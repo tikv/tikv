@@ -46,9 +46,11 @@ macro_rules! match_template_charset {
          match_template::match_template! {
              $t = [
                  UTF8 => EncodingUTF8,
-                 UTF8Mb4 => EncodingUTF8,
+                 UTF8Mb4 => EncodingUTF8Mb4,
                  Latin1 => EncodingLatin1,
                  GBK => EncodingGBK,
+                 Binary => EncodingBinary,
+                 Ascii => EncodingAscii,
             ],
             $($tail)*
          }
@@ -95,10 +97,13 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
 
 pub trait Encoding {
     /// decode convert bytes from a specific charset to utf-8 charset.
-    fn decode(data: BytesRef) -> Result<Bytes>;
+    fn decode(data: BytesRef<'_>) -> Result<Bytes>;
 
     /// encode convert bytes from utf-8 charset to a specific charset.
-    fn encode(data: BytesRef) -> Result<Bytes>;
+    #[inline]
+    fn encode(data: BytesRef<'_>) -> Result<Bytes> {
+        Ok(Bytes::from(data))
+    }
 }
 
 #[derive(Debug)]

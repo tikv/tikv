@@ -2,7 +2,7 @@
 
 use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{AssertionLevel, Context};
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn, SnapshotReader};
@@ -46,6 +46,7 @@ where
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         };
         prewrite(
             &mut txn,
@@ -64,7 +65,7 @@ where
     (snapshot, keys)
 }
 
-fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
@@ -95,6 +96,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
                     min_commit_ts: TimeStamp::default(),
                     need_old_value: false,
                     is_retry_request: false,
+                    assertion_level: AssertionLevel::Off,
                 };
                 prewrite(&mut txn, &mut reader, &txn_props, mutation, &None, false).unwrap();
             }
@@ -103,7 +105,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
     )
 }
 
-fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
@@ -120,7 +122,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
 }
 
 fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -146,7 +148,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
 }
 
 fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -172,7 +174,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
 }
 
 fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -207,7 +209,10 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     )
 }
 
-fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(
+    b: &mut Bencher<'_>,
+    config: &BenchConfig<F>,
+) {
     let engine = config.engine_factory.build();
     let test_keys: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
@@ -235,7 +240,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 }
 
 fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
-    b: &mut Bencher,
+    b: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();

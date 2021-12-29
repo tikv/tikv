@@ -14,7 +14,6 @@ use std::{
     cmp,
     convert::TryFrom,
     env, fmt,
-    fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
@@ -36,10 +35,9 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, IOBudgetAdjustor,
+    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IOBudgetAdjustor,
     MetricsManager as IOMetricsManager,
 };
-use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
@@ -364,10 +362,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let lock_dir = get_lock_dir();
 
         let search_base = env::temp_dir().join(&lock_dir);
-        std::fs::create_dir_all(&search_base)
+        file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
-        for entry in fs::read_dir(&search_base).unwrap().flatten() {
+        for entry in file_system::read_dir(&search_base).unwrap().flatten() {
             if !entry.file_type().unwrap().is_file() {
                 continue;
             }
@@ -472,7 +470,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn create_raftstore_compaction_listener(&self) -> engine_rocks::CompactionListener {
-        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo) -> bool {
+        fn size_change_filter(info: &engine_rocks::RocksCompactionJobInfo<'_>) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
             let cf = info.cf_name();
@@ -631,27 +629,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.resource_metering.enabled,
                 self.config.resource_metering.precision.as_millis(),
             );
-
-        let mut reporter_worker = WorkerBuilder::new("resource-metering-reporter")
-            .pending_capacity(30)
-            .create()
-            .lazy_build("resource-metering-reporter");
-        let reporter_scheduler = reporter_worker.scheduler();
-        let mut resource_metering_client = resource_metering::GrpcClient::default();
-        resource_metering_client.set_env(self.env.clone());
-        let reporter = resource_metering::Reporter::new(
-            resource_metering_client,
-            self.config.resource_metering.clone(),
-            collector_reg_handle.clone(),
-            reporter_scheduler.clone(),
+        let (config_notifier, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(
+                self.config.resource_metering.clone(),
+                collector_reg_handle.clone(),
+            );
+        self.to_stop.push(reporter_worker);
+        let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
+            self.config.resource_metering.receiver_address.clone(),
+            self.env.clone(),
+            data_sink_reg_handle,
         );
-        reporter_worker.start_with_timer(reporter);
-        self.to_stop.push(Box::new(reporter_worker));
+        self.to_stop.push(single_target_worker);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
-            reporter_scheduler,
             recorder_handle,
+            config_notifier,
+            address_change_notifier,
         );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
@@ -833,11 +828,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
         );
 
-        cfg_controller.register(
-            tikv::config::Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store)),
-        );
-
         let split_config_manager =
             SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
         cfg_controller.register(
@@ -935,6 +925,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
         }
+
+        cfg_controller.register(
+            tikv::config::Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.refresh_config_scheduler(),
+                raft_store,
+            )),
+        );
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -1035,6 +1033,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engines.kv.as_inner().clone(),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
+            self.config.storage.api_version(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,

@@ -923,7 +923,7 @@ where
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
 
-        let region = self.region().clone();
+        let mut region = self.region().clone();
         info!(
             "begin to destroy";
             "region_id" => self.region_id,
@@ -934,6 +934,14 @@ where
         let mut kv_wb = engines.kv.write_batch();
         let mut raft_wb = engines.raft.log_batch(1024);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
+
+        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+        // peer list are empty, so a removed peer will be created again.  Saving current peer
+        // into the peer list of region will fix this problem.
+        if !self.get_store().is_initialized() {
+            region.mut_peers().push(self.peer.clone());
+        }
         write_peer_state(
             &mut kv_wb,
             &region,
@@ -1617,6 +1625,8 @@ where
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(&ctx.pd_scheduler);
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -1631,6 +1641,7 @@ where
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -3903,7 +3914,7 @@ where
         let peers_len = self.get_store().region().get_peers().len();
         let mut normal_peers = HashSet::default();
         let mut next_idxs = Vec::with_capacity(peers_len);
-        let mut min_peer_index = std::u64::MAX;
+        let mut min_peer_index = u64::MAX;
         for peer in self.get_store().region().get_peers() {
             let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
             let usage = ctx.store_disk_usages.get(&store_id);
@@ -4390,6 +4401,19 @@ where
             );
         }
     }
+
+    fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = true;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.map = Default::default();
+    }
 }
 
 /// `RequestPolicy` decides how we handle a request.
@@ -4588,7 +4612,7 @@ pub trait AbstractPeer {
     fn group_state(&self) -> GroupState;
     fn region(&self) -> &metapb::Region;
     fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status;
+    fn raft_status(&self) -> raft::Status<'_>;
     fn raft_commit_index(&self) -> u64;
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }

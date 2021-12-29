@@ -33,6 +33,8 @@ struct LogIterator {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
+// Allowing this is actually more understandabled when used in code.
 pub enum Error {
     InvalidRequest(String),
     ParseError(String),
@@ -54,11 +56,7 @@ impl LogIterator {
         level_flag: usize,
         patterns: Vec<regex::Regex>,
     ) -> Result<Self, Error> {
-        let end_time = if end_time > 0 {
-            end_time
-        } else {
-            std::i64::MAX
-        };
+        let end_time = if end_time > 0 { end_time } else { i64::MAX };
         let log_path = log_file.as_ref();
         let log_name = match log_path.file_name() {
             Some(file_name) => match file_name.to_str() {
@@ -570,7 +568,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
 
         // We use the timestamp as the identity of log item in following test cases
         // all content
-        let log_iter = LogIterator::new(&log_file, 0, std::i64::MAX, 0, vec![]).unwrap();
+        let log_iter = LogIterator::new(&log_file, 0, i64::MAX, 0, vec![]).unwrap();
         let expected = vec![
             "2019/08/23 18:09:53.387 +08:00",
             "2019/08/23 18:09:54.387 +08:00",
@@ -666,7 +664,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
             expected
         );
 
-        for time in vec![0, std::i64::MAX].into_iter() {
+        for time in vec![0, i64::MAX].into_iter() {
             let log_iter = LogIterator::new(
                 &log_file,
                 timestamp("2019/08/23 18:09:53.387 +08:00"),
@@ -694,7 +692,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
         let log_iter = LogIterator::new(
             &log_file,
             timestamp("2019/08/23 18:09:54.387 +08:00"),
-            std::i64::MAX,
+            i64::MAX,
             1 << (LogLevel::Warn as usize),
             vec![regex::Regex::new(".*test-filter.*").unwrap()],
         )
@@ -761,7 +759,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
 
         let mut req = SearchLogRequest::default();
         req.set_start_time(timestamp("2019/08/23 18:09:54.387 +08:00"));
-        req.set_end_time(std::i64::MAX);
+        req.set_end_time(i64::MAX);
         req.set_levels(vec![LogLevel::Warn as _]);
         req.set_patterns(vec![".*test-filter.*".to_string()].into());
         let expected = vec![

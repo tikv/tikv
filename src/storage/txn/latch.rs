@@ -201,7 +201,7 @@ impl Latches {
     }
 
     #[inline]
-    fn lock_latch(&self, hash: u64) -> MutexGuard<Latch> {
+    fn lock_latch(&self, hash: u64) -> MutexGuard<'_, Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
     }
 }

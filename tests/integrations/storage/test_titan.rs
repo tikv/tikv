@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
@@ -363,7 +362,7 @@ fn test_delete_files_in_range_for_titan() {
     // Generate a snapshot
     let default_sst_file_path = path.path().join("default.sst");
     let write_sst_file_path = path.path().join("write.sst");
-    let limiter = Limiter::new(INFINITY);
+    let limiter = Limiter::new(f64::INFINITY);
     build_sst_cf_file::<RocksEngine>(
         &default_sst_file_path.to_str().unwrap(),
         &engines.kv,

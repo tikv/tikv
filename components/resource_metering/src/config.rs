@@ -1,14 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::recorder::RecorderHandle;
-use crate::reporter::Task;
+use crate::reporter::ConfigChangeNotifier;
+use crate::AddressChangeNotifier;
 
 use std::error::Error;
 
 use online_config::{ConfigChange, OnlineConfig};
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
-use tikv_util::worker::Scheduler;
 
 const MIN_PRECISION: ReadableDuration = ReadableDuration::millis(100);
 const MAX_PRECISION: ReadableDuration = ReadableDuration::hours(1);
@@ -90,20 +90,23 @@ impl Config {
 /// to control the dynamic update of the configuration.
 pub struct ConfigManager {
     current_config: Config,
-    scheduler: Scheduler<Task>,
     recorder: RecorderHandle,
+    config_notifier: ConfigChangeNotifier,
+    address_notifier: AddressChangeNotifier,
 }
 
 impl ConfigManager {
     pub fn new(
         current_config: Config,
-        scheduler: Scheduler<Task>,
         recorder: RecorderHandle,
+        config_notifier: ConfigChangeNotifier,
+        address_notifier: AddressChangeNotifier,
     ) -> Self {
         ConfigManager {
             current_config,
-            scheduler,
             recorder,
+            config_notifier,
+            address_notifier,
         }
     }
 }
@@ -124,10 +127,12 @@ impl online_config::ConfigManager for ConfigManager {
         if self.current_config.precision != new_config.precision {
             self.recorder.precision(new_config.precision.0);
         }
+        if self.current_config.receiver_address != new_config.receiver_address {
+            self.address_notifier
+                .notify(new_config.receiver_address.clone());
+        }
         // Notify reporter that the configuration has changed.
-        self.scheduler
-            .schedule(Task::ConfigChange(new_config.clone()))
-            .ok();
+        self.config_notifier.notify(new_config.clone());
         self.current_config = new_config;
         Ok(())
     }

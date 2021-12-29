@@ -682,7 +682,12 @@ impl<ER: RaftEngine> Debugger<ER> {
             })?;
 
             let applied_index = old_raft_apply_state.applied_index;
+            let commit_index = old_raft_apply_state.commit_index;
             let last_index = old_raft_local_state.last_index;
+
+            if last_index == applied_index && commit_index == applied_index {
+                continue;
+            }
 
             let new_raft_local_state = RaftLocalState {
                 last_index: applied_index,
