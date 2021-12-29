@@ -191,7 +191,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         ))
     }
 
-    fn build_lock_cursor(&mut self) -> Result<Option<Cursor<<S as Snapshot>::Iter>>> {
+    fn build_lock_cursor(&mut self) -> Result<Option<Cursor<S::Iter>>> {
         Ok(match self.0.isolation_level {
             IsolationLevel::Si => Some(self.0.create_cf_cursor(CF_LOCK)?),
             IsolationLevel::Rc => None,
@@ -1007,18 +1007,17 @@ mod tests {
         must_prewrite_put(&engine, key2, val2, key2, 30);
         must_commit(&engine, key2, 30, 40);
 
-        // use async commit to avoid skipping lock.
-        must_prewrite_put_async_commit(&engine, key1, val12, key1, &Some(vec![]), 50, 0);
+        must_prewrite_put(&engine, key1, val12, key1, 50);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
+        let mut scanner = ScannerBuilder::new(snapshot, 60.into())
             .fill_cache(false)
             .range(Some(Key::from_raw(key1)), None)
             .desc(desc)
             .isolation_level(IsolationLevel::Rc)
             .build()
             .unwrap();
-        
+
         for e in expected {
             let (k, v) = scanner.next().unwrap().unwrap();
             assert_eq!(k, Key::from_raw(e.0));

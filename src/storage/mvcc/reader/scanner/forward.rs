@@ -609,22 +609,23 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
         let lock_value = lock_cursor.value(&mut statistics.lock);
         Lock::parse(lock_value)?
     };
-    let result = Lock::check_ts_conflict(
+    lock_cursor.next(&mut statistics.lock);
+
+    Lock::check_ts_conflict(
         Cow::Owned(lock),
         &current_user_key,
         cfg.ts,
         &cfg.bypass_locks,
-    );
-    lock_cursor.next(&mut statistics.lock);
-    // Even if there is a lock error, we still need to step the cursor for future
-    // calls.
-    if result.is_err() {
+    )
+    .or_else(|e| {
+        // Even if there is a lock error, we still need to step the cursor for future
+        // calls.
         statistics.lock.processed_keys += 1;
-        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-    }
-    result
-        .map(|_| HandleRes::Skip(current_user_key))
-        .map_err(Into::into)
+        cursors
+            .move_write_cursor_to_next_user_key(&current_user_key, statistics)
+            .and(Err(e.into()))
+    })
+    .map(|_| HandleRes::Skip(current_user_key))
 }
 
 /// The ScanPolicy for outputting `TxnEntry` for every locks or commits in specified ts range.
