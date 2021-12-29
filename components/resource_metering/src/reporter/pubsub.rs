@@ -68,7 +68,7 @@ impl ResourceMeteringPubSub for PubSubService {
                     .inc_by(records.len() as _);
                 for record in records.iter() {
                     if let Err(err) = sink.send((record.clone(), WriteFlags::default())).await {
-                        warn!("failed to send records"; "error" => ?err);
+                        warn!("failed to send records to the pubsub subscriber"; "error" => ?err);
                         return;
                     }
                     REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
