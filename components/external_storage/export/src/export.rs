@@ -157,7 +157,7 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
 /// Create a new storage from the given storage backend description.
 fn create_backend_inner(
     backend: &Backend,
-    config: BackendConfig,
+    backend_config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     let start = Instant::now();
     let storage: Box<dyn ExternalStorage> = match backend {
@@ -165,10 +165,16 @@ fn create_backend_inner(
             let p = Path::new(&local.path);
             Box::new(LocalStorage::new(p)?) as Box<dyn ExternalStorage>
         }
-        Backend::Hdfs(hdfs) => Box::new(HdfsStorage::new(&hdfs.remote, config.hdfs_config)?),
+        Backend::Hdfs(hdfs) => {
+            Box::new(HdfsStorage::new(&hdfs.remote, backend_config.hdfs_config)?)
+        }
         Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
         #[cfg(feature = "cloud-aws")]
-        Backend::S3(config) => blob_store(S3Storage::from_input(config.clone())?),
+        Backend::S3(config) => {
+            let mut s = S3Storage::from_input(config.clone())?;
+            s.set_multi_part_size(backend_config.s3_multi_part_size);
+            blob_store(s)
+        }
         #[cfg(feature = "cloud-gcp")]
         Backend::Gcs(config) => blob_store(GCSStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
@@ -180,7 +186,7 @@ fn create_backend_inner(
                 return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
             }
         },
-        #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
+        #[allow(unreachable_patterns)]
         _ => return Err(bad_backend(backend.clone())),
     };
     record_storage_create(start, &*storage);

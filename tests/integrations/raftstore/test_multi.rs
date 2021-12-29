@@ -17,8 +17,12 @@ use raftstore::store::*;
 use raftstore::Result;
 use rand::RngCore;
 use test_raftstore::*;
+use tikv::storage::kv::SnapshotExt;
+use tikv::storage::Snapshot;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
+use txn_types::PessimisticLock;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -821,4 +825,38 @@ fn test_node_catch_up_logs() {
     must_get_equal(&cluster.get_engine(1), b"0009", b"0009");
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"0009", b"0009");
+}
+
+#[test]
+fn test_leader_drop_with_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    txn_ext.pessimistic_locks.write().map.insert(
+        Key::from_raw(b"k1"),
+        PessimisticLock {
+            primary: b"k1".to_vec().into_boxed_slice(),
+            start_ts: 10.into(),
+            ttl: 1000,
+            for_update_ts: 10.into(),
+            min_commit_ts: 10.into(),
+        },
+    );
+
+    // Isolate node 1, leader should be transferred to another node.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.must_put(b"k1", b"v1");
+    assert_ne!(cluster.leader_of_region(1).unwrap().id, 1);
+
+    // When peer 1 becomes leader again, the pessimistic locks should be cleared before.
+    cluster.clear_send_filters();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    assert!(txn_ext.pessimistic_locks.write().map.is_empty());
 }

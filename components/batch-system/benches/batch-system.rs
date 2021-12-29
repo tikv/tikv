@@ -2,8 +2,6 @@
 
 #![feature(test)]
 
-extern crate test;
-
 use batch_system::test_runner::*;
 use batch_system::*;
 use criterion::*;

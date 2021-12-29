@@ -56,7 +56,7 @@ where
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
-    let filter = move |record: &Record| {
+    let filter = move |record: &Record<'_>| {
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
@@ -397,7 +397,7 @@ where
     type Ok = ();
     type Err = slog::Never;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.tag() == "slow_log" {
             let mut s = SlowCostSerializer { cost: None };
             let kv = record.kv();
@@ -437,7 +437,7 @@ pub struct LogCost(pub u64);
 impl slog::Value for LogCost {
     fn serialize(
         &self,
-        _record: &Record,
+        _record: &Record<'_>,
         key: Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -474,7 +474,7 @@ where
     type Ok = ();
     type Err = io::Error;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = record.tag();
         if self.slow.is_some() && tag.starts_with("slow_log") {
             self.slow.as_ref().unwrap().log(record, values)
@@ -659,9 +659,9 @@ mod tests {
         );
 
         slog_warn!(logger, "Type";
-            "Counter" => std::f64::NAN,
-            "Score" => std::f64::INFINITY,
-            "Other" => std::f64::NEG_INFINITY
+            "Counter" => f64::NAN,
+            "Score" => f64::INFINITY,
+            "Other" => f64::NEG_INFINITY
         );
 
         let none: Option<u8> = None;

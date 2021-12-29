@@ -4,11 +4,8 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use collections::HashMap;
-    use resource_metering::utils;
-    use resource_metering::{
-        register_collector, Collector, RawRecord, RawRecords, RecorderBuilder, ResourceMeteringTag,
-        TagInfos, TEST_TAG_PREFIX,
-    };
+    use resource_metering::{utils, ResourceTagFactory};
+    use resource_metering::{Collector, RawRecord, RawRecords, RecorderBuilder, TEST_TAG_PREFIX};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -25,14 +22,16 @@ mod linux {
         ops: Vec<Operation>,
         current_ctx: Option<&'static str>,
         records: HashMap<Vec<u8>, RawRecord>,
+        resource_tag_factory: ResourceTagFactory,
     }
 
     impl Operations {
-        fn begin() -> Self {
+        fn begin(resource_tag_factory: ResourceTagFactory) -> Self {
             Self {
                 ops: Vec::default(),
                 current_ctx: None,
                 records: HashMap::default(),
+                resource_tag_factory,
             }
         }
 
@@ -73,24 +72,25 @@ mod linux {
                 "should keep context clean finally"
             );
 
-            let Operations { ops, records, .. } = self;
+            let Operations {
+                ops,
+                records,
+                resource_tag_factory,
+                ..
+            } = self;
 
-            let handle = std::thread::spawn(|| {
+            let handle = std::thread::spawn(move || {
                 let mut guard = None;
 
                 for op in ops {
                     match op {
                         SetContext(tag) => {
-                            let tag = ResourceMeteringTag::from(Arc::new(TagInfos {
-                                store_id: 0,
-                                region_id: 0,
-                                peer_id: 0,
-                                extra_attachment: {
-                                    let mut t = Vec::from(TEST_TAG_PREFIX);
-                                    t.extend_from_slice(tag.as_bytes());
-                                    t
-                                },
-                            }));
+                            let mut ctx = kvproto::kvrpcpb::Context::default();
+                            ctx.mut_resource_group_tag()
+                                .extend_from_slice(TEST_TAG_PREFIX);
+                            ctx.mut_resource_group_tag()
+                                .extend_from_slice(tag.as_bytes());
+                            let tag = resource_tag_factory.new_tag(&ctx);
                             guard = Some(tag.attach());
                         }
                         ResetContext => {
@@ -144,7 +144,7 @@ mod linux {
         fn collect(&self, records: Arc<RawRecords>) {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, record) in records.records.iter() {
-                    let (_, k) = tag.infos.extra_attachment.split_at(TEST_TAG_PREFIX.len());
+                    let (_, k) = tag.extra_attachment.split_at(TEST_TAG_PREFIX.len());
                     r.entry(k.to_vec())
                         .or_insert_with(RawRecord::default)
                         .merge(record);
@@ -188,7 +188,7 @@ mod linux {
         // let collector = MockCollector::default();
         // let records = collector.records.clone();
 
-        let handle = RecorderBuilder::default()
+        let (handle, collector_reg_handle, resource_tag_factory) = RecorderBuilder::default()
             .add_sub_recorder(Box::new(resource_metering::CpuRecorder::default()))
             .spawn()
             .unwrap();
@@ -198,9 +198,9 @@ mod linux {
         // Heavy CPU only with 1 thread
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
 
-            let (handle, expected) = Operations::begin()
+            let (handle, expected) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(2000))
                 .then(ResetContext)
@@ -213,9 +213,9 @@ mod linux {
         // Sleep only with 1 thread
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
 
-            let (handle, expected) = Operations::begin()
+            let (handle, expected) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-0"))
                 .then(Sleep(2000))
                 .then(ResetContext)
@@ -228,9 +228,9 @@ mod linux {
         // Hybrid workload with 1 thread
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
 
-            let (handle, expected) = Operations::begin()
+            let (handle, expected) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(600))
                 .then(Sleep(400))
@@ -251,19 +251,19 @@ mod linux {
         // Heavy CPU with 3 threads
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
 
-            let (handle0, expected0) = Operations::begin()
+            let (handle0, expected0) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(1500))
                 .then(ResetContext)
                 .spawn();
-            let (handle1, expected1) = Operations::begin()
+            let (handle1, expected1) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-1"))
                 .then(CpuHeavy(1500))
                 .then(ResetContext)
                 .spawn();
-            let (handle2, expected2) = Operations::begin()
+            let (handle2, expected2) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-2"))
                 .then(CpuHeavy(1500))
                 .then(ResetContext)
@@ -278,9 +278,9 @@ mod linux {
         // Hybrid workload with 3 threads
         {
             let collector = DummyCollector::default();
-            let _handle = register_collector(Box::new(collector.clone()));
+            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
 
-            let (handle0, expected0) = Operations::begin()
+            let (handle0, expected0) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-0"))
                 .then(CpuHeavy(200))
                 .then(Sleep(300))
@@ -291,7 +291,7 @@ mod linux {
                 .then(ResetContext)
                 .then(CpuHeavy(500))
                 .spawn();
-            let (handle1, expected1) = Operations::begin()
+            let (handle1, expected1) = Operations::begin(resource_tag_factory.clone())
                 .then(SetContext("ctx-1"))
                 .then(CpuHeavy(500))
                 .then(ResetContext)
@@ -300,7 +300,7 @@ mod linux {
                 .then(ResetContext)
                 .then(Sleep(300))
                 .spawn();
-            let (handle2, expected2) = Operations::begin()
+            let (handle2, expected2) = Operations::begin(resource_tag_factory)
                 .then(SetContext("ctx-2"))
                 .then(CpuHeavy(800))
                 .then(ResetContext)

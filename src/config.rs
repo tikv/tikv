@@ -16,6 +16,8 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
+use api_version::match_template_api_version;
+use api_version::APIVersion;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
@@ -591,19 +593,26 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
-            cf_opts.add_table_properties_collector_factory(
-                "tikv.ttl-properties-collector",
-                TtlPropertiesCollectorFactory { api_version },
-            );
-            cf_opts
-                .set_compaction_filter_factory(
-                    "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory { api_version })
-                        as Box<dyn CompactionFilterFactory>,
-                )
-                .unwrap();
-        }
+        match_template_api_version!(
+            API,
+            match api_version {
+                ApiVersion::API => {
+                    if API::IS_TTL_ENABLED {
+                        cf_opts.add_table_properties_collector_factory(
+                            "tikv.ttl-properties-collector",
+                            TtlPropertiesCollectorFactory::<API>::default(),
+                        );
+                        cf_opts
+                            .set_compaction_filter_factory(
+                                "ttl_compaction_filter_factory",
+                                Box::new(TTLCompactionFilterFactory::<API>::default())
+                                    as Box<dyn CompactionFilterFactory>,
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        );
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -2200,6 +2209,10 @@ pub struct BackupConfig {
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
+    pub io_thread_size: usize,
+    // Do not expose this config to user.
+    // It used to debug s3 503 error.
+    pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2212,6 +2225,10 @@ impl BackupConfig {
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            return Err("backup.s3_multi_part_size cannot larger than 5GB".into());
+        }
+
         Ok(())
     }
 }
@@ -2221,13 +2238,16 @@ impl Default for BackupConfig {
         let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
-            // use at most 75% of vCPU by default
-            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            // use at most 50% of vCPU by default
+            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
-            enable_auto_tune: false,
-            auto_tune_remain_threads: 2,
+            enable_auto_tune: true,
+            auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
+            io_thread_size: 2,
+            // 5MB is the minimum part size that S3 allowed.
+            s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
         }
     }
@@ -2244,6 +2264,13 @@ pub struct CdcConfig {
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
+    /// less than total content. However in other cases, `TsFilter` can make performance worse
+    /// because it needs to re-fetch old row values if they are required.
+    ///
+    /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
+    /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
+    pub incremental_scan_ts_filter_ratio: f64,
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
@@ -2265,6 +2292,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            incremental_scan_ts_filter_ratio: 0.2,
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
@@ -2286,6 +2314,14 @@ impl CdcConfig {
         if self.incremental_scan_concurrency < self.incremental_scan_threads {
             return Err(
                 "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
+        }
+        if self.incremental_scan_ts_filter_ratio < 0.0
+            || self.incremental_scan_ts_filter_ratio > 1.0
+        {
+            return Err(
+                "cdc.incremental-scan-ts-filter-ratio should be larger than 0 and less than 1"
                     .into(),
             );
         }
@@ -2995,6 +3031,28 @@ lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
 
+fn serde_to_online_config(name: String) -> String {
+    match name.as_ref() {
+        "raftstore.store-pool-size" => name.replace(
+            "raftstore.store-pool-size",
+            "raft_store.store_batch_system.pool_size",
+        ),
+        "raftstore.apply-pool-size" => name.replace(
+            "raftstore.apply-pool-size",
+            "raft_store.apply_batch_system.pool_size",
+        ),
+        "raftstore.store_pool_size" => name.replace(
+            "raftstore.store_pool_size",
+            "raft_store.store_batch_system.pool_size",
+        ),
+        "raftstore.apply_pool_size" => name.replace(
+            "raftstore.apply_pool_size",
+            "raft_store.apply_batch_system.pool_size",
+        ),
+        _ => name.replace("raftstore", "raft_store").replace("-", "_"),
+    }
+}
+
 fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
     fn helper(
         mut fields: Vec<String>,
@@ -3003,19 +3061,14 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         value: String,
     ) -> CfgResult<()> {
         if let Some(field) = fields.pop() {
-            let f = if field == "raftstore" {
-                "raft_store".to_owned()
-            } else {
-                field.replace("-", "_")
-            };
-            return match typed.get(&f) {
+            return match typed.get(&field) {
                 None => Err(format!("unexpect fields: {}", field).into()),
                 Some(ConfigValue::Skip) => {
                     Err(format!("config {} can not be changed", field).into())
                 }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
-                        .entry(f)
+                        .entry(field)
                         .or_insert_with(|| ConfigValue::Module(HashMap::new()))
                     {
                         return helper(fields, n_dst, m, value);
@@ -3027,7 +3080,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                         return match to_change_value(&value, v) {
                             Err(_) => Err(format!("failed to parse: {}", value).into()),
                             Ok(v) => {
-                                dst.insert(f, v);
+                                dst.insert(field, v);
                                 Ok(())
                             }
                         };
@@ -3040,7 +3093,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         Ok(())
     }
     let mut res = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = serde_to_online_config(name);
         let fields: Vec<_> = name
             .as_str()
             .split('.')
@@ -3077,12 +3131,7 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
 fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
         if let Some(field) = fields.pop() {
-            let f = if field == "raftstore" {
-                "raft_store".to_owned()
-            } else {
-                field.replace("-", "_")
-            };
-            match typed.get(&f) {
+            match typed.get(&field) {
                 None | Some(ConfigValue::Skip) => {
                     Err(format!("failed to get field: {}", field).into())
                 }
@@ -3108,7 +3157,8 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
     }
     let mut dst = HashMap::new();
     for (name, value) in change {
-        let fields: Vec<_> = name
+        let online_config_name = serde_to_online_config(name.clone());
+        let fields: Vec<_> = online_config_name
             .as_str()
             .split('.')
             .map(|s| s.to_owned())
@@ -3540,6 +3590,8 @@ mod tests {
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
         );
+        change.insert("raftstore.apply_pool_size".to_owned(), "7".to_owned());
+        change.insert("raftstore.store-pool-size".to_owned(), "17".to_owned());
         let res = to_toml_encode(change).unwrap();
         assert_eq!(
             res.get("raftstore.pd-heartbeat-tick-interval"),
@@ -3557,6 +3609,8 @@ mod tests {
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())
         );
+        assert_eq!(res.get("raftstore.apply-pool-size"), Some(&"7".to_owned()));
+        assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
     fn new_engines(
