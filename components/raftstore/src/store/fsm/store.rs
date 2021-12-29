@@ -903,7 +903,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             if self.poll_ctx.trans.need_flush() {
                 self.poll_ctx.trans.flush();
             }
-        } else if self.poll_ctx.trans.need_flush() || self.need_flush_events {
+        } else {
             if self.poll_ctx.trans.need_flush() {
                 self.poll_ctx.trans.flush();
             }
