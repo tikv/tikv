@@ -712,8 +712,10 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector = collector_reg_handle
-            .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = collector_reg_handle.register(
+            Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
+            true,
+        );
 
         Runner {
             store_id,

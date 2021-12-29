@@ -17,7 +17,7 @@ thread_local! {
 }
 
 /// Raw resource statistics record.
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
     pub read_keys: u32,
@@ -45,7 +45,7 @@ impl RawRecord {
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter
 /// [Collector]: crate::collector::Collector
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct RawRecords {
     pub begin_unix_time_secs: u64,
     pub duration: Duration,
