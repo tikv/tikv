@@ -29,7 +29,6 @@ pub fn test_enable() {
 
     // | Address |
     // |   x     |
-    test_suite.cfg_enabled(true);
     sleep(Duration::from_millis(3000));
     assert!(test_suite.nonblock_receiver_all().is_empty());
 
