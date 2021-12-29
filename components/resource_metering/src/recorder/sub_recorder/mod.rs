@@ -63,9 +63,7 @@ pub trait SubRecorder: Send {
     ) {
     }
 
-    /// This function is called when a reset is required.
-    ///
-    /// The typical situation is when the [Recorder] thread is resume execution.
+    /// This function is called when the [Recorder] thread is resume execution.
     fn resume(
         &mut self,
         _records: &mut RawRecords,
