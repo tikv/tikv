@@ -229,14 +229,29 @@ impl TestSuite {
     ) {
         for r in records {
             let tag = String::from_utf8_lossy(
-                (!r.get_resource_group_tag().is_empty())
-                    .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
+                (!r.get_record().get_resource_group_tag().is_empty())
+                    .then(|| {
+                        r.get_record()
+                            .get_resource_group_tag()
+                            .split_at(TEST_TAG_PREFIX.len())
+                            .1
+                    })
                     .unwrap_or(b""),
             )
             .into_owned();
             let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
-            ts.extend(r.get_record().get_items().iter().map(|item| item.timestamp_sec));
-            cpu_time.extend(r.get_record().get_items().iter().map(|item| item.cpu_time_ms));
+            ts.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.timestamp_sec),
+            );
+            cpu_time.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.cpu_time_ms),
+            );
         }
     }
 
