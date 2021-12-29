@@ -36,7 +36,7 @@ impl Runnable for Recorder {
     fn run(&mut self, task: Self::Task) {
         match task {
             Task::CollectorReg(reg) => self.handle_collector_registration(reg),
-            Task::NewThread(lsr) => self.handle_thread_registration(lsr),
+            Task::ThreadReg(lsr) => self.handle_thread_registration(lsr),
         }
     }
 
@@ -193,7 +193,7 @@ impl Recorder {
 
 pub enum Task {
     CollectorReg(CollectorReg),
-    NewThread(LocalStorageRef),
+    ThreadReg(LocalStorageRef),
 }
 
 impl Display for Task {
@@ -202,7 +202,7 @@ impl Display for Task {
             Task::CollectorReg(_) => {
                 write!(f, "CollectorReg")?;
             }
-            Task::NewThread(_) => {
+            Task::ThreadReg(_) => {
                 write!(f, "NewThread")?;
             }
         }
@@ -405,7 +405,7 @@ mod tests {
             .build();
 
         // register a new thread
-        recorder.run(Task::NewThread(LocalStorageRef {
+        recorder.run(Task::ThreadReg(LocalStorageRef {
             id: 0,
             storage: LocalStorage::default(),
         }));

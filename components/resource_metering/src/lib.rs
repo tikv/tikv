@@ -166,7 +166,7 @@ impl ResourceTagFactory {
             id: utils::thread_id(),
             storage: storage.clone(),
         };
-        match self.scheduler.schedule(recorder::Task::NewThread(lsr)) {
+        match self.scheduler.schedule(recorder::Task::ThreadReg(lsr)) {
             Ok(_) => true,
             Err(err) => {
                 warn!("failed to register thread"; "err" => ?err);
