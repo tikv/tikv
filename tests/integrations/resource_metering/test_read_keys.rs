@@ -162,7 +162,12 @@ fn recv_read_keys(rx: &Receiver<Vec<ResourceUsageRecord>>) -> u32 {
     let mut total = 0;
     while let Ok(records) = rx.try_recv() {
         for r in &records {
-            total += r.get_record_list_read_keys().iter().sum::<u32>();
+            total += r
+                .get_record()
+                .get_items()
+                .iter()
+                .map(|item| item.read_keys)
+                .sum::<u32>();
         }
     }
     total
@@ -290,7 +295,12 @@ impl resource_metering::DataSink for MockDataSink {
     ) -> resource_metering::error::Result<()> {
         let mut read_keys = 0;
         for r in records.iter() {
-            read_keys += r.get_record_list_read_keys().iter().sum::<u32>();
+            read_keys += r
+                .get_record()
+                .get_items()
+                .iter()
+                .map(|item| item.read_keys)
+                .sum::<u32>();
         }
         self.tx.send(read_keys).unwrap();
         Ok(())

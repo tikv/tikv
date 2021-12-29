@@ -247,10 +247,20 @@ impl TestSuite {
         records: Vec<ResourceUsageRecord>,
     ) {
         for r in records {
-            let tag = String::from_utf8_lossy(r.get_resource_group_tag()).into_owned();
+            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
             let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
-            ts.extend(&r.record_list_timestamp_sec);
-            cpu_time.extend(&r.record_list_cpu_time_ms);
+            ts.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.timestamp_sec),
+            );
+            cpu_time.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.cpu_time_ms),
+            );
         }
     }
 
