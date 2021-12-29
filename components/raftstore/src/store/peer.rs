@@ -469,7 +469,7 @@ where
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pub pending_reads: ReadIndexQueue<EK::Snapshot>,
+    pending_reads: ReadIndexQueue<EK::Snapshot>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -3228,6 +3228,10 @@ where
         );
     }
 
+    pub fn push_pending_read(&mut self, read: ReadIndexRequest<EK::Snapshot>, is_leader: bool) {
+        self.pending_reads.push_back(read, is_leader);
+    }
+
     // Returns a boolean to indicate whether the `read` is proposed or not.
     // For these cases it won't be proposed:
     // 1. The region is in merging or splitting;
@@ -3347,7 +3351,7 @@ where
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
-        self.pending_reads.push_back(read, self.is_leader());
+        self.push_pending_read(read, self.is_leader());
         self.should_wake_up = true;
 
         debug!(

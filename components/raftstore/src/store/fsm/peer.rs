@@ -1496,7 +1496,7 @@ where
             }
             self.ctx.raft_metrics.propose.read_index += 1;
             let read_proposal = ReadIndexRequest::noop(id, current_time);
-            self.fsm.peer.pending_reads.push_back(read_proposal, true);
+            self.fsm.peer.push_pending_read(read_proposal, true);
         }
     }
 
