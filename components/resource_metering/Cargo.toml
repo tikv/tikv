@@ -3,9 +3,6 @@ name = "resource_metering"
 version = "0.0.1"
 edition = "2018"
 
-[features]
-failpoints = ["fail/failpoints"]
-
 [dependencies]
 lazy_static = "1.3"
 collections = { path = "../collections" }
@@ -39,4 +36,3 @@ rand = "0.8"
 [[test]]
 name = "test-recorder"
 path = "tests/recorder_test.rs"
-required-features = ["failpoints"]

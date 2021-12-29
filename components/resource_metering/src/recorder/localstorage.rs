@@ -30,9 +30,9 @@ pub struct LocalStorage {
     pub summary_records: Arc<Mutex<HashMap<Arc<TagInfos>, SummaryRecord>>>,
 }
 
-/// This structure is transmitted as a event in [STORAGE_CHAN].
+/// This structure is transmitted as a event in [Scheduler] of [Recorder].
 ///
-/// See [STORAGE] for more information.
+/// See [ResourceTagFactory::register_local_storage] for more information.
 #[derive(Clone)]
 pub struct LocalStorageRef {
     pub id: usize,

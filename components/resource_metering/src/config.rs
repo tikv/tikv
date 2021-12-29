@@ -20,11 +20,6 @@ const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// Turn on resource metering.
-    ///
-    /// This configuration will affect all resource modules such as cpu/summary.
-    pub enabled: bool,
-
     /// Data reporting destination address.
     pub receiver_address: String,
 
@@ -43,7 +38,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            enabled: false,
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
@@ -116,14 +110,6 @@ impl online_config::ConfigManager for ConfigManager {
         let mut new_config = self.current_config.clone();
         new_config.update(change);
         new_config.validate()?;
-        // Pause or resume the recorder thread.
-        if self.current_config.enabled != new_config.enabled {
-            if new_config.enabled {
-                self.recorder.resume();
-            } else {
-                self.recorder.pause();
-            }
-        }
         if self.current_config.precision != new_config.precision {
             self.recorder.precision(new_config.precision.0);
         }
@@ -148,7 +134,6 @@ mod tests {
         let cfg = Config::default();
         assert!(cfg.validate().is_ok()); // Empty address is allowed.
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
@@ -156,7 +141,6 @@ mod tests {
         };
         assert!(cfg.validate().is_ok());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::days(999), // invalid
             max_resource_groups: 2000,
@@ -164,7 +148,6 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: usize::MAX, // invalid
@@ -172,7 +155,6 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
