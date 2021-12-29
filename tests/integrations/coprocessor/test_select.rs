@@ -1907,11 +1907,11 @@ fn test_rc_read() {
 
     // uncommitted lock to be ignored
     let (store, _) = init_data_with_engine_and_commit(
-         Default::default(),
-         store.get_engine(),
-         &product,
-         &[(3, Some("name:33"), 3)],
-         false,
+        Default::default(),
+        store.get_engine(),
+        &product,
+        &[(3, Some("name:33"), 3)],
+        false,
     );
 
     // committed lock to be read
@@ -1936,9 +1936,7 @@ fn test_rc_read() {
 
     let mut ctx = Context::default();
     ctx.set_isolation_level(IsolationLevel::Rc);
-    let ranges = vec![
-        product.get_record_range(1, 4),
-    ];
+    let ranges = vec![product.get_record_range(1, 4)];
 
     let mut req = DAGSelect::from(&product).build_with(ctx.clone(), &[0]);
     req.set_start_ts(u64::MAX - 1);
