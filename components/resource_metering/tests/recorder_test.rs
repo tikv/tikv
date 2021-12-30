@@ -4,7 +4,7 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use collections::HashMap;
-    use resource_metering::{init_recorder, utils, ResourceTagFactory};
+    use resource_metering::{init_recorder, utils, Config, ResourceTagFactory};
     use resource_metering::{Collector, RawRecord, RawRecords};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
@@ -182,7 +182,7 @@ mod linux {
 
     #[test]
     fn test_cpu_recorder_heavy_single_thread() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, 2000);
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
@@ -201,7 +201,7 @@ mod linux {
 
     #[test]
     fn test_cpu_recorder_sleep_single_thread() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, 2000);
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         let collector = DummyCollector::default();
         let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
@@ -220,7 +220,7 @@ mod linux {
 
     #[test]
     fn test_cpu_recorder_hybrid_single_thread() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, 2000);
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         // Hybrid workload with 1 thread
         let collector = DummyCollector::default();
@@ -248,7 +248,7 @@ mod linux {
 
     #[test]
     fn test_cpu_recorder_heavy_multiple_threads() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, 2000);
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         // Heavy CPU with 3 threads
         let collector = DummyCollector::default();
@@ -280,7 +280,7 @@ mod linux {
 
     #[test]
     fn test_cpu_recorder_hybrid_multiple_threads() {
-        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000, 2000);
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         // Hybrid workload with 3 threads
         let collector = DummyCollector::default();

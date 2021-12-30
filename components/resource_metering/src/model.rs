@@ -46,14 +46,13 @@ impl RawRecord {
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter
 /// [Collector]: crate::collector::Collector
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct RawRecords {
     pub begin_unix_time_secs: u64,
     pub duration: Duration,
 
     // tag -> record
     pub records: HashMap<Arc<TagInfos>, RawRecord>,
-    pub others: RawRecord,
 }
 
 impl Default for RawRecords {
@@ -65,16 +64,16 @@ impl Default for RawRecords {
             begin_unix_time_secs: now_unix_time.as_secs(),
             duration: Duration::default(),
             records: HashMap::default(),
-            others: RawRecord::default(),
         }
     }
 }
 
 impl RawRecords {
-    /// Keep a maximum of `k` self.records and aggregate the others into self.others.
-    pub fn keep_top_k(&mut self, k: usize) {
+    /// Keep a maximum of `k` self.records and aggregate the others into returned [RawRecord].
+    pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
+        let mut others = RawRecord::default();
         if self.records.len() <= k {
-            return;
+            return others;
         }
         let mut buf = STATIC_BUF.with(|b| b.take());
         buf.clear();
@@ -85,13 +84,13 @@ impl RawRecords {
         pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
         let kth = buf[k];
         // Evict records with cpu time less or equal than `kth`
-        let others = &mut self.others;
         let evicted_records = self.records.drain_filter(|_, r| r.cpu_time <= kth);
         // Record evicted into others
         for (_, record) in evicted_records {
             others.merge(&record);
         }
         STATIC_BUF.with(move |b| b.set(buf));
+        others
     }
 }
 
@@ -249,85 +248,6 @@ impl Records {
                 record.write_keys_list.push(raw_record.write_keys);
             }
         }
-
-        self.others
-            .entry(ts)
-            .or_default()
-            .merge(&raw_records.others);
-    }
-
-    /// Keep a maximum of `k` items and aggregate the others into `others`.
-    pub fn keep_top_k(&mut self, k: usize) {
-        // # Before
-        //
-        // K: 2
-        //
-        // t1: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 300        |    500     |
-        //     | total    | 800                     |
-        //
-        // t2: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 200        |    700     |
-        //     | total    | 900                     |
-        //
-        // t3: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 100        |    200     |
-        //     | total    | 300                     |
-        //
-        // t4: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 500        |    200     |
-        //     | total    | 700                     |
-
-        // # After
-        //
-        // t1: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 300        |    500     |
-        //     | total    | 800                     |
-        //
-        // t2: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 200        |    700     |
-        //     | total    | 900                     |
-        //
-        // others: |  ts      | 1630464416 | 1630464417 |
-        //         | cpu time | 600        | 400        |
-
-        if self.records.len() <= k {
-            return;
-        }
-        if k == 0 {
-            self.records.clear();
-            self.others.clear();
-            return;
-        }
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-
-        // Find kth top total cpu time
-        for record in self.records.values() {
-            buf.push(record.total_cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-
-        // Evict records with total cpu time less or equal than `kth`
-        let others = &mut self.others;
-        let evicted_records = self.records.drain_filter(|_, r| r.total_cpu_time <= kth);
-
-        // Record evicted into others
-        for (_, record) in evicted_records {
-            for n in 0..record.timestamps.len() {
-                others
-                    .entry(record.timestamps[n])
-                    .or_insert_with(RawRecord::default)
-                    .merge(&RawRecord {
-                        cpu_time: record.cpu_time_list[n],
-                        read_keys: record.read_keys_list[n],
-                        write_keys: record.write_keys_list[n],
-                    });
-            }
-        }
-
-        STATIC_BUF.with(move |b| b.set(buf));
     }
 
     /// Clear all internal data.
@@ -472,21 +392,10 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records: raw_map,
-            others: RawRecord {
-                cpu_time: 111,
-                read_keys: 222,
-                write_keys: 333,
-            },
         };
         assert_eq!(records.records.len(), 0);
         records.append(Arc::new(raw));
         assert_eq!(records.records.len(), 3);
-        records.keep_top_k(2);
-        assert_eq!(records.records.len(), 2);
-        assert_eq!(records.others.len(), 1);
-        assert_eq!(records.others.get(&1).unwrap().cpu_time, 111 + 111);
-        assert_eq!(records.others.get(&1).unwrap().read_keys, 222 + 222);
-        assert_eq!(records.others.get(&1).unwrap().write_keys, 333 + 333)
     }
 
     #[test]
@@ -538,32 +447,31 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
-            others: RawRecord::default(),
         };
-        rs.keep_top_k(999);
+        let others = rs.keep_top_k(999);
         assert_eq!(rs.records.len(), 3);
-        assert_eq!(rs.others.cpu_time, 0);
-        assert_eq!(rs.others.read_keys, 0);
-        assert_eq!(rs.others.write_keys, 0);
-        rs.keep_top_k(3);
+        assert_eq!(others.cpu_time, 0);
+        assert_eq!(others.read_keys, 0);
+        assert_eq!(others.write_keys, 0);
+        let others = rs.keep_top_k(3);
         assert_eq!(rs.records.len(), 3);
-        assert_eq!(rs.others.cpu_time, 0);
-        assert_eq!(rs.others.read_keys, 0);
-        assert_eq!(rs.others.write_keys, 0);
-        rs.keep_top_k(2);
+        assert_eq!(others.cpu_time, 0);
+        assert_eq!(others.read_keys, 0);
+        assert_eq!(others.write_keys, 0);
+        let others = rs.keep_top_k(2);
         assert_eq!(rs.records.len(), 2);
-        assert_eq!(rs.others.cpu_time, 111);
-        assert_eq!(rs.others.read_keys, 222);
-        assert_eq!(rs.others.write_keys, 333);
-        rs.keep_top_k(1);
+        assert_eq!(others.cpu_time, 111);
+        assert_eq!(others.read_keys, 222);
+        assert_eq!(others.write_keys, 333);
+        let others = rs.keep_top_k(1);
         assert_eq!(rs.records.len(), 1);
-        assert_eq!(rs.others.cpu_time, 111 + 444);
-        assert_eq!(rs.others.read_keys, 222 + 555);
-        assert_eq!(rs.others.write_keys, 333 + 666);
-        rs.keep_top_k(0);
+        assert_eq!(others.cpu_time, 111 + 444);
+        assert_eq!(others.read_keys, 222 + 555);
+        assert_eq!(others.write_keys, 333 + 666);
+        let others = rs.keep_top_k(0);
         assert!(rs.records.is_empty());
-        assert_eq!(rs.others.cpu_time, 111 + 444 + 777);
-        assert_eq!(rs.others.read_keys, 222 + 555 + 888);
-        assert_eq!(rs.others.write_keys, 333 + 666 + 999);
+        assert_eq!(others.cpu_time, 111 + 444 + 777);
+        assert_eq!(others.read_keys, 222 + 555 + 888);
+        assert_eq!(others.write_keys, 333 + 666 + 999);
     }
 }

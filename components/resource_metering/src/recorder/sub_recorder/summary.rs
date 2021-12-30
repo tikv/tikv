@@ -2,7 +2,7 @@
 
 use crate::recorder::localstorage::{LocalStorage, STORAGE};
 use crate::recorder::SubRecorder;
-use crate::{RawRecords, SummaryRecord, TagInfos};
+use crate::RawRecords;
 
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 
@@ -50,7 +50,7 @@ impl SubRecorder for SummaryRecorder {
         thread_stores.iter_mut().for_each(|(_, ls)| {
             let summary = { std::mem::take(&mut *ls.summary_records.lock().unwrap()) };
             for (k, v) in summary {
-                merge_summary(records, &k, &v);
+                records.records.entry(k).or_default().merge_summary(&v);
             }
             // The request currently being polled has not yet been merged into the hashmap,
             // so it needs to be processed separately. (For example, a slow request that is
@@ -60,7 +60,7 @@ impl SubRecorder for SummaryRecorder {
                     return;
                 }
                 let s = ls.summary_cur_record.take_and_reset();
-                merge_summary(records, &t, &s);
+                records.records.entry(t).or_default().merge_summary(&s);
             }
             // Update latest switch.
             ls.summary_enable.store(self.enabled, SeqCst);
@@ -91,16 +91,5 @@ impl SubRecorder for SummaryRecorder {
 
     fn thread_created(&mut self, _id: usize, store: &LocalStorage) {
         store.summary_enable.store(self.enabled, SeqCst);
-    }
-}
-
-fn merge_summary(records: &mut RawRecords, tag: &TagInfos, summary: &SummaryRecord) {
-    if let Some(r) = records.records.get_mut(tag) {
-        r.merge_summary(summary);
-    } else {
-        // We will merge any TagInfo which cannot be found in `records.records`
-        // into `records.others` after CpuRecorder executes `keep_top_k()`. So we
-        // depend on SummaryRecorder to execute after CpuRecorder.
-        records.others.merge_summary(summary);
     }
 }

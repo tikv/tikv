@@ -12,24 +12,27 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use recorder::{LocalStorage, LocalStorageRef, STORAGE};
+use tikv_util::warn;
+use tikv_util::worker::{Scheduler, Worker};
+
 pub use collector::Collector;
 pub use config::{Config, ConfigManager};
 pub use model::*;
 pub use recorder::{
-    init_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder, RecorderBuilder,
-    RecorderHandle, SummaryRecorder,
+    init_recorder, record_read_keys, record_write_keys, CollectorGuard, CollectorId,
+    CollectorRegHandle, ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder,
+    Recorder, RecorderBuilder, SummaryRecorder,
 };
-pub use recorder::{CollectorGuard, CollectorId, CollectorRegHandle};
-use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::data_sink::DataSink;
 pub use reporter::data_sink_reg::DataSinkRegHandle;
-pub use reporter::init_reporter;
 pub use reporter::pubsub::PubSubService;
-pub use reporter::single_target::SingleTargetDataSink;
-pub use reporter::single_target::{init_single_target, AddressChangeNotifier};
-pub use reporter::{Reporter, Task};
-use tikv_util::warn;
-use tikv_util::worker::{Scheduler, Worker};
+pub use reporter::single_target::{
+    init_single_target, AddressChangeNotifier, SingleTargetDataSink,
+};
+pub use reporter::{
+    init_reporter, ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
+};
 
 mod collector;
 mod config;

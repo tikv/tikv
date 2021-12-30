@@ -12,6 +12,7 @@ use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle}
 use crate::{Config, DataSink, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use collections::HashMap;
@@ -87,8 +88,14 @@ impl Reporter {
     }
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
-        self.records.append(records);
-        self.records.keep_top_k(self.config.max_resource_groups);
+        let mut records = records.deref().clone();
+        let others = records.keep_top_k(self.config.max_resource_groups);
+        self.records
+            .others
+            .entry(records.begin_unix_time_secs)
+            .or_default()
+            .merge(&others);
+        self.records.append(Arc::new(records));
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -176,7 +183,7 @@ impl ConfigChangeNotifier {
 
     pub fn notify(&self, config: Config) {
         if let Err(err) = self.scheduler.schedule(Task::ConfigChange(config)) {
-            warn!("failed to schedule Task::ConfigChange"; "err" => ?err);
+            warn!("failed to schedule reporter::Task::ConfigChange"; "err" => ?err);
         }
     }
 }
@@ -269,7 +276,6 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
-            others: RawRecord::default(),
         })));
         r.on_timeout();
         r.shutdown();
@@ -316,7 +322,6 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records: records.clone(),
-            others: RawRecord::default(),
         })));
 
         r.on_timeout();
@@ -332,7 +337,6 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
-            others: RawRecord::default(),
         })));
 
         r.on_timeout();
