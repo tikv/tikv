@@ -17,7 +17,8 @@ use tokio_timer::timer::Handle;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb;
 use kvproto::replication_modepb::{
-    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus,
+    DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
+    StoreDrAutoSyncStatus,
 };
 use raft::eraftpb::ConfChangeType;
 

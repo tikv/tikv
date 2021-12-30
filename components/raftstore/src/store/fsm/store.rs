@@ -2212,7 +2212,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             stats,
             store_info,
             send_detailed_report: false,
-            dr_autosync_status: dr_autosync_status,
+            dr_autosync_status,
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";

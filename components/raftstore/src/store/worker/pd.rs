@@ -1083,7 +1083,9 @@ where
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_report, dr_autosync_status.clone());
+        let resp =
+            self.pd_client
+                .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1096,7 +1098,7 @@ where
                             stats: stats_copy,
                             store_info,
                             send_detailed_report: true,
-                            dr_autosync_status: dr_autosync_status,
+                            dr_autosync_status,
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
@@ -1130,7 +1132,7 @@ where
                             stats: stats_copy,
                             store_info,
                             send_detailed_report: true,
-                            dr_autosync_status: dr_autosync_status,
+                            dr_autosync_status,
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
@@ -1680,7 +1682,12 @@ where
                 store_info,
                 send_detailed_report,
                 dr_autosync_status,
-            } => self.handle_store_heartbeat(stats, store_info, send_detailed_report, dr_autosync_status),
+            } => self.handle_store_heartbeat(
+                stats,
+                store_info,
+                send_detailed_report,
+                dr_autosync_status,
+            ),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),

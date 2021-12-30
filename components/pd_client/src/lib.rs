@@ -24,7 +24,9 @@ use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus};
+use kvproto::replication_modepb::{
+    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+};
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;

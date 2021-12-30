@@ -17,7 +17,9 @@ use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus};
+use kvproto::replication_modepb::{
+    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+};
 use security::SecurityManager;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;

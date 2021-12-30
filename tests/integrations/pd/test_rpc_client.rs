@@ -122,7 +122,12 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader.unwrap(), peer);
 
-    block_on(client.store_heartbeat(pdpb::StoreStats::default(), /*store_report=*/ None, None)).unwrap();
+    block_on(client.store_heartbeat(
+        pdpb::StoreStats::default(),
+        /*store_report=*/ None,
+        None,
+    ))
+    .unwrap();
     block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
     block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
