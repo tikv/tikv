@@ -78,13 +78,13 @@ impl RawRecords {
         }
         let mut buf = STATIC_BUF.with(|b| b.take());
         buf.clear();
-        // Find kth top total cpu time.
+        // Find kth top cpu time.
         for record in self.records.values() {
             buf.push(record.cpu_time);
         }
         pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
         let kth = buf[k];
-        // Evict records with total cpu time less or equal than `kth`
+        // Evict records with cpu time less or equal than `kth`
         let others = &mut self.others;
         let evicted_records = self.records.drain_filter(|_, r| r.cpu_time <= kth);
         // Record evicted into others
