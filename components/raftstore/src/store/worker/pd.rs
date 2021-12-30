@@ -2147,6 +2147,7 @@ mod tests {
                     );
                     records
                 },
+                others: RawRecord::default(),
             });
 
             calculate_region_cpu_records(
