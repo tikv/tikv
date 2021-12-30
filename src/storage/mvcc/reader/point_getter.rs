@@ -294,6 +294,7 @@ impl<S: Snapshot> PointGetter<S> {
             match write.write_type {
                 WriteType::Put => {
                     self.statistics.write.processed_keys += 1;
+                    resource_metering::record_read_keys(1);
 
                     if self.omit_value {
                         return Ok(Some(vec![]));

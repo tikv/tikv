@@ -468,6 +468,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
             if keys.len() >= limit {
                 self.statistics.write.processed_keys += keys.len();
+                resource_metering::record_read_keys(keys.len() as u32);
                 return Ok((keys, start));
             }
             let key =
@@ -637,7 +638,7 @@ pub mod tests {
             start_ts: TimeStamp,
             primary: &[u8],
             pessimistic: bool,
-        ) -> TransactionProperties {
+        ) -> TransactionProperties<'_> {
             let kind = if pessimistic {
                 TransactionKind::Pessimistic(TimeStamp::default())
             } else {

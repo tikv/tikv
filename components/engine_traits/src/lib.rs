@@ -254,10 +254,6 @@
 #![feature(min_specialization)]
 #![feature(assert_matches)]
 
-#[cfg(test)]
-extern crate serde_derive;
-extern crate slog_global;
-extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
@@ -337,8 +333,7 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, 
 // These modules need further scrutiny
 
 pub mod compaction_job;
-pub mod key_prefix;
-pub mod raw_value;
+pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
 

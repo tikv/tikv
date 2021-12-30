@@ -25,7 +25,7 @@ use kvproto::kvrpcpb::{Assertion, AssertionLevel};
 pub fn prewrite<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
-    txn_props: &TransactionProperties,
+    txn_props: &TransactionProperties<'_>,
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
@@ -615,7 +615,7 @@ fn async_commit_timestamps(
 // TiKV may fails to write pessimistic locks due to pipelined process.
 // If the data is not changed after acquiring the lock, we can still prewrite the key.
 fn amend_pessimistic_lock<S: Snapshot>(
-    mutation: &PrewriteMutation,
+    mutation: &PrewriteMutation<'_>,
     reader: &mut SnapshotReader<S>,
 ) -> Result<()> {
     let write = reader.seek_write(&mutation.key, TimeStamp::max())?;

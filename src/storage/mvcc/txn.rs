@@ -715,7 +715,7 @@ pub(crate) mod tests {
         for_update_ts: Option<TimeStamp>,
         txn_size: u64,
         skip_constraint_check: bool,
-    ) -> TransactionProperties {
+    ) -> TransactionProperties<'_> {
         let kind = if let Some(ts) = for_update_ts {
             TransactionKind::Pessimistic(ts)
         } else {

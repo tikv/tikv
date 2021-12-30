@@ -4713,7 +4713,7 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
     fn apply_state(&self) -> &RaftApplyState {
         self.peer.raft_group.store().apply_state()
     }
-    fn raft_status(&self) -> raft::Status {
+    fn raft_status(&self) -> raft::Status<'_> {
         self.peer.raft_group.status()
     }
     fn raft_commit_index(&self) -> u64 {

@@ -63,7 +63,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
             store
                 .scan(
                     Context::default(),
-                    k,
+                    Key::from_raw(&k),
                     None,
                     1,
                     false,

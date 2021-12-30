@@ -527,7 +527,6 @@ impl Default for ThreadReadId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f64;
     use std::ops::Sub;
     use std::thread;
     use std::time::{Duration, SystemTime};

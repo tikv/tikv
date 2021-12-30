@@ -16,6 +16,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::TempDir;
+use tikv::storage::kv::SnapContext;
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
@@ -32,11 +33,11 @@ use raftstore::router::{
 };
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::SnapManager;
 use raftstore::store::{
     AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
     SplitCheckRunner, SplitConfigManager,
 };
+use raftstore::store::{RegionSnapshot, SnapManager};
 use raftstore::Result;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
@@ -57,8 +58,8 @@ use tikv::server::{
     create_raft_storage, ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
     Server, ServerTransport,
 };
-use tikv::storage;
 use tikv::storage::txn::flow_controller::FlowController;
+use tikv::storage::{self, Engine};
 use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
@@ -115,6 +116,7 @@ struct ServerMeta {
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
+    rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -200,6 +202,31 @@ impl ServerCluster {
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    fn init_resource_metering(
+        &self,
+        cfg: &resource_metering::Config,
+    ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
+        let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
+        let (_, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+        let (_, single_target_worker) = resource_metering::init_single_target(
+            cfg.receiver_address.clone(),
+            Arc::new(Environment::new(2)),
+            data_sink_reg_handle,
+        );
+
+        (
+            resource_tag_factory,
+            collector_reg_handle,
+            Box::new(move || {
+                single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
+            }),
+        )
     }
 }
 
@@ -306,6 +333,10 @@ impl Simulator for ServerCluster {
             None
         };
 
+        // Start resource metering.
+        let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
+            self.init_resource_metering(&cfg.resource_metering);
+
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
@@ -319,7 +350,7 @@ impl Simulator for ServerCluster {
             lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             pd_sender,
-            ResourceTagFactory::new_for_test(),
+            res_tag_factory.clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -368,7 +399,7 @@ impl Simulator for ServerCluster {
             cop_read_pool.handle(),
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
-            ResourceTagFactory::new_for_test(),
+            res_tag_factory,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -472,7 +503,7 @@ impl Simulator for ServerCluster {
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager.clone(),
-            CollectorRegHandle::new_for_test(),
+            collector_reg_handle,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -506,6 +537,7 @@ impl Simulator for ServerCluster {
                 sim_trans: simulate_trans,
                 gc_worker,
                 rts_worker,
+                rsmeter_cleanup,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -535,6 +567,7 @@ impl Simulator for ServerCluster {
             if let Some(worker) = meta.rts_worker {
                 worker.stop_worker();
             }
+            (meta.rsmeter_cleanup)();
         }
     }
 
@@ -616,6 +649,25 @@ impl Simulator for ServerCluster {
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
+    }
+}
+
+impl Cluster<ServerCluster> {
+    pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<RocksSnapshot> {
+        let leader = self.leader_of_region(region_id).unwrap();
+        let store_id = leader.store_id;
+        let epoch = self.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+
+        let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        storage.snapshot(snap_ctx).unwrap()
     }
 }
 

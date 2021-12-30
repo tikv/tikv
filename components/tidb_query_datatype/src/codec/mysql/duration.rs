@@ -676,7 +676,6 @@ mod tests {
     use crate::codec::data_type::DateTime;
     use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
-    use std::f64::EPSILON;
     use std::sync::Arc;
 
     #[test]
@@ -952,7 +951,7 @@ mod tests {
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: f64 = du.convert(&mut ctx).unwrap();
             assert!(
-                (expect - get).abs() < EPSILON,
+                (expect - get).abs() < f64::EPSILON,
                 "expect: {}, got: {}",
                 expect,
                 get
