@@ -94,8 +94,9 @@ impl Reporter {
         }
         let (top, evicted) = records.top_k(self.config.max_resource_groups);
         self.records.append(ts, top);
+        let others = self.records.others.entry(ts).or_default();
         evicted.for_each(|(_, v)| {
-            self.records.others.entry(ts).or_default().merge(v);
+            others.merge(v);
         });
     }
 
