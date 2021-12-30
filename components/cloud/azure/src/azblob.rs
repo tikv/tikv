@@ -5,7 +5,7 @@ use azure_core::prelude::*;
 use azure_identity::token_credentials::{ClientSecretCredential, TokenCredentialOptions};
 use azure_storage::blob::prelude::*;
 use azure_storage::core::{prelude::*, ConnectionStringBuilder};
-use chrono::{Duration as chDuration, Utc};
+use chrono::{Duration as ChronoDuration, Utc};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
@@ -38,21 +38,11 @@ const ENV_SHARED_KEY: &str = "AZURE_STORAGE_KEY";
 /// client_id:      $AZURE_CLIENT_ID,
 /// tenant_id:      $AZURE_TENANT_ID,
 /// client_secret:  $AZURE_CLIENT_SECRET,
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CredentialInfo {
     client_id: ClientId,
     tenant_id: String,
     client_secret: ClientSecret,
-}
-
-impl std::fmt::Debug for CredentialInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CredentialInfo")
-            .field("client_id", &self.client_id)
-            .field("tenant_id", &self.tenant_id)
-            .field("client_secret", &"?")
-            .finish()
-    }
 }
 
 #[derive(Clone)]
@@ -112,17 +102,13 @@ impl Config {
     }
 
     fn load_env_account_name() -> Option<StringNonEmpty> {
-        match env::var(ENV_ACCOUNT_NAME).ok() {
-            Some(name) => StringNonEmpty::opt(name),
-            None => None,
-        }
+        env::var(ENV_ACCOUNT_NAME)
+            .ok()
+            .and_then(StringNonEmpty::opt)
     }
 
     fn load_env_shared_key() -> Option<StringNonEmpty> {
-        match env::var(ENV_SHARED_KEY).ok() {
-            Some(key) => StringNonEmpty::opt(key),
-            None => None,
-        }
+        env::var(ENV_SHARED_KEY).ok().and_then(StringNonEmpty::opt)
     }
 
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
@@ -378,6 +364,14 @@ impl TokenCredContainerBuilder {
     }
 }
 
+// if the token only has 5 minutes left.
+// Threads will try to modify it without blocked: try_lock
+// The thread doesn't get the lock will continue to use the token.
+const TOKEN_UPDATE_LEFT_TIME_MINS: i64 = 5;
+// if the token only has 2 minutes left.
+// Threads will try to modify it with blocked: lock
+const TOKEN_EXPIRE_LEFT_TIME_MINS: i64 = 2;
+
 #[async_trait]
 impl ContainerBuilder for TokenCredContainerBuilder {
     async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
@@ -390,11 +384,11 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             if let Some(ref t) = *token_response {
                 let interval = t.0.expires_on - Utc::now();
                 // keep token updated 5 minutes before it expires
-                if interval > chDuration::minutes(5) {
+                if interval > ChronoDuration::minutes(TOKEN_UPDATE_LEFT_TIME_MINS) {
                     return Ok(t.1.clone());
                 }
 
-                if interval > chDuration::minutes(2) {
+                if interval > ChronoDuration::minutes(TOKEN_EXPIRE_LEFT_TIME_MINS) {
                     // there still have time to use the token,
                     // and only need one thread to update token.
                     if let Ok(l) = self.modify_place.try_lock() {
@@ -419,7 +413,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 if let Some(ref t) = *token_response {
                     let interval = t.0.expires_on - Utc::now();
                     // token is already updated
-                    if interval > chDuration::minutes(5) {
+                    if interval > ChronoDuration::minutes(TOKEN_UPDATE_LEFT_TIME_MINS) {
                         return Ok(t.1.clone());
                     }
                 }
