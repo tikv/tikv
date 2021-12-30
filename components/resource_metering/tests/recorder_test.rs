@@ -4,8 +4,8 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use collections::HashMap;
-    use resource_metering::{utils, ResourceTagFactory};
-    use resource_metering::{Collector, RawRecord, RawRecords, RecorderBuilder, TEST_TAG_PREFIX};
+    use resource_metering::{init_recorder, utils, ResourceTagFactory};
+    use resource_metering::{Collector, RawRecord, RawRecords};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
@@ -87,8 +87,6 @@ mod linux {
                         SetContext(tag) => {
                             let mut ctx = kvproto::kvrpcpb::Context::default();
                             ctx.mut_resource_group_tag()
-                                .extend_from_slice(TEST_TAG_PREFIX);
-                            ctx.mut_resource_group_tag()
                                 .extend_from_slice(tag.as_bytes());
                             let tag = resource_tag_factory.new_tag(&ctx);
                             guard = Some(tag.attach());
@@ -144,8 +142,7 @@ mod linux {
         fn collect(&self, records: Arc<RawRecords>) {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, record) in records.records.iter() {
-                    let (_, k) = tag.extra_attachment.split_at(TEST_TAG_PREFIX.len());
-                    r.entry(k.to_vec())
+                    r.entry(tag.extra_attachment.to_vec())
                         .or_insert_with(RawRecord::default)
                         .merge(record);
                 }
@@ -184,137 +181,147 @@ mod linux {
     }
 
     #[test]
-    fn test_cpu_recorder() {
-        // let collector = MockCollector::default();
-        // let records = collector.records.clone();
+    fn test_cpu_recorder_heavy_single_thread() {
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
-        let (handle, collector_reg_handle, resource_tag_factory) = RecorderBuilder::default()
-            .add_sub_recorder(Box::new(resource_metering::CpuRecorder::default()))
-            .spawn()
-            .unwrap();
-        handle.resume();
-        fail::cfg("cpu-record-test-filter", "return").unwrap();
+        let collector = DummyCollector::default();
+        let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-        // Heavy CPU only with 1 thread
-        {
-            let collector = DummyCollector::default();
-            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
+        let (handle, expected) = Operations::begin(resource_tag_factory)
+            .then(SetContext("ctx-0"))
+            .then(CpuHeavy(2000))
+            .then(ResetContext)
+            .spawn();
+        handle.join().unwrap();
 
-            let (handle, expected) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-0"))
-                .then(CpuHeavy(2000))
-                .then(ResetContext)
-                .spawn();
-            handle.join().unwrap();
+        collector.check(expected);
 
-            collector.check(expected);
-        }
+        worker.stop_worker();
+    }
 
-        // Sleep only with 1 thread
-        {
-            let collector = DummyCollector::default();
-            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
+    #[test]
+    fn test_cpu_recorder_sleep_single_thread() {
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
-            let (handle, expected) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-0"))
-                .then(Sleep(2000))
-                .then(ResetContext)
-                .spawn();
-            handle.join().unwrap();
+        let collector = DummyCollector::default();
+        let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-            collector.check(expected);
-        }
+        let (handle, expected) = Operations::begin(resource_tag_factory)
+            .then(SetContext("ctx-0"))
+            .then(Sleep(2000))
+            .then(ResetContext)
+            .spawn();
+        handle.join().unwrap();
+
+        collector.check(expected);
+
+        worker.stop_worker();
+    }
+
+    #[test]
+    fn test_cpu_recorder_hybrid_single_thread() {
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         // Hybrid workload with 1 thread
-        {
-            let collector = DummyCollector::default();
-            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
+        let collector = DummyCollector::default();
+        let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-            let (handle, expected) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-0"))
-                .then(CpuHeavy(600))
-                .then(Sleep(400))
-                .then(ResetContext)
-                .then(SetContext("ctx-1"))
-                .then(CpuHeavy(500))
-                .then(Sleep(500))
-                .then(ResetContext)
-                .then(SetContext("ctx-2"))
-                .then(Sleep(600))
-                .then(ResetContext)
-                .spawn();
-            handle.join().unwrap();
+        let (handle, expected) = Operations::begin(resource_tag_factory)
+            .then(SetContext("ctx-0"))
+            .then(CpuHeavy(600))
+            .then(Sleep(400))
+            .then(ResetContext)
+            .then(SetContext("ctx-1"))
+            .then(CpuHeavy(500))
+            .then(Sleep(500))
+            .then(ResetContext)
+            .then(SetContext("ctx-2"))
+            .then(Sleep(600))
+            .then(ResetContext)
+            .spawn();
+        handle.join().unwrap();
 
-            collector.check(expected);
-        }
+        collector.check(expected);
+
+        worker.stop_worker();
+    }
+
+    #[test]
+    fn test_cpu_recorder_heavy_multiple_threads() {
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         // Heavy CPU with 3 threads
-        {
-            let collector = DummyCollector::default();
-            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
+        let collector = DummyCollector::default();
+        let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-            let (handle0, expected0) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-0"))
-                .then(CpuHeavy(1500))
-                .then(ResetContext)
-                .spawn();
-            let (handle1, expected1) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-1"))
-                .then(CpuHeavy(1500))
-                .then(ResetContext)
-                .spawn();
-            let (handle2, expected2) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-2"))
-                .then(CpuHeavy(1500))
-                .then(ResetContext)
-                .spawn();
-            handle0.join().unwrap();
-            handle1.join().unwrap();
-            handle2.join().unwrap();
+        let (handle0, expected0) = Operations::begin(resource_tag_factory.clone())
+            .then(SetContext("ctx-0"))
+            .then(CpuHeavy(1500))
+            .then(ResetContext)
+            .spawn();
+        let (handle1, expected1) = Operations::begin(resource_tag_factory.clone())
+            .then(SetContext("ctx-1"))
+            .then(CpuHeavy(1500))
+            .then(ResetContext)
+            .spawn();
+        let (handle2, expected2) = Operations::begin(resource_tag_factory)
+            .then(SetContext("ctx-2"))
+            .then(CpuHeavy(1500))
+            .then(ResetContext)
+            .spawn();
+        handle0.join().unwrap();
+        handle1.join().unwrap();
+        handle2.join().unwrap();
 
-            collector.check(merge(vec![expected0, expected1, expected2]));
-        }
+        collector.check(merge(vec![expected0, expected1, expected2]));
+
+        worker.stop_worker();
+    }
+
+    #[test]
+    fn test_cpu_recorder_hybrid_multiple_threads() {
+        let (_, collector_reg_handle, resource_tag_factory, worker) = init_recorder(1000);
 
         // Hybrid workload with 3 threads
-        {
-            let collector = DummyCollector::default();
-            let _handle = collector_reg_handle.register(Box::new(collector.clone()));
+        let collector = DummyCollector::default();
+        let _handle = collector_reg_handle.register(Box::new(collector.clone()), false);
 
-            let (handle0, expected0) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-0"))
-                .then(CpuHeavy(200))
-                .then(Sleep(300))
-                .then(ResetContext)
-                .then(SetContext("ctx-1"))
-                .then(Sleep(200))
-                .then(CpuHeavy(600))
-                .then(ResetContext)
-                .then(CpuHeavy(500))
-                .spawn();
-            let (handle1, expected1) = Operations::begin(resource_tag_factory.clone())
-                .then(SetContext("ctx-1"))
-                .then(CpuHeavy(500))
-                .then(ResetContext)
-                .then(SetContext("ctx-2"))
-                .then(Sleep(400))
-                .then(ResetContext)
-                .then(Sleep(300))
-                .spawn();
-            let (handle2, expected2) = Operations::begin(resource_tag_factory)
-                .then(SetContext("ctx-2"))
-                .then(CpuHeavy(800))
-                .then(ResetContext)
-                .then(SetContext("ctx-1"))
-                .then(Sleep(200))
-                .then(ResetContext)
-                .then(CpuHeavy(200))
-                .spawn();
-            handle0.join().unwrap();
-            handle1.join().unwrap();
-            handle2.join().unwrap();
+        let (handle0, expected0) = Operations::begin(resource_tag_factory.clone())
+            .then(SetContext("ctx-0"))
+            .then(CpuHeavy(200))
+            .then(Sleep(300))
+            .then(ResetContext)
+            .then(SetContext("ctx-1"))
+            .then(Sleep(200))
+            .then(CpuHeavy(600))
+            .then(ResetContext)
+            .then(CpuHeavy(500))
+            .spawn();
+        let (handle1, expected1) = Operations::begin(resource_tag_factory.clone())
+            .then(SetContext("ctx-1"))
+            .then(CpuHeavy(500))
+            .then(ResetContext)
+            .then(SetContext("ctx-2"))
+            .then(Sleep(400))
+            .then(ResetContext)
+            .then(Sleep(300))
+            .spawn();
+        let (handle2, expected2) = Operations::begin(resource_tag_factory)
+            .then(SetContext("ctx-2"))
+            .then(CpuHeavy(800))
+            .then(ResetContext)
+            .then(SetContext("ctx-1"))
+            .then(Sleep(200))
+            .then(ResetContext)
+            .then(CpuHeavy(200))
+            .spawn();
+        handle0.join().unwrap();
+        handle1.join().unwrap();
+        handle2.join().unwrap();
 
-            collector.check(merge(vec![expected0, expected1, expected2]));
-        }
+        collector.check(merge(vec![expected0, expected1, expected2]));
+
+        worker.stop_worker();
     }
 
     fn merge(

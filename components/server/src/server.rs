@@ -43,6 +43,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -203,6 +204,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
+    rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
 type LocalServer<EK, ER> =
@@ -624,11 +626,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start resource metering.
-        let (recorder_handle, collector_reg_handle, resource_tag_factory) =
-            resource_metering::init_recorder(
-                self.config.resource_metering.enabled,
-                self.config.resource_metering.precision.as_millis(),
-            );
+        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(self.config.resource_metering.precision.as_millis());
+        self.to_stop.push(recorder_worker);
         let (config_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.config.resource_metering.clone(),
@@ -638,9 +638,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.config.resource_metering.receiver_address.clone(),
             self.env.clone(),
-            data_sink_reg_handle,
+            data_sink_reg_handle.clone(),
         );
         self.to_stop.push(single_target_worker);
+        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
@@ -941,6 +942,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             importer,
             cdc_scheduler,
             cdc_memory_quota,
+            rsmeter_pubsub_service,
         });
 
         server_config
@@ -1051,6 +1053,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .is_some()
         {
             fatal!("failed to register cdc service");
+        }
+        if servers
+            .server
+            .register_service(create_resource_metering_pub_sub(
+                servers.rsmeter_pubsub_service.clone(),
+            ))
+            .is_some()
+        {
+            warn!("failed to register resource metering pubsub service");
         }
     }
 
