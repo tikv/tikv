@@ -270,10 +270,22 @@ where
             .await?;
         Ok(match decode_json(&body) {
             Ok(change) => match cfg_controller.update(change) {
-                Err(e) => make_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to update, error: {:?}", e),
-                ),
+                Err(e) => {
+                    if let Some(e) = e.downcast_ref::<std::io::Error>() {
+                        make_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!(
+                                "config changed, but failed to persist change due to err: {:?}",
+                                e
+                            ),
+                        )
+                    } else {
+                        make_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("failed to update, error: {:?}", e),
+                        )
+                    }
+                }
                 Ok(_) => {
                     let mut resp = Response::default();
                     *resp.status_mut() = StatusCode::OK;
@@ -285,6 +297,23 @@ where
                 format!("failed to decode, error: {:?}", e),
             ),
         })
+    }
+
+    async fn update_config_from_toml_file(
+        cfg_controller: ConfigController,
+        _req: Request<Body>,
+    ) -> hyper::Result<Response<Body>> {
+        match cfg_controller.update_from_toml_file() {
+            Err(e) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to update, error: {:?}", e),
+            )),
+            Ok(_) => {
+                let mut resp = Response::default();
+                *resp.status_mut() = StatusCode::OK;
+                Ok(resp)
+            }
+        }
     }
 
     pub async fn dump_cpu_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
@@ -516,6 +545,14 @@ where
                             }
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
+                            }
+                            // This interface is used for configuration file hosting scenarios,
+                            // TiKV will not update configuration files, and this interface will
+                            // silently ignore configration items that cannot be updated online,
+                            // hand it over to the hosting platform for processing.
+                            (Method::PUT, "/config/reload") => {
+                                Self::update_config_from_toml_file(cfg_controller.clone(), req)
+                                    .await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_cpu_prof_to_resp(req).await

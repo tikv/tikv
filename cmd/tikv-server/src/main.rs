@@ -159,14 +159,22 @@ fn main() {
     let mut config = matches
         .value_of_os("config")
         .map_or_else(TiKvConfig::default, |path| {
+            let path = Path::new(path);
             TiKvConfig::from_file(
-                Path::new(path),
+                path,
                 if is_config_check {
                     Some(&mut unrecognized_keys)
                 } else {
                     None
                 },
             )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    path.display(),
+                    e
+                );
+            })
         });
 
     server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
