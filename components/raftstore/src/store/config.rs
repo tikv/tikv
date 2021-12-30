@@ -16,6 +16,7 @@ use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 
@@ -500,8 +501,15 @@ impl Config {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
 
-        if self.apply_batch_system.pool_size == 0 {
-            return Err(box_err!("apply-pool-size should be greater than 0"));
+        // Since the following configuration supports online update, in order to
+        // prevent mistakenly inputting too large values, the max limit is made
+        // according to the cpu quota.
+        let cpu_num = SysQuota::cpu_cores_quota() as usize;
+        if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > cpu_num {
+            return Err(box_err!(
+                "apply-pool-size should be greater than 0 and less than or equal to: {}",
+                cpu_num
+            ));
         }
         if let Some(size) = self.apply_batch_system.max_batch_size {
             if size == 0 {
@@ -510,8 +518,11 @@ impl Config {
         } else {
             self.apply_batch_system.max_batch_size = Some(256);
         }
-        if self.store_batch_system.pool_size == 0 {
-            return Err(box_err!("store-pool-size should be greater than 0"));
+        if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > cpu_num {
+            return Err(box_err!(
+                "store-pool-size should be greater than 0 and less than or equal to: {}",
+                cpu_num
+            ));
         }
         if self.store_batch_system.low_priority_pool_size > 0 {
             // The store thread pool doesn't need a low-priority thread currently.

@@ -10,13 +10,15 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use collections::HashMap;
+use kvproto::resource_usage_agent::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
+use tikv_util::warn;
 
 thread_local! {
     static STATIC_BUF: Cell<Vec<u32>> = Cell::new(vec![]);
 }
 
 /// Raw resource statistics record.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
     pub read_keys: u32,
@@ -44,7 +46,7 @@ impl RawRecord {
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter
 /// [Collector]: crate::collector::Collector
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct RawRecords {
     pub begin_unix_time_secs: u64,
     pub duration: Duration,
@@ -67,6 +69,8 @@ impl Default for RawRecords {
 }
 
 /// Resource statistics.
+///
+/// TODO(mornyx): Optimize to Vec<Item{timestamp,cpu_time,read_keys,write_keys}>
 #[derive(Debug, Default, Clone)]
 pub struct Record {
     pub timestamps: Vec<u64>,
@@ -74,6 +78,29 @@ pub struct Record {
     pub read_keys_list: Vec<u32>,
     pub write_keys_list: Vec<u32>,
     pub total_cpu_time: u32,
+}
+
+impl From<Record> for Vec<GroupTagRecordItem> {
+    fn from(record: Record) -> Self {
+        let mut items = Vec::with_capacity(record.timestamps.len());
+        for n in 0..record.timestamps.len() {
+            let mut item = GroupTagRecordItem::new();
+            item.set_timestamp_sec(record.timestamps[n]);
+            item.set_cpu_time_ms(record.cpu_time_list[n]);
+            item.set_read_keys(record.read_keys_list[n]);
+            item.set_write_keys(record.write_keys_list[n]);
+            items.push(item);
+        }
+        items
+    }
+}
+
+impl Record {
+    pub fn valid(&self) -> bool {
+        self.timestamps.len() == self.cpu_time_list.len()
+            && self.timestamps.len() == self.read_keys_list.len()
+            && self.timestamps.len() == self.write_keys_list.len()
+    }
 }
 
 /// Resource statistics map.
@@ -87,6 +114,52 @@ pub struct Record {
 pub struct Records {
     pub records: HashMap<Vec<u8>, Record>,
     pub others: HashMap<u64, RawRecord>,
+}
+
+impl From<Records> for Vec<ResourceUsageRecord> {
+    fn from(records: Records) -> Vec<ResourceUsageRecord> {
+        let mut res = Vec::with_capacity(records.records.len() + 1);
+        for (tag, record) in records.records {
+            if !record.valid() {
+                warn!("invalid record"); // should not happen
+                continue;
+            }
+            let items: Vec<GroupTagRecordItem> = record.into();
+            let mut tag_record = GroupTagRecord::new();
+            tag_record.set_resource_group_tag(tag);
+            tag_record.set_items(items.into());
+            let mut r = ResourceUsageRecord::new();
+            r.set_record(tag_record);
+            res.push(r);
+        }
+
+        if !records.others.is_empty() {
+            let mut items = Vec::with_capacity(records.others.len());
+            for (
+                ts,
+                RawRecord {
+                    cpu_time,
+                    read_keys,
+                    write_keys,
+                },
+            ) in records.others
+            {
+                let mut item = GroupTagRecordItem::new();
+                item.set_timestamp_sec(ts);
+                item.set_cpu_time_ms(cpu_time);
+                item.set_read_keys(read_keys);
+                item.set_write_keys(write_keys);
+                items.push(item);
+            }
+            let mut tag_record = GroupTagRecord::new();
+            tag_record.set_items(items.into());
+            let mut r = ResourceUsageRecord::new();
+            r.set_record(tag_record);
+            res.push(r);
+        }
+
+        res
+    }
 }
 
 impl Records {

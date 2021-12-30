@@ -119,6 +119,12 @@ impl Writer {
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf.into()])
             .observe(size as f64);
+        BACKUP_SCAN_KV_SIZE
+            .with_label_values(&[cf.into()])
+            .inc_by(self.total_bytes);
+        BACKUP_SCAN_KV_COUNT
+            .with_label_values(&[cf.into()])
+            .inc_by(self.total_kvs);
         let file_name = format!("{}_{}.sst", name, cf);
         let iv = Iv::new_ctr();
         let encrypter_reader =
@@ -428,7 +434,7 @@ mod tests {
 
     type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
-    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs]) {
+    fn check_sst(ssts: &[(engine_traits::CfName, &Path)], kvs: &[CfKvs<'_>]) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
             .path(temp.path())

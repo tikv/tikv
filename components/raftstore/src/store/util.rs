@@ -840,7 +840,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
 pub struct MsgType<'a>(pub &'a RaftMessage);
 
 impl Display for MsgType<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.0.has_extra_msg() {
             write!(f, "{:?}", self.0.get_message().get_msg_type())
         } else {

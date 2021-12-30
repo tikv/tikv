@@ -23,6 +23,7 @@ failpoints = ["fail/failpoints"]
 nortcheck = []
 
 [dependencies]
+api_version = { path = "../api_version", default-features = false }
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 file_system = { path = "../file_system", default-features = false }

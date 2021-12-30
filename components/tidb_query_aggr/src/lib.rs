@@ -443,7 +443,7 @@ mod tests {
             let _ = update!(
                 &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
                 &mut ctx,
-                Some(&[1u8] as BytesRef)
+                Some(&[1u8] as BytesRef<'_>)
             );
         });
         assert!(result.is_err());
