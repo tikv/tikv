@@ -4227,7 +4227,7 @@ where
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         let mut region = self.region().clone();
-        if self.region_buckets.get_keys().len() != 0 {
+        if !self.region_buckets.get_keys().is_empty() {
             debug!("notifying pd with region_bucket";
                 "region_bucket size" => self.region_buckets.get_keys().len(),
             );

@@ -292,18 +292,15 @@ pub mod tests {
         exp_buckets_keys: Vec<Vec<u8>>,
     ) {
         loop {
-            match rx.try_recv() {
-                Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) => {
-                    let mut i = 0;
-                    let keys = region_buckets.get_keys();
-                    assert_eq!(keys.len(), exp_buckets_keys.len());
-                    while i < keys.len() {
-                        assert_eq!(keys[i], exp_buckets_keys[i]);
-                        i += 1
-                    }
-                    break;
+            if let Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) = rx.try_recv() {
+                let mut i = 0;
+                let keys = region_buckets.get_keys();
+                assert_eq!(keys.len(), exp_buckets_keys.len());
+                while i < keys.len() {
+                    assert_eq!(keys[i], exp_buckets_keys[i]);
+                    i += 1
                 }
-                _ => {}
+                break;
             }
         }
     }
@@ -454,24 +451,28 @@ pub mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(100),
-            region_split_size: ReadableSize(60),
+            region_max_size: ReadableSize(500),
+            region_split_size: ReadableSize(500),
             batch_split_limit: 5,
             enable_region_bucket: true,
-            region_bucket_size: ReadableSize(60),
+            region_bucket_size: ReadableSize(300),
             ..Default::default()
         };
 
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-        let mut exp_bucket_keys = vec![];
+        let exp_bucket_keys = vec!["0040".as_bytes().to_vec(), "0062".as_bytes().to_vec()];
         for i in 0..41 {
-            let s = keys::data_key(format!("{:04}", i).as_bytes()); // size is 4 + 1 = 5
+            let s = keys::data_key(format!("{:04}", 2 * i + 1).as_bytes()); // size is 4 + 1 = 5
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 && i > 0 {
-                if i < 40 {
-                    exp_bucket_keys.push(keys::origin_key(&s).to_vec());
-                }
+                engine.flush_cf(data_cf, true).unwrap();
+            }
+        }
+        for i in 0..41 {
+            let s = keys::data_key(format!("{:04}", 2 * i).as_bytes()); // size is 4 + 1 = 5
+            engine.put_cf(data_cf, &s, &s).unwrap();
+            if i % 10 == 0 && i > 0 {
                 engine.flush_cf(data_cf, true).unwrap();
             }
         }
@@ -483,18 +484,15 @@ pub mod tests {
         ));
 
         loop {
-            match rx.try_recv() {
-                Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) => {
-                    let mut i = 0;
-                    let keys = region_buckets.get_keys();
-                    assert_eq!(keys.len(), exp_bucket_keys.len());
-                    while i < keys.len() {
-                        assert_eq!(keys[i], exp_bucket_keys[i]);
-                        i += 1
-                    }
-                    break;
+            if let Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) = rx.try_recv() {
+                let mut i = 0;
+                let keys = region_buckets.get_keys();
+                assert_eq!(keys.len(), exp_bucket_keys.len());
+                while i < keys.len() {
+                    assert_eq!(keys[i], exp_bucket_keys[i]);
+                    i += 1
                 }
-                _ => {}
+                break;
             }
         }
         drop(rx);

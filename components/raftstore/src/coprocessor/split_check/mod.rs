@@ -20,7 +20,6 @@ pub use self::table::TableCheckObserver;
 
 pub struct Host<'a, E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
-    bucket_checker: size::Checker,
     auto_split: bool,
     cfg: &'a Config,
 }
@@ -31,12 +30,6 @@ impl<'a, E> Host<'a, E> {
             auto_split,
             checkers: vec![],
             cfg,
-            bucket_checker: size::Checker::new(
-                cfg.region_bucket_size.0 * 2,
-                cfg.region_bucket_size.0,
-                100000,
-                CheckPolicy::Approximate,
-            ),
         }
     }
 
@@ -97,9 +90,22 @@ impl<'a, E> Host<'a, E> {
         region: &Region,
         engine: &Kv,
     ) -> Result<Vec<Vec<u8>>> {
-        let keys = box_try!(self.bucket_checker.approximate_split_keys(region, engine));
-        if !keys.is_empty() {
-            return Ok(keys);
+        let region_size = if let Ok(size) = get_region_approximate_size(engine, region, 0) {
+            size
+        } else {
+            self.cfg.region_max_size.0
+        };
+        if region_size >= self.cfg.region_bucket_size.0 * 2 {
+            let mut bucket_checker = size::Checker::new(
+                self.cfg.region_bucket_size.0 * 2,
+                self.cfg.region_bucket_size.0,
+                region_size / self.cfg.region_bucket_size.0,
+                CheckPolicy::Approximate,
+            );
+            let keys = box_try!(bucket_checker.approximate_split_keys(region, engine));
+            if !keys.is_empty() {
+                return Ok(keys);
+            }
         }
         Ok(vec![])
     }
@@ -111,11 +117,11 @@ impl<'a, E> Host<'a, E> {
 
     #[inline]
     pub fn enable_region_bucket(&self) -> bool {
-        return self.cfg.enable_region_bucket;
+        self.cfg.enable_region_bucket
     }
 
     #[inline]
     pub fn region_bucket_size(&self) -> u64 {
-        return self.cfg.region_bucket_size.0;
+        self.cfg.region_bucket_size.0
     }
 }

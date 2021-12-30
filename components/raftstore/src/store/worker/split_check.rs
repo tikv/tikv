@@ -201,34 +201,36 @@ where
         let mut host =
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
+        if host.policy() == CheckPolicy::Approximate && host.enable_region_bucket() {
+            let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
+                Ok(keys) => keys
+                    .into_iter()
+                    .map(|k| keys::origin_key(&k).to_vec())
+                    .collect(),
+                Err(e) => {
+                    error!(%e;
+                        "failed to get approximate bucket key";
+                        "region_id" => region_id,
+                    );
+                    vec![]
+                }
+            };
+            info!("starting approximate_bucket_keys {}", bucket_keys.len());
+            if !bucket_keys.is_empty() {
+                let mut region_buckets = Buckets::default();
+                region_buckets.set_keys(::protobuf::RepeatedField::from_vec(bucket_keys));
+                let _ = self.router.send(
+                    region.get_id(),
+                    CasualMessage::RefreshRegionBuckets { region_buckets },
+                );
+            }
+        }
+
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
         }
 
-        if host.policy() == CheckPolicy::Approximate {
-            if host.enable_region_bucket() {
-                let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
-                    Ok(keys) => keys.into_iter().map(|k| keys::origin_key(&k).to_vec()).collect(),
-                    Err(e) => {
-                        error!(%e;
-                            "failed to get approximate bucket key";
-                            "region_id" => region_id,
-                        );
-                        vec![]
-                    }
-                };
-                info!("starting approximate_bucket_keys {}", bucket_keys.len());
-                if bucket_keys.len() > 0 {
-                    let mut region_buckets = Buckets::default();
-                    region_buckets.set_keys(::protobuf::RepeatedField::from_vec(bucket_keys));
-                    let _ = self.router.send(
-                        region.get_id(),
-                        CasualMessage::RefreshRegionBuckets { region_buckets },
-                    );
-                }
-            }
-        }
         let split_keys = match host.policy() {
             CheckPolicy::Scan => {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {

@@ -219,7 +219,7 @@ mod tests {
         let cfg = Config {
             region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
             enable_region_bucket: true,
-            region_bucket_size: ReadableSize(20 as u64), // so that each key below will form a bucket
+            region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
         let mut runnable =
@@ -228,7 +228,7 @@ mod tests {
         // so bucket key will be all these keys
         let mut exp_bucket_keys = vec![];
         for i in 0..11 {
-            let k = format!("{:04}", i).into_bytes(); 
+            let k = format!("{:04}", i).into_bytes();
             exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
             engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
