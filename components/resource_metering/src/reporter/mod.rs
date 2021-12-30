@@ -269,6 +269,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            others: RawRecord::default(),
         })));
         r.on_timeout();
         r.shutdown();
@@ -315,6 +316,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records: records.clone(),
+            others: RawRecord::default(),
         })));
 
         r.on_timeout();
@@ -330,6 +332,7 @@ mod tests {
             begin_unix_time_secs: 123,
             duration: Duration::default(),
             records,
+            others: RawRecord::default(),
         })));
 
         r.on_timeout();

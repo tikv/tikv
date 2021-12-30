@@ -19,9 +19,18 @@ use collections::HashMap;
 /// See [SubRecorder] for more relevant designs.
 ///
 /// [SubRecorder]: crate::recorder::SubRecorder
-#[derive(Default)]
 pub struct CpuRecorder {
     thread_stats: HashMap<usize, ThreadStat>,
+    max_resource_groups: usize,
+}
+
+impl CpuRecorder {
+    pub fn new(max_resource_groups: usize) -> Self {
+        Self {
+            thread_stats: HashMap::default(),
+            max_resource_groups,
+        }
+    }
 }
 
 impl SubRecorder for CpuRecorder {
@@ -45,6 +54,10 @@ impl SubRecorder for CpuRecorder {
                 }
             }
         });
+    }
+
+    fn collect(&mut self, records: &mut RawRecords, _: &mut HashMap<usize, LocalStorage>) {
+        records.keep_top_k(self.max_resource_groups);
     }
 
     fn cleanup(
@@ -94,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_record() {
-        let mut recorder = CpuRecorder::default();
+        let mut recorder = CpuRecorder::new(2000);
         let mut records = RawRecords::default();
         recorder.tick(&mut records, &mut HashMap::default());
         assert!(records.records.is_empty());
@@ -130,7 +143,7 @@ mod tests {
         });
         let mut store = LocalStorage::default();
         store.attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
-        let mut recorder = CpuRecorder::default();
+        let mut recorder = CpuRecorder::new(2000);
         recorder.thread_created(utils::thread_id(), &store);
         let thread_id = utils::thread_id();
         let prev_stat = &recorder.thread_stats.get(&thread_id).unwrap().stat;

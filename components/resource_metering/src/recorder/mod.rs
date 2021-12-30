@@ -290,6 +290,7 @@ impl RecorderHandle {
 /// This function is intended to simplify external use.
 pub fn init_recorder(
     precision_ms: u64,
+    max_resource_groups: usize,
 ) -> (
     RecorderHandle,
     CollectorRegHandle,
@@ -298,7 +299,7 @@ pub fn init_recorder(
 ) {
     let (recorder, recorder_handle) = RecorderBuilder::default()
         .precision_ms(Arc::new(AtomicU64::new(precision_ms)))
-        .add_sub_recorder(Box::new(CpuRecorder::default()))
+        .add_sub_recorder(Box::new(CpuRecorder::new(max_resource_groups)))
         .add_sub_recorder(Box::new(SummaryRecorder::default()))
         .build();
     let mut recorder_worker = WorkerBuilder::new("resource-metering-recorder")

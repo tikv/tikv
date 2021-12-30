@@ -53,6 +53,7 @@ pub struct RawRecords {
 
     // tag -> record
     pub records: HashMap<Arc<TagInfos>, RawRecord>,
+    pub others: RawRecord,
 }
 
 impl Default for RawRecords {
@@ -64,7 +65,33 @@ impl Default for RawRecords {
             begin_unix_time_secs: now_unix_time.as_secs(),
             duration: Duration::default(),
             records: HashMap::default(),
+            others: RawRecord::default(),
         }
+    }
+}
+
+impl RawRecords {
+    /// Keep a maximum of `k` self.records and aggregate the others into self.others.
+    pub fn keep_top_k(&mut self, k: usize) {
+        if self.records.len() <= k {
+            return;
+        }
+        let mut buf = STATIC_BUF.with(|b| b.take());
+        buf.clear();
+        // Find kth top total cpu time.
+        for record in self.records.values() {
+            buf.push(record.cpu_time);
+        }
+        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+        let kth = buf[k];
+        // Evict records with total cpu time less or equal than `kth`
+        let others = &mut self.others;
+        let evicted_records = self.records.drain_filter(|_, r| r.cpu_time <= kth);
+        // Record evicted into others
+        for (_, record) in evicted_records {
+            others.merge(&record);
+        }
+        STATIC_BUF.with(move |b| b.set(buf));
     }
 }
 
@@ -222,6 +249,11 @@ impl Records {
                 record.write_keys_list.push(raw_record.write_keys);
             }
         }
+
+        self.others
+            .entry(ts)
+            .or_default()
+            .merge(&raw_records.others);
     }
 
     /// Keep a maximum of `k` items and aggregate the others into `others`.
@@ -440,6 +472,11 @@ mod tests {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records: raw_map,
+            others: RawRecord {
+                cpu_time: 111,
+                read_keys: 222,
+                write_keys: 333,
+            },
         };
         assert_eq!(records.records.len(), 0);
         records.append(Arc::new(raw));
@@ -447,5 +484,86 @@ mod tests {
         records.keep_top_k(2);
         assert_eq!(records.records.len(), 2);
         assert_eq!(records.others.len(), 1);
+        assert_eq!(records.others.get(&1).unwrap().cpu_time, 111 + 111);
+        assert_eq!(records.others.get(&1).unwrap().read_keys, 222 + 222);
+        assert_eq!(records.others.get(&1).unwrap().write_keys, 333 + 333)
+    }
+
+    #[test]
+    fn test_raw_records_keep_top_k() {
+        let tag1 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            extra_attachment: b"a".to_vec(),
+        });
+        let tag2 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            extra_attachment: b"b".to_vec(),
+        });
+        let tag3 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            extra_attachment: b"c".to_vec(),
+        });
+        let mut records = HashMap::default();
+        records.insert(
+            tag1,
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 222,
+                write_keys: 333,
+            },
+        );
+        records.insert(
+            tag2,
+            RawRecord {
+                cpu_time: 444,
+                read_keys: 555,
+                write_keys: 666,
+            },
+        );
+        records.insert(
+            tag3,
+            RawRecord {
+                cpu_time: 777,
+                read_keys: 888,
+                write_keys: 999,
+            },
+        );
+        let mut rs = RawRecords {
+            begin_unix_time_secs: 1,
+            duration: Duration::from_secs(1),
+            records,
+            others: RawRecord::default(),
+        };
+        rs.keep_top_k(999);
+        assert_eq!(rs.records.len(), 3);
+        assert_eq!(rs.others.cpu_time, 0);
+        assert_eq!(rs.others.read_keys, 0);
+        assert_eq!(rs.others.write_keys, 0);
+        rs.keep_top_k(3);
+        assert_eq!(rs.records.len(), 3);
+        assert_eq!(rs.others.cpu_time, 0);
+        assert_eq!(rs.others.read_keys, 0);
+        assert_eq!(rs.others.write_keys, 0);
+        rs.keep_top_k(2);
+        assert_eq!(rs.records.len(), 2);
+        assert_eq!(rs.others.cpu_time, 111);
+        assert_eq!(rs.others.read_keys, 222);
+        assert_eq!(rs.others.write_keys, 333);
+        rs.keep_top_k(1);
+        assert_eq!(rs.records.len(), 1);
+        assert_eq!(rs.others.cpu_time, 111 + 444);
+        assert_eq!(rs.others.read_keys, 222 + 555);
+        assert_eq!(rs.others.write_keys, 333 + 666);
+        rs.keep_top_k(0);
+        assert!(rs.records.is_empty());
+        assert_eq!(rs.others.cpu_time, 111 + 444 + 777);
+        assert_eq!(rs.others.read_keys, 222 + 555 + 888);
+        assert_eq!(rs.others.write_keys, 333 + 666 + 999);
     }
 }

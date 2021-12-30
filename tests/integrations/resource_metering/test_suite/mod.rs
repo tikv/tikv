@@ -52,7 +52,7 @@ impl TestSuite {
         let cfg_controller = ConfigController::new(tikv_cfg);
 
         let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
-            resource_metering::init_recorder(cfg.precision.as_millis());
+            resource_metering::init_recorder(cfg.precision.as_millis(), cfg.max_resource_groups);
         let (config_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let env = Arc::new(Environment::new(2));
