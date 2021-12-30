@@ -1259,6 +1259,7 @@ impl TiKVServer<RocksEngine> {
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
+        self.config.configure_shared_rocks_env(&env);
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
