@@ -7,8 +7,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
@@ -145,6 +144,12 @@ where
     /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
     /// can start destroying without seeking.
     logs_gc_flushed: bool,
+
+    /// To make sure the reported store/peer meta is up to date, each peer has to wait for the log
+    /// at its target commit index to be applied. The last peer does so triggers the next procedure
+    /// which is reporting the store/peer meta to PD.
+    unsafe_recovery_target_commit_index: u64,
+    unsafe_recovery_wait_apply_counter: Arc<AtomicUsize>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -262,6 +267,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+		unsafe_recovery_target_commit_index: 0,
+		unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
             }),
         ))
     }
@@ -315,6 +322,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+		unsafe_recovery_target_commit_index: 0,
+		unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
             }),
         ))
     }
@@ -866,16 +875,10 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, commit_index: u64, counter: Arc<AtomicUsize>) {
-        if self.fsm.peer.raft_group.store().applied_index() != commit_index {
-            sleep(Duration::from_millis(1000));
-            let _ = self.ctx.router.force_send(
-                self.fsm.region_id(),
-                PeerMsg::UnsafeRecoveryWaitApply {
-                    commit_index,
-                    counter: counter.clone(),
-                },
-            );
-        } else {
+	// Checks the applied index here first, in case the log at the target index has been
+	// applied right before this peer msg is handled. If the log has not been applied here,
+	// further checks will be performed in on_apply_res().
+        if self.fsm.peer.raft_group.store().applied_index() >= commit_index {
             if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
                 let stats = StoreStats::default();
                 let store_info = StoreInfo {
@@ -892,7 +895,10 @@ where
                     panic!("fail to send detailed report to pd {:?}", e);
                 }
             }
-        }
+        } else {
+	    self.fsm.unsafe_recovery_target_commit_index = commit_index;
+	    self.fsm.unsafe_recovery_wait_apply_counter = counter.clone();
+	}
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1521,6 +1527,28 @@ where
 
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
+	// After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
+	if self.fsm.unsafe_recovery_target_commit_index != 0 {
+            if self.fsm.peer.raft_group.store().applied_index() >= self.fsm.unsafe_recovery_target_commit_index {
+                if self.fsm.unsafe_recovery_wait_apply_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    let stats = StoreStats::default();
+                    let store_info = StoreInfo {
+                        kv_engine: self.ctx.engines.kv.clone(),
+                        raft_engine: self.ctx.engines.raft.clone(),
+                        capacity: self.ctx.cfg.capacity.0,
+                    };
+                    let task = PdTask::StoreHeartbeat {
+                        stats,
+                        store_info,
+                        send_detailed_report: true,
+                    };
+                    if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                        panic!("fail to send detailed report to pd {:?}", e);
+                    }
+                }
+		self.fsm.unsafe_recovery_target_commit_index = 0;
+	    }
+	}
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
