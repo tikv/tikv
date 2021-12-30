@@ -2409,7 +2409,7 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
-            enable_io_snoop: true,
+            enable_io_snoop: false,
             abort_on_panic: false,
             memory_usage_limit: OptionReadableSize(None),
             memory_usage_high_water: 0.9,
