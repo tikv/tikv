@@ -28,6 +28,7 @@ pub struct RaftLogGCTask {
 
 pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
+    type ConsumeAsyncFut<'a>: std::future::Future<Output = Result<usize>> + 'a;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;
 
@@ -37,6 +38,12 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Consume the write batch by moving the content into the engine itself
     /// and return written bytes.
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize>;
+
+    fn consume_async<'a, 'b>(
+        &'a self,
+        batch: &'b mut Self::LogBatch,
+        sync: bool,
+    ) -> Self::ConsumeAsyncFut<'b>;
 
     /// Like `consume` but shrink `batch` if need.
     fn consume_and_shrink(

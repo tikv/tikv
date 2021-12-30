@@ -37,7 +37,9 @@ use tikv_util::{box_err, debug, info, slow_log, thd_name, warn};
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
+#[allow(dead_code)]
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
+#[allow(dead_code)]
 const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
@@ -507,8 +509,11 @@ where
         let notifier = self.notifier.clone();
         let mut raft_wb = std::mem::replace(
             &mut self.batch.raft_wb,
-            // TODO(TPC): reduce allocation.
-            raft_db.log_batch(RAFT_WB_DEFAULT_SIZE),
+            // The capacity is not data length in raft-engine. It's the region count in one round
+            // of the store batch system.
+            //
+            // TODO(TPC): tune
+            raft_db.log_batch(256),
         );
         let mut tasks = std::mem::take(&mut self.batch.tasks);
         let readies = std::mem::take(&mut self.batch.readies);
@@ -526,14 +531,9 @@ where
             let mut write_raft_time = 0f64;
             if raft_wb.is_empty() {
                 let now = Instant::now();
-                // TODO(TPC): await here.
                 raft_db
-                    .consume_and_shrink(
-                        &mut raft_wb,
-                        true,
-                        RAFT_WB_SHRINK_SIZE,
-                        RAFT_WB_DEFAULT_SIZE,
-                    )
+                    .consume_async(&mut raft_wb, true)
+                    .await
                     .unwrap_or_else(|e| {
                         panic!("failed to write to raft engine: {:?}", e);
                     });

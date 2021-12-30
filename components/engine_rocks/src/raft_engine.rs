@@ -11,6 +11,7 @@ use engine_traits::{
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use std::future::{self, Ready};
 use tikv_util::{box_err, box_try};
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
@@ -136,6 +137,7 @@ impl RocksEngine {
 // every engine.
 impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatch;
+    type ConsumeAsyncFut<'a> = Ready<Result<usize>>;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
@@ -152,6 +154,10 @@ impl RaftEngine for RocksEngine {
         batch.write_opt(&opts)?;
         batch.clear();
         Ok(bytes)
+    }
+
+    fn consume_async(&self, batch: &mut Self::LogBatch, sync: bool) -> Self::ConsumeAsyncFut<'_> {
+        future::ready(self.consume(batch, sync))
     }
 
     fn consume_and_shrink(

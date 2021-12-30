@@ -16,6 +16,7 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(generic_associated_types)]
+#![feature(min_type_alias_impl_trait)]
 
 #[macro_use]
 extern crate tikv_util;

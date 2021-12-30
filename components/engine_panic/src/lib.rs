@@ -10,6 +10,7 @@
 //! the allow(unused) attribute;
 
 #![allow(unused)]
+#![feature(generic_associated_types)]
 
 mod cf_names;
 pub use crate::cf_names::*;

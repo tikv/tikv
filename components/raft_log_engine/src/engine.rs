@@ -246,6 +246,7 @@ impl RaftEngineReadOnly for RaftLogEngine {
 
 impl RaftEngine for RaftLogEngine {
     type LogBatch = RaftLogBatch;
+    type ConsumeAsyncFut<'a> = impl std::future::Future<Output = Result<usize>> + 'a;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         RaftLogBatch(LogBatch::with_capacity(capacity))
@@ -257,6 +258,15 @@ impl RaftEngine for RaftLogEngine {
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
+    }
+
+    fn consume_async<'a, 'b>(
+        &'a self,
+        batch: &'b mut Self::LogBatch,
+        sync: bool,
+    ) -> Self::ConsumeAsyncFut<'b> {
+        let engine = self.0.clone();
+        async move { engine.write(&mut batch.0, sync).map_err(transfer_error) }
     }
 
     fn consume_and_shrink(
