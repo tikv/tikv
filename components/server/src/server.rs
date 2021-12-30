@@ -716,6 +716,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
+        {
+            raftstore::engine_store_ffi::gen_engine_store_server_helper(
+                self.config.raft_store.engine_store_server_helper,
+            )
+            .set_store(node.store());
+            info!("set store {} to engine-store", node.id());
+        }
+
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
         let server = Server::new(

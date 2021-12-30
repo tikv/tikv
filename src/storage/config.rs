@@ -64,7 +64,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let cpu_num = SysQuota::cpu_cores_quota();
+        let _cpu_num = SysQuota::cpu_cores_quota();
         Config {
             data_dir: DEFAULT_DATA_DIR.to_owned(),
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,

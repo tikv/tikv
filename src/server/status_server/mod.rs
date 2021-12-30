@@ -287,7 +287,7 @@ where
 
         let engine_store_config = match engine_store_config {
             Ok(c) => serde_json::to_string(&c),
-            Err(e) => {
+            Err(_) => {
                 return Ok(StatusServer::err_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal Server Error: fail to parse config from engine-store",
@@ -459,7 +459,7 @@ where
         }
     }
 
-    pub fn stop(mut self) {
+    pub fn stop(self) {
         // unregister the status address to pd
         // self.unregister_addr();
         let _ = self.tx.send(());
@@ -491,7 +491,7 @@ where
             None
         }
     }
-
+    #[allow(unused)]
     fn register_addr(&mut self, advertise_addr: String) {
         if let Some(ssl) = self.generate_ssl_connector() {
             let mut connector = HttpConnector::new();
@@ -502,7 +502,7 @@ where
             self.register_addr_core(HttpConnector::new(), advertise_addr);
         }
     }
-
+    #[allow(unused)]
     fn register_addr_core<C>(&mut self, conn: C, advertise_addr: String)
     where
         C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
@@ -560,6 +560,7 @@ where
         );
     }
 
+    #[allow(unused)]
     fn unregister_addr(&mut self) {
         if let Some(ssl) = self.generate_ssl_connector() {
             let mut connector = HttpConnector::new();
@@ -571,6 +572,7 @@ where
         }
     }
 
+    #[allow(unused)]
     fn unregister_addr_core<C>(&mut self, conn: C)
     where
         C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
@@ -860,7 +862,7 @@ where
         self.thread_pool.spawn(graceful);
     }
 
-    pub fn start(&mut self, status_addr: String, advertise_status_addr: String) -> Result<()> {
+    pub fn start(&mut self, status_addr: String, _advertise_status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
         let incoming = {

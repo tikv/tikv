@@ -778,6 +778,12 @@ impl EngineStoreServerHelper {
         let config = unsafe { (self.fn_get_config.into_inner())(self.inner, full.into()) };
         config.view.to_slice().to_vec()
     }
+
+    pub fn set_store(&self, store: metapb::Store) {
+        debug_assert!(self.fn_set_store.is_some());
+        let store = ProtoMsgBaseBuff::new(&store);
+        unsafe { (self.fn_set_store.into_inner())(self.inner, Pin::new(&store).into()) }
+    }
 }
 
 impl Clone for SSTReaderPtr {

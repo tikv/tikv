@@ -722,7 +722,7 @@ where
         spawn_local(f);
     }
 
-    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
+    fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, _store_info: StoreInfo<EK>) {
         let store_stats = self.engine_store_server_helper.handle_compute_store_stats();
         if store_stats.fs_stats.ok == 0 {
             return;

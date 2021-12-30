@@ -177,5 +177,6 @@ struct EngineStoreServerHelper {
   void (*fn_insert_batch_read_index_resp)(RawVoidPtr, BaseBuffView, uint64_t);
   void (*fn_set_server_info_resp)(BaseBuffView, RawVoidPtr);
   CppStrWithView (*fn_get_config)(EngineStoreServerWrap *, uint8_t full);
+  void (*fn_set_store)(EngineStoreServerWrap *, BaseBuffView);
 };
 }  // namespace DB
