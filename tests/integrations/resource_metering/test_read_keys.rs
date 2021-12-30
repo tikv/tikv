@@ -25,12 +25,10 @@ use tikv::read_pool::ReadPool;
 use tikv::storage::{Engine, RocksEngine, TestEngineBuilder};
 use tikv_util::config::ReadableDuration;
 use tikv_util::thread_group::GroupProperties;
-use tikv_util::worker::Builder as WorkerBuilder;
 use tikv_util::HandyRwLock;
 use tipb::SelectResponse;
 
 #[test]
-#[ignore = "the case is unstable, ref #11689"]
 pub fn test_read_keys() {
     // Create & start receiver server.
     let (tx, rx) = unbounded();
@@ -137,7 +135,6 @@ pub fn test_read_keys() {
 
 fn new_cluster(port: u16, env: Arc<Environment>) -> (Cluster<ServerCluster>, TikvClient, Context) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        cluster.cfg.resource_metering.enabled = true;
         cluster.cfg.resource_metering.receiver_address = format!("127.0.0.1:{}", port);
         cluster.cfg.resource_metering.precision = ReadableDuration::millis(100);
         cluster.cfg.resource_metering.report_receiver_interval = ReadableDuration::millis(400);
@@ -165,30 +162,31 @@ fn recv_read_keys(rx: &Receiver<Vec<ResourceUsageRecord>>) -> u32 {
     let mut total = 0;
     while let Ok(records) = rx.try_recv() {
         for r in &records {
-            total += r.get_record_list_read_keys().iter().sum::<u32>();
+            total += r
+                .get_record()
+                .get_items()
+                .iter()
+                .map(|item| item.read_keys)
+                .sum::<u32>();
         }
     }
     total
 }
 
 #[test]
-#[ignore = "the case is unstable, ref #11689"]
 fn test_read_keys_coprocessor() {
     // Start resource metering.
     let mut cfg = resource_metering::Config::default();
-    cfg.enabled = true;
-    cfg.receiver_address = "mock-receiver".to_owned();
     cfg.precision = ReadableDuration::millis(100);
     cfg.report_receiver_interval = ReadableDuration::millis(400);
-    let (_, crh, rtf) = resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
-    let mut worker = WorkerBuilder::new("resource-metering-reporter")
-        .pending_capacity(30)
-        .create()
-        .lazy_build("resource-metering-reporter");
-    let client = MockClient::new();
-    let reporter =
-        resource_metering::Reporter::new(client.clone(), cfg.clone(), crh, worker.scheduler());
-    worker.start_with_timer(reporter);
+
+    let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
+        resource_metering::init_recorder(cfg.precision.as_millis());
+    let (_, data_sink_reg_handle, reporter_worker) =
+        resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+
+    let data_sink = MockDataSink::new();
+    let _reg_guard = data_sink_reg_handle.register(Box::new(data_sink.clone()));
 
     // Init data.
     let data = vec![
@@ -198,7 +196,7 @@ fn test_read_keys_coprocessor() {
         (5, Some("name:1"), 4),
     ];
     let product = ProductTable::new();
-    let endpoint = init_coprocessor_with_data(&product, &data, rtf);
+    let endpoint = init_coprocessor_with_data(&product, &data, resource_tag_factory);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
@@ -211,16 +209,20 @@ fn test_read_keys_coprocessor() {
     runtime.block_on(handle_select(&endpoint, req.clone()));
 
     // Clear current result.
-    let _ = client.wait_read_keys(Duration::from_secs(3));
+    let _ = data_sink.wait_read_keys(Duration::from_secs(3));
 
     // Do DAG select again.
     runtime.block_on(handle_select(&endpoint, req));
 
     // Wait & receive & assert.
-    assert_eq!(client.wait_read_keys(Duration::from_secs(30)).unwrap(), 4);
+    assert_eq!(
+        data_sink.wait_read_keys(Duration::from_secs(30)).unwrap(),
+        4
+    );
 
     // Cleanup.
-    worker.stop_worker();
+    reporter_worker.stop_worker();
+    recorder_worker.stop_worker();
 }
 
 fn init_coprocessor_with_data(
@@ -270,12 +272,12 @@ where
 }
 
 #[derive(Clone)]
-struct MockClient {
+struct MockDataSink {
     tx: Sender<u32>,
     rx: Receiver<u32>,
 }
 
-impl MockClient {
+impl MockDataSink {
     fn new() -> Self {
         let (tx, rx) = unbounded();
         Self { tx, rx }
@@ -286,14 +288,19 @@ impl MockClient {
     }
 }
 
-impl resource_metering::DataSink for MockClient {
+impl resource_metering::DataSink for MockDataSink {
     fn try_send(
         &mut self,
         records: Arc<Vec<ResourceUsageRecord>>,
     ) -> resource_metering::error::Result<()> {
         let mut read_keys = 0;
         for r in records.iter() {
-            read_keys += r.get_record_list_read_keys().iter().sum::<u32>();
+            read_keys += r
+                .get_record()
+                .get_items()
+                .iter()
+                .map(|item| item.read_keys)
+                .sum::<u32>();
         }
         self.tx.send(read_keys).unwrap();
         Ok(())

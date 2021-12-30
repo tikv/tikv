@@ -1126,6 +1126,25 @@ impl DbConfig {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
         }
+
+        // Since the following configuration supports online update, in order to
+        // prevent mistakenly inputting too large values, the max limit is made
+        // according to the cpu quota.
+        let cpu_num = SysQuota::cpu_cores_quota() as i32;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+            return Err(format!(
+                "max_background_jobs should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
+        }
+        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+            return Err(format!(
+                "max_background_flushes should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -2210,6 +2229,9 @@ pub struct BackupConfig {
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
     pub io_thread_size: usize,
+    // Do not expose this config to user.
+    // It used to debug s3 503 error.
+    pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2222,6 +2244,10 @@ impl BackupConfig {
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            return Err("backup.s3_multi_part_size cannot larger than 5GB".into());
+        }
+
         Ok(())
     }
 }
@@ -2231,14 +2257,16 @@ impl Default for BackupConfig {
         let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
-            // use at most 75% of vCPU by default
-            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            // use at most 50% of vCPU by default
+            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
-            enable_auto_tune: false,
-            auto_tune_remain_threads: 2,
+            enable_auto_tune: true,
+            auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
             io_thread_size: 2,
+            // 5MB is the minimum part size that S3 allowed.
+            s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
         }
     }
