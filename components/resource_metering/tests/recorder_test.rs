@@ -4,7 +4,7 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use collections::HashMap;
-    use resource_metering::{init_recorder, utils, Config, ResourceTagFactory};
+    use resource_metering::{init_recorder, utils, ResourceTagFactory};
     use resource_metering::{Collector, RawRecord, RawRecords};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
