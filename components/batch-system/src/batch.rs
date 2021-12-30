@@ -10,7 +10,12 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
+<<<<<<< HEAD
 use crossbeam::channel::{self, after, SendError};
+=======
+use crossbeam::channel::{self, SendError};
+use fail::fail_point;
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
@@ -326,6 +331,7 @@ pub trait PollHandler<N, C> {
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
+<<<<<<< HEAD
 struct Poller<N: Fsm, C: Fsm, Handler> {
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
@@ -333,6 +339,27 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     max_batch_size: usize,
     reschedule_duration: Duration,
     before_pause_wait: Option<Duration>,
+=======
+pub struct Poller<N: Fsm, C: Fsm, Handler> {
+    pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
+    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub handler: Handler,
+    pub max_batch_size: usize,
+    pub reschedule_duration: Duration,
+    pub joinable_workers: Option<Arc<Mutex<Vec<ThreadId>>>>,
+}
+
+impl<N, C, Handler> Drop for Poller<N, C, Handler>
+where
+    N: Fsm,
+    C: Fsm,
+{
+    fn drop(&mut self) {
+        if let Some(joinable_workers) = &self.joinable_workers {
+            joinable_workers.lock().unwrap().push(current().id());
+        }
+    }
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
 }
 
 enum ReschedulePolicy {
@@ -352,25 +379,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            if let Some(d) = self.before_pause_wait {
-                channel::select! {
-                    recv(self.fsm_receiver) -> msg => {
-                        if let Ok(fsm) = msg {
-                            return batch.push(fsm);
-                        }
-                    }
-                    recv(after(d)) -> _ => {
-                        self.handler.pause();
-                        if let Ok(fsm) = self.fsm_receiver.recv() {
-                            return batch.push(fsm);
-                        }
-                    }
-                }
-            } else {
-                self.handler.pause();
-                if let Ok(fsm) = self.fsm_receiver.recv() {
-                    return batch.push(fsm);
-                }
+            self.handler.pause();
+            if let Ok(fsm) = self.fsm_receiver.recv() {
+                return batch.push(fsm);
             }
         }
         !batch.is_empty()
@@ -497,7 +508,11 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     workers: Vec<JoinHandle<()>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
+<<<<<<< HEAD
     before_pause_wait: Option<Duration>,
+=======
+    pool_state_builder: Option<PoolStateBuilder<N, C>>,
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
 }
 
 impl<N, C> BatchSystem<N, C>
@@ -525,7 +540,15 @@ where
             handler,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
+<<<<<<< HEAD
             before_pause_wait: self.before_pause_wait,
+=======
+            joinable_workers: if priority == Priority::Normal {
+                Some(Arc::clone(&self.joinable_workers))
+            } else {
+                None
+            },
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
         };
         let props = tikv_util::thread_group::current_properties();
         let t = thread::Builder::new()
@@ -585,6 +608,57 @@ where
     }
 }
 
+<<<<<<< HEAD
+=======
+struct PoolStateBuilder<N, C> {
+    max_batch_size: usize,
+    reschedule_duration: Duration,
+    fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pool_size: usize,
+}
+
+impl<N, C> PoolStateBuilder<N, C> {
+    fn build<H: HandlerBuilder<N, C>>(
+        self,
+        name_prefix: String,
+        low_priority_pool_size: usize,
+        workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+        joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
+        handler_builder: H,
+        id_base: usize,
+    ) -> PoolState<N, C, H> {
+        PoolState {
+            name_prefix,
+            handler_builder,
+            fsm_receiver: self.fsm_receiver,
+            fsm_sender: self.fsm_sender,
+            low_priority_pool_size,
+            workers,
+            joinable_workers,
+            expected_pool_size: self.pool_size,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+            id_base,
+        }
+    }
+}
+
+pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
+    pub name_prefix: String,
+    pub handler_builder: H,
+    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pub low_priority_pool_size: usize,
+    pub expected_pool_size: usize,
+    pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    pub joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
+    pub max_batch_size: usize,
+    pub reschedule_duration: Duration,
+    pub id_base: usize,
+}
+
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
 pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>;
 
 /// Create a batch system with the given thread name prefix and pool size.
@@ -607,6 +681,16 @@ pub fn create_system<N: Fsm, C: Fsm>(
         sender: tx,
         low_sender: tx2,
     };
+<<<<<<< HEAD
+=======
+    let pool_state_builder = PoolStateBuilder {
+        max_batch_size: cfg.max_batch_size(),
+        reschedule_duration: cfg.reschedule_duration.0,
+        fsm_receiver: rx.clone(),
+        fsm_sender: tx,
+        pool_size: cfg.pool_size,
+    };
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
     let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
@@ -618,7 +702,11 @@ pub fn create_system<N: Fsm, C: Fsm>(
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
         low_priority_pool_size: cfg.low_priority_pool_size,
+<<<<<<< HEAD
         before_pause_wait: cfg.before_pause_wait,
+=======
+        pool_state_builder: Some(pool_state_builder),
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
     };
     (router, system)
 }

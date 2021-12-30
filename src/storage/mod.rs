@@ -4862,6 +4862,7 @@ mod tests {
             (b"f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
+        let before_written = ttl_current_ts();
         // Write key-value pairs one by one
         for &(ref key, ref value, ttl) in &test_data {
             storage
@@ -4878,6 +4879,7 @@ mod tests {
         rx.recv().unwrap();
 
         for &(ref key, _, ttl) in &test_data {
+<<<<<<< HEAD
             let res =
                 block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
                     .unwrap();
@@ -4887,8 +4889,22 @@ mod tests {
                 } else {
                     assert_eq!(res, Some(ttl));
                 }
+=======
+            let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))
+                .unwrap()
+                .unwrap();
+            if ttl != 0 {
+                let lower_bound = before_written.saturating_add(ttl) - ttl_current_ts();
+                assert!(
+                    res >= lower_bound && res <= ttl,
+                    "{} < {} < {}",
+                    lower_bound,
+                    res,
+                    ttl
+                );
+>>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
             } else {
-                assert_eq!(res, Some(0));
+                assert_eq!(res, 0);
             }
         }
     }
