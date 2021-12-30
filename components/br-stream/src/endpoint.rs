@@ -8,7 +8,7 @@ use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
 use crate::metadata::store::{EtcdStore, MetaStore};
-use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
+use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::router::{ApplyEvent, Router};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
@@ -179,7 +179,7 @@ where
     }
 
     // register task ranges
-    pub fn on_register(&self, task: MetaTask) {
+    pub fn on_register(&self, task: StreamTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
             let range_router = self.range_router.clone();
@@ -199,16 +199,18 @@ where
                             "ranges-count" => ranges.inner.len(),
                         );
                         // TODO implement register ranges
-                        range_router.register_ranges(
-                            task_name,
-                            ranges
-                                .inner
-                                .into_iter()
-                                .map(|(start_key, end_key)| {
-                                    (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                                })
-                                .collect(),
-                        );
+                        let _ = range_router
+                            .register_task(
+                                task,
+                                ranges
+                                    .inner
+                                    .into_iter()
+                                    .map(|(start_key, end_key)| {
+                                        (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                                    })
+                                    .collect(),
+                            )
+                            .await;
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);
@@ -220,11 +222,10 @@ where
     }
 
     pub async fn do_flush(router: Router, task: String) -> Result<()> {
-        let temp_files = router.take_temporary_files(&task).await?;
-        let meta = temp_files.generate_metadata().await?;
         // TODO flush the files to external storage
-        info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
-        Ok(())
+        router.do_flush(&task).await;
+        //info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
+        Ok({})
     }
 
     pub fn on_flush(&self, task: String) {
@@ -260,7 +261,7 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
 }
 
 pub enum Task {
-    WatchTask(MetaTask),
+    WatchTask(StreamTask),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(ConfigChange),
     /// Flush the task with name.

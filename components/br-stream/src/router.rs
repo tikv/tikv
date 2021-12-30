@@ -9,22 +9,39 @@ use std::{
     time::Duration,
 };
 
-use crate::{endpoint::Task, errors::Error, metadata::store::EtcdStore, utils::SlotMap};
+use crate::{
+    endpoint::Task,
+    errors::Error,
+    metadata::{store::EtcdStore, StreamTask},
+    utils::SlotMap,
+};
 
 use super::errors::Result;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
+
+use external_storage::BackendConfig;
+use external_storage_export::{create_storage, ExternalStorage};
 
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
-
-use tikv_util::{box_err, info, warn, worker::Scheduler};
+use tikv_util::{box_err, info, time::Limiter, warn, worker::Scheduler};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, sync::RwLock};
 use txn_types::{Key, TimeStamp};
+
+#[derive(Debug)]
+pub struct ApplyEvent {
+    key: Vec<u8>,
+    value: Vec<u8>,
+    cf: String,
+    region_id: u64,
+    region_resolved_ts: u64,
+    cmd_type: CmdType,
+}
 
 impl ApplyEvent {
     /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error commands.
@@ -136,7 +153,7 @@ pub struct RouterInner {
     /// which range a point belongs to.
     ranges: SyncRwLock<BTreeMap<KeyRange, TaskRange>>,
     /// The temporary files associated to some task.
-    temp_files_of_task: Mutex<HashMap<String, Arc<TemporaryFiles>>>,
+    temp_files_of_task: Mutex<HashMap<String, Arc<StreamTaskInfo>>>,
     /// The temporary directory for all tasks.
     prefix: PathBuf,
 
@@ -156,16 +173,6 @@ impl std::fmt::Debug for RouterInner {
     }
 }
 
-#[derive(Debug)]
-pub struct ApplyEvent {
-    key: Vec<u8>,
-    value: Vec<u8>,
-    cf: String,
-    region_id: u64,
-    region_resolved_ts: u64,
-    cmd_type: CmdType,
-}
-
 impl RouterInner {
     pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
         RouterInner {
@@ -181,7 +188,7 @@ impl RouterInner {
     /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
     /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
     /// We keep ranges in memory to filter kv events not in these ranges.  
-    pub fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
+    fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
@@ -204,6 +211,32 @@ impl RouterInner {
         }
     }
 
+    // register task info ans range info to router
+    pub async fn register_task(
+        &self,
+        mut task: StreamTask,
+        ranges: Vec<(Vec<u8>, Vec<u8>)>,
+    ) -> Result<()> {
+        let task_name = task.info.take_name();
+
+        // register ragnes
+        self.register_ranges(&task_name, ranges);
+
+        // register task info
+        let prefix_path = self
+            .prefix
+            .join(&task_name)
+            .join(format!("{}", TimeStamp::physical_now()));
+        let stream_task = StreamTaskInfo::new(prefix_path, task)?;
+
+        let _ = self
+            .temp_files_of_task
+            .lock()
+            .await
+            .insert(task_name, Arc::new(stream_task));
+        Ok(())
+    }
+
     /// get the task name by a key.
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         // TODO avoid key.to_vec()
@@ -224,7 +257,6 @@ impl RouterInner {
     }
 
     pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
-        let prefix = &self.prefix;
         if let Some(task) = self.get_task_by_key(&kv.key) {
             debug!(
                 "backup stream kv";
@@ -234,21 +266,8 @@ impl RouterInner {
             );
             let inner_router = {
                 let mut tasks = self.temp_files_of_task.lock().await;
-                if !tasks.contains_key(&task) {
-                    info!("creating temp dir for task."; "task" => %task, "maps" => ?tasks);
-                    let inserted = tasks.insert(
-                        task.clone(),
-                        Arc::new(
-                            TemporaryFiles::new(
-                                prefix
-                                    .join(&task)
-                                    .join(format!("{}", TimeStamp::physical_now())),
-                            )
-                            .await?,
-                        ),
-                    );
-                    assert!(inserted.is_none(), "double created map.")
-                }
+                assert!(!tasks.contains_key(&task), "task not existed");
+
                 tasks.get_mut(&task).unwrap().clone()
             };
             inner_router.on_event(kv).await?;
@@ -284,7 +303,7 @@ impl RouterInner {
         Ok(())
     }
 
-    pub async fn take_temporary_files(&self, task: &str) -> Result<TemporaryFiles> {
+    pub async fn take_temporary_files(&self, task: &str) -> Result<StreamTaskInfo> {
         let mut arc = self.temp_files_of_task.lock().await.remove(task).map_or(
             Err(Error::NoSuchTask {
                 task_name: task.to_owned(),
@@ -301,6 +320,12 @@ impl RouterInner {
                     tokio::time::sleep(Duration::from_millis(800)).await
                 }
             }
+        }
+    }
+
+    pub async fn do_flush(&self, task_name: &str) {
+        if let Some(task_info) = self.temp_files_of_task.lock().await.get(task_name){
+            task_info.do_flush().await;
         }
     }
 }
@@ -355,8 +380,10 @@ impl TempFileKey {
     }
 }
 
-#[derive(Default)]
-pub struct TemporaryFiles {
+pub struct StreamTaskInfo {
+    task: StreamTask,
+    storage: Box<dyn ExternalStorage>,
+
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
@@ -375,7 +402,7 @@ pub struct TemporaryFiles {
     flushed: AtomicBool,
 }
 
-impl std::fmt::Debug for TemporaryFiles {
+impl std::fmt::Debug for StreamTaskInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TemporaryFiles")
             .field("temp_dir", &self.temp_dir)
@@ -385,14 +412,19 @@ impl std::fmt::Debug for TemporaryFiles {
     }
 }
 
-impl TemporaryFiles {
+impl StreamTaskInfo {
     /// Create a new temporary file set at the `temp_dir`.
-    pub async fn new(temp_dir: PathBuf) -> Result<Self> {
-        tokio::fs::create_dir_all(&temp_dir).await?;
+    pub fn new(temp_dir: PathBuf, task: StreamTask) -> Result<Self> {
+        //tokio::fs::create_dir_all(&temp_dir).await?;
+        let storage = create_storage(task.info.get_storage(), BackendConfig::default())?;
         Ok(Self {
+            task,
+            storage,
             temp_dir,
             min_resolved_ts: TimeStamp::max(),
-            ..Default::default()
+            files: SlotMap::default(),
+            total_size: AtomicUsize::new(0),
+            flushed: AtomicBool::new(false),
         })
     }
 
@@ -474,6 +506,20 @@ impl TemporaryFiles {
             result.push(file_meta)
         }
         Ok(result)
+    }
+
+    pub async fn do_flush(&self) {
+        let mut tmp_data_files = self.files.write().await;
+        for (k, v) in tmp_data_files.drain() {
+            let data_file = v.lock().await;
+            self.storage.restore(
+                data_file.local_path.clone().to_str().unwrap(),
+                data_file.local_path.clone(),
+                0,
+                &Limiter::new(std::f64::INFINITY),
+                None,
+            );
+        }
     }
 }
 
