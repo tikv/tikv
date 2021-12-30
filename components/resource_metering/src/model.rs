@@ -463,15 +463,10 @@ mod tests {
         assert_eq!(others.cpu_time, 111);
         assert_eq!(others.read_keys, 222);
         assert_eq!(others.write_keys, 333);
-        let others = rs.keep_top_k(1);
-        assert_eq!(rs.records.len(), 1);
-        assert_eq!(others.cpu_time, 111 + 444);
-        assert_eq!(others.read_keys, 222 + 555);
-        assert_eq!(others.write_keys, 333 + 666);
         let others = rs.keep_top_k(0);
         assert!(rs.records.is_empty());
-        assert_eq!(others.cpu_time, 111 + 444 + 777);
-        assert_eq!(others.read_keys, 222 + 555 + 888);
-        assert_eq!(others.write_keys, 333 + 666 + 999);
+        assert_eq!(others.cpu_time, 444 + 777);
+        assert_eq!(others.read_keys, 555 + 888);
+        assert_eq!(others.write_keys, 666 + 999);
     }
 }
