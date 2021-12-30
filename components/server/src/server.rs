@@ -626,10 +626,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start resource metering.
-        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(self.config.resource_metering.precision.as_millis());
         self.to_stop.push(recorder_worker);
-        let (config_notifier, data_sink_reg_handle, reporter_worker) =
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.config.resource_metering.clone(),
                 collector_reg_handle.clone(),
@@ -645,8 +645,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
-            recorder_handle,
-            config_notifier,
+            recorder_notifier,
+            reporter_notifier,
             address_change_notifier,
         );
         cfg_controller.register(
