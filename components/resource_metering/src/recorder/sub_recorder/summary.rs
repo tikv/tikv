@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::localstorage::{LocalStorage, STORAGE};
+use crate::recorder::localstorage::{LocalStorage, STORAGE};
 use crate::recorder::SubRecorder;
 use crate::RawRecords;
 
@@ -36,14 +36,9 @@ pub fn record_write_keys(count: u32) {
 /// See [SubRecorder] for more relevant designs.
 ///
 /// [SubRecorder]: crate::recorder::SubRecorder
+#[derive(Default)]
 pub struct SummaryRecorder {
     enabled: bool,
-}
-
-impl SummaryRecorder {
-    pub fn new(enabled: bool) -> Self {
-        Self { enabled }
-    }
 }
 
 impl SubRecorder for SummaryRecorder {
@@ -83,7 +78,7 @@ impl SubRecorder for SummaryRecorder {
         self.enabled = false;
     }
 
-    fn reset(
+    fn resume(
         &mut self,
         _records: &mut RawRecords,
         thread_stores: &mut HashMap<usize, LocalStorage>,

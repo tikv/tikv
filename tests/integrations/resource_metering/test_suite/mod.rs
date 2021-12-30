@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod mock_pubsub;
 mod mock_receiver_server;
 
 pub use mock_receiver_server::MockReceiverServer;
@@ -11,11 +12,14 @@ use std::time::Duration;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
-use grpcio::Environment;
+use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
 use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::resource_usage_agent::ResourceUsageRecord;
-use resource_metering::{Config, TEST_TAG_PREFIX};
+use kvproto::resource_usage_agent::{
+    ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
+};
+use resource_metering::Config;
 use tempfile::TempDir;
+use test_util::alloc_port;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
@@ -23,6 +27,7 @@ use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
+    pubsub_server_port: u16,
     receiver_server: Option<MockReceiverServer>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
@@ -32,7 +37,7 @@ pub struct TestSuite {
     rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
-    rt: Runtime,
+    pub rt: Runtime,
     cancel_workload: Option<oneshot::Sender<()>>,
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
@@ -42,22 +47,27 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(cfg: resource_metering::Config) -> Self {
-        fail::cfg("cpu-record-test-filter", "return").unwrap();
-
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
 
-        let (recorder_handle, collector_reg_handle, resource_tag_factory) =
-            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
         let (config_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let env = Arc::new(Environment::new(2));
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             cfg.receiver_address.clone(),
             env.clone(),
+            data_sink_reg_handle.clone(),
+        );
+        let pubsub_server_port = alloc_port();
+        let mut pubsub_server = mock_pubsub::MockPubSubServer::new(
+            pubsub_server_port,
+            env.clone(),
             data_sink_reg_handle,
         );
+        pubsub_server.start();
 
         let cfg_manager = resource_metering::ConfigManager::new(
             cfg,
@@ -88,6 +98,7 @@ impl TestSuite {
             .unwrap();
 
         Self {
+            pubsub_server_port,
             receiver_server: None,
             storage,
             cfg_controller,
@@ -99,16 +110,29 @@ impl TestSuite {
             wait_for_cancel: None,
             _dir: dir,
             stop_workers: Some(Box::new(move || {
-                reporter_worker.stop_worker();
+                futures::executor::block_on(pubsub_server.shutdown()).unwrap();
                 single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
             })),
         }
     }
 
-    pub fn cfg_enabled(&mut self, enabled: bool) {
-        self.cfg_controller
-            .update_config("resource-metering.enabled", &enabled.to_string())
+    pub fn subscribe(
+        &self,
+    ) -> (
+        ResourceMeteringPubSubClient,
+        ClientSStreamReceiver<ResourceUsageRecord>,
+    ) {
+        let channel = {
+            let cb = ChannelBuilder::new(self.env.clone());
+            cb.connect(&format!("127.0.0.1:{}", self.pubsub_server_port))
+        };
+        let client = ResourceMeteringPubSubClient::new(channel);
+        let receiver = client
+            .subscribe(&ResourceMeteringRequest::default())
             .unwrap();
+        (client, receiver)
     }
 
     pub fn cfg_receiver_address(&self, addr: impl Into<String>) {
@@ -179,12 +203,7 @@ impl TestSuite {
             loop {
                 let mut workload = futures::future::join_all(tags.iter().map(|tag| {
                     let mut ctx = Context::default();
-                    ctx.set_resource_group_tag({
-                        let mut t = Vec::from(TEST_TAG_PREFIX);
-                        let tag = tag.clone();
-                        t.extend_from_slice(tag.as_bytes());
-                        t
-                    });
+                    ctx.set_resource_group_tag(tag.as_bytes().to_vec());
                     storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
                 }))
                 .fuse();
@@ -228,15 +247,20 @@ impl TestSuite {
         records: Vec<ResourceUsageRecord>,
     ) {
         for r in records {
-            let tag = String::from_utf8_lossy(
-                (!r.get_resource_group_tag().is_empty())
-                    .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
-                    .unwrap_or(b""),
-            )
-            .into_owned();
+            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
             let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
-            ts.extend(&r.record_list_timestamp_sec);
-            cpu_time.extend(&r.record_list_cpu_time_ms);
+            ts.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.timestamp_sec),
+            );
+            cpu_time.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.cpu_time_ms),
+            );
         }
     }
 

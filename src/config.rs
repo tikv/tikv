@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::i32;
-use std::io::Error as IoError;
 use std::io::Write;
+use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
@@ -1125,6 +1125,25 @@ impl DbConfig {
             if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
+        }
+
+        // Since the following configuration supports online update, in order to
+        // prevent mistakenly inputting too large values, the max limit is made
+        // according to the cpu quota.
+        let cpu_num = SysQuota::cpu_cores_quota() as i32;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+            return Err(format!(
+                "max_background_jobs should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
+        }
+        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+            return Err(format!(
+                "max_background_flushes should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
         }
         Ok(())
     }
@@ -2887,26 +2906,20 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file(path: &Path, unrecognized_keys: Option<&mut Vec<String>>) -> Self {
-        (|| -> Result<Self, Box<dyn Error>> {
-            let s = fs::read_to_string(path)?;
-            let mut deserializer = toml::Deserializer::new(&s);
-            let mut cfg = if let Some(keys) = unrecognized_keys {
-                serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
-            } else {
-                <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
-            }?;
-            deserializer.end()?;
-            cfg.cfg_path = path.display().to_string();
-            Ok(cfg)
-        })()
-        .unwrap_or_else(|e| {
-            panic!(
-                "invalid auto generated configuration file {}, err {}",
-                path.display(),
-                e
-            );
-        })
+    pub fn from_file(
+        path: &Path,
+        unrecognized_keys: Option<&mut Vec<String>>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let s = fs::read_to_string(path)?;
+        let mut deserializer = toml::Deserializer::new(&s);
+        let mut cfg = if let Some(keys) = unrecognized_keys {
+            serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
+        } else {
+            <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+        }?;
+        deserializer.end()?;
+        cfg.cfg_path = path.display().to_string();
+        Ok(cfg)
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
@@ -2958,7 +2971,15 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
-        return Some(TiKvConfig::from_file(&last_cfg_path, None));
+        return Some(
+            TiKvConfig::from_file(&last_cfg_path, None).unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    last_cfg_path.display(),
+                    e
+                );
+            }),
+        );
     }
     None
 }
@@ -3011,11 +3032,13 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
     let tmp_cfg_path = match path.as_ref().parent() {
         Some(p) => p.join(TMP_CONFIG_FILE),
         None => {
-            return Err(format!(
-                "failed to get parent path of config file: {}",
-                path.as_ref().display()
-            )
-            .into());
+            return Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                format!(
+                    "failed to get parent path of config file: {}",
+                    path.as_ref().display()
+                ),
+            )));
         }
     };
     {
@@ -3132,13 +3155,17 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
         if let Some(field) = fields.pop() {
             match typed.get(&field) {
-                None | Some(ConfigValue::Skip) => {
-                    Err(format!("failed to get field: {}", field).into())
-                }
+                None | Some(ConfigValue::Skip) => Err(Box::new(IoError::new(
+                    ErrorKind::Other,
+                    format!("failed to get field: {}", field),
+                ))),
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
                     if !fields.is_empty() {
-                        return Err(format!("unexpect fields: {:?}", fields).into());
+                        return Err(Box::new(IoError::new(
+                            ErrorKind::Other,
+                            format!("unexpect fields: {:?}", fields),
+                        )));
                     }
                     match c {
                         ConfigValue::Duration(_)
@@ -3152,7 +3179,10 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                 }
             }
         } else {
-            Err("failed to get field".to_owned().into())
+            Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                "failed to get field",
+            )))
         }
     }
     let mut dst = HashMap::new();
@@ -3251,6 +3281,25 @@ impl ConfigController {
 
     pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
         let diff = to_config_change(change.clone())?;
+        self.update_impl(diff, Some(change))
+    }
+
+    pub fn update_from_toml_file(&self) -> CfgResult<()> {
+        let current = self.get_current();
+        match TiKvConfig::from_file(Path::new(&current.cfg_path), None) {
+            Ok(incoming) => {
+                let diff = current.diff(&incoming);
+                self.update_impl(diff, None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn update_impl(
+        &self,
+        diff: HashMap<String, ConfigValue>,
+        change: Option<HashMap<String, String>>,
+    ) -> CfgResult<()> {
         {
             let mut incoming = self.get_current();
             incoming.update(diff.clone());
@@ -3279,18 +3328,20 @@ impl ConfigController {
         debug!("all config change had been dispatched"; "change" => ?to_update);
         inner.current.update(to_update);
         // Write change to the config file
-        let content = {
-            let change = to_toml_encode(change)?;
-            let src = if Path::new(&inner.current.cfg_path).exists() {
-                fs::read_to_string(&inner.current.cfg_path)?
-            } else {
-                String::new()
+        if let Some(change) = change {
+            let content = {
+                let change = to_toml_encode(change)?;
+                let src = if Path::new(&inner.current.cfg_path).exists() {
+                    fs::read_to_string(&inner.current.cfg_path)?
+                } else {
+                    String::new()
+                };
+                let mut t = TomlWriter::new();
+                t.write_change(src, change);
+                t.finish()
             };
-            let mut t = TomlWriter::new();
-            t.write_change(src, change);
-            t.finish()
-        };
-        write_config(&inner.current.cfg_path, &content)?;
+            write_config(&inner.current.cfg_path, &content)?;
+        }
         Ok(())
     }
 
@@ -3411,7 +3462,13 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None);
+        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                file.display(),
+                e
+            );
+        });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
@@ -3419,7 +3476,13 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None);
+        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                file.display(),
+                e
+            );
+        });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
