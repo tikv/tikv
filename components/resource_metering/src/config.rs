@@ -40,7 +40,7 @@ impl Default for Config {
         Config {
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
-            max_resource_groups: 200,
+            max_resource_groups: 100,
             precision: ReadableDuration::secs(1),
         }
     }
