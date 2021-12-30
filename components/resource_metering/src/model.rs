@@ -92,6 +92,30 @@ impl RawRecords {
         STATIC_BUF.with(move |b| b.set(buf));
         others
     }
+
+    /// Returns (TopK, Evicted).
+    /// It is caller's responsibility to ensure that k < records.len().
+    pub fn top_k(
+        &self,
+        k: usize,
+    ) -> (
+        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
+        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
+    ) {
+        assert!(self.records.len() > k);
+        let mut buf = STATIC_BUF.with(|b| b.take());
+        buf.clear();
+        for record in self.records.values() {
+            buf.push(record.cpu_time);
+        }
+        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+        let kth = buf[k];
+        STATIC_BUF.with(move |b| b.set(buf));
+        (
+            self.records.iter().filter(move |(_, v)| v.cpu_time > kth),
+            self.records.iter().filter(move |(_, v)| v.cpu_time <= kth),
+        )
+    }
 }
 
 /// Resource statistics.
@@ -190,7 +214,11 @@ impl From<Records> for Vec<ResourceUsageRecord> {
 
 impl Records {
     /// Aggregates [RawRecords] into [Records].
-    pub fn append(&mut self, raw_records: Arc<RawRecords>) {
+    pub fn append<'a>(
+        &mut self,
+        ts: u64,
+        iter: impl Iterator<Item = (&'a Arc<TagInfos>, &'a RawRecord)>,
+    ) {
         // # Before
         //
         // ts: 1630464417
@@ -215,8 +243,7 @@ impl Records {
         //     | cpu time | ... |    200     |
         //     | total    | $total + 200     |
 
-        let ts = raw_records.begin_unix_time_secs;
-        for (tag, raw_record) in &raw_records.records {
+        for (tag, raw_record) in iter {
             let tag = &tag.extra_attachment;
             if tag.is_empty() {
                 continue;
@@ -394,12 +421,12 @@ mod tests {
             records: raw_map,
         };
         assert_eq!(records.records.len(), 0);
-        records.append(Arc::new(raw));
+        records.append(raw.begin_unix_time_secs, raw.records.iter());
         assert_eq!(records.records.len(), 3);
     }
 
     #[test]
-    fn test_raw_records_keep_top_k() {
+    fn test_raw_records_top_k() {
         let tag1 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
@@ -443,30 +470,33 @@ mod tests {
                 write_keys: 999,
             },
         );
-        let mut rs = RawRecords {
+        let rs = RawRecords {
             begin_unix_time_secs: 1,
             duration: Duration::from_secs(1),
             records,
         };
-        let others = rs.keep_top_k(999);
-        assert_eq!(rs.records.len(), 3);
-        assert_eq!(others.cpu_time, 0);
-        assert_eq!(others.read_keys, 0);
-        assert_eq!(others.write_keys, 0);
-        let others = rs.keep_top_k(3);
-        assert_eq!(rs.records.len(), 3);
-        assert_eq!(others.cpu_time, 0);
-        assert_eq!(others.read_keys, 0);
-        assert_eq!(others.write_keys, 0);
-        let others = rs.keep_top_k(2);
-        assert_eq!(rs.records.len(), 2);
+        let (top, evicted) = rs.top_k(2);
+        let others = evicted
+            .map(|(_, v)| v)
+            .fold(RawRecord::default(), |mut others, r| {
+                others.merge(r);
+                others
+            });
+        assert_eq!(top.count(), 2);
         assert_eq!(others.cpu_time, 111);
         assert_eq!(others.read_keys, 222);
         assert_eq!(others.write_keys, 333);
-        let others = rs.keep_top_k(0);
-        assert!(rs.records.is_empty());
-        assert_eq!(others.cpu_time, 444 + 777);
-        assert_eq!(others.read_keys, 555 + 888);
-        assert_eq!(others.write_keys, 666 + 999);
+        let (top, evicted) = rs.top_k(0);
+        // let top = top.collect::<Vec<(&Arc<TagInfos>, &RawRecord)>>();
+        let others = evicted
+            .map(|(_, v)| v)
+            .fold(RawRecord::default(), |mut others, r| {
+                others.merge(r);
+                others
+            });
+        assert_eq!(top.count(), 0);
+        assert_eq!(others.cpu_time, 111 + 444 + 777);
+        assert_eq!(others.read_keys, 222 + 555 + 888);
+        assert_eq!(others.write_keys, 333 + 666 + 999);
     }
 }

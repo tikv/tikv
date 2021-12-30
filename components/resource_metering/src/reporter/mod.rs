@@ -12,7 +12,6 @@ use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle}
 use crate::{Config, DataSink, RawRecords, Records};
 
 use std::fmt::{self, Display, Formatter};
-use std::ops::Deref;
 use std::sync::Arc;
 
 use collections::HashMap;
@@ -88,14 +87,16 @@ impl Reporter {
     }
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
-        let mut records = records.deref().clone();
-        let others = records.keep_top_k(self.config.max_resource_groups);
-        self.records
-            .others
-            .entry(records.begin_unix_time_secs)
-            .or_default()
-            .merge(&others);
-        self.records.append(Arc::new(records));
+        let ts = records.begin_unix_time_secs;
+        if self.config.max_resource_groups >= records.records.len() {
+            self.records.append(ts, records.records.iter());
+            return;
+        }
+        let (top, evicted) = records.top_k(self.config.max_resource_groups);
+        self.records.append(ts, top);
+        evicted.for_each(|(_, v)| {
+            self.records.others.entry(ts).or_default().merge(v);
+        });
     }
 
     fn handle_config_change(&mut self, config: Config) {
