@@ -5,6 +5,7 @@ pub mod config;
 mod endpoint;
 pub mod errors;
 pub mod metadata;
+mod metrics;
 pub mod observer;
 mod router;
 mod utils;
