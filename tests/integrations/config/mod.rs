@@ -59,9 +59,9 @@ fn read_file_in_project_dir(path: &str) -> String {
 #[test]
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
-    value.log_level = Level::Debug;
-    value.log_file = "foo".to_owned();
-    value.log_format = LogFormat::Json;
+    value.log.level = Level::Debug;
+    value.log.file.filename = "foo".to_owned();
+    value.log.format = LogFormat::Json;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
@@ -834,4 +834,19 @@ fn test_block_cache_backward_compatible() {
             + cfg.rocksdb.lockcf.block_cache_size.0
             + cfg.raftdb.defaultcf.block_cache_size.0
     );
+}
+
+#[test]
+fn test_log_backward_compatible() {
+    let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
+    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg.log.level, slog::Level::Info);
+    assert_eq!(cfg.log.file.filename, "");
+    assert_eq!(cfg.log.format, LogFormat::Text);
+    assert_eq!(cfg.log.file.max_size, ReadableSize::mb(300));
+    cfg.compatible_adjust();
+    assert_eq!(cfg.log.level, slog::Level::Debug);
+    assert_eq!(cfg.log.file.filename, "foo");
+    assert_eq!(cfg.log.format, LogFormat::Json);
+    assert_eq!(cfg.log.file.max_size, ReadableSize::mb(1024));
 }

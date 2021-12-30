@@ -9,12 +9,10 @@ use chrono::DateTime;
 use futures::stream::{self, Stream};
 use itertools::Itertools;
 use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
-use lazy_static::lazy_static;
 use nom::bytes::complete::{tag, take};
 use nom::character::complete::{alpha1, space0, space1};
 use nom::sequence::tuple;
 use nom::*;
-use regex::Regex;
 
 const TIMESTAMP_LENGTH: usize = 30;
 
@@ -87,13 +85,8 @@ impl LogIterator {
             if !entry.path().is_file() {
                 continue;
             }
-            let file_name = entry.file_name();
-            let file_name = match file_name.to_str() {
-                Some(file_name) => file_name,
-                None => continue,
-            };
             // Rotated file name have the same prefix with the original
-            if !is_log_file(file_name, log_name) {
+            if !is_log_file(entry.path().as_path(), log_path) {
                 continue;
             }
             // Open the file
@@ -110,7 +103,11 @@ impl LogIterator {
                 continue;
             }
             if let Err(err) = file.seek(SeekFrom::Start(0)) {
-                warn!("seek file failed: {}, err: {}", file_name, err);
+                warn!(
+                    "seek file failed: {}, err: {}",
+                    entry.path().file_name().unwrap().to_str().unwrap(),
+                    err
+                );
                 continue;
             }
             search_files.push((file_start_time, file));
@@ -209,21 +206,34 @@ impl Iterator for LogIterator {
     }
 }
 
-lazy_static! {
-    static ref NUM_REGEX: Regex = Regex::new(r"^\d{4}").unwrap();
-}
-
 // Returns true if target 'filename' is part of given 'log_file'
-fn is_log_file(filename: &str, log_file: &str) -> bool {
-    // for not rotated nomral file
-    if filename == log_file {
+fn is_log_file(file_path: &Path, log_file_path: &Path) -> bool {
+    let file_name = file_path.file_stem().unwrap().to_str().unwrap();
+    let log_file = log_file_path.file_stem().unwrap().to_str().unwrap();
+    if !file_name.starts_with(log_file) {
+        return false;
+    }
+    // for not rotated normal file
+    if file_name.eq(log_file) {
         return true;
     }
 
-    // for rotated *.<rotated-datetime> file
-    if let Some(res) = filename.strip_prefix((log_file.to_owned() + ".").as_str()) {
-        if NUM_REGEX.is_match(res) {
-            return true;
+    // for rotated *.rotated-datetime.* file
+    let mut dt = file_name.to_string().replace(log_file, "");
+    if let Some(offset) = dt.find('T') {
+        unsafe {
+            // -2021-12-13T16-08-27.621 => -2021-12-13T16:08:27.621
+            let dt = dt.as_bytes_mut();
+            if dt.len() < offset + 6 {
+                return false;
+            }
+            dt[offset + 3] = b':';
+            dt[offset + 6] = b':';
+        };
+        dt.push_str("+00:00");
+        match DateTime::parse_from_rfc3339(&dt.as_str()[1..]) {
+            Ok(_) => return true,
+            Err(_) => return false,
         }
     }
     false
@@ -549,7 +559,7 @@ Some invalid logs 2: Welcome to TiKV
         )
         .unwrap();
 
-        let log_file2 = dir.path().join("tikv.log.2019-08-23-18:10:00.387000");
+        let log_file2 = dir.path().join("tikv.2019-08-23T18-10-00.387.log");
         let mut file = File::create(&log_file2).unwrap();
         write!(
             file,
@@ -739,7 +749,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
         )
         .unwrap();
 
-        let log_file3 = dir.path().join("tikv.log.2019-08-23-18:11:02.123456789");
+        let log_file3 = dir.path().join("tikv.2019-08-23T18-11-02.123.log");
         let mut file = File::create(&log_file3).unwrap();
         write!(
             file,
@@ -752,6 +762,20 @@ Some invalid logs 1: Welcome to TiKV - test-filter
 [2019/08/23 18:11:58.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter
 [2019/08/23 18:11:59.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]
 Some invalid logs 2: Welcome to TiKV - test-filter"#
+        )
+        .unwrap();
+
+        // this file is ignored because its filename is not expected
+        let log_file4 = dir.path().join("tikv.T.log");
+        let mut file = File::create(&log_file4).unwrap();
+        write!(
+            file,
+            r#"[2019/08/23 18:10:01.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:10:02.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:10:03.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:10:04.387 +08:00] [ERROR] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:10:05.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]
+[2019/08/23 18:10:06.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val] - test-filter"#
         )
         .unwrap();
 

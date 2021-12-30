@@ -988,7 +988,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
             servers.server.get_debug_thread_pool().clone(),
-            self.config.log_file.clone(),
+            self.config.log.file.filename.clone(),
             self.config.slow_log_file.clone(),
         );
         if servers
