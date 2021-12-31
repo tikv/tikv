@@ -706,15 +706,17 @@ fn test_debug_raft_log() {
     // Put some data.
     let engine = cluster.get_raft_engine(store_id);
     let (region_id, log_index) = (200, 200);
-    let key = keys::raft_log_key(region_id, log_index);
     let mut entry = eraftpb::Entry::default();
     entry.set_term(1);
-    entry.set_index(1);
+    entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
-    engine.c().put_msg(&key, &entry).unwrap();
+    engine.append(region_id, vec![entry]).unwrap();
     assert_eq!(
-        engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine
+            .get_entry::<eraftpb::Entry>(region_id, log_index)
+            .unwrap()
+            .unwrap(),
         entry
     );
 
@@ -747,14 +749,10 @@ fn test_debug_region_info() {
     let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
-    raft_engine
-        .c()
-        .put_msg(&raft_state_key, &raft_state)
-        .unwrap();
+    raft_engine.put_raft_state(region_id, &raft_state).unwrap();
     assert_eq!(
         raft_engine
-            .c()
-            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+            .get_raft_state::<raft_serverpb::RaftLocalState>(region_id)
             .unwrap()
             .unwrap(),
         raft_state

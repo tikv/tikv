@@ -632,7 +632,7 @@ fn test_batch_read_index_after_transfer_leader() {
 
     for i in 0..2 {
         let index = resps[i].responses[0].get_read_index().read_index;
-        let engine = RocksEngine::from_db(cluster.get_raft_engine(2));
+        let raft_engine = cluster.get_raft_engine(2);
         let entry = engine.get_entry(1, index).unwrap().unwrap();
         // According to Raft, a peer shouldn't be able to perform read index until it commits
         // to the current term. So term of `read_index` must equal to the current one.

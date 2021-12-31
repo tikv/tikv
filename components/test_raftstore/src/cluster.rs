@@ -13,8 +13,7 @@ use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
-    RegionLocalState,
+    PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
@@ -25,11 +24,12 @@ use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt,
-    CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use pd_client::PdClient;
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -58,11 +58,11 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: Config,
-        engines: Engines<RocksEngine, RocksEngine>,
+        engines: Engines<RocksEngine, RaftLogEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
-        router: RaftRouter<RocksEngine, RocksEngine>,
-        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+        router: RaftRouter<RocksEngine, RaftLogEngine>,
+        system: RaftBatchSystem<RocksEngine, RaftLogEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -84,7 +84,7 @@ pub trait Simulator {
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
-    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RocksEngine>>;
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftLogEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -143,11 +143,11 @@ pub struct Cluster<T: Simulator> {
     pub count: usize,
 
     pub paths: Vec<TempDir>,
-    pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
+    pub dbs: Vec<Engines<RocksEngine, RaftLogEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IORateLimiter>>,
-    pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
+    pub engines: HashMap<u64, Engines<RocksEngine, RaftLogEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
@@ -197,6 +197,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn pre_start_check(&mut self) -> result::Result<(), Box<dyn StdError>> {
         for path in &self.paths {
+            // Unconditionally enable raft engine.
+            self.cfg.raft_engine.enable = true;
             self.cfg.storage.data_dir = path.path().to_str().unwrap().to_owned();
             self.cfg.validate()?
         }
@@ -215,7 +217,7 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
     }
 
-    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
+    fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftLogEngine>>) {
         let (engines, key_manager, dir) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
@@ -353,11 +355,11 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(self.engines[&node_id].kv.as_inner())
     }
 
-    pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(self.engines[&node_id].raft.as_inner())
+    pub fn get_raft_engine(&self, node_id: u64) -> RaftLogEngine {
+        self.engines[&node_id].raft.clone()
     }
 
-    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RocksEngine> {
+    pub fn get_all_engines(&self, node_id: u64) -> Engines<RocksEngine, RaftLogEngine> {
         self.engines[&node_id].clone()
     }
 
@@ -1101,12 +1103,11 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
-        let key = keys::raft_state_key(region_id);
-        self.get_raft_engine(store_id)
-            .c()
-            .get_msg::<raft_serverpb::RaftLocalState>(&key)
-            .unwrap()
-            .unwrap()
+        let state: Option<RaftLocalState> = self.engines[&store_id]
+            .raft
+            .get_raft_state(region_id)
+            .unwrap();
+        state.unwrap()
     }
 
     pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
@@ -1182,25 +1183,14 @@ impl<T: Simulator> Cluster<T> {
         kv_wb.write().unwrap();
     }
 
-    pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
-        let (raft_start, raft_end) = (
-            keys::region_raft_prefix(region_id),
-            keys::region_raft_prefix(region_id + 1),
-        );
-        let mut raft_wb = self.engines[&store_id].raft.write_batch();
+    pub fn restore_raft(&self, region_id: u64, store_id: u64, from: &RaftLogEngine) {
+        let mut entries = Vec::new();
+        from.fetch_entries_to(region_id, 0, u64::MAX, None /*max_size*/, &mut entries)
+            .unwrap();
         self.engines[&store_id]
             .raft
-            .scan(&raft_start, &raft_end, false, |k, _| {
-                raft_wb.delete(k).unwrap();
-                Ok(true)
-            })
+            .append(region_id, entries)
             .unwrap();
-        snap.scan(&raft_start, &raft_end, false, |k, v| {
-            raft_wb.put(k, v).unwrap();
-            Ok(true)
-        })
-        .unwrap();
-        raft_wb.write().unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

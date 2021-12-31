@@ -39,24 +39,24 @@ where
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     action(cluster);
     cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
-    let mut snaps = vec![];
-    snaps.push((1, RocksSnapshot::new(cluster.get_raft_engine(1))));
+    let mut rafts = Vec::new();
+    rafts.push((1, cluster.get_raft_engine(1)));
     if mode == DataLost::AllLost {
         cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
-        snaps.push((2, RocksSnapshot::new(cluster.get_raft_engine(2))));
+        rafts.push((2, cluster.get_raft_engine(2)));
         cluster.wait_last_index(1, 3, last_index + 1, Duration::from_secs(3));
-        snaps.push((3, RocksSnapshot::new(cluster.get_raft_engine(3))));
+        rafts.push((3, cluster.get_raft_engine(3)));
     }
     cluster.clear_send_filters();
     check(cluster);
-    for (id, _) in &snaps {
+    for (id, _) in &rafts {
         cluster.stop_node(*id);
     }
     // Simulate data lost in raft cf.
-    for (id, snap) in &snaps {
-        cluster.restore_raft(1, *id, snap);
+    for (id, raft) in &rafts {
+        cluster.restore_raft(1, *id, raft);
     }
-    for (id, _) in &snaps {
+    for (id, _) in &rafts {
         cluster.run_node(*id).unwrap();
     }
 

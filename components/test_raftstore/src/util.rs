@@ -15,7 +15,9 @@ use engine_rocks::raw::DB;
 use engine_rocks::{
     get_env, CompactionListener, Compat, RocksCompactionJobInfo, RocksEngine, RocksSnapshot,
 };
-use engine_traits::{Engines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use engine_traits::{
+    Engines, Iterable, Peekable, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
+};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
@@ -33,6 +35,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -92,7 +95,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftLogEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -110,16 +113,15 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RocksEngine>, region: &
             })
             .unwrap();
     }
-    let log_min_key = keys::raft_log_key(id, 0);
-    let log_max_key = keys::raft_log_key(id, u64::MAX);
-    engine
-        .raft
-        .scan(&log_min_key, &log_max_key, false, |k, v| {
-            panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
-        })
-        .unwrap();
-    let state_key = keys::raft_state_key(id);
-    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
+    let mut entries = Vec::new();
+    assert_eq!(
+        engine
+            .raft
+            .fetch_entries_to(id, 0, u64::MAX, None /*max_size*/, &mut entries)
+            .unwrap(),
+        0
+    );
+    let state: Option<RaftLocalState> = engine.raft.get_raft_state(id).unwrap();
     assert!(
         state.is_none(),
         "[region {}] raft state key should be removed: {:?}",
@@ -617,11 +619,11 @@ fn dummpy_filter(_: &RocksCompactionJobInfo<'_>) -> bool {
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksEngine, RocksEngine>>,
+    router: Option<RaftRouter<RocksEngine, RaftLogEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
 ) -> (
-    Engines<RocksEngine, RocksEngine>,
+    Engines<RocksEngine, RaftLogEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
@@ -631,7 +633,7 @@ pub fn create_test_engine(
             .unwrap()
             .map(Arc::new);
 
-    let env = get_env(key_manager.clone(), limiter).unwrap();
+    let env = get_env(key_manager.clone(), limiter.clone()).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
@@ -663,22 +665,13 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
     );
 
-    let raft_path = dir.path().join("raft");
-    let raft_path_str = raft_path.to_str().unwrap();
-
-    let mut raft_db_opt = cfg.raftdb.build_opt();
-    raft_db_opt.set_env(env);
-
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
-    );
+    let raft_config = cfg.raft_engine.config();
+    assert!(raft_config.enable);
+    let raft_engine = RaftLogEngine::new(raft_config, key_manager.clone(), limiter).unwrap();
 
     let mut engine = RocksEngine::from_db(engine);
-    let mut raft_engine = RocksEngine::from_db(raft_engine);
     let shared_block_cache = cache.is_some();
     engine.set_shared_block_cache(shared_block_cache);
-    raft_engine.set_shared_block_cache(shared_block_cache);
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }
