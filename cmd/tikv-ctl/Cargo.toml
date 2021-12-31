@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -23,6 +23,10 @@ cloud-aws = [
 cloud-gcp = [
   "encryption_export/cloud-gcp",
   "backup/cloud-gcp",
+]
+cloud-azure = [
+  "encryption_export/cloud-azure",
+  "backup/cloud-azure",
 ]
 cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
 cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]

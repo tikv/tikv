@@ -15,9 +15,10 @@ name = "external_storage_export"
 # crate-type = ["lib", "cdylib"]
 
 [features]
-default = ["cloud-gcp", "cloud-aws"]
+default = ["cloud-gcp", "cloud-aws", "cloud-azure"]
 cloud-aws = ["aws"]
 cloud-gcp = ["gcp"]
+cloud-azure = ["azure"]
 cloud-storage-dylib = [
   "external_storage/cloud-storage-dylib",
   "ffi-support",
@@ -50,6 +51,7 @@ cloud-storage-grpc = [
 
 [dependencies]
 aws = { optional = true, path = "../../cloud/aws", default-features = false }
+azure = { optional = true, path = "../../cloud/azure", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
 lazy_static = { optional = true, version = "1.3" }
 gcp = { optional = true, path = "../../cloud/gcp", default-features = false }
