@@ -5,7 +5,7 @@ use std::fs::{read_dir, File};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-use chrono::DateTime;
+use chrono::{DateTime, Local};
 use futures::stream::{self, Stream};
 use itertools::Itertools;
 use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
@@ -220,18 +220,10 @@ fn is_log_file(file_path: &Path, log_file_path: &Path) -> bool {
 
     // for rotated *.rotated-datetime.* file
     let mut dt = file_name.to_string().replace(log_file, "");
-    if let Some(offset) = dt.find('T') {
-        unsafe {
-            // -2021-12-13T16-08-27.621 => -2021-12-13T16:08:27.621
-            let dt = dt.as_bytes_mut();
-            if dt.len() < offset + 6 {
-                return false;
-            }
-            dt[offset + 3] = b':';
-            dt[offset + 6] = b':';
-        };
-        dt.push_str("+00:00");
-        match DateTime::parse_from_rfc3339(&dt.as_str()[1..]) {
+    if !dt.is_empty() {
+        // We must add *a timezone* as `DateTime::parse_from_str` requires it
+        dt.push_str(&Local::now().offset().to_string());
+        match DateTime::parse_from_str(&dt.as_str()[1..], "%Y-%m-%dT%H-%M-%S%.3f %z") {
             Ok(_) => return true,
             Err(_) => return false,
         }
