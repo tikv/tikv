@@ -149,8 +149,8 @@ impl Default for Builder {
 }
 
 impl Builder {
-    pub fn new() {
-        Builder::defalut()
+    pub fn new() -> Self {
+        Builder::default()
     }
 }
 
