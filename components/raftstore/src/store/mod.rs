@@ -24,6 +24,7 @@ mod replication_mode;
 mod snap;
 mod txn_ext;
 mod worker;
+mod sst_reader;
 
 pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,

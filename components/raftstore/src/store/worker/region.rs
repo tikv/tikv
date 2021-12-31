@@ -380,6 +380,9 @@ where
         }
         check_abort(&abort)?;
         let timer = Instant::now();
+        unsafe{
+            s.replicate_snapshot(&region);
+        }
         let options = ApplyOptions {
             db: self.engine.clone(),
             region,
