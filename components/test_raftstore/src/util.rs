@@ -665,9 +665,10 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
     );
 
-    assert!(cfg.raft_engine.enable);
-    let raft_engine =
-        RaftLogEngine::new(cfg.raft_engine.config(), key_manager.clone(), limiter).unwrap();
+    let raft_path = dir.path().join("raft-engine");
+    let mut raft_engine_cfg = cfg.raft_engine.config();
+    raft_engine_cfg.dir = raft_path.to_str().unwrap().to_owned();
+    let raft_engine = RaftLogEngine::new(raft_engine_cfg, key_manager.clone(), limiter).unwrap();
 
     let mut engine = RocksEngine::from_db(engine);
     let shared_block_cache = cache.is_some();
