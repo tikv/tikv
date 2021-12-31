@@ -1182,13 +1182,22 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, from: &RaftLogEngine) {
-        let mut entries = Vec::new();
-        from.fetch_entries_to(region_id, 0, u64::MAX, None /*max_size*/, &mut entries)
+        if let (Some(first), Some(last)) = (from.first_index(region_id), from.last_index(region_id))
+        {
+            let mut entries = Vec::new();
+            from.fetch_entries_to(
+                region_id,
+                first,
+                last + 1,
+                None, /*max_size*/
+                &mut entries,
+            )
             .unwrap();
-        self.engines[&store_id]
-            .raft
-            .append(region_id, entries)
-            .unwrap();
+            self.engines[&store_id]
+                .raft
+                .append(region_id, entries)
+                .unwrap();
+        }
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

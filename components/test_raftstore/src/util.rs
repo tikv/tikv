@@ -113,14 +113,8 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftLogEngine>, region:
             })
             .unwrap();
     }
-    let mut entries = Vec::new();
-    assert_eq!(
-        engine
-            .raft
-            .fetch_entries_to(id, 0, u64::MAX, None /*max_size*/, &mut entries)
-            .unwrap(),
-        0
-    );
+    assert_eq!(engine.raft.first_index(id), None);
+    assert_eq!(engine.raft.last_index(id), None);
     let state: Option<RaftLocalState> = engine.raft.get_raft_state(id).unwrap();
     assert!(
         state.is_none(),
