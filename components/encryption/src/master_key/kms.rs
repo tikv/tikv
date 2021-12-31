@@ -245,14 +245,14 @@ mod tests {
         let encrypted2 = EncryptedKey::new(vec![3u8; 32]).unwrap();
         let state = State::new_from_datakey(data_key).unwrap();
         // cached to the data key
-        assert_eq!(state.cached(&encrypted), true);
+        assert!(state.cached(&encrypted));
         let state2 = State::new_from_datakey(DataKeyPair {
             plaintext,
             encrypted: encrypted2.clone(),
         })
         .unwrap();
         // updated to the new data key
-        assert_eq!(state2.cached(&encrypted2), true);
+        assert!(state2.cached(&encrypted2));
     }
 
     #[test]

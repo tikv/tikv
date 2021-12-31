@@ -148,6 +148,12 @@ impl Builder {
     }
 }
 
+impl Default for Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HandlerBuilder<Runner, Runner> for Builder {
     type Handler = Handler;
 
