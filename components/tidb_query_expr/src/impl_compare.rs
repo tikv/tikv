@@ -375,12 +375,7 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
 #[inline]
 pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     // Max datetime range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
-    let mut least = Some(Time::parse_datetime(
-        ctx,
-        "9999-12-31 23:59:59",
-        0,
-        true,
-    )?);
+    let mut least = Some(Time::parse_datetime(ctx, "9999-12-31 23:59:59", 0, true)?);
     for arg in args {
         match arg {
             Some(arg_val) => {

@@ -556,14 +556,7 @@ fn test_query_num(query: Box<Query>, enable_ttl: bool) {
         put(&cluster, &client, &ctx, store_id, k.clone());
     }
     let region_id = cluster.get_region_id(&k);
-    query(
-        ctx,
-        &cluster,
-        client,
-        store_id,
-        region_id,
-        k.clone(),
-    );
+    query(ctx, &cluster, client, store_id, region_id, k.clone());
 }
 
 fn test_delete_query() {

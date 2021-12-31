@@ -253,7 +253,8 @@ fn test_cdc_not_leader() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1).is_none()
+            .is_subscribed(1)
+            .is_none()
     );
 
     // Sleep a while to make sure the stream is deregistered.
@@ -285,7 +286,8 @@ fn test_cdc_not_leader() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1).is_none()
+            .is_subscribed(1)
+            .is_none()
     );
 
     event_feed_wrap.replace(None);

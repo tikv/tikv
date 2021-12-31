@@ -30,7 +30,8 @@ const BASE64_LINE_WRAP: u8 = b'\n';
 fn get_utf8_byte_index(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .map(|(i, _)| i)
-        .nth(char_idx).unwrap_or(s.len())
+        .nth(char_idx)
+        .unwrap_or(s.len())
 }
 
 #[rpn_fn(writer)]

@@ -71,7 +71,6 @@ impl DateTimeExtension for Time {
         mut week_year: bool,
         first_weekday: bool,
     ) -> (i32, i32) {
-        
         let mut year = self.year() as i32;
         let daynr = calc_day_number(year, self.month() as i32, self.day() as i32);
         let mut first_daynr = calc_day_number(year, 1, 1);
