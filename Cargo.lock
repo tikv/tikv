@@ -1217,6 +1217,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.29"
+source = "git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a72a37a78228d80cd98047326559cf43c"
+dependencies = [
+ "cfg-if 1.0.0",
+]
+
+[[package]]
 name = "encryption"
 version = "0.0.1"
 dependencies = [
@@ -4007,7 +4015,7 @@ checksum = "0460542b551950620a3648c6aa23318ac6b3cd779114bd873209e6e8b5eb1c34"
 dependencies = [
  "base64",
  "bytes 1.0.1",
- "encoding_rs",
+ "encoding_rs 0.8.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-core",
  "futures-util",
  "http",
@@ -5372,7 +5380,7 @@ dependencies = [
  "chrono-tz",
  "codec",
  "collections",
- "encoding_rs",
+ "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
  "error_code",
  "hex 0.4.2",
  "kvproto",
