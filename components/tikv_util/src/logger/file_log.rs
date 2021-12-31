@@ -383,17 +383,14 @@ mod tests {
     }
 
     fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
-        use chrono::SecondsFormat;
         use std::ffi::OsString;
         let parent = path.parent().unwrap().as_os_str();
         let prefix = path.file_stem().unwrap();
         let mut new_path = OsString::from(parent);
         new_path.push("/");
         new_path.push(prefix);
-        let dt = Local::now().to_rfc3339_opts(SecondsFormat::Millis, false);
-        // remove zone
-        let (dt, _) = dt.split_at(dt.len() - 6);
-        new_path.push(format!("-{}", dt.replace(":", "-")));
+        let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
+        new_path.push(format!("-{}", dt));
         if let Some(ext) = path.extension() {
             new_path.push(".");
             new_path.push(ext);
@@ -402,7 +399,6 @@ mod tests {
     }
 
     fn rename_with_old_timestamp(path: &Path, t: ReadableDuration) -> io::Result<PathBuf> {
-        use chrono::SecondsFormat;
         use std::ffi::OsString;
         let parent = path.parent().unwrap().as_os_str();
         let prefix = path.file_stem().unwrap();
@@ -410,9 +406,8 @@ mod tests {
         new_path.push("/");
         new_path.push(prefix);
         let dt = (Local::now() - chrono::Duration::from_std(t.0).unwrap())
-            .to_rfc3339_opts(SecondsFormat::Millis, false);
-        let (dt, _) = dt.split_at(dt.len() - 6);
-        new_path.push(format!("-{}", dt.replace(":", "-")));
+            .format("%Y-%m-%dT%H-%M-%S%.3f");
+        new_path.push(format!("-{}", dt));
         if let Some(ext) = path.extension() {
             new_path.push(".");
             new_path.push(ext);

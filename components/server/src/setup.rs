@@ -43,10 +43,8 @@ fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = OsString::from(parent);
     new_path.push("/");
     new_path.push(prefix);
-    let dt = Local::now().to_rfc3339_opts(SecondsFormat::Millis, false);
-    // remove zone
-    let (dt, _) = dt.split_at(dt.len() - 6);
-    new_path.push(format!("-{}", dt.replace(":", "-")));
+    let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
+    new_path.push(format!("-{}", dt));
     if let Some(ext) = path.extension() {
         new_path.push(".");
         new_path.push(ext);
