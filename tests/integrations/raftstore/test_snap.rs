@@ -140,11 +140,10 @@ fn test_server_snap_gc() {
 
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
+    
+    assert!(fs::read_dir(snap_dir)
         .unwrap()
-        .map(|p| p.unwrap().path())
-        .collect();
-    assert!(snapfiles.len() >= 2);
+        .filter(|p| p.is_ok()).count() >= 2);
 
     cluster.sim.wl().clear_recv_filters(3);
     debug!("filters cleared.");
