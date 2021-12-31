@@ -14,6 +14,7 @@ use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
+use kvproto::resource_usage_agent::create_resource_metering_pub_sub;
 use kvproto::tikvpb::TikvClient;
 use tempfile::TempDir;
 use tikv::storage::kv::SnapContext;
@@ -43,7 +44,7 @@ use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     store::msg::RaftCmdExtraOpts,
 };
-use resource_metering::{CollectorRegHandle, ResourceTagFactory};
+use resource_metering::{CollectorRegHandle, PubSubService, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
@@ -207,22 +208,22 @@ impl ServerCluster {
     fn init_resource_metering(
         &self,
         cfg: &resource_metering::Config,
-    ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
+    ) -> (
+        ResourceTagFactory,
+        CollectorRegHandle,
+        PubSubService,
+        Box<dyn FnOnce()>,
+    ) {
         let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(cfg.precision.as_millis());
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
-        let (_, single_target_worker) = resource_metering::init_single_target(
-            cfg.receiver_address.clone(),
-            Arc::new(Environment::new(2)),
-            data_sink_reg_handle,
-        );
 
         (
             resource_tag_factory,
             collector_reg_handle,
+            PubSubService::new(data_sink_reg_handle),
             Box::new(move || {
-                single_target_worker.stop_worker();
                 reporter_worker.stop_worker();
                 recorder_worker.stop_worker();
             }),
@@ -334,7 +335,7 @@ impl Simulator for ServerCluster {
         };
 
         // Start resource metering.
-        let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
+        let (res_tag_factory, collector_reg_handle, pubsub_service, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
@@ -456,6 +457,7 @@ impl Simulator for ServerCluster {
             svr.register_service(create_import_sst(import_service.clone()));
             svr.register_service(create_debug(debug_service.clone()));
             svr.register_service(create_deadlock(deadlock_service.clone()));
+            svr.register_service(create_resource_metering_pub_sub(pubsub_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
                     svr.register_service(fact());

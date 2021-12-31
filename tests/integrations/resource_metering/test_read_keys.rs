@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::resource_metering::test_suite::MockReceiverServer;
+use crate::resource_metering::test_suite::Subscriber;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,13 +11,13 @@ use engine_rocks::PerfLevel;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::coprocessor;
 use kvproto::kvrpcpb::*;
+use kvproto::resource_usage_agent::ResourceMeteringPubSubClient;
 use kvproto::resource_usage_agent::ResourceUsageRecord;
 use kvproto::tikvpb::*;
 use protobuf::Message;
 use resource_metering::ResourceTagFactory;
 use test_coprocessor::{DAGSelect, ProductTable, Store};
 use test_raftstore::*;
-use test_util::alloc_port;
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
@@ -28,17 +28,13 @@ use tikv_util::thread_group::GroupProperties;
 use tikv_util::HandyRwLock;
 use tipb::SelectResponse;
 
+const DEFAULT_DELAY: Duration = Duration::from_secs(30);
+
 #[test]
 pub fn test_read_keys() {
-    // Create & start receiver server.
-    let (tx, rx) = unbounded();
-    let mut server = MockReceiverServer::new(tx);
-    let port = alloc_port();
-    let env = Arc::new(Environment::new(1));
-    server.start_server(port, env.clone());
-
     // Create cluster.
-    let (_cluster, client, mut ctx) = new_cluster(port, env);
+    let (_cluster, client, pubsub, mut ctx) = new_cluster();
+    let mut subscriber = Subscriber::from_client(pubsub);
 
     // Set resource group tag for enable resource metering.
     ctx.set_resource_group_tag("TEST-TAG".into());
@@ -85,8 +81,6 @@ pub fn test_read_keys() {
     get_req.set_key(b"0".to_vec());
     get_req.set_version(ts);
     let _ = client.kv_get(&get_req).unwrap(); // trigger thread register
-    std::thread::sleep(Duration::from_secs(2));
-    recv_read_keys(&rx);
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
@@ -97,7 +91,14 @@ pub fn test_read_keys() {
     assert_eq!(get_resp.value, b"0".to_vec());
 
     // Wait & receive & assert.
-    assert_eq!(must_recv_read_keys(&rx), 1);
+    let records = subscriber.next_batch_records(DEFAULT_DELAY);
+    assert_eq!(
+        records["TEST-TAG"]
+            .iter()
+            .map(|r| r.get_read_keys())
+            .sum::<u32>(),
+        2
+    );
 
     // Scan 0 ~ 4.
     ts += 1;
@@ -111,7 +112,14 @@ pub fn test_read_keys() {
     assert_eq!(scan_resp.pairs.len(), 5);
 
     // Wait & receive & assert.
-    assert_eq!(must_recv_read_keys(&rx), 5);
+    let records = subscriber.next_batch_records(DEFAULT_DELAY);
+    assert_eq!(
+        records["TEST-TAG"]
+            .iter()
+            .map(|r| r.get_read_keys())
+            .sum::<u32>(),
+        5
+    );
 
     // Scan 0 ~ 9.
     ts += 1;
@@ -125,52 +133,31 @@ pub fn test_read_keys() {
     assert_eq!(scan_resp.pairs.len(), 10);
 
     // Wait & receive & assert.
-    assert_eq!(must_recv_read_keys(&rx), 10);
-
-    // Shutdown receiver server.
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        server.shutdown_server().await;
-    });
+    let records = subscriber.next_batch_records(DEFAULT_DELAY);
+    assert_eq!(
+        records["TEST-TAG"]
+            .iter()
+            .map(|r| r.get_read_keys())
+            .sum::<u32>(),
+        10
+    );
 }
 
-fn new_cluster(port: u16, env: Arc<Environment>) -> (Cluster<ServerCluster>, TikvClient, Context) {
+fn new_cluster() -> (
+    Cluster<ServerCluster>,
+    TikvClient,
+    ResourceMeteringPubSubClient,
+    Context,
+) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        cluster.cfg.resource_metering.receiver_address = format!("127.0.0.1:{}", port);
         cluster.cfg.resource_metering.precision = ReadableDuration::millis(100);
         cluster.cfg.resource_metering.report_receiver_interval = ReadableDuration::millis(400);
     });
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
-    (cluster, client, ctx)
-}
-
-fn must_recv_read_keys(rx: &Receiver<Vec<ResourceUsageRecord>>) -> u32 {
-    const MAX_WAIT_SECS: u32 = 30;
-    let duration = Duration::from_secs(1);
-    for _ in 0..MAX_WAIT_SECS {
-        std::thread::sleep(duration);
-        let read_keys = recv_read_keys(rx);
-        if read_keys > 0 {
-            return read_keys;
-        }
-    }
-    panic!("no read_keys");
-}
-
-fn recv_read_keys(rx: &Receiver<Vec<ResourceUsageRecord>>) -> u32 {
-    let mut total = 0;
-    while let Ok(records) = rx.try_recv() {
-        for r in &records {
-            total += r
-                .get_record()
-                .get_items()
-                .iter()
-                .map(|item| item.read_keys)
-                .sum::<u32>();
-        }
-    }
-    total
+    let channel = ChannelBuilder::new(Arc::new(Environment::new(2)))
+        .connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel.clone());
+    let pubsub = ResourceMeteringPubSubClient::new(channel);
+    (cluster, client, pubsub, ctx)
 }
 
 #[test]

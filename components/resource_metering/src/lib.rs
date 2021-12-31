@@ -27,9 +27,6 @@ pub use recorder::{
 pub use reporter::data_sink::DataSink;
 pub use reporter::data_sink_reg::DataSinkRegHandle;
 pub use reporter::pubsub::PubSubService;
-pub use reporter::single_target::{
-    init_single_target, AddressChangeNotifier, SingleTargetDataSink,
-};
 pub use reporter::{
     init_reporter, ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
 };

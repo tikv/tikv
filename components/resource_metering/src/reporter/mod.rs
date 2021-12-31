@@ -4,7 +4,6 @@ pub mod collector_impl;
 pub mod data_sink;
 pub mod data_sink_reg;
 pub mod pubsub;
-pub mod single_target;
 
 use crate::recorder::{CollectorGuard, CollectorRegHandle};
 use crate::reporter::collector_impl::CollectorImpl;
@@ -254,7 +253,6 @@ mod tests {
             data_sink: Box::new(client.clone()),
         }));
         r.run(Task::ConfigChange(Config {
-            receiver_address: "abc".to_string(),
             report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,
             precision: ReadableDuration::secs(2),

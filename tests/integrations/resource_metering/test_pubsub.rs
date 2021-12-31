@@ -2,9 +2,11 @@
 
 use crate::resource_metering::test_suite::TestSuite;
 
-use collections::hash_set_with_capacity;
-use futures::StreamExt;
+use std::time::Duration;
+
 use tikv_util::config::ReadableDuration;
+
+const DEFAULT_DELAY: Duration = Duration::from_secs(10);
 
 #[test]
 pub fn test_basic() {
@@ -18,21 +20,8 @@ pub fn test_basic() {
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
-    let (client, stream) = test_suite.subscribe();
-    let res = test_suite.rt.block_on(async move {
-        let _client = client;
-        let mut res = hash_set_with_capacity(4);
-
-        let stream = stream.take(4);
-        let records = stream.collect::<Vec<_>>().await;
-        for r in records {
-            let r = r.unwrap();
-            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
-            res.insert(tag);
-        }
-
-        res
-    });
+    let mut subsriber = test_suite.subscribe();
+    let res = subsriber.next_batch_tags(DEFAULT_DELAY);
 
     assert!(res.contains("req-1"));
     assert!(res.contains("req-2"));
@@ -49,30 +38,36 @@ pub fn test_multiple_subscribers() {
     // Workload
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
-    let jhs: Vec<_> = (0..3)
-        .map(|_| {
-            let (client, stream) = test_suite.subscribe();
-            test_suite.rt.spawn(async move {
-                let _client = client;
-                let mut res = hash_set_with_capacity(4);
 
-                let stream = stream.take(4);
-                let records = stream.collect::<Vec<_>>().await;
-                for r in records {
-                    let r = r.unwrap();
-                    let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag())
-                        .into_owned();
-                    res.insert(tag);
-                }
+    let mut subsriber1 = test_suite.subscribe();
+    let mut subsriber2 = test_suite.subscribe();
 
-                res
-            })
-        })
-        .collect();
+    let res1 = subsriber1.next_batch_tags(DEFAULT_DELAY);
+    assert!(res1.contains("req-1"));
+    assert!(res1.contains("req-2"));
 
-    for jh in jhs {
-        let res = test_suite.rt.block_on(jh).unwrap();
-        assert!(res.contains("req-1"));
-        assert!(res.contains("req-2"));
-    }
+    let res2 = subsriber2.next_batch_tags(DEFAULT_DELAY);
+    assert!(res2.contains("req-1"));
+    assert!(res2.contains("req-2"));
+}
+
+#[test]
+pub fn test_reconnect_subscriber() {
+    let mut test_suite = TestSuite::new(resource_metering::Config {
+        report_receiver_interval: ReadableDuration::secs(3),
+        precision: ReadableDuration::secs(1),
+        ..Default::default()
+    });
+
+    // Workload
+    // [req-1, req-2]
+    test_suite.setup_workload(vec!["req-1", "req-2"]);
+
+    [0..3].iter().for_each(|_| {
+        let mut subsriber = test_suite.subscribe();
+
+        let res1 = subsriber.next_batch_tags(DEFAULT_DELAY);
+        assert!(res1.contains("req-1"));
+        assert!(res1.contains("req-2"));
+    });
 }
