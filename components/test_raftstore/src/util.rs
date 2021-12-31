@@ -45,8 +45,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::{escape, HandyRwLock};
 use txn_types::Key;
 
-use crate::pd_client::PdClient;
 use crate::{Cluster, ServerCluster, Simulator, TestPdClient};
+use pd_client::PdClient;
 
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
@@ -132,7 +132,13 @@ lazy_static! {
     static ref TEST_CONFIG: TiKvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TiKvConfig::from_file(&common_test_cfg, None)
+        TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                manifest_dir.display(),
+                e
+            );
+        })
     };
 }
 
@@ -605,7 +611,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
+fn dummpy_filter(_: &RocksCompactionJobInfo<'_>) -> bool {
     true
 }
 

@@ -1045,8 +1045,8 @@
 
 [backup]
 ## Number of threads to perform backup tasks.
-## The default value is set to min(CPU_NUM * 0.75, 32).
-# num-threads = 24
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
 
 ## Number of ranges to backup in one batch.
 # batch-size = 8
@@ -1058,7 +1058,7 @@
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = false 
+# enable-auto-tune = true 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

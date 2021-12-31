@@ -5,9 +5,10 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
+cloud-azure = ["external_storage_export/cloud-azure"]
 cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
 cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
 test-engines-rocksdb = [
@@ -63,6 +64,9 @@ collections = { path = "../collections" }
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio-stream = "0.1"
+async-channel = "1.4"
+
 
 [dev-dependencies]
 rand = "0.8"

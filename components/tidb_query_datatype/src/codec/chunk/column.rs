@@ -802,7 +802,7 @@ impl Column {
 
     /// Append a json datum to the column.
     #[inline]
-    pub fn append_json(&mut self, j: JsonRef) -> Result<()> {
+    pub fn append_json(&mut self, j: JsonRef<'_>) -> Result<()> {
         self.data.write_json(j)?;
         self.finished_append_var();
         Ok(())
@@ -845,7 +845,7 @@ impl Column {
 
     // Append an Enum datum to the column
     #[inline]
-    pub fn append_enum(&mut self, e: EnumRef) -> Result<()> {
+    pub fn append_enum(&mut self, e: EnumRef<'_>) -> Result<()> {
         self.data.write_enum_to_chunk(e.value(), e.name())?;
         self.finished_append_var();
         Ok(())

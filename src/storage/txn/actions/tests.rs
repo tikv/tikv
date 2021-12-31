@@ -247,7 +247,7 @@ fn default_txn_props(
     start_ts: TimeStamp,
     primary: &[u8],
     for_update_ts: TimeStamp,
-) -> TransactionProperties {
+) -> TransactionProperties<'_> {
     let kind = if for_update_ts.is_zero() {
         TransactionKind::Optimistic(false)
     } else {

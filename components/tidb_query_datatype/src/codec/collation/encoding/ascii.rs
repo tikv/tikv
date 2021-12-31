@@ -7,7 +7,7 @@ pub struct EncodingBinary;
 
 impl Encoding for EncodingBinary {
     #[inline]
-    fn decode(data: BytesRef) -> Result<Bytes> {
+    fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         Ok(Bytes::from(data))
     }
 }
@@ -17,7 +17,7 @@ pub struct EncodingAscii;
 
 impl Encoding for EncodingAscii {
     #[inline]
-    fn decode(data: BytesRef) -> Result<Bytes> {
+    fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         for x in data {
             if !x.is_ascii() {
                 return Err(Error::cannot_convert_string("ascii"));

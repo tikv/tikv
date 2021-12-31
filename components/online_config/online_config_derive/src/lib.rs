@@ -3,8 +3,6 @@
 //! This crate provides a macro that can be used to generate code to
 //! implement `OnlineConfig` trait
 
-extern crate proc_macro;
-
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 

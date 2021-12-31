@@ -1886,3 +1886,75 @@ fn test_copr_bypass_or_access_locks() {
         assert!(!resp.has_locked(), "{:?}", resp);
     }
 }
+
+#[test]
+fn test_rc_read() {
+    let data = vec![
+        (1, Some("name:1"), 1), /* no lock */
+        (2, Some("name:2"), 2), /* no lock */
+        (3, Some("name:3"), 3), /* update lock */
+        (4, Some("name:4"), 4), /* delete lock */
+    ];
+
+    let product = ProductTable::new();
+    let (store, _) = init_with_data(&product, &data);
+    let expected_data = vec![
+        (1, Some("name:1"), 1),
+        (2, Some("name:22"), 2),
+        (3, Some("name:3"), 3),
+        (4, Some("name:4"), 4),
+    ];
+
+    // uncommitted lock to be ignored
+    let (store, _) = init_data_with_engine_and_commit(
+        Default::default(),
+        store.get_engine(),
+        &product,
+        &[(3, Some("name:33"), 3)],
+        false,
+    );
+
+    // committed lock to be read
+    let (mut store, endpoint) = init_data_with_engine_and_commit(
+        Default::default(),
+        store.get_engine(),
+        &product,
+        &expected_data[1..2],
+        true,
+    );
+
+    // delete and lock row 3
+    store.begin();
+    store.delete_from(&product).execute(
+        data[3].0,
+        vec![
+            data[3].0.into(),
+            data[3].1.clone().map(|s| s.as_bytes()).into(),
+            data[3].2.into(),
+        ],
+    );
+
+    let mut ctx = Context::default();
+    ctx.set_isolation_level(IsolationLevel::Rc);
+    let ranges = vec![product.get_record_range(1, 4)];
+
+    let mut req = DAGSelect::from(&product).build_with(ctx.clone(), &[0]);
+    req.set_start_ts(u64::MAX - 1);
+    req.set_ranges(ranges.into());
+
+    let mut resp = handle_select(&endpoint, req);
+    let mut row_count = 0;
+    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    for (row, (id, name, cnt)) in spliter.zip(expected_data.clone()) {
+        let name_datum = name.map(|s| s.as_bytes()).into();
+        let expected_encoded = datum::encode_value(
+            &mut EvalContext::default(),
+            &[Datum::I64(id), name_datum, cnt.into()],
+        )
+        .unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        assert_eq!(result_encoded, &*expected_encoded);
+        row_count += 1;
+    }
+    assert_eq!(row_count, expected_data.len());
+}

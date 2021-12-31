@@ -13,7 +13,7 @@ impl std::error::Error for DeadlineError {
 }
 
 impl std::fmt::Display for DeadlineError {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(fmt, "deadline has elapsed")
     }
 }

@@ -56,7 +56,6 @@ where
                 handler,
                 max_batch_size: self.state.max_batch_size,
                 reschedule_duration: self.state.reschedule_duration,
-                before_pause_wait: self.state.before_pause_wait,
                 joinable_workers: Some(Arc::clone(&self.state.joinable_workers)),
             };
             let props = tikv_util::thread_group::current_properties();
@@ -116,7 +115,7 @@ pub enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self {
             Task::ScalePool(pool, size) => {
                 write!(f, "Scale pool ")?;
