@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_2)]
+// #![feature(duration_consts_2)]
+#![feature(duration_consts_float)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -196,7 +197,7 @@ impl<'de> Deserialize<'de> for IOPriority {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&"invalid IO priority".to_string()),
+                            Unexpected::Other("invalid IO priority"),
                             &self,
                         ));
                     }

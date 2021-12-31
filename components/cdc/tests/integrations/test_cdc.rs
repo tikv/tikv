@@ -249,12 +249,11 @@ fn test_cdc_not_leader() {
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
-            .is_some()
+            .is_subscribed(1).is_none()
     );
 
     // Sleep a while to make sure the stream is deregistered.
@@ -282,12 +281,11 @@ fn test_cdc_not_leader() {
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
-            .is_some()
+            .is_subscribed(1).is_none()
     );
 
     event_feed_wrap.replace(None);

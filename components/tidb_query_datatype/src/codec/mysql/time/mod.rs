@@ -310,8 +310,7 @@ mod parser {
     fn digit1(input: &[u8]) -> Option<(&[u8], &[u8])> {
         let end = input
             .iter()
-            .position(|&c| !c.is_ascii_digit())
-            .unwrap_or_else(|| input.len());
+            .position(|&c| !c.is_ascii_digit()).unwrap_or(input.len());
         (end != 0).as_option()?;
         Some((&input[end..], &input[..end]))
     }

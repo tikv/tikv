@@ -279,8 +279,7 @@ impl std::ops::Index<usize> for BufferVec {
         let end = self
             .offsets
             .get(index + 1)
-            .copied()
-            .unwrap_or_else(|| self.data.len());
+            .copied().unwrap_or(self.data.len());
         &self.data[start..end]
     }
 }

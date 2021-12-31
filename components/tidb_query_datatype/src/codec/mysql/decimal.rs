@@ -3692,8 +3692,8 @@ mod tests {
             val,
             max,
             "expect: {}, got: {}",
-            val.to_string(),
-            max.to_string()
+            val,
+            max
         );
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
