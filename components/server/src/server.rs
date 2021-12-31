@@ -635,19 +635,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 collector_reg_handle.clone(),
             );
         self.to_stop.push(reporter_worker);
-        let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
-            self.config.resource_metering.receiver_address.clone(),
-            self.env.clone(),
-            data_sink_reg_handle.clone(),
-        );
-        self.to_stop.push(single_target_worker);
         let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
             recorder_notifier,
             reporter_notifier,
-            address_change_notifier,
         );
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,

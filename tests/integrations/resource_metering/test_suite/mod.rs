@@ -1,23 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod mock_pubsub;
-mod mock_receiver_server;
 
-pub use mock_receiver_server::MockReceiverServer;
-
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
-use futures::{select, FutureExt};
+use futures::{select, FutureExt, StreamExt};
+use futures_timer::Delay;
 use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
 use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::{
-    ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
+    GroupTagRecordItem, ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
 };
-use resource_metering::Config;
 use tempfile::TempDir;
 use test_util::alloc_port;
 use tikv::config::{ConfigController, TiKvConfig};
@@ -28,16 +24,12 @@ use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
     pubsub_server_port: u16,
-    receiver_server: Option<MockReceiverServer>,
 
     storage: Storage<RocksEngine, DummyLockManager>,
     cfg_controller: ConfigController,
 
-    tx: Sender<Vec<ResourceUsageRecord>>,
-    rx: Receiver<Vec<ResourceUsageRecord>>,
-
     env: Arc<Environment>,
-    pub rt: Runtime,
+    rt: Runtime,
     cancel_workload: Option<oneshot::Sender<()>>,
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
@@ -56,11 +48,6 @@ impl TestSuite {
         let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let env = Arc::new(Environment::new(2));
-        let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
-            cfg.receiver_address.clone(),
-            env.clone(),
-            data_sink_reg_handle.clone(),
-        );
         let pubsub_server_port = alloc_port();
         let mut pubsub_server = mock_pubsub::MockPubSubServer::new(
             pubsub_server_port,
@@ -69,12 +56,8 @@ impl TestSuite {
         );
         pubsub_server.start();
 
-        let cfg_manager = resource_metering::ConfigManager::new(
-            cfg,
-            recorder_notifier,
-            reporter_notifier,
-            address_change_notifier,
-        );
+        let cfg_manager =
+            resource_metering::ConfigManager::new(cfg, recorder_notifier, reporter_notifier);
         cfg_controller.register(
             tikv::config::Module::ResourceMetering,
             Box::new(cfg_manager),
@@ -90,8 +73,6 @@ impl TestSuite {
         .build()
         .unwrap();
 
-        let (tx, rx) = unbounded();
-
         let rt = runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .build()
@@ -99,11 +80,8 @@ impl TestSuite {
 
         Self {
             pubsub_server_port,
-            receiver_server: None,
             storage,
             cfg_controller,
-            tx,
-            rx,
             env,
             rt,
             cancel_workload: None,
@@ -111,19 +89,13 @@ impl TestSuite {
             _dir: dir,
             stop_workers: Some(Box::new(move || {
                 futures::executor::block_on(pubsub_server.shutdown()).unwrap();
-                single_target_worker.stop_worker();
                 reporter_worker.stop_worker();
                 recorder_worker.stop_worker();
             })),
         }
     }
 
-    pub fn subscribe(
-        &self,
-    ) -> (
-        ResourceMeteringPubSubClient,
-        ClientSStreamReceiver<ResourceUsageRecord>,
-    ) {
+    pub fn subscribe(&self) -> Subscriber {
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone());
             cb.connect(&format!("127.0.0.1:{}", self.pubsub_server_port))
@@ -132,14 +104,7 @@ impl TestSuite {
         let receiver = client
             .subscribe(&ResourceMeteringRequest::default())
             .unwrap();
-        (client, receiver)
-    }
-
-    pub fn cfg_receiver_address(&self, addr: impl Into<String>) {
-        let addr = addr.into();
-        self.cfg_controller
-            .update_config("resource-metering.receiver-address", &addr)
-            .unwrap();
+        Subscriber::new(client, receiver)
     }
 
     pub fn cfg_precision(&self, precision: impl Into<String>) {
@@ -163,32 +128,6 @@ impl TestSuite {
                 &max_resource_groups.to_string(),
             )
             .unwrap();
-    }
-
-    pub fn get_current_cfg(&self) -> Config {
-        self.cfg_controller.get_current().resource_metering.clone()
-    }
-
-    pub fn start_receiver_at(&mut self, port: u16) {
-        assert!(self.receiver_server.is_none());
-
-        let mut receiver_server = MockReceiverServer::new(self.tx.clone());
-        receiver_server.start_server(port, self.env.clone());
-        self.receiver_server = Some(receiver_server);
-    }
-
-    pub fn shutdown_receiver(&mut self) {
-        if let Some(mut receiver) = self.receiver_server.take() {
-            self.rt.block_on(receiver.shutdown_server());
-        }
-    }
-
-    pub fn block_receiver(&mut self) {
-        self.receiver_server.as_ref().unwrap().block();
-    }
-
-    pub fn unblock_receiver(&mut self) {
-        self.receiver_server.as_ref().unwrap().unblock();
     }
 
     pub fn setup_workload(&mut self, tags: Vec<impl Into<String>>) {
@@ -226,54 +165,101 @@ impl TestSuite {
                 .unwrap();
         }
     }
-
-    pub fn nonblock_receiver_all(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
-        let mut res = HashMap::new();
-        for r in self.rx.try_recv() {
-            Self::merge_records(&mut res, r);
-        }
-        res
-    }
-
-    pub fn block_receive_one(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
-        let records = self.rx.recv().unwrap();
-        let mut res = HashMap::new();
-        Self::merge_records(&mut res, records);
-        res
-    }
-
-    fn merge_records(
-        map: &mut HashMap<String, (Vec<u64>, Vec<u32>)>,
-        records: Vec<ResourceUsageRecord>,
-    ) {
-        for r in records {
-            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
-            let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
-            ts.extend(
-                r.get_record()
-                    .get_items()
-                    .iter()
-                    .map(|item| item.timestamp_sec),
-            );
-            cpu_time.extend(
-                r.get_record()
-                    .get_items()
-                    .iter()
-                    .map(|item| item.cpu_time_ms),
-            );
-        }
-    }
-
-    pub fn flush_receiver(&self) {
-        while let Ok(_) = self.rx.try_recv() {}
-        let _ = self.rx.recv_timeout(
-            self.get_current_cfg().report_receiver_interval.0 + Duration::from_millis(500),
-        );
-    }
 }
 
 impl Drop for TestSuite {
     fn drop(&mut self) {
+        self.cancel_workload();
         self.stop_workers.take().unwrap()();
+    }
+}
+
+pub struct Subscriber {
+    _client: ResourceMeteringPubSubClient,
+    stream: ClientSStreamReceiver<ResourceUsageRecord>,
+}
+
+impl Subscriber {
+    pub fn from_client(client: ResourceMeteringPubSubClient) -> Self {
+        let stream = client
+            .subscribe(&ResourceMeteringRequest::default())
+            .unwrap();
+        Self {
+            _client: client,
+            stream,
+        }
+    }
+
+    pub fn new(
+        client: ResourceMeteringPubSubClient,
+        stream: ClientSStreamReceiver<ResourceUsageRecord>,
+    ) -> Self {
+        Self {
+            _client: client,
+            stream,
+        }
+    }
+
+    pub fn next_batch_tags(&mut self, max_delay: Duration) -> HashSet<String> {
+        let mut set = HashSet::default();
+        for (k, _) in self.next_batch_records(max_delay) {
+            set.insert(k);
+        }
+        set
+    }
+
+    pub fn next_batch_records(
+        &mut self,
+        max_delay: Duration,
+    ) -> HashMap<String, Vec<GroupTagRecordItem>> {
+        let f = async {
+            let mut map = HashMap::default();
+
+            let dl = Delay::new(max_delay);
+            let res = select! {
+                r = self.stream.next().fuse() => r.map(|r| r.ok()).flatten(),
+                _ = dl.fuse() => None,
+            };
+
+            if res.is_none() {
+                return map;
+            }
+
+            let record = res.as_ref().unwrap().get_record();
+            let tag = record.get_resource_group_tag();
+            map.insert(
+                String::from_utf8_lossy(tag).into_owned(),
+                record.get_items().into(),
+            );
+
+            loop {
+                let dl = Delay::new(Duration::from_millis(50));
+                let res = select! {
+                    r = self.stream.next().fuse() => r.map(|r| r.ok()).flatten(),
+                    _ = dl.fuse() => None,
+                };
+
+                if res.is_none() {
+                    break;
+                }
+
+                let record = res.as_ref().unwrap().get_record();
+                let tag = record.get_resource_group_tag();
+                map.insert(
+                    String::from_utf8_lossy(tag).into_owned(),
+                    record.get_items().into(),
+                );
+            }
+
+            map
+        };
+
+        futures::executor::block_on(f)
+    }
+}
+
+impl Drop for Subscriber {
+    fn drop(&mut self) {
+        self.stream.cancel();
     }
 }
