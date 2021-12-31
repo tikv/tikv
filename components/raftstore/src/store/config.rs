@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
+use super::worker::{RaftStoreThreadPool, RefreshConfigTask};
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::perf_level_serde;
@@ -15,7 +16,9 @@ use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use tikv_util::{box_err, info, warn};
+use tikv_util::sys::SysQuota;
+use tikv_util::worker::Scheduler;
+use tikv_util::{box_err, error, info, warn};
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -145,6 +148,12 @@ pub struct Config {
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
 
+    /// This setting can only ensure conf remove will not be proposed by the peer
+    /// being removed. But it can't guarantee the remove is applied when the target
+    /// is not leader. That means we always need to check if it's working as expected
+    /// when a leader applies a self-remove conf change. Keep the configuration only
+    /// for convenient test.
+    #[cfg(any(test, feature = "testexport"))]
     pub allow_remove_leader: bool,
 
     /// Max log gap allowed to propose merge.
@@ -156,16 +165,19 @@ pub struct Config {
     #[online_config(hidden)]
     pub use_delete_range: bool,
 
+    #[online_config(skip)]
+    pub snap_generator_pool_size: usize,
+
     pub cleanup_import_sst_interval: ReadableDuration,
 
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_apply")]
     pub apply_batch_system: BatchSystemConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     #[serde(flatten, with = "prefix_store")]
     pub store_batch_system: BatchSystemConfig,
 
@@ -219,6 +231,10 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
+    // Deprecated! Batch is done in raft client.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
     pub raft_msg_flush_interval: ReadableDuration,
 
     // Deprecated! These configuration has been moved to Coprocessor.
@@ -292,10 +308,12 @@ impl Default for Config {
             report_region_flow_interval: ReadableDuration::minutes(1),
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             right_derive_when_split: true,
+            #[cfg(any(test, feature = "testexport"))]
             allow_remove_leader: false,
             merge_max_log_gap: 10,
             merge_check_tick_interval: ReadableDuration::secs(2),
             use_delete_range: false,
+            snap_generator_pool_size: 2,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
@@ -336,6 +354,16 @@ impl Config {
 
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn allow_remove_leader(&self) -> bool {
+        self.allow_remove_leader
+    }
+
+    #[cfg(not(any(test, feature = "testexport")))]
+    pub fn allow_remove_leader(&self) -> bool {
+        false
     }
 
     pub fn validate(&mut self) -> Result<()> {
@@ -464,8 +492,15 @@ impl Config {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
 
-        if self.apply_batch_system.pool_size == 0 {
-            return Err(box_err!("apply-pool-size should be greater than 0"));
+        // Since the following configuration supports online update, in order to
+        // prevent mistakenly inputting too large values, the max limit is made
+        // according to the cpu quota.
+        let cpu_num = SysQuota::cpu_cores_quota() as usize;
+        if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > cpu_num {
+            return Err(box_err!(
+                "apply-pool-size should be greater than 0 and less than or equal to: {}",
+                cpu_num
+            ));
         }
         if let Some(size) = self.apply_batch_system.max_batch_size {
             if size == 0 {
@@ -474,8 +509,11 @@ impl Config {
         } else {
             self.apply_batch_system.max_batch_size = Some(256);
         }
-        if self.store_batch_system.pool_size == 0 {
-            return Err(box_err!("store-pool-size should be greater than 0"));
+        if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > cpu_num {
+            return Err(box_err!(
+                "store-pool-size should be greater than 0 and less than or equal to: {}",
+                cpu_num
+            ));
         }
         if self.store_batch_system.low_priority_pool_size > 0 {
             // The store thread pool doesn't need a low-priority thread currently.
@@ -490,10 +528,6 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-        self.store_batch_system.before_pause_wait = Some(std::cmp::min(
-            self.raft_msg_flush_interval.0,
-            Duration::from_millis(1),
-        ));
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"
@@ -514,6 +548,12 @@ impl Config {
         if self.evict_cache_on_memory_ratio < 0.0 {
             return Err(box_err!(
                 "evict_cache_on_memory_ratio must be greater than 0"
+            ));
+        }
+
+        if self.snap_generator_pool_size == 0 {
+            return Err(box_err!(
+                "snap-generator-pool-size should be greater than 0."
             ));
         }
 
@@ -654,9 +694,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["right_derive_when_split"])
             .set((self.right_derive_when_split as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["allow_remove_leader"])
-            .set((self.allow_remove_leader as i32).into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["merge_max_log_gap"])
@@ -696,6 +733,9 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["snap_generator_pool_size"])
+            .set(self.snap_generator_pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["hibernate_regions"])
             .set((self.hibernate_regions as i32).into());
         CONFIG_RAFTSTORE_GAUGE
@@ -716,9 +756,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["io_reschedule_hotpot_duration"])
             .set(self.io_reschedule_hotpot_duration.as_secs_f64());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_msg_flush_interval"])
-            .set(self.raft_msg_flush_interval.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {
@@ -740,7 +777,19 @@ impl Config {
     }
 }
 
-pub struct RaftstoreConfigManager(pub Arc<VersionTrack<Config>>);
+pub struct RaftstoreConfigManager {
+    scheduler: Scheduler<RefreshConfigTask>,
+    config: Arc<VersionTrack<Config>>,
+}
+
+impl RaftstoreConfigManager {
+    pub fn new(
+        scheduler: Scheduler<RefreshConfigTask>,
+        config: Arc<VersionTrack<Config>>,
+    ) -> RaftstoreConfigManager {
+        RaftstoreConfigManager { scheduler, config }
+    }
+}
 
 impl ConfigManager for RaftstoreConfigManager {
     fn dispatch(
@@ -749,7 +798,30 @@ impl ConfigManager for RaftstoreConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut Config| cfg.update(change));
+            self.config
+                .update(move |cfg: &mut Config| cfg.update(change));
+        }
+        if let Some(ConfigValue::Module(raft_batch_system_change)) =
+            change.get("store_batch_system")
+        {
+            if let Some(pool_size) = raft_batch_system_change.get("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Store, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale raft pool work task failed"; "err"=> ?e);
+                }
+            }
+        }
+        if let Some(ConfigValue::Module(apply_batch_system_change)) =
+            change.get("apply_batch_system")
+        {
+            if let Some(pool_size) = apply_batch_system_change.get("pool_size") {
+                let scale_pool =
+                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Apply, pool_size.into());
+                if let Err(e) = self.scheduler.schedule(scale_pool) {
+                    error!("raftstore configuration manager schedule scale apply pool work task failed"; "err"=> ?e);
+                }
+            }
         }
         info!(
             "raftstore config changed";
@@ -757,14 +829,6 @@ impl ConfigManager for RaftstoreConfigManager {
         );
         Config::write_change_into_metrics(change);
         Ok(())
-    }
-}
-
-impl std::ops::Deref for RaftstoreConfigManager {
-    type Target = Arc<VersionTrack<Config>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -888,6 +952,10 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
+        cfg.snap_generator_pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 11;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
@@ -899,21 +967,5 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval = ReadableDuration::micros(888);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.store_batch_system.before_pause_wait,
-            Some(Duration::from_micros(888))
-        );
-
-        cfg = Config::new();
-        cfg.raft_msg_flush_interval = ReadableDuration::micros(1888);
-        assert!(cfg.validate().is_ok());
-        assert_eq!(
-            cfg.store_batch_system.before_pause_wait,
-            Some(Duration::from_millis(1))
-        );
     }
 }

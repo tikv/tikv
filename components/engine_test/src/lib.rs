@@ -74,7 +74,7 @@ pub mod raft {
         path: &str,
         db_opt: Option<DBOptions>,
         cf: &str,
-        opt: Option<CFOptions>,
+        opt: Option<CFOptions<'_>>,
     ) -> Result<RaftTestEngine> {
         let cfs = &[cf];
         let opts = opt.map(|o| vec![o]);
@@ -84,7 +84,7 @@ pub mod raft {
     pub fn new_engine_opt(
         path: &str,
         db_opt: DBOptions,
-        cf_opt: CFOptions,
+        cf_opt: CFOptions<'_>,
     ) -> Result<RaftTestEngine> {
         let cfs_opts = vec![cf_opt];
         RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
@@ -112,7 +112,7 @@ pub mod kv {
         path: &str,
         db_opt: Option<DBOptions>,
         cfs: &[&str],
-        opts: Option<Vec<CFOptions>>,
+        opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_engine(path, db_opt, cfs, opts)
     }
@@ -120,7 +120,7 @@ pub mod kv {
     pub fn new_engine_opt(
         path: &str,
         db_opt: DBOptions,
-        cfs_opts: Vec<CFOptions>,
+        cfs_opts: Vec<CFOptions<'_>>,
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
@@ -161,14 +161,18 @@ pub mod ctor {
             path: &str,
             db_opt: Option<DBOptions>,
             cfs: &[&str],
-            opts: Option<Vec<CFOptions>>,
+            opts: Option<Vec<CFOptions<'_>>>,
         ) -> Result<Self>;
 
         /// Create a new engine with specified column families and options
         ///
         /// The engine stores its data in the `path` directory.
         /// If that directory does not exist, then it is created.
-        fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
+        fn new_engine_opt(
+            path: &str,
+            db_opt: DBOptions,
+            cfs_opts: Vec<CFOptions<'_>>,
+        ) -> Result<Self>;
     }
 
     #[derive(Clone)]
@@ -313,7 +317,7 @@ pub mod ctor {
                 _path: &str,
                 _db_opt: Option<DBOptions>,
                 _cfs: &[&str],
-                _opts: Option<Vec<CFOptions>>,
+                _opts: Option<Vec<CFOptions<'_>>>,
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
@@ -321,7 +325,7 @@ pub mod ctor {
             fn new_engine_opt(
                 _path: &str,
                 _db_opt: DBOptions,
-                _cfs_opts: Vec<CFOptions>,
+                _cfs_opts: Vec<CFOptions<'_>>,
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
@@ -353,7 +357,7 @@ pub mod ctor {
                 path: &str,
                 db_opt: Option<DBOptions>,
                 cfs: &[&str],
-                opts: Option<Vec<CFOptions>>,
+                opts: Option<Vec<CFOptions<'_>>>,
             ) -> Result<Self> {
                 let rocks_db_opts = match db_opt {
                     Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
@@ -384,7 +388,7 @@ pub mod ctor {
             fn new_engine_opt(
                 path: &str,
                 db_opt: DBOptions,
-                cfs_opts: Vec<CFOptions>,
+                cfs_opts: Vec<CFOptions<'_>>,
             ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts

@@ -13,7 +13,7 @@ use txn_types::{Key, Mutation};
 #[ignore]
 #[bench]
 fn bench_tombstone_scan(b: &mut Bencher) {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build().unwrap();
     let mut ts_generator = 1..;
 
     let mut kvs = KvGenerator::new(100, 1000);
@@ -23,7 +23,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         store
             .prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(&k), v))],
+                vec![Mutation::make_put(Key::from_raw(&k), v)],
                 k.clone(),
                 ts,
             )
@@ -41,7 +41,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         store
             .prewrite(
                 Context::default(),
-                vec![Mutation::Delete(Key::from_raw(&k))],
+                vec![Mutation::make_delete(Key::from_raw(&k))],
                 k.clone(),
                 ts,
             )

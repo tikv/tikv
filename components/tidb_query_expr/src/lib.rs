@@ -7,6 +7,7 @@
 //! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
 //! standalone.
 
+#![allow(elided_lifetimes_in_paths)] // Necessary until rpn_fn accepts functions annotated with lifetimes.
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
@@ -684,6 +685,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Repeat => repeat_fn_meta(),
         ScalarFuncSig::Substring2Args => substring_2_args_fn_meta(),
         ScalarFuncSig::Substring3Args => substring_3_args_fn_meta(),
+        ScalarFuncSig::Substring2ArgsUtf8 => substring_2_args_utf8_fn_meta(),
+        ScalarFuncSig::Substring3ArgsUtf8 => substring_3_args_utf8_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::Date => date_fn_meta(),

@@ -212,7 +212,7 @@ pub struct Range {
 }
 
 impl Debug for Range {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
@@ -935,7 +935,7 @@ where
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        mut committed_entries_drainer: Drain<Entry>,
+        mut committed_entries_drainer: Drain<'_, Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -1075,7 +1075,7 @@ where
         // 2. When a leader tries to read index during transferring leader,
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
             if let Some(cb) = cmd.cb.take() {
                 apply_ctx
                     .applied_batch
@@ -3293,7 +3293,7 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
@@ -3399,7 +3399,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
     ) {
-        fail_point!("after_handle_catch_up_logs_for_merge");
+        fail_point!("after_handle_catch_up_logs_for_merge", |_| {});
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.delegate.id() == 1003,
@@ -3738,7 +3738,7 @@ where
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3896,7 +3896,7 @@ where
 impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     type Handler = ApplyPoller<EK, W>;
 
@@ -3920,6 +3920,28 @@ where
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
+        }
+    }
+}
+
+impl<EK, W> Clone for Builder<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn clone(&self) -> Self {
+        Builder {
+            tag: self.tag.clone(),
+            cfg: self.cfg.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            importer: self.importer.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            engine: self.engine.clone(),
+            sender: self.sender.clone_box(),
+            router: self.router.clone(),
+            _phantom: self._phantom,
+            store_id: self.store_id,
+            pending_create_peers: self.pending_create_peers.clone(),
         }
     }
 }

@@ -10,6 +10,7 @@ use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
 use futures::{ready, Future, Sink};
+use futures_timer::Delay;
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -27,7 +28,7 @@ use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -111,7 +112,7 @@ impl Queue {
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
         self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
@@ -140,6 +141,12 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
+
+    /// If the buffer is not full, suggest whether sender should wait
+    /// for next message.
+    fn wait_hint(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// A buffer for BatchRaftMessage.
@@ -174,7 +181,9 @@ impl Buffer for BatchMessageBuffer {
         let mut msg_size = msg.start_key.len()
             + msg.end_key.len()
             + msg.get_message().context.len()
-            + msg.extra_ctx.len();
+            + msg.extra_ctx.len()
+            // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
+            + 11 * msg.get_message().get_entries().len();
         for entry in msg.get_message().get_entries() {
             msg_size += entry.data.len();
         }
@@ -210,6 +219,15 @@ impl Buffer for BatchMessageBuffer {
             self.push(more);
         }
         res
+    }
+
+    #[inline]
+    fn wait_hint(&self) -> Option<Duration> {
+        if !self.cfg.raft_msg_flush_interval.0.is_zero() {
+            Some(self.cfg.raft_msg_flush_interval.0)
+        } else {
+            None
+        }
     }
 }
 
@@ -341,6 +359,7 @@ struct AsyncRaftSender<R, M, B, E> {
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
     addr: String,
+    flush_timeout: Option<Delay>,
     _engine: PhantomData<E>,
 }
 
@@ -388,7 +407,7 @@ where
         }
     }
 
-    fn fill_msg(&mut self, ctx: &Context) {
+    fn fill_msg(&mut self, ctx: &Context<'_>) {
         while !self.buffer.full() {
             let msg = match self.queue.pop(ctx) {
                 Some(msg) => msg,
@@ -412,16 +431,36 @@ where
 {
     type Output = grpcio::Result<()>;
 
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<grpcio::Result<()>> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<grpcio::Result<()>> {
         let s = &mut *self;
         loop {
             s.fill_msg(ctx);
             if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                // Then it's the first time visit this block since last flush.
+                if s.flush_timeout.is_none() {
+                    ready!(Pin::new(&mut s.sender).poll_ready(ctx))?;
                 }
-                ready!(res)?;
+                // Only set up a timer if buffer is not full.
+                if !s.buffer.full() {
+                    if s.flush_timeout.is_none() {
+                        // Only set up a timer if necessary.
+                        if let Some(wait_time) = s.buffer.wait_hint() {
+                            s.flush_timeout = Some(Delay::new(wait_time));
+                        }
+                    }
+
+                    // It will be woken up again when the timer fires or new messages are enqueued.
+                    if s.flush_timeout
+                        .as_mut()
+                        .map_or(false, |t| Pin::new(t).poll(ctx).is_pending())
+                    {
+                        return Poll::Pending;
+                    }
+                }
+
+                // So either enough messages are batched up or don't need to wait or wait timeouts.
+                s.flush_timeout.take();
+                ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
                 continue;
             }
 
@@ -533,6 +572,9 @@ where
                             let sid: u64 = sid.parse().unwrap();
                             if sid == store_id {
                                 mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                                // Sleep some time to avoid race between enqueuing message and
+                                // resolving address.
+                                std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                         })
                     };
@@ -568,7 +610,6 @@ where
 
         let cb = ChannelBuilder::new(self.builder.env.clone())
             .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_send_message_len(self.builder.cfg.max_grpc_send_msg_len)
             .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
             .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
@@ -592,6 +633,7 @@ where
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
+                flush_timeout: None,
                 _engine: PhantomData::<E>,
             },
             receiver: batch_stream,
@@ -616,6 +658,7 @@ where
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
+                flush_timeout: None,
                 _engine: PhantomData::<E>,
             },
             receiver: stream,

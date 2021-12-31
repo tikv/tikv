@@ -23,6 +23,8 @@ pub enum Error {
     RegionNotFound(Vec<u8>),
     #[error("store is tombstone {0:?}")]
     StoreTombstone(String),
+    #[error("global config item {0} not found")]
+    GlobalConfigNotFound(String),
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -37,6 +39,7 @@ impl ErrorCodeExt for Error {
             Error::Grpc(_) => error_code::pd::GRPC,
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
+            Error::GlobalConfigNotFound(_) => error_code::pd::GLOBAL_CONFIG_NOT_FOUND,
             Error::Other(_) => error_code::pd::UNKNOWN,
         }
     }

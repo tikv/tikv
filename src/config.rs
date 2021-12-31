@@ -10,12 +10,14 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::i32;
-use std::io::Error as IoError;
 use std::io::Write;
+use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
+use api_version::match_template_api_version;
+use api_version::APIVersion;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
@@ -591,19 +593,26 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
-            cf_opts.add_table_properties_collector_factory(
-                "tikv.ttl-properties-collector",
-                TtlPropertiesCollectorFactory { api_version },
-            );
-            cf_opts
-                .set_compaction_filter_factory(
-                    "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory { api_version })
-                        as Box<dyn CompactionFilterFactory>,
-                )
-                .unwrap();
-        }
+        match_template_api_version!(
+            API,
+            match api_version {
+                ApiVersion::API => {
+                    if API::IS_TTL_ENABLED {
+                        cf_opts.add_table_properties_collector_factory(
+                            "tikv.ttl-properties-collector",
+                            TtlPropertiesCollectorFactory::<API>::default(),
+                        );
+                        cf_opts
+                            .set_compaction_filter_factory(
+                                "ttl_compaction_filter_factory",
+                                Box::new(TTLCompactionFilterFactory::<API>::default())
+                                    as Box<dyn CompactionFilterFactory>,
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        );
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -1116,6 +1125,25 @@ impl DbConfig {
             if self.enable_pipelined_write || self.enable_multi_batch_write {
                 return Err("pipelined_write is not compatible with unordered_write".into());
             }
+        }
+
+        // Since the following configuration supports online update, in order to
+        // prevent mistakenly inputting too large values, the max limit is made
+        // according to the cpu quota.
+        let cpu_num = SysQuota::cpu_cores_quota() as i32;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+            return Err(format!(
+                "max_background_jobs should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
+        }
+        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+            return Err(format!(
+                "max_background_flushes should be greater than 0 and less than or equal to {:?}",
+                cpu_num,
+            )
+            .into());
         }
         Ok(())
     }
@@ -2200,6 +2228,10 @@ pub struct BackupConfig {
     pub enable_auto_tune: bool,
     pub auto_tune_remain_threads: usize,
     pub auto_tune_refresh_interval: ReadableDuration,
+    pub io_thread_size: usize,
+    // Do not expose this config to user.
+    // It used to debug s3 503 error.
+    pub s3_multi_part_size: ReadableSize,
     #[online_config(submodule)]
     pub hadoop: HadoopConfig,
 }
@@ -2212,6 +2244,10 @@ impl BackupConfig {
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
         }
+        if self.s3_multi_part_size.0 > ReadableSize::gb(5).0 {
+            return Err("backup.s3_multi_part_size cannot larger than 5GB".into());
+        }
+
         Ok(())
     }
 }
@@ -2221,13 +2257,16 @@ impl Default for BackupConfig {
         let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::cpu_cores_quota();
         Self {
-            // use at most 75% of vCPU by default
-            num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            // use at most 50% of vCPU by default
+            num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
             batch_size: 8,
             sst_max_size: default_coprocessor.region_max_size,
-            enable_auto_tune: false,
-            auto_tune_remain_threads: 2,
+            enable_auto_tune: true,
+            auto_tune_remain_threads: (cpu_num * 0.2).round() as usize,
             auto_tune_refresh_interval: ReadableDuration::secs(60),
+            io_thread_size: 2,
+            // 5MB is the minimum part size that S3 allowed.
+            s3_multi_part_size: ReadableSize::mb(5),
             hadoop: Default::default(),
         }
     }
@@ -2244,6 +2283,13 @@ pub struct CdcConfig {
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
+    /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
+    /// less than total content. However in other cases, `TsFilter` can make performance worse
+    /// because it needs to re-fetch old row values if they are required.
+    ///
+    /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
+    /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
+    pub incremental_scan_ts_filter_ratio: f64,
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
@@ -2265,6 +2311,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            incremental_scan_ts_filter_ratio: 0.2,
             // 512MB memory for CDC sink.
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
@@ -2286,6 +2333,14 @@ impl CdcConfig {
         if self.incremental_scan_concurrency < self.incremental_scan_threads {
             return Err(
                 "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
+                    .into(),
+            );
+        }
+        if self.incremental_scan_ts_filter_ratio < 0.0
+            || self.incremental_scan_ts_filter_ratio > 1.0
+        {
+            return Err(
+                "cdc.incremental-scan-ts-filter-ratio should be larger than 0 and less than 1"
                     .into(),
             );
         }
@@ -2851,26 +2906,20 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file(path: &Path, unrecognized_keys: Option<&mut Vec<String>>) -> Self {
-        (|| -> Result<Self, Box<dyn Error>> {
-            let s = fs::read_to_string(path)?;
-            let mut deserializer = toml::Deserializer::new(&s);
-            let mut cfg = if let Some(keys) = unrecognized_keys {
-                serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
-            } else {
-                <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
-            }?;
-            deserializer.end()?;
-            cfg.cfg_path = path.display().to_string();
-            Ok(cfg)
-        })()
-        .unwrap_or_else(|e| {
-            panic!(
-                "invalid auto generated configuration file {}, err {}",
-                path.display(),
-                e
-            );
-        })
+    pub fn from_file(
+        path: &Path,
+        unrecognized_keys: Option<&mut Vec<String>>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let s = fs::read_to_string(path)?;
+        let mut deserializer = toml::Deserializer::new(&s);
+        let mut cfg = if let Some(keys) = unrecognized_keys {
+            serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
+        } else {
+            <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+        }?;
+        deserializer.end()?;
+        cfg.cfg_path = path.display().to_string();
+        Ok(cfg)
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
@@ -2922,7 +2971,15 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
-        return Some(TiKvConfig::from_file(&last_cfg_path, None));
+        return Some(
+            TiKvConfig::from_file(&last_cfg_path, None).unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    last_cfg_path.display(),
+                    e
+                );
+            }),
+        );
     }
     None
 }
@@ -2975,11 +3032,13 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
     let tmp_cfg_path = match path.as_ref().parent() {
         Some(p) => p.join(TMP_CONFIG_FILE),
         None => {
-            return Err(format!(
-                "failed to get parent path of config file: {}",
-                path.as_ref().display()
-            )
-            .into());
+            return Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                format!(
+                    "failed to get parent path of config file: {}",
+                    path.as_ref().display()
+                ),
+            )));
         }
     };
     {
@@ -2995,6 +3054,28 @@ lazy_static! {
     pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
 }
 
+fn serde_to_online_config(name: String) -> String {
+    match name.as_ref() {
+        "raftstore.store-pool-size" => name.replace(
+            "raftstore.store-pool-size",
+            "raft_store.store_batch_system.pool_size",
+        ),
+        "raftstore.apply-pool-size" => name.replace(
+            "raftstore.apply-pool-size",
+            "raft_store.apply_batch_system.pool_size",
+        ),
+        "raftstore.store_pool_size" => name.replace(
+            "raftstore.store_pool_size",
+            "raft_store.store_batch_system.pool_size",
+        ),
+        "raftstore.apply_pool_size" => name.replace(
+            "raftstore.apply_pool_size",
+            "raft_store.apply_batch_system.pool_size",
+        ),
+        _ => name.replace("raftstore", "raft_store").replace("-", "_"),
+    }
+}
+
 fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> {
     fn helper(
         mut fields: Vec<String>,
@@ -3003,19 +3084,14 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         value: String,
     ) -> CfgResult<()> {
         if let Some(field) = fields.pop() {
-            let f = if field == "raftstore" {
-                "raft_store".to_owned()
-            } else {
-                field.replace("-", "_")
-            };
-            return match typed.get(&f) {
+            return match typed.get(&field) {
                 None => Err(format!("unexpect fields: {}", field).into()),
                 Some(ConfigValue::Skip) => {
                     Err(format!("config {} can not be changed", field).into())
                 }
                 Some(ConfigValue::Module(m)) => {
                     if let ConfigValue::Module(n_dst) = dst
-                        .entry(f)
+                        .entry(field)
                         .or_insert_with(|| ConfigValue::Module(HashMap::new()))
                     {
                         return helper(fields, n_dst, m, value);
@@ -3027,7 +3103,7 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
                         return match to_change_value(&value, v) {
                             Err(_) => Err(format!("failed to parse: {}", value).into()),
                             Ok(v) => {
-                                dst.insert(f, v);
+                                dst.insert(field, v);
                                 Ok(())
                             }
                         };
@@ -3040,7 +3116,8 @@ fn to_config_change(change: HashMap<String, String>) -> CfgResult<ConfigChange> 
         Ok(())
     }
     let mut res = HashMap::new();
-    for (name, value) in change {
+    for (mut name, value) in change {
+        name = serde_to_online_config(name);
         let fields: Vec<_> = name
             .as_str()
             .split('.')
@@ -3077,19 +3154,18 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
 fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, String>> {
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
         if let Some(field) = fields.pop() {
-            let f = if field == "raftstore" {
-                "raft_store".to_owned()
-            } else {
-                field.replace("-", "_")
-            };
-            match typed.get(&f) {
-                None | Some(ConfigValue::Skip) => {
-                    Err(format!("failed to get field: {}", field).into())
-                }
+            match typed.get(&field) {
+                None | Some(ConfigValue::Skip) => Err(Box::new(IoError::new(
+                    ErrorKind::Other,
+                    format!("failed to get field: {}", field),
+                ))),
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
                     if !fields.is_empty() {
-                        return Err(format!("unexpect fields: {:?}", fields).into());
+                        return Err(Box::new(IoError::new(
+                            ErrorKind::Other,
+                            format!("unexpect fields: {:?}", fields),
+                        )));
                     }
                     match c {
                         ConfigValue::Duration(_)
@@ -3103,12 +3179,16 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                 }
             }
         } else {
-            Err("failed to get field".to_owned().into())
+            Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                "failed to get field",
+            )))
         }
     }
     let mut dst = HashMap::new();
     for (name, value) in change {
-        let fields: Vec<_> = name
+        let online_config_name = serde_to_online_config(name.clone());
+        let fields: Vec<_> = online_config_name
             .as_str()
             .split('.')
             .map(|s| s.to_owned())
@@ -3201,6 +3281,25 @@ impl ConfigController {
 
     pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
         let diff = to_config_change(change.clone())?;
+        self.update_impl(diff, Some(change))
+    }
+
+    pub fn update_from_toml_file(&self) -> CfgResult<()> {
+        let current = self.get_current();
+        match TiKvConfig::from_file(Path::new(&current.cfg_path), None) {
+            Ok(incoming) => {
+                let diff = current.diff(&incoming);
+                self.update_impl(diff, None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn update_impl(
+        &self,
+        diff: HashMap<String, ConfigValue>,
+        change: Option<HashMap<String, String>>,
+    ) -> CfgResult<()> {
         {
             let mut incoming = self.get_current();
             incoming.update(diff.clone());
@@ -3229,18 +3328,20 @@ impl ConfigController {
         debug!("all config change had been dispatched"; "change" => ?to_update);
         inner.current.update(to_update);
         // Write change to the config file
-        let content = {
-            let change = to_toml_encode(change)?;
-            let src = if Path::new(&inner.current.cfg_path).exists() {
-                fs::read_to_string(&inner.current.cfg_path)?
-            } else {
-                String::new()
+        if let Some(change) = change {
+            let content = {
+                let change = to_toml_encode(change)?;
+                let src = if Path::new(&inner.current.cfg_path).exists() {
+                    fs::read_to_string(&inner.current.cfg_path)?
+                } else {
+                    String::new()
+                };
+                let mut t = TomlWriter::new();
+                t.write_change(src, change);
+                t.finish()
             };
-            let mut t = TomlWriter::new();
-            t.write_change(src, change);
-            t.finish()
-        };
-        write_config(&inner.current.cfg_path, &content)?;
+            write_config(&inner.current.cfg_path, &content)?;
+        }
         Ok(())
     }
 
@@ -3361,7 +3462,13 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None);
+        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                file.display(),
+                e
+            );
+        });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
@@ -3369,7 +3476,13 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None);
+        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                file.display(),
+                e
+            );
+        });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
@@ -3540,6 +3653,8 @@ mod tests {
             "rocksdb.defaultcf.titan.blob-run-mode".to_owned(),
             "read-only".to_owned(),
         );
+        change.insert("raftstore.apply_pool_size".to_owned(), "7".to_owned());
+        change.insert("raftstore.store-pool-size".to_owned(), "17".to_owned());
         let res = to_toml_encode(change).unwrap();
         assert_eq!(
             res.get("raftstore.pd-heartbeat-tick-interval"),
@@ -3557,6 +3672,8 @@ mod tests {
             res.get("rocksdb.defaultcf.titan.blob-run-mode"),
             Some(&"\"read-only\"".to_owned())
         );
+        assert_eq!(res.get("raftstore.apply-pool-size"), Some(&"7".to_owned()));
+        assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
     fn new_engines(

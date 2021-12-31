@@ -45,8 +45,8 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::{escape, HandyRwLock};
 use txn_types::Key;
 
-use crate::pd_client::PdClient;
 use crate::{Cluster, ServerCluster, Simulator, TestPdClient};
+use pd_client::PdClient;
 
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
@@ -132,7 +132,13 @@ lazy_static! {
     static ref TEST_CONFIG: TiKvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TiKvConfig::from_file(&common_test_cfg, None)
+        TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                manifest_dir.display(),
+                e
+            );
+        })
     };
 }
 
@@ -306,6 +312,12 @@ pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
 
 pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
+}
+
+pub fn sleep_until_election_triggered(cfg: &Config) {
+    let election_timeout = cfg.raft_store.raft_base_tick_interval.as_millis()
+        * cfg.raft_store.raft_election_timeout_ticks as u64;
+    sleep_ms(3u64 * election_timeout);
 }
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
@@ -599,7 +611,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
+fn dummpy_filter(_: &RocksCompactionJobInfo<'_>) -> bool {
     true
 }
 
@@ -879,15 +891,20 @@ pub fn must_kv_prewrite_with(
     muts: Vec<Mutation>,
     pk: Vec<u8>,
     ts: u64,
+    for_update_ts: u64,
     use_async_commit: bool,
     try_one_pc: bool,
 ) {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
+    if for_update_ts != 0 {
+        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+    }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
     prewrite_req.start_version = ts;
     prewrite_req.lock_ttl = 3000;
+    prewrite_req.for_update_ts = for_update_ts;
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
@@ -911,15 +928,20 @@ pub fn try_kv_prewrite_with(
     muts: Vec<Mutation>,
     pk: Vec<u8>,
     ts: u64,
+    for_update_ts: u64,
     use_async_commit: bool,
     try_one_pc: bool,
 ) -> PrewriteResponse {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
+    if for_update_ts != 0 {
+        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+    }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
     prewrite_req.start_version = ts;
     prewrite_req.lock_ttl = 3000;
+    prewrite_req.for_update_ts = for_update_ts;
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
@@ -933,7 +955,17 @@ pub fn try_kv_prewrite(
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
-    try_kv_prewrite_with(client, ctx, muts, pk, ts, false, false)
+    try_kv_prewrite_with(client, ctx, muts, pk, ts, 0, false, false)
+}
+
+pub fn try_kv_prewrite_pessimistic(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+) -> PrewriteResponse {
+    try_kv_prewrite_with(client, ctx, muts, pk, ts, ts, false, false)
 }
 
 pub fn must_kv_prewrite(
@@ -943,7 +975,17 @@ pub fn must_kv_prewrite(
     pk: Vec<u8>,
     ts: u64,
 ) {
-    must_kv_prewrite_with(client, ctx, muts, pk, ts, false, false)
+    must_kv_prewrite_with(client, ctx, muts, pk, ts, 0, false, false)
+}
+
+pub fn must_kv_prewrite_pessimistic(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+) {
+    must_kv_prewrite_with(client, ctx, muts, pk, ts, ts, false, false)
 }
 
 pub fn must_kv_commit(
@@ -1169,11 +1211,11 @@ impl PeerClient {
     }
 
     pub fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, true, false)
+        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, 0, true, false)
     }
 
     pub fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, false, true)
+        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, 0, false, true)
     }
 
     pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
