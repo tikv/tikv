@@ -208,6 +208,32 @@ struct LogInfo {
     dt: DateTime<Local>,
 }
 
+fn dt_from_file_name(path: &Path, prefix: &str) -> Option<DateTime<Local>> {
+    let file_name_with_dt = path.file_stem().unwrap();
+    let mut dt = file_name_with_dt
+        .to_str()
+        .unwrap()
+        .to_string()
+        .replace(prefix, "");
+    if let Some(offset) = dt.find('T') {
+        unsafe {
+            // -2021-12-13T16-08-27.621 => -2021-12-13T16:08:27.621
+            let dt = dt.as_bytes_mut();
+            if dt.len() < offset + 6 {
+                return None;
+            }
+            dt[offset + 3] = b':';
+            dt[offset + 6] = b':';
+        };
+        dt.push_str("+00:00");
+        match DateTime::parse_from_rfc3339(&dt.as_str()[1..]) {
+            Ok(t) => return Some(t.with_timezone(&Local)),
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 pub struct Runner {
     log_dir: PathBuf,
     file_name: String,
@@ -228,38 +254,12 @@ impl Runner {
         }
     }
 
-    fn dt_from_file_name(&self, path: &Path) -> Option<DateTime<Local>> {
-        let file_name_with_dt = path.file_stem().unwrap();
-        let mut dt = file_name_with_dt
-            .to_str()
-            .unwrap()
-            .to_string()
-            .replace(&self.file_name, "");
-        if let Some(offset) = dt.find('T') {
-            unsafe {
-                // -2021-12-13T16-08-27.621 => -2021-12-13T16:08:27.621
-                let dt = dt.as_bytes_mut();
-                if dt.len() < offset + 6 {
-                    return None;
-                }
-                dt[offset + 3] = b':';
-                dt[offset + 6] = b':';
-            };
-            dt.push_str("+00:00");
-            match DateTime::parse_from_rfc3339(&dt.as_str()[1..]) {
-                Ok(t) => return Some(t.with_timezone(&Local)),
-                Err(_) => return None,
-            }
-        }
-        None
-    }
-
     fn list_old_logs(&self) -> Result<Vec<LogInfo>, Error> {
         let mut logs = Vec::new();
         for f in fs::read_dir(&self.log_dir)? {
             let f = f?;
             if f.file_type()?.is_file() {
-                if let Some(dt) = self.dt_from_file_name(f.path().as_path()) {
+                if let Some(dt) = dt_from_file_name(f.path().as_path(), &self.file_name) {
                     logs.push(LogInfo { f, dt });
                 }
             }
@@ -575,5 +575,42 @@ mod tests {
             .build()
             .unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_get_datetime_from_filename() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("t.g.d.f.2019-08-23T18-11-02.123.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_some());
+        let path = tmp_dir.path().join("t.g.d.f.2019-08-23T18:11:02.123.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_some());
+        let path = tmp_dir
+            .path()
+            .join("t.g.d.f.2019-08-23T18:11:02.123.log.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("t.g.d.f.2019-08-23T18:11:02.123+00:00.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("2019-08-23T18:11:02.123.t.g.d.f.2019-08-23T18:11:02.123.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("2019-08-23T18:11:02.123.t.g.d.f.2019-08-23T18:11:02.123.log");
+        let dt = dt_from_file_name(&path, "2019-08-23T18:11:02.123.t.g.d.f");
+        assert!(dt.is_some());
+        let path = tmp_dir.path().join("t.g.d.f.2019-08-23.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir.path().join("t.g.d.f.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
     }
 }
