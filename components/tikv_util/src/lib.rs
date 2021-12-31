@@ -474,7 +474,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // When the old global async logger is replaced, the old async guard will be taken and dropped.
         // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
-            let drainer = logger::text_format(logger::term_writer());
+            let drainer = logger::text_format(logger::term_writer(), true);
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),
@@ -595,7 +595,7 @@ mod tests {
         let mut stderr = BufferRedirect::stderr().unwrap();
         let status = run_and_wait_child_process(|| {
             set_panic_hook(false, "./");
-            let drainer = logger::text_format(logger::term_writer());
+            let drainer = logger::text_format(logger::term_writer(), true);
             crate::logger::init_log(
                 DelayDrain(drainer),
                 logger::get_level_by_string("debug").unwrap(),
