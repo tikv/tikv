@@ -65,6 +65,7 @@ pub enum Task<S> {
     },
     Apply {
         region_id: u64,
+        peer_id: u64,
         status: Arc<AtomicUsize>,
     },
     /// Destroy data between [start_key, end_key).
@@ -409,7 +410,9 @@ where
     }
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
+    fn handle_apply(&mut self, task: EngineStoreApplySnapTask) {
+        let region_id = task.region_id;
+        let status = task.status;
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
@@ -604,6 +607,12 @@ where
     }
 }
 
+struct EngineStoreApplySnapTask {
+    region_id: u64,
+    peer_id: u64,
+    status: Arc<AtomicUsize>,
+}
+
 pub struct Runner<EK, R>
 where
     EK: KvEngine,
@@ -612,7 +621,8 @@ where
     ctx: SnapContext<EK, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<EK::Snapshot>>,
+    // pending_applies: VecDeque<Task<EK::Snapshot>>,
+    pending_applies: VecDeque<EngineStoreApplySnapTask>,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
 }
@@ -659,8 +669,8 @@ where
             if self.ctx.ingest_maybe_stall() {
                 break;
             }
-            if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
-                self.ctx.handle_apply(region_id, status);
+            if let snap = self.pending_applies.pop_front() {
+                self.ctx.handle_apply(snap.unwrap());
             }
         }
     }
@@ -702,10 +712,18 @@ where
                     tikv_alloc::remove_thread_memory_accessor();
                 });
             }
-            task @ Task::Apply { .. } => {
+            Task::Apply {
+                region_id,
+                peer_id,
+                status,
+            } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
                 // to makes sure applying snapshots in order.
-                self.pending_applies.push_back(task);
+                self.pending_applies.push_back(EngineStoreApplySnapTask {
+                    region_id,
+                    peer_id,
+                    status: status.clone(),
+                });
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
