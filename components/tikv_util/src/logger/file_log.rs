@@ -47,7 +47,7 @@ pub trait Rotator: Send {
 /// This `FileLogger` will iterate over a series of `Rotators`,
 /// once the context trigger the `Rotator`, it will execute a rotation.
 ///
-/// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}".
+/// After rotating, the original log file would be renamed to "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}".
 /// Note: log file will *not* be compressed or otherwise modified.
 pub struct RotatingFileLogger {
     path: PathBuf,
@@ -193,13 +193,14 @@ impl Rotator for RotateBySize {
     }
 }
 
+#[derive(Debug)]
 pub enum Task {
     Archive,
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "")
+        write!(f, "{:?}", self)
     }
 }
 
@@ -386,33 +387,33 @@ mod tests {
         use std::ffi::OsString;
         let parent = path.parent().unwrap().as_os_str();
         let prefix = path.file_stem().unwrap();
-        let mut new_path = OsString::from(parent);
-        new_path.push("/");
-        new_path.push(prefix);
+        let mut new_path = Path::new(parent).to_path_buf();
+        let mut new_fname = OsString::from(prefix);
         let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
-        new_path.push(format!("-{}", dt));
+        new_fname.push(format!("-{}", dt));
         if let Some(ext) = path.extension() {
-            new_path.push(".");
-            new_path.push(ext);
+            new_fname.push(".");
+            new_fname.push(ext);
         };
-        Ok(PathBuf::from(new_path))
+        new_path.push(new_fname);
+        Ok(new_path)
     }
 
     fn rename_with_old_timestamp(path: &Path, t: ReadableDuration) -> io::Result<PathBuf> {
         use std::ffi::OsString;
         let parent = path.parent().unwrap().as_os_str();
         let prefix = path.file_stem().unwrap();
-        let mut new_path = OsString::from(parent);
-        new_path.push("/");
-        new_path.push(prefix);
+        let mut new_path = Path::new(parent).to_path_buf();
+        let mut new_fname = OsString::from(prefix);
         let dt = (Local::now() - chrono::Duration::from_std(t.0).unwrap())
             .format("%Y-%m-%dT%H-%M-%S%.3f");
-        new_path.push(format!("-{}", dt));
+        new_fname.push(format!("-{}", dt));
         if let Some(ext) = path.extension() {
-            new_path.push(".");
-            new_path.push(ext);
+            new_fname.push(".");
+            new_fname.push(ext);
         };
-        Ok(PathBuf::from(new_path))
+        new_path.push(new_fname);
+        Ok(new_path)
     }
 
     fn logs_nr(path: &Path) -> usize {

@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::{Local, SecondsFormat};
+use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
@@ -36,20 +36,20 @@ macro_rules! fatal {
 // a lot of logs written in a very short time. Consider rename the rotated file with a version
 // number while rotate by size.
 //
-// The file name format after rotated is as follows: tikv-2021-12-21T00-19-38.378.log
+// The file name format after rotated is as follows: "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}"
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let parent = path.parent().unwrap().as_os_str();
     let prefix = path.file_stem().unwrap();
-    let mut new_path = OsString::from(parent);
-    new_path.push("/");
-    new_path.push(prefix);
+    let mut new_path = Path::new(parent).to_path_buf();
+    let mut new_fname = OsString::from(prefix);
     let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
-    new_path.push(format!("-{}", dt));
+    new_fname.push(format!("-{}", dt));
     if let Some(ext) = path.extension() {
-        new_path.push(".");
-        new_path.push(ext);
+        new_fname.push(".");
+        new_fname.push(ext);
     };
-    Ok(PathBuf::from(new_path))
+    new_path.push(new_fname);
+    Ok(new_path)
 }
 
 fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
