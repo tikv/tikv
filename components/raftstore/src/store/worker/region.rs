@@ -381,6 +381,7 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         unsafe{
+            println!("!!!!! ==> region id {} region {:?} apply_state {:?}", region.id, region, apply_state);
             s.replicate_snapshot(&region);
         }
         let options = ApplyOptions {

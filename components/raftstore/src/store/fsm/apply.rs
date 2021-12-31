@@ -1500,6 +1500,9 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
     ) -> Result<()> {
+
+        println!("!!!!! ==> id {} region {:?} apply_state {:?}", self.id, self.region, self.apply_state);
+        println!("!!!!! put k {:?} v {:?}", req.get_put().get_key(), req.get_put().get_value());
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1546,6 +1549,9 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
     ) -> Result<()> {
+
+        println!("!!!!! ==> id {} region {:?} apply_state {:?}", self.id, self.region, self.apply_state);
+        println!("!!!!! delete k {:?}", req.get_delete().get_key());
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1597,6 +1603,9 @@ where
     ) -> Result<()> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+
+        println!("!!!!! ==> id {} region {:?} apply_state {:?}", self.id, self.region, self.apply_state);
+        println!("!!!!! delete range f {:?} t {:?}", s_key, e_key);
         let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(

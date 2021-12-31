@@ -809,7 +809,11 @@ impl Snapshot {
 
 
         let key_mgr = self.mgr.encryption_key_manager.as_ref();
-        let key_manager = Some(key_mgr.unwrap().to_owned());
+        let key_manager = if key_mgr.is_some() {
+            Some(key_mgr.unwrap().to_owned())
+        }else{
+            None
+        };
         for i in 0..sst_views.len() {
             let mut snapshot = sst_views[i].0;
             let t = sst_views[i].1;
@@ -819,6 +823,8 @@ impl Snapshot {
                 let value = sst_reader::ffi_val(sst_reader_ptr.clone(), t);
 
                 let cf_index = t;
+
+                println!("!!!!! Snapshot key {:?} v {:?}", key, value);
 
                 sst_reader::ffi_next(sst_reader_ptr.clone(), t);
             }
