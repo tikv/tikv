@@ -385,9 +385,8 @@ mod tests {
 
     fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
         use std::ffi::OsString;
-        let parent = path.parent().unwrap().as_os_str();
         let prefix = path.file_stem().unwrap();
-        let mut new_path = Path::new(parent).to_path_buf();
+        let mut new_path = path.parent().unwrap().to_path_buf();
         let mut new_fname = OsString::from(prefix);
         let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
         new_fname.push(format!("-{}", dt));
@@ -401,9 +400,8 @@ mod tests {
 
     fn rename_with_old_timestamp(path: &Path, t: ReadableDuration) -> io::Result<PathBuf> {
         use std::ffi::OsString;
-        let parent = path.parent().unwrap().as_os_str();
         let prefix = path.file_stem().unwrap();
-        let mut new_path = Path::new(parent).to_path_buf();
+        let mut new_path = path.parent().unwrap().to_path_buf();
         let mut new_fname = OsString::from(prefix);
         let dt = (Local::now() - chrono::Duration::from_std(t.0).unwrap())
             .format("%Y-%m-%dT%H-%M-%S%.3f");
