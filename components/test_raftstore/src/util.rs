@@ -640,7 +640,7 @@ pub fn create_test_engine(
     let kv_path_str = kv_path.to_str().unwrap();
 
     let mut kv_db_opt = cfg.rocksdb.build_opt();
-    kv_db_opt.set_env(env.clone());
+    kv_db_opt.set_env(env);
 
     if let Some(router) = router {
         let router = Mutex::new(router);
@@ -665,9 +665,9 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
     );
 
-    let raft_config = cfg.raft_engine.config();
-    assert!(raft_config.enable);
-    let raft_engine = RaftLogEngine::new(raft_config, key_manager.clone(), limiter).unwrap();
+    assert!(cfg.raft_engine.enable);
+    let raft_engine =
+        RaftLogEngine::new(cfg.raft_engine.config(), key_manager.clone(), limiter).unwrap();
 
     let mut engine = RocksEngine::from_db(engine);
     let shared_block_cache = cache.is_some();
