@@ -1,13 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::{self, File, OpenOptions};
+use std::fmt::{self, Display, Formatter};
+use std::fs::{self, DirEntry, File, OpenOptions};
 use std::io::{self, Error, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Duration, Local};
 
 use crate::config::{ReadableDuration, ReadableSize};
+use crate::worker::{LazyWorker, Runnable};
 
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
@@ -46,13 +47,14 @@ pub trait Rotator: Send {
 /// This `FileLogger` will iterate over a series of `Rotators`,
 /// once the context trigger the `Rotator`, it will execute a rotation.
 ///
-/// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}".
+/// After rotating, the original log file would be renamed to "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}".
 /// Note: log file will *not* be compressed or otherwise modified.
 pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,
     rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
     rotators: Vec<Box<dyn Rotator>>,
+    archive_worker: LazyWorker<Task>,
 }
 
 /// Builder for `RotatingFileLogger`.
@@ -60,10 +62,17 @@ pub struct RotatingFileLoggerBuilder {
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
     rename: Box<dyn Send + Fn(&Path) -> io::Result<PathBuf>>,
+    max_backups: usize,
+    max_days: ReadableDuration,
 }
 
 impl RotatingFileLoggerBuilder {
-    pub fn new<F>(path: impl AsRef<Path>, rename: F) -> Self
+    pub fn new<F>(
+        path: impl AsRef<Path>,
+        rename: F,
+        max_backups: usize,
+        max_days: ReadableDuration,
+    ) -> Self
     where
         F: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
     {
@@ -71,6 +80,8 @@ impl RotatingFileLoggerBuilder {
             path: path.as_ref().to_path_buf(),
             rotators: vec![],
             rename: Box::new(rename),
+            max_backups,
+            max_days,
         }
     }
 
@@ -83,6 +94,9 @@ impl RotatingFileLoggerBuilder {
 
     pub fn build(mut self) -> io::Result<RotatingFileLogger> {
         let file = open_log_file(&self.path)?;
+        let mut worker = LazyWorker::new("archive-worker");
+        assert!(worker.start(Runner::new(&self.path, self.max_backups, self.max_days)));
+        worker.scheduler().schedule(Task::Archive).unwrap();
 
         for rotator in self.rotators.iter_mut() {
             rotator.prepare(&file)?;
@@ -93,6 +107,7 @@ impl RotatingFileLoggerBuilder {
             path: self.path,
             rename: self.rename,
             file,
+            archive_worker: worker,
         })
     }
 }
@@ -120,6 +135,11 @@ impl Write for RotatingFileLogger {
                     rotator.on_rotate()?;
                 }
 
+                self.archive_worker
+                    .scheduler()
+                    .schedule(Task::Archive)
+                    .unwrap();
+
                 return Ok(());
             }
         }
@@ -130,64 +150,7 @@ impl Write for RotatingFileLogger {
 impl Drop for RotatingFileLogger {
     fn drop(&mut self) {
         let _ = self.file.flush();
-    }
-}
-
-pub struct RotateByTime {
-    rotation_timespan: ReadableDuration,
-    next_rotation_time: Option<SystemTime>,
-}
-
-impl RotateByTime {
-    pub fn new(rotation_timespan: ReadableDuration) -> Self {
-        Self {
-            rotation_timespan,
-            next_rotation_time: None,
-        }
-    }
-
-    fn next_rotation_time(begin: SystemTime, duration: Duration) -> io::Result<SystemTime> {
-        begin
-            .checked_add(duration)
-            .ok_or_else(|| Error::new(ErrorKind::Other, "Next rotation time is out of range."))
-    }
-}
-
-impl Rotator for RotateByTime {
-    fn is_enabled(&self) -> bool {
-        !self.rotation_timespan.is_zero()
-    }
-
-    fn prepare(&mut self, file: &File) -> io::Result<()> {
-        // Use the minimum of the created time and access time.
-        let metadata = file.metadata()?;
-        let created = metadata.created();
-        let accessed = metadata.accessed();
-        let birth = match (created, accessed) {
-            (Err(_), a) => a?,
-            (Ok(c), Ok(a)) if a < c => a,
-            (Ok(c), _) => c,
-        };
-        self.next_rotation_time = Some(Self::next_rotation_time(birth, self.rotation_timespan.0)?);
-        Ok(())
-    }
-
-    fn should_rotate(&self) -> bool {
-        assert!(self.next_rotation_time.is_some());
-        Local::now() > DateTime::<Local>::from(self.next_rotation_time.unwrap())
-    }
-
-    fn on_write(&mut self, _: &[u8]) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn on_rotate(&mut self) -> io::Result<()> {
-        assert!(self.next_rotation_time.is_some());
-        self.next_rotation_time = Some(Self::next_rotation_time(
-            SystemTime::now(),
-            self.rotation_timespan.0,
-        )?);
-        Ok(())
+        self.archive_worker.stop();
     }
 }
 
@@ -230,12 +193,111 @@ impl Rotator for RotateBySize {
     }
 }
 
+#[derive(Debug)]
+pub enum Task {
+    Archive,
+}
+
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+struct LogInfo {
+    f: DirEntry,
+    dt: DateTime<Local>,
+}
+
+fn dt_from_file_name(path: &Path, prefix: &str) -> Option<DateTime<Local>> {
+    let file_name_with_dt = path.file_stem().unwrap();
+    let mut dt = file_name_with_dt
+        .to_str()
+        .unwrap()
+        .to_string()
+        .replace(prefix, "");
+    if !dt.is_empty() {
+        // We must add *a timezone* as `DateTime::parse_from_str` requires it
+        dt.push_str(&Local::now().offset().to_string());
+        match DateTime::parse_from_str(&dt.as_str()[1..], "%Y-%m-%dT%H-%M-%S%.3f %z") {
+            Ok(t) => return Some(t.with_timezone(&Local)),
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+pub struct Runner {
+    log_dir: PathBuf,
+    file_name: String,
+    max_backups: usize,
+    max_days: ReadableDuration,
+}
+
+impl Runner {
+    pub fn new<P: AsRef<Path>>(path: P, max_backups: usize, max_days: ReadableDuration) -> Runner {
+        let mut path = path.as_ref().to_owned();
+        let file_name = path.file_stem().unwrap().to_str().unwrap().to_owned();
+        assert!(path.pop());
+        Runner {
+            log_dir: path,
+            file_name,
+            max_backups,
+            max_days,
+        }
+    }
+
+    fn list_old_logs(&self) -> Result<Vec<LogInfo>, Error> {
+        let mut logs = Vec::new();
+        for f in fs::read_dir(&self.log_dir)? {
+            let f = f?;
+            if f.file_type()?.is_file() {
+                if let Some(dt) = dt_from_file_name(f.path().as_path(), &self.file_name) {
+                    logs.push(LogInfo { f, dt });
+                }
+            }
+        }
+        logs.sort_by(|l1, l2| l2.dt.cmp(&l1.dt));
+        Ok(logs)
+    }
+}
+
+impl Runnable for Runner {
+    type Task = Task;
+
+    fn run(&mut self, _: Task) {
+        if self.max_backups == 0 && self.max_days.is_zero() {
+            return;
+        }
+        let mut logs = self.list_old_logs().unwrap();
+        let mut remove = Vec::new();
+        if self.max_backups > 0 && self.max_backups < logs.len() {
+            remove = logs.split_off(self.max_backups);
+        }
+        if !self.max_days.is_zero() {
+            let threshold = Local::now() - Duration::from_std(self.max_days.0).unwrap();
+            while let Some(log) = logs.last() {
+                if log.dt < threshold {
+                    remove.push(logs.pop().unwrap());
+                } else {
+                    break;
+                }
+            }
+        }
+        for log in remove {
+            fs::remove_file(log.f.path())
+                .unwrap_or_else(|e| error!("achieve log: {:?} failed, err: {}", log.f.path(), e));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use std::ffi::OsStr;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::ops::Add;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
@@ -258,90 +320,17 @@ mod tests {
     }
 
     #[test]
-    fn test_should_rotate_by_time() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_should_rotate_by_time.log");
-        let suffix = ".backup";
-
-        // Set the last modification time to 1 minute before.
-        let last_modified = SystemTime::now()
-            .checked_sub(Duration::from_secs(60))
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create a file.
-        open_log_file(path.clone()).unwrap();
-
-        // Modify last_modified time.
-        let accessed = last_modified;
-        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
-
-        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_suffix(path, suffix)
-        })
-        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(30))))
-        .build()
-        .unwrap();
-
-        // Rotate normally
-        logger.flush().unwrap();
-
-        let mut new_path = path.into_os_string();
-        new_path.push(suffix);
-
-        assert!(file_exists(new_path));
-    }
-
-    #[test]
-    fn test_should_not_rotate_by_time() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_should_not_rotate_by_time.log");
-        let suffix = ".backup";
-
-        // Set the last modification time to 1 minute later.
-        let last_modified = SystemTime::now()
-            .checked_add(Duration::from_secs(60))
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create a file.
-        open_log_file(path.clone()).unwrap();
-
-        // Modify last_modified time.
-        let accessed = last_modified;
-        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
-
-        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_suffix(path, suffix)
-        })
-        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(
-            120,
-        ))))
-        .build()
-        .unwrap();
-
-        // Rotate normally
-        logger.flush().unwrap();
-
-        let mut new_path = path.into_os_string();
-        new_path.push(suffix);
-
-        assert!(!file_exists(new_path));
-    }
-
-    #[test]
     fn test_rotate_by_size() {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_should_rotate_by_size.log");
         let suffix = ".backup";
 
-        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_suffix(path, suffix)
-        })
+        let mut logger = RotatingFileLoggerBuilder::new(
+            path.clone(),
+            move |path| rename_with_suffix(path, suffix),
+            0,
+            ReadableDuration(Duration::from_secs(0)),
+        )
         .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
         .build()
         .unwrap();
@@ -361,103 +350,20 @@ mod tests {
     }
 
     #[test]
-    fn test_update_rotate_by_size() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_update_rotate_by_size.log");
-        let suffix = ".backup";
-
-        // Set the last modification time to 1 minute before.
-        let last_modified = SystemTime::now()
-            .checked_sub(Duration::from_secs(120))
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create a file.
-        open_log_file(path.clone()).unwrap();
-
-        // Modify last_modified time.
-        let accessed = last_modified;
-        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
-
-        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_suffix(path, suffix)
-        })
-        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(60))))
-        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
-        .build()
-        .unwrap();
-
-        let mut new_path = path.into_os_string();
-        new_path.push(suffix);
-
-        logger.write_all(&[0xff; 2048]).unwrap();
-        // Triggers rotate by time.
-        logger.flush().unwrap();
-
-        assert!(file_exists(new_path));
-
-        // Should update `RotateBySize`'s state.
-        assert_eq!(logger.rotators[1].should_rotate(), false);
-    }
-
-    #[test]
-    fn test_update_rotate_by_time() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_update_rotate_by_time.log");
-        let suffix = ".backup";
-
-        // Set the last modification time to 1 minute before.
-        let last_modified = SystemTime::now()
-            .checked_sub(Duration::from_secs(120))
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create a file.
-        open_log_file(path.clone()).unwrap();
-
-        // Modify last_modified time.
-        let accessed = last_modified;
-        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
-
-        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
-            rename_with_suffix(path, suffix)
-        })
-        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
-        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(60))))
-        .build()
-        .unwrap();
-
-        let mut new_path = path.into_os_string();
-        new_path.push(suffix);
-
-        logger.write_all(&[0xff; 2048]).unwrap();
-        // Triggers rotate by size.
-        logger.flush().unwrap();
-
-        assert!(file_exists(new_path.clone()));
-
-        // Should update `RotateByTime`'s state.
-        assert_eq!(logger.rotators[1].should_rotate(), false);
-
-        logger.write_all(&[0xff; 2048]).unwrap();
-        assert_eq!(logger.rotators[1].should_rotate(), false);
-        assert!(file_exists(new_path));
-    }
-
-    #[test]
     fn test_failing_to_rotate_file_will_not_cause_panic() {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_no_panic.log");
         let suffix = ".backup";
 
-        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), |_| rename_fail())
-            .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
-            .build()
-            .unwrap();
+        let mut logger = RotatingFileLoggerBuilder::new(
+            path.clone(),
+            |_| rename_fail(),
+            0,
+            ReadableDuration(Duration::from_secs(0)),
+        )
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .build()
+        .unwrap();
 
         let mut new_path = path.into_os_string();
         new_path.push(suffix);
@@ -468,5 +374,226 @@ mod tests {
 
         // dropping the logger still should not panic.
         drop(logger);
+    }
+
+    fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
+        let mut new_path = path.parent().unwrap().to_path_buf();
+        let mut new_fname = path.file_stem().unwrap().to_os_string();
+        let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
+        new_fname.push(format!("-{}", dt));
+        if let Some(ext) = path.extension() {
+            new_fname.push(".");
+            new_fname.push(ext);
+        };
+        new_path.push(new_fname);
+        Ok(new_path)
+    }
+
+    fn rename_with_old_timestamp(path: &Path, t: ReadableDuration) -> io::Result<PathBuf> {
+        let mut new_path = path.parent().unwrap().to_path_buf();
+        let mut new_fname = path.file_stem().unwrap().to_os_string();
+        let dt = (Local::now() - chrono::Duration::from_std(t.0).unwrap())
+            .format("%Y-%m-%dT%H-%M-%S%.3f");
+        new_fname.push(format!("-{}", dt));
+        if let Some(ext) = path.extension() {
+            new_fname.push(".");
+            new_fname.push(ext);
+        };
+        new_path.push(new_fname);
+        Ok(new_path)
+    }
+
+    fn logs_nr(path: &Path) -> usize {
+        let log_dir = path.parent().unwrap().as_os_str();
+        let mut i = 0;
+        for f in fs::read_dir(log_dir).unwrap() {
+            let f = f.unwrap();
+            if f.file_type().unwrap().is_file() {
+                i += 1;
+            }
+        }
+        i
+    }
+
+    #[test]
+    fn test_archive_by_max_backups_at_startup() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir
+            .path()
+            .join("test_should_archive_by_max_backups_at_startup.log");
+        for _ in 1..10 {
+            let new_path = rename_by_timestamp(&path).unwrap();
+            open_log_file(new_path.clone()).unwrap();
+            // Avoid generating the same file name when rotating
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let logger = RotatingFileLoggerBuilder::new(
+            path.clone(),
+            rename_by_timestamp,
+            3,
+            ReadableDuration::days(0),
+        )
+        .build()
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert_eq!(4, logs_nr(&path));
+        drop(logger);
+    }
+
+    #[test]
+    fn test_archive_by_max_backups_after_rotate() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir
+            .path()
+            .join("test_should_archive_by_max_backups.log");
+        let mut logger = RotatingFileLoggerBuilder::new(
+            path.clone(),
+            rename_by_timestamp,
+            3,
+            ReadableDuration::days(0),
+        )
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .build()
+        .unwrap();
+
+        for _ in 0..20 {
+            logger.write_all(&[0xff; 1025]).unwrap();
+            logger.flush().unwrap();
+            // Avoid generating the same file name when rotating
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        assert_eq!(4, logs_nr(&path));
+    }
+
+    #[test]
+    fn test_archive_by_max_days_at_startup() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir
+            .path()
+            .join("test_should_archive_by_max_days_at_startup.log");
+        for i in 1..10 {
+            let new_path = rename_with_old_timestamp(
+                &path,
+                ReadableDuration::days(i).add(ReadableDuration::hours(12)),
+            )
+            .unwrap();
+            open_log_file(new_path.clone()).unwrap();
+            // Avoid generating the same file name when rotating
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let logger = RotatingFileLoggerBuilder::new(
+            path.clone(),
+            rename_by_timestamp,
+            0,
+            ReadableDuration::days(3),
+        )
+        .build()
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert_eq!(3, logs_nr(&path));
+        drop(logger);
+    }
+
+    #[test]
+    fn test_archive_by_max_days_after_rotate() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir
+            .path()
+            .join("test_should_archive_by_max_days_after_rotate.log");
+
+        let mut logger = RotatingFileLoggerBuilder::new(
+            path.clone(),
+            rename_by_timestamp,
+            0,
+            ReadableDuration::days(3),
+        )
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .build()
+        .unwrap();
+
+        for i in 1..10 {
+            let new_path = rename_with_old_timestamp(
+                &path,
+                ReadableDuration::days(i).add(ReadableDuration::hours(12)),
+            )
+            .unwrap();
+            open_log_file(new_path.clone()).unwrap();
+            // Avoid generating the same file name when rotating
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert_eq!(10, logs_nr(&path));
+
+        logger.write_all(&[0xff; 1025]).unwrap();
+        logger.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert_eq!(4, logs_nr(&path));
+    }
+
+    #[test]
+    fn test_archive_with_illegal_log_name_will_not_cause_panic() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("test_archive_will_not_cause_panic.log");
+        let new_path1 = tmp_dir
+            .path()
+            .join("test_archive_will_not_cause_panic.T.log");
+        open_log_file(new_path1).unwrap();
+        let new_path2 = tmp_dir
+            .path()
+            .join("test_archive_will_not_cause_panic.2019-08-23T18:11:02.123.log");
+        open_log_file(new_path2).unwrap();
+        let new_path3 = tmp_dir
+            .path()
+            .join("test_panic.2019-08-23T18-11-02.123.log");
+        open_log_file(new_path3).unwrap();
+        let new_path4 = tmp_dir.path().join("test_panic.log.2");
+        open_log_file(new_path4).unwrap();
+
+        RotatingFileLoggerBuilder::new(path, rename_by_timestamp, 3, ReadableDuration::days(0))
+            .build()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_get_datetime_from_filename() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("t.g.d.f.2019-08-23T18-11-02.123.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_some());
+        let path = tmp_dir.path().join("t.g.d.f.2019-08-23T18:11:02.123.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("t.g.d.f.2019-08-23T18-11-02.123.log.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("t.g.d.f.2019-08-23T18-11-02.123+00:00.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("2019-08-23T18-11-02.123.t.g.d.f.2019-08-23T18-11-02.123.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir
+            .path()
+            .join("2019-08-23T18-11-02.123.t.g.d.f.2019-08-23T18-11-02.123.log");
+        let dt = dt_from_file_name(&path, "2019-08-23T18-11-02.123.t.g.d.f");
+        assert!(dt.is_some());
+        let path = tmp_dir.path().join("t.g.d.f.2019-08-23.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
+        let path = tmp_dir.path().join("t.g.d.f.log");
+        let dt = dt_from_file_name(&path, "t.g.d.f");
+        assert!(dt.is_none());
     }
 }
