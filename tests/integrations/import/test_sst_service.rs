@@ -374,9 +374,7 @@ fn test_duplicate_and_close() {
         while let Some(resp) = stream.next().await {
             match resp {
                 Ok(mut resp) => {
-                    if resp.has_key_error() {
-                        break;
-                    } else if resp.has_region_error() {
+                    if resp.has_key_error() || resp.has_region_error() {
                         break;
                     }
                     let pairs = resp.take_pairs();

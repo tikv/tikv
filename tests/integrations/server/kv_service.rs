@@ -23,7 +23,10 @@ use raft::eraftpb;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
@@ -711,12 +714,9 @@ fn test_debug_raft_log() {
     entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
-    engine.append(region_id, vec![entry]).unwrap();
+    engine.append(region_id, vec![entry.clone()]).unwrap();
     assert_eq!(
-        engine
-            .get_entry::<eraftpb::Entry>(region_id, log_index)
-            .unwrap()
-            .unwrap(),
+        engine.get_entry(region_id, log_index).unwrap().unwrap(),
         entry
     );
 
@@ -746,15 +746,11 @@ fn test_debug_region_info() {
     let kv_engine = cluster.get_engine(store_id);
 
     let region_id = 100;
-    let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
     raft_engine.put_raft_state(region_id, &raft_state).unwrap();
     assert_eq!(
-        raft_engine
-            .get_raft_state::<raft_serverpb::RaftLocalState>(region_id)
-            .unwrap()
-            .unwrap(),
+        raft_engine.get_raft_state(region_id).unwrap().unwrap(),
         raft_state
     );
 

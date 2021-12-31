@@ -252,7 +252,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
             panic!("store {} must apply to {}", store_id, last_index + 1);
         }
         let apply_state = cluster.apply_state(region_id, store_id);
-        if apply_state.applied_index >= last_index + 1 {
+        if apply_state.applied_index > last_index {
             break;
         }
     }

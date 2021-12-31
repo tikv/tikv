@@ -4,13 +4,14 @@ use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, CF_RAFT};
+use engine_traits::{Engines, Peekable, RaftEngineReadOnly, CF_RAFT};
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 
 fn get_raft_msg_or_default<M: protobuf::Message + Default>(
-    engines: &Engines<RocksEngine, RocksEngine>,
+    engines: &Engines<RocksEngine, RaftLogEngine>,
     key: &[u8],
 ) -> M {
     engines
@@ -46,7 +47,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 fn check_compacted(
-    all_engines: &HashMap<u64, Engines<RocksEngine, RocksEngine>>,
+    all_engines: &HashMap<u64, Engines<RocksEngine, RaftLogEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
 ) -> bool {
@@ -76,11 +77,7 @@ fn check_compacted(
 
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
-            let key = keys::raft_log_key(1, i);
-            if engines.raft.get_value(&key).unwrap().is_none() {
-                break;
-            }
-            assert!(engines.raft.get_value(&key).unwrap().is_none());
+            assert!(engines.raft.get_entry(1, i).unwrap().is_none());
         }
     }
     true

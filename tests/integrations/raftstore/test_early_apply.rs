@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksSnapshot;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use std::time::*;
@@ -151,19 +150,19 @@ fn test_update_internal_apply_index() {
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
     cluster.async_put(b"k2", b"v2").unwrap();
-    let mut snaps = vec![];
+    let mut rafts = Vec::new();
     for i in 1..3 {
         cluster.wait_last_index(1, i, last_index + 2, Duration::from_secs(3));
-        snaps.push((i, RocksSnapshot::new(cluster.get_raft_engine(1))));
+        rafts.push((i, cluster.get_raft_engine(1)));
     }
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
     // Simulate data lost in raft cf.
-    for (id, snap) in &snaps {
+    for (id, raft) in &rafts {
         cluster.stop_node(*id);
-        cluster.restore_raft(1, *id, &snap);
+        cluster.restore_raft(1, *id, raft);
         cluster.run_node(*id).unwrap();
     }
 
