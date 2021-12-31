@@ -5,8 +5,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
