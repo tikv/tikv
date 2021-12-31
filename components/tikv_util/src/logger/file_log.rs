@@ -216,18 +216,10 @@ fn dt_from_file_name(path: &Path, prefix: &str) -> Option<DateTime<Local>> {
         .unwrap()
         .to_string()
         .replace(prefix, "");
-    if let Some(offset) = dt.find('T') {
-        unsafe {
-            // -2021-12-13T16-08-27.621 => -2021-12-13T16:08:27.621
-            let dt = dt.as_bytes_mut();
-            if dt.len() < offset + 6 {
-                return None;
-            }
-            dt[offset + 3] = b':';
-            dt[offset + 6] = b':';
-        };
-        dt.push_str("+00:00");
-        match DateTime::parse_from_rfc3339(&dt.as_str()[1..]) {
+    if !dt.is_empty() {
+        // We must add *a timezone* as `DateTime::parse_from_str` requires it
+        dt.push_str(&Local::now().offset().to_string());
+        match DateTime::parse_from_str(&dt.as_str()[1..], "%Y-%m-%dT%H-%M-%S%.3f %z") {
             Ok(t) => return Some(t.with_timezone(&Local)),
             Err(_) => return None,
         }
@@ -293,7 +285,8 @@ impl Runnable for Runner {
             }
         }
         for log in remove {
-            fs::remove_file(log.f.path()).unwrap();
+            fs::remove_file(log.f.path())
+                .unwrap_or_else(|e| error!("achieve log: {:?} failed, err: {}", log.f.path(), e));
         }
     }
 }
@@ -575,26 +568,26 @@ mod tests {
         assert!(dt.is_some());
         let path = tmp_dir.path().join("t.g.d.f.2019-08-23T18:11:02.123.log");
         let dt = dt_from_file_name(&path, "t.g.d.f");
-        assert!(dt.is_some());
+        assert!(dt.is_none());
         let path = tmp_dir
             .path()
-            .join("t.g.d.f.2019-08-23T18:11:02.123.log.log");
+            .join("t.g.d.f.2019-08-23T18-11-02.123.log.log");
         let dt = dt_from_file_name(&path, "t.g.d.f");
         assert!(dt.is_none());
         let path = tmp_dir
             .path()
-            .join("t.g.d.f.2019-08-23T18:11:02.123+00:00.log");
+            .join("t.g.d.f.2019-08-23T18-11-02.123+00:00.log");
         let dt = dt_from_file_name(&path, "t.g.d.f");
         assert!(dt.is_none());
         let path = tmp_dir
             .path()
-            .join("2019-08-23T18:11:02.123.t.g.d.f.2019-08-23T18:11:02.123.log");
+            .join("2019-08-23T18-11-02.123.t.g.d.f.2019-08-23T18-11-02.123.log");
         let dt = dt_from_file_name(&path, "t.g.d.f");
         assert!(dt.is_none());
         let path = tmp_dir
             .path()
-            .join("2019-08-23T18:11:02.123.t.g.d.f.2019-08-23T18:11:02.123.log");
-        let dt = dt_from_file_name(&path, "2019-08-23T18:11:02.123.t.g.d.f");
+            .join("2019-08-23T18-11-02.123.t.g.d.f.2019-08-23T18-11-02.123.log");
+        let dt = dt_from_file_name(&path, "2019-08-23T18-11-02.123.t.g.d.f");
         assert!(dt.is_some());
         let path = tmp_dir.path().join("t.g.d.f.2019-08-23.log");
         let dt = dt_from_file_name(&path, "t.g.d.f");
