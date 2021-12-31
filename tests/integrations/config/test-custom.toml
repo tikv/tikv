@@ -1,6 +1,6 @@
-log-level = "debug"
-log-file = "foo"
-log-format = "json"
+log-level = "info"
+log-file = ""
+log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -9,6 +9,13 @@ enable-io-snoop = false
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
+
+[log]
+level = "debug"
+format = "json"
+
+[log.file]
+filename = "foo"
 
 [readpool.unified]
 min-thread-count = 5
