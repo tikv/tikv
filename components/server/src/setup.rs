@@ -38,9 +38,8 @@ macro_rules! fatal {
 //
 // The file name format after rotated is as follows: "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}"
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
-    let prefix = path.file_stem().unwrap();
     let mut new_path = path.parent().unwrap().to_path_buf();
-    let mut new_fname = OsString::from(prefix);
+    let mut new_fname = path.file_stem().unwrap().to_os_string();
     let dt = Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
     new_fname.push(format!("-{}", dt));
     if let Some(ext) = path.extension() {
