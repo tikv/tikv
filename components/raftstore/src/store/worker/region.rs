@@ -323,7 +323,7 @@ where
     }
 
     /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>, task: EngineStoreApplySnapTask) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
@@ -382,7 +382,7 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         unsafe{
-            println!("!!!!! ==> region id {} region {:?} apply_state {:?}", region.id, region, apply_state);
+            println!("!!!!! ==> SNAPSHOT id {} region id {} region {:?} apply_state {:?}", task.peer_id, region.id, region, apply_state);
             s.replicate_snapshot(&region);
         }
         let options = ApplyOptions {
@@ -412,8 +412,8 @@ where
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, task: EngineStoreApplySnapTask) {
         let region_id = task.region_id;
-        let status = task.status;
-        let _ = status.compare_exchange(
+        let abort = task.status.clone();
+        let _ = abort.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
             Ordering::SeqCst,
@@ -424,22 +424,22 @@ where
         // let timer = apply_histogram.start_coarse_timer();
         let start = Instant::now();
 
-        match self.apply_snap(region_id, Arc::clone(&status)) {
+        match self.apply_snap(region_id, Arc::clone(&abort), task) {
             Ok(()) => {
-                status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
+                abort.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
                 assert_eq!(
-                    status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
+                    abort.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
                 );
                 SNAP_COUNTER.apply.abort.inc();
             }
             Err(e) => {
                 error!(%e; "failed to apply snap!!!");
-                status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
+                abort.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
             }
         }
