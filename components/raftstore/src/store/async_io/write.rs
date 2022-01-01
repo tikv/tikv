@@ -529,7 +529,7 @@ where
 
         async move {
             let mut write_raft_time = 0f64;
-            if raft_wb.is_empty() {
+            if !raft_wb.is_empty() {
                 let now = Instant::now();
                 raft_db
                     .consume_async(&mut raft_wb, true)
