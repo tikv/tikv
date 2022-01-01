@@ -29,6 +29,7 @@ impl RaftEngineReadOnly for PanicEngine {
 
 impl RaftEngine for PanicEngine {
     type LogBatch = PanicWriteBatch;
+    type ConsumeAsyncFut<'a> = std::future::Ready<Result<usize>>;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         panic!()
@@ -39,6 +40,9 @@ impl RaftEngine for PanicEngine {
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
+        panic!()
+    }
+    fn consume_async(&self, batch: &mut Self::LogBatch, sync: bool) -> Self::ConsumeAsyncFut<'_> {
         panic!()
     }
 

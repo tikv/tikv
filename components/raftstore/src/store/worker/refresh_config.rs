@@ -6,9 +6,10 @@ use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState
 use file_system::{set_io_type, IOType};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
-use std::thread;
 use tikv_util::worker::Runnable;
 use tikv_util::{debug, error, info, safe_panic, thd_name};
+
+use glommio::{Latency, LocalExecutorBuilder, Placement, Shares};
 
 pub struct PoolController<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub router: BatchRouter<N, C>,
@@ -26,6 +27,7 @@ where
     }
 }
 
+// TODO(TPC): use glommio.
 impl<N, C, H> PoolController<N, C, H>
 where
     N: Fsm + std::marker::Send + 'static,
@@ -34,7 +36,7 @@ where
 {
     pub fn decrease_by(&mut self, size: usize) {
         for _ in 0..size {
-            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty) {
+            if let Err(e) = self.state.fsm_sender.try_send(FsmTypes::Empty) {
                 error!(
                     "failed to decrese thread pool";
                     "decrease to" => size,
@@ -60,16 +62,21 @@ where
                 joinable_workers: Some(Arc::clone(&self.state.joinable_workers)),
             };
             let props = tikv_util::thread_group::current_properties();
-            let t = thread::Builder::new()
-                .name(thd_name!(format!(
-                    "{}-{}",
-                    name_prefix,
-                    i + self.state.id_base,
-                )))
-                .spawn(move || {
+            // TODO(TPC): pin CPU and tune.
+            let t = LocalExecutorBuilder::new(Placement::Unbound)
+                .name(&(thd_name!(format!("{}-{}", name_prefix, i + self.state.id_base))))
+                .spawn(move || async move {
                     tikv_util::thread_group::set_properties(props);
                     set_io_type(IOType::ForegroundWrite);
-                    poller.poll();
+                    let store_tq = glommio::executor().create_task_queue(
+                        Shares::default(),
+                        // TODO(TPC): it should be important.
+                        Latency::NotImportant,
+                        "store-batch-system",
+                    );
+                    glommio::spawn_local_into(async move { poller.poll().await }, store_tq)
+                        .unwrap()
+                        .await
                 })
                 .unwrap();
             workers.push(t);

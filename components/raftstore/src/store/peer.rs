@@ -44,7 +44,6 @@ use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
@@ -435,6 +434,9 @@ pub struct UnpersistedReady {
     /// Max number of following ready whose data to be persisted is empty.
     pub max_empty_number: u64,
     pub raft_msgs: Vec<Vec<eraftpb::Message>>,
+    /// Ready in TPC TiKV can be persisted out of order.
+    /// We use sliding window to handle it.
+    pub persisted: bool,
 }
 
 pub struct ReadyResult {
@@ -575,6 +577,7 @@ where
 
     pub memtrace_raft_entries: usize,
     /// Used for sending write msg.
+    #[allow(dead_code)]
     write_router: WriteRouter<EK, ER>,
     /// Used for async write io.
     unpersisted_readies: VecDeque<UnpersistedReady>,
@@ -2083,7 +2086,6 @@ where
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
-        let mut has_write_ready = false;
         match &res {
             HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
@@ -2096,23 +2098,12 @@ where
 
                 if let Some(write_worker) = &mut ctx.sync_write_worker {
                     write_worker.handle_write_task(task);
-
-                    assert_eq!(self.unpersisted_ready, None);
-                    self.unpersisted_ready = Some(ready);
-                    has_write_ready = true;
-                } else {
-                    self.write_router.send_write_msg(
-                        ctx,
-                        self.unpersisted_readies.back().map(|r| r.number),
-                        WriteMsg::WriteTask(task),
-                    );
-
                     self.unpersisted_readies.push_back(UnpersistedReady {
                         number: ready_number,
                         max_empty_number: ready_number,
                         raft_msgs: vec![],
+                        persisted: false,
                     });
-
                     self.raft_group.advance_append_async(ready);
                 }
             }
@@ -2197,7 +2188,7 @@ where
         Some(ReadyResult {
             state_role,
             has_new_entries,
-            has_write_ready,
+            has_write_ready: false,
         })
     }
 
@@ -2360,7 +2351,6 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
-        assert!(ctx.sync_write_worker.is_none());
         if self.persisted_number >= number {
             return None;
         }
@@ -2372,27 +2362,33 @@ where
             );
         }
         // There must be a match in `self.unpersisted_readies`
-        while let Some(v) = self.unpersisted_readies.pop_front() {
-            if number < v.number {
-                panic!(
-                    "{} no match of persisted number {}, unpersisted readies: {:?} {:?}",
-                    self.tag, number, v, self.unpersisted_readies
-                );
-            }
-            for msgs in v.raft_msgs {
-                fail_point!("raft_before_follower_send");
-                self.unpersisted_message_count -= msgs.capacity();
-                let m = self.build_raft_messages(ctx, msgs);
-                self.send_raft_messages(ctx, m);
-            }
-            if number == v.number {
+        let v = self.unpersisted_readies.front_mut().unwrap();
+        if v.number == number {
+            v.persisted = true;
+            while let Some(v) = self.unpersisted_readies.pop_front() {
+                if !v.persisted {
+                    self.unpersisted_readies.push_front(v);
+                    break;
+                }
+                for msgs in v.raft_msgs {
+                    fail_point!("raft_before_follower_send");
+                    self.unpersisted_message_count -= msgs.capacity();
+                    let m = self.build_raft_messages(ctx, msgs);
+                    self.send_raft_messages(ctx, m);
+                }
                 self.persisted_number = v.max_empty_number;
-                break;
             }
+        } else {
+            self.unpersisted_readies
+                .iter_mut()
+                .find(|v| v.number == number)
+                .expect("should have a corresponding ready")
+                .persisted = true;
+            return None;
         }
 
-        self.write_router
-            .check_new_persisted(ctx, self.persisted_number);
+        // self.write_router
+        // .check_new_persisted(ctx, self.persisted_number);
 
         if !self.pending_remove {
             // If `pending_remove` is true, no need to call `on_persist_ready` to
