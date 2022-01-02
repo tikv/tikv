@@ -23,17 +23,22 @@ impl WriteBatchExt for RocksEngine {
     }
 
     fn write_batch(&self) -> Self::WriteBatch {
-        Self::WriteBatch::new(Arc::clone(self.as_inner()))
+        let mut wb = Self::WriteBatch::new(Arc::clone(self.as_inner()));
+        wb.disable_wal = self.disable_wal();
+        wb
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        Self::WriteBatch::with_capacity(Arc::clone(self.as_inner()), cap)
+        let mut wb = Self::WriteBatch::with_capacity(Arc::clone(self.as_inner()), cap);
+        wb.disable_wal = self.disable_wal();
+        wb
     }
 }
 
 pub struct RocksWriteBatch {
     db: Arc<DB>,
     wb: RawWriteBatch,
+    disable_wal: bool,
 }
 
 impl RocksWriteBatch {
@@ -41,6 +46,7 @@ impl RocksWriteBatch {
         RocksWriteBatch {
             db,
             wb: RawWriteBatch::default(),
+            disable_wal: false,
         }
     }
 
@@ -54,11 +60,19 @@ impl RocksWriteBatch {
         } else {
             RawWriteBatch::with_capacity(cap)
         };
-        RocksWriteBatch { db, wb }
+        RocksWriteBatch {
+            db,
+            wb,
+            disable_wal: false,
+        }
     }
 
     pub fn from_raw(db: Arc<DB>, wb: RawWriteBatch) -> RocksWriteBatch {
-        RocksWriteBatch { db, wb }
+        RocksWriteBatch {
+            db,
+            wb,
+            disable_wal: false,
+        }
     }
 
     pub fn get_db(&self) -> &DB {
@@ -76,7 +90,8 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
+        let mut opt: RocksWriteOptions = opts.into();
+        opt.disable_wal(self.disable_wal);
         self.get_db()
             .write_opt(self.as_inner(), &opt.into_raw())
             .map_err(Error::Engine)
@@ -165,10 +180,16 @@ pub struct RocksWriteBatchVec {
     index: usize,
     cur_batch_size: usize,
     batch_size_limit: usize,
+    disable_wal: bool,
 }
 
 impl RocksWriteBatchVec {
-    pub fn new(db: Arc<DB>, batch_size_limit: usize, cap: usize) -> RocksWriteBatchVec {
+    pub fn new(
+        db: Arc<DB>,
+        batch_size_limit: usize,
+        cap: usize,
+        disable_wal: bool,
+    ) -> RocksWriteBatchVec {
         let wb = RawWriteBatch::with_capacity(cap);
         RocksWriteBatchVec {
             db,
@@ -177,6 +198,7 @@ impl RocksWriteBatchVec {
             index: 0,
             cur_batch_size: 0,
             batch_size_limit,
+            disable_wal,
         }
     }
 
@@ -208,11 +230,17 @@ impl RocksWriteBatchVec {
 
 impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     fn with_capacity(e: &RocksEngine, cap: usize) -> RocksWriteBatchVec {
-        RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
+        RocksWriteBatchVec::new(
+            e.as_inner().clone(),
+            WRITE_BATCH_LIMIT,
+            cap,
+            e.disable_wal(),
+        )
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
+        let mut opt: RocksWriteOptions = opts.into();
+        opt.disable_wal(self.disable_wal);
         if self.index > 0 {
             self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())

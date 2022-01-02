@@ -33,6 +33,13 @@ impl RocksWriteOptions {
     pub fn into_raw(self) -> RawWriteOptions {
         self.0
     }
+
+    pub fn disable_wal(&mut self, disable_wal: bool) {
+        if disable_wal {
+            self.0.disable_wal(true);
+            self.0.set_sync(false);
+        }
+    }
 }
 
 impl From<engine_traits::WriteOptions> for RocksWriteOptions {
@@ -40,7 +47,9 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
         let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync());
         r.set_no_slowdown(opts.no_slowdown());
-        RocksWriteOptions(r)
+        let mut o = RocksWriteOptions(r);
+        o.disable_wal(opts.disable_wal());
+        o
     }
 }
 

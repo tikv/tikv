@@ -569,6 +569,9 @@
 ## Enable or disable the pipelined write.
 # enable-pipelined-write = true
 
+## Disable kvdb WAL
+# disable_wal = true
+
 ## Allows OS to incrementally sync files to disk while they are being written, asynchronously,
 ## in the background.
 # bytes-per-sync = "1MB"

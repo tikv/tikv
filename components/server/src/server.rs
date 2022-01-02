@@ -31,7 +31,7 @@ use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines,
-    FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -145,7 +145,7 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.run_server(server_config);
             tikv.run_status_server();
 
-            signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+            signal_handler::wait_for_signal(Some(tikv.engines.as_ref().unwrap().engines.clone()));
             tikv.stop();
         }};
     }
@@ -1239,6 +1239,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         servers.lock_mgr.stop();
 
         self.to_stop.into_iter().for_each(|s| s.stop());
+        // flush all memtables when shuting down otherwise TiKV can't restart due to mismatch apply
+        // state.
+        info!("flushing kvdb");
+        for cf in ALL_CFS {
+            self.engines
+                .as_ref()
+                .unwrap()
+                .engine
+                .kv_engine()
+                .flush_cf(cf, true)
+                .unwrap();
+        }
+        info!("finish flushing kvdb");
     }
 }
 
@@ -1282,6 +1295,7 @@ impl TiKVServer<RocksEngine> {
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+        kv_engine.set_disable_wal(self.config.rocksdb.disable_wal);
         let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
         let shared_block_cache = block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
@@ -1366,6 +1380,7 @@ impl TiKVServer<RaftLogEngine> {
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+        kv_engine.set_disable_wal(self.config.rocksdb.disable_wal);
         let shared_block_cache = block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);

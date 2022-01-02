@@ -547,6 +547,7 @@ impl Default for DefaultCfConfig {
                 DBCompressionType::Zstd,
                 DBCompressionType::Zstd,
             ],
+            // TODO(TPC): tune
             write_buffer_size: ReadableSize::mb(128),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
@@ -967,6 +968,8 @@ pub struct DbConfig {
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+    #[online_config(skip)]
+    pub disable_wal: bool,
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
     #[online_config(submodule)]
@@ -999,12 +1002,14 @@ impl Default for DbConfig {
             max_open_files: 40960,
             enable_statistics: true,
             stats_dump_period: ReadableDuration::minutes(10),
+            // TODO(TPC): tune
             compaction_readahead_size: ReadableSize::kb(0),
             info_log_max_size: ReadableSize::gb(1),
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             info_log_level: LogLevel::Info,
+            // TODO(TPC): tune
             rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
@@ -1014,10 +1019,16 @@ impl Default for DbConfig {
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
-            use_direct_io_for_flush_and_compaction: false,
+            // TODO(TPC): tune
+            // It should be helpful for pure write workload like rawkv ycsb pure write.
+            use_direct_io_for_flush_and_compaction: true,
+            // TODO(TPC): RocksDB still joins write group when disables WAL. Don't do this if have
+            // time.
             enable_pipelined_write: true,
-            enable_multi_batch_write: true,
+            enable_multi_batch_write: false,
             enable_unordered_write: false,
+            disable_wal: true,
+
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),

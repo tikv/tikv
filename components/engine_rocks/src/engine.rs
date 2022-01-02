@@ -26,6 +26,7 @@ use crate::{RocksEngineIterator, RocksSnapshot};
 pub struct RocksEngine {
     db: Arc<DB>,
     shared_block_cache: bool,
+    disable_wal: bool,
 }
 
 impl RocksEngine {
@@ -33,6 +34,7 @@ impl RocksEngine {
         RocksEngine {
             db,
             shared_block_cache: false,
+            disable_wal: false,
         }
     }
 
@@ -62,6 +64,14 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
+    }
+
+    pub fn set_disable_wal(&mut self, disable: bool) {
+        self.disable_wal = disable;
+    }
+
+    pub fn disable_wal(&self) -> bool {
+        self.disable_wal
     }
 }
 
