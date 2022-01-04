@@ -41,7 +41,6 @@ pub use external_storage::{
 };
 
 use kvproto::brpb::{Noop, StorageBackend};
-use tikv_util::stream::block_on_external_io;
 use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
@@ -338,13 +337,14 @@ impl ExternalStorage for EncryptedExternalStorage {
         let min_read_speed: usize = 8192;
         let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
-        block_on_external_io(read_external_storage_into_file(
+        read_external_storage_into_file(
             &mut input,
             file_writer,
             speed_limiter,
             expected_length,
             min_read_speed,
-        ))
+        )
+        .await
     }
 }
 
