@@ -4465,7 +4465,6 @@ mod tests {
         assert_eq!(cfg, default_cfg);
     }
 
-    /*
     #[test]
     fn test_compatibility_with_old_config_template() {
         let mut buf = Vec::new();
@@ -4491,7 +4490,6 @@ mod tests {
             }
         }
     }
-    */
 
     #[test]
     fn test_cdc() {
