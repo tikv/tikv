@@ -16,6 +16,9 @@ format = "json"
 
 [log.file]
 filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
 
 [readpool.unified]
 min-thread-count = 5
