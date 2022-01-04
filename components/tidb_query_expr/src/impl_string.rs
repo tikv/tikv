@@ -525,10 +525,9 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn upper_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+pub fn upper_utf8<E: Encoding>(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    let res = s.chars().flat_map(char::to_uppercase);
-    Ok(writer.write_from_char_iter(res))
+    Ok(E::upper(s, writer))
 }
 
 #[rpn_fn(writer)]
@@ -541,10 +540,9 @@ pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn lower_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+pub fn lower_utf8<E: Encoding>(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     let s = str::from_utf8(arg)?;
-    let res = s.chars().flat_map(char::to_lowercase);
-    Ok(writer.write_from_char_iter(res))
+    Ok(E::lower(s, writer))
 }
 
 #[rpn_fn(writer)]
@@ -1092,6 +1090,7 @@ mod tests {
     use std::{f64, i64};
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::codec::mysql::charset::{CHARSET_GBK, CHARSET_UTF8MB4};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -2684,7 +2683,13 @@ mod tests {
 
         for (arg, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param_with_field_type(
+                    arg.clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_UTF8MB4)
+                        .build(),
+                )
                 .evaluate(ScalarFuncSig::UpperUtf8)
                 .unwrap();
             assert_eq!(output, exp);
@@ -2717,10 +2722,38 @@ mod tests {
 
         for (arg, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param_with_field_type(
+                    arg.clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_UTF8MB4)
+                        .build(),
+                )
                 .evaluate(ScalarFuncSig::Upper)
                 .unwrap();
             assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_gbk_lower_upper() {
+        // Test GBK string case
+        let sig = vec![ScalarFuncSig::Lower, ScalarFuncSig::Upper];
+        for s in sig {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    Some("àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec()).clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_GBK)
+                        .build(),
+                )
+                .evaluate(s)
+                .unwrap();
+            assert_eq!(
+                output,
+                Some("àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec())
+            );
         }
     }
 
@@ -2751,7 +2784,13 @@ mod tests {
 
         for (arg, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param_with_field_type(
+                    arg.clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_UTF8MB4)
+                        .build(),
+                )
                 .evaluate(ScalarFuncSig::Lower)
                 .unwrap();
             assert_eq!(output, exp);

@@ -51,9 +51,9 @@ impl TestSuite {
         tikv_cfg.resource_metering = cfg.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
 
-        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(cfg.precision.as_millis());
-        let (config_notifier, data_sink_reg_handle, reporter_worker) =
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let env = Arc::new(Environment::new(2));
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
@@ -71,8 +71,8 @@ impl TestSuite {
 
         let cfg_manager = resource_metering::ConfigManager::new(
             cfg,
-            recorder_handle,
-            config_notifier,
+            recorder_notifier,
+            reporter_notifier,
             address_change_notifier,
         );
         cfg_controller.register(
