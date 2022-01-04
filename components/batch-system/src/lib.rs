@@ -11,8 +11,8 @@ mod router;
 pub mod test_runner;
 
 pub use self::batch::{
-    create_system, BatchRouter, BatchSystem, FsmTypes, HandleResult, HandlerBuilder, PollHandler,
-    Poller, PoolState,
+    create_system, BatchRouter, BatchSystem, FsmTypes, HandleResult, HandlerBuilder, HandlerConfig,
+    PollHandler, Poller, PoolState, TaskQueueConfig, GATE,
 };
 pub use self::config::Config;
 pub use self::fsm::{Fsm, Priority};

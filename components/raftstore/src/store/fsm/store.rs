@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use std::{mem, u64};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, HandlerConfig,
+    PollHandler, Priority, TaskQueueConfig, GATE,
 };
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
@@ -74,8 +74,8 @@ use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-    RegionRunner, RegionTask, SplitCheckTask,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigTask, RegionRunner, RegionTask,
+    SplitCheckTask,
 };
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
@@ -831,7 +831,15 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
             if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
                 if !write_worker.is_empty() {
-                    glommio::spawn_local(write_worker.write_to_db(true)).detach();
+                    // NOTE(TPC): the reason not use gate::spawn_local() is it doesn't run the
+                    // future right away. Call glommio::spawn_local() manually to do it.
+                    let pass = GATE.with(|g| g.enter()).unwrap();
+                    let fut = write_worker.write_to_db(true);
+                    glommio::spawn_local(async move {
+                        fut.await;
+                        drop(pass);
+                    })
+                    .detach();
                 }
             }
 
@@ -1239,9 +1247,9 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
+    router: RaftRouter<EK, ER>,
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
-    router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK, ER>>,
     store_writers: StoreWriters<EK, ER>,
 }
@@ -1453,10 +1461,37 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
         });
 
-        let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
+        // let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
+        let mut store_cfg = HandlerConfig {
+            priority: Priority::Normal,
+            router: self.system.router().clone(),
+            receiver: self.system.fsm_receiver().clone(),
+            tq_cfg: TaskQueueConfig {
+                name: "store-batch-system".to_string(),
+                // default is 1000.
+                shares: 1000,
+                // TODO(TPC): tune
+                latency: glommio::Latency::Matters(Duration::from_millis(1)),
+            },
+            builder: builder.clone(),
+        };
+
+        let mut apply_cfg = HandlerConfig {
+            priority: Priority::Normal,
+            router: self.apply_system.router().clone(),
+            receiver: self.apply_system.fsm_receiver().clone(),
+            tq_cfg: TaskQueueConfig {
+                name: "apply-batch-system".to_string(),
+                shares: 2000,
+                latency: glommio::Latency::NotImportant,
+            },
+            builder: apply_poller_builder.clone(),
+        };
         let tag = format!("raftstore-{}", store.get_id());
-        self.system.spawn(tag, builder);
+        self.system
+            .spawn_2_pollers(tag, &mut store_cfg, &mut apply_cfg);
+        // self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
@@ -1478,16 +1513,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             })
             .unwrap();
 
-        self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
+        self.apply_system.set_name_prefix("apply".to_string());
+        // self.apply_system
+        // .spawn("apply".to_owned(), apply_poller_builder);
 
-        let refresh_config_runner = RefreshConfigRunner::new(
-            self.apply_router.router.clone(),
-            self.router.router.clone(),
-            self.apply_system.build_pool_state(apply_builder),
-            self.system.build_pool_state(raft_builder),
-        );
-        assert!(workers.refresh_config_worker.start(refresh_config_runner));
+        // let refresh_config_runner = RefreshConfigRunner::new(
+        // self.apply_router.router.clone(),
+        // self.router.router.clone(),
+        // self.apply_system.build_pool_state(apply_builder),
+        // self.system.build_pool_state(raft_builder),
+        // );
+        // assert!(workers.refresh_config_worker.start(refresh_config_runner));
 
         let pd_runner = PdRunner::new(
             &cfg,

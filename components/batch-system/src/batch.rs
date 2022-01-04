@@ -23,7 +23,7 @@ use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 use async_channel::{self, Receiver, Sender, TrySendError};
-use glommio::{self, Latency, LocalExecutorBuilder, Placement, Shares};
+use glommio::{self, sync::Gate, Latency, LocalExecutorBuilder, Placement, Shares};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
@@ -31,6 +31,10 @@ pub enum FsmTypes<N, C> {
     Control(Box<C>),
     // Used as a signal that scheduler should be shutdown.
     Empty,
+}
+
+thread_local! {
+    pub static GATE: Gate = Gate::new();
 }
 
 // A macro to introduce common definition of scheduler.
@@ -508,6 +512,23 @@ pub trait HandlerBuilder<N, C> {
     fn build(&mut self, priority: Priority) -> Self::Handler;
 }
 
+#[derive(Clone)]
+pub struct HandlerConfig<N: Fsm, C: Fsm, B: HandlerBuilder<N, C>> {
+    pub priority: Priority,
+    pub router: BatchRouter<N, C>,
+    pub receiver: Receiver<FsmTypes<N, C>>,
+    pub tq_cfg: TaskQueueConfig,
+    pub builder: B,
+}
+
+#[derive(Clone)]
+pub struct TaskQueueConfig {
+    pub name: String,
+    // use static shares. glommio::Shares is not send.
+    pub shares: usize,
+    pub latency: Latency,
+}
+
 /// A system that can poll FSMs concurrently and in batch.
 ///
 /// To use the system, two type of FSMs and their PollHandlers need
@@ -536,6 +557,14 @@ where
         &self.router
     }
 
+    pub fn fsm_receiver(&self) -> &Receiver<FsmTypes<N, C>> {
+        &self.receiver
+    }
+
+    pub fn set_name_prefix(&mut self, s: String) {
+        self.name_prefix = Some(s);
+    }
+
     pub fn build_pool_state<H: HandlerBuilder<N, C>>(
         &mut self,
         handler_builder: H,
@@ -549,6 +578,80 @@ where
             handler_builder,
             self.pool_size,
         )
+    }
+
+    fn build_poller<N2: Fsm, C2: Fsm, B2: HandlerBuilder<N2, C2>>(
+        &self,
+        cfg: &mut HandlerConfig<N2, C2, B2>,
+    ) -> Poller<N2, C2, B2::Handler> {
+        let handler = cfg.builder.build(cfg.priority);
+        Poller {
+            router: cfg.router.clone(),
+            fsm_receiver: cfg.receiver.clone(),
+            handler,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+            joinable_workers: if cfg.priority == Priority::Normal {
+                Some(Arc::clone(&self.joinable_workers))
+            } else {
+                None
+            },
+        }
+    }
+
+    pub fn spawn_2_pollers<B, N2, C2, B2>(
+        &mut self,
+        name_prefix: String,
+        cfg1: &mut HandlerConfig<N, C, B>,
+        cfg2: &mut HandlerConfig<N2, C2, B2>,
+    ) where
+        B: HandlerBuilder<N, C>,
+        B::Handler: Send + 'static,
+        N2: Fsm + Send + 'static,
+        C2: Fsm + Send + 'static,
+        B2: HandlerBuilder<N2, C2>,
+        B2::Handler: Send + 'static,
+    {
+        for _ in 0..self.pool_size {
+            let mut poller1 = self.build_poller(cfg1);
+            let mut poller2 = self.build_poller(cfg2);
+            let (tq1_cfg, tq2_cfg) = (cfg1.tq_cfg.clone(), cfg2.tq_cfg.clone());
+
+            let props = tikv_util::thread_group::current_properties();
+            // TODO(TPC): pin CPU and tune
+            let t = LocalExecutorBuilder::new(Placement::Unbound)
+                .name(&name_prefix)
+                .spawn(move || async move {
+                    tikv_util::thread_group::set_properties(props);
+                    set_io_type(IOType::ForegroundWrite);
+
+                    let tq1 = glommio::executor().create_task_queue(
+                        Shares::Static(tq1_cfg.shares),
+                        tq1_cfg.latency,
+                        &tq1_cfg.name,
+                    );
+                    let j1 = glommio::spawn_local_into(async move { poller1.poll().await }, tq1)
+                        .unwrap()
+                        .detach();
+
+                    let tq2 = glommio::executor().create_task_queue(
+                        Shares::Static(tq2_cfg.shares),
+                        tq2_cfg.latency,
+                        &tq2_cfg.name,
+                    );
+                    let j2 = glommio::spawn_local_into(async move { poller2.poll().await }, tq2)
+                        .unwrap()
+                        .detach();
+
+                    j1.await;
+                    j2.await;
+                    // Waiting for futures like async I/O done.
+                    let _ = GATE.with(|g| g.clone()).close().await;
+                })
+                .unwrap();
+            self.workers.lock().unwrap().push(t);
+        }
+        self.name_prefix = Some(name_prefix);
     }
 
     fn start_poller<B>(&mut self, name: String, priority: Priority, builder: &mut B)
@@ -607,14 +710,6 @@ where
                 &mut builder,
             );
         }
-        // TODO(TPC)
-        // for i in 0..self.low_priority_pool_size {
-        // self.start_poller(
-        // thd_name!(format!("{}-low-{}", name_prefix, i)),
-        // Priority::Low,
-        // &mut builder,
-        // );
-        // }
         self.name_prefix = Some(name_prefix);
     }
 

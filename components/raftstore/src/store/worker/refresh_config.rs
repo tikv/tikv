@@ -153,6 +153,7 @@ where
     AH: HandlerBuilder<ApplyFsm<EK>, ControlFsm>,
     RH: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>>,
 {
+    #[allow(dead_code)]
     pub fn new(
         apply_router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
