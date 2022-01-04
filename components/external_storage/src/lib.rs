@@ -8,7 +8,7 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::io::{self, Write};
+use std::io;
 use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use futures::io::AllowStdIo;
 use futures::{AsyncWrite, AsyncWriteExt};
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
-use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
+use tikv_util::stream::READ_BUF_SIZE;
 use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
 
@@ -147,10 +147,10 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 
 // Wrap the reader with file_crypter
 // Return the reader directly if file_crypter is None
-pub fn encrypt_wrap_reader<'a>(
+pub fn encrypt_wrap_reader(
     file_crypter: Option<FileEncryptionInfo>,
-    reader: Box<DynAsyncReadRef<'a>>,
-) -> io::Result<Box<DynAsyncReadRef<'a>>> {
+    reader: Box<DynAsyncReadRef<'_>>,
+) -> io::Result<Box<DynAsyncReadRef<'_>>> {
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,

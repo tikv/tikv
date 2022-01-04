@@ -6,7 +6,6 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures::executor::ThreadPool;
 use kvproto::brpb::{CipherInfo, StorageBackend};
 use kvproto::import_sstpb::*;
 
@@ -137,6 +136,30 @@ impl SSTImporter {
         self.dir.exist(meta).unwrap_or(false)
     }
 
+    /// The synchronous version of [`Self::download`].
+    /// Only for test compatibility.
+    #[cfg(test)]
+    pub(crate) fn download_sync<E: KvEngine>(
+        &self,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: Limiter,
+        engine: E,
+    ) -> Result<Option<Range>> {
+        tikv_util::stream::block_on_external_io(self.download(
+            meta,
+            backend,
+            name,
+            rewrite_rule,
+            crypter,
+            speed_limiter,
+            engine,
+        ))
+    }
+
     // Downloads an SST file from an external storage.
     //
     // This method is blocking. It performs the following transformations before
@@ -221,7 +244,6 @@ impl SSTImporter {
 
             // prepare to download the file from the external_storage
             // TODO: pass a config to support hdfs
-            // NOTE: if we create external storage for each file, that might introduce some overhead about TLS handshaking.
             let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
             let url = ext_storage.url()?.to_string();
 
@@ -241,15 +263,17 @@ impl SSTImporter {
                 iv: meta.cipher_iv.to_owned(),
             });
 
-            let result = ext_storage.restore(
-                name,
-                path.temp.to_owned(),
-                meta.length,
-                &speed_limiter,
-                file_crypter,
-            );
+            let result = ext_storage
+                .restore(
+                    name,
+                    path.temp.to_owned(),
+                    meta.length,
+                    &speed_limiter,
+                    file_crypter,
+                )
+                .await;
             IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
-            result.await.map_err(|e| Error::CannotReadExternalStorage {
+            result.map_err(|e| Error::CannotReadExternalStorage {
                 url: url.to_string(),
                 name: name.to_owned(),
                 local_path: path.temp.to_owned(),
@@ -951,7 +975,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1010,7 +1034,7 @@ mod tests {
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1059,7 +1083,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1107,7 +1131,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let _ = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample_default.sst",
@@ -1151,7 +1175,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let _ = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample_write.sst",
@@ -1214,7 +1238,7 @@ mod tests {
             let db = create_sst_test_engine().unwrap();
 
             let range = importer
-                .download::<TestEngine>(
+                .download_sync::<TestEngine>(
                     &meta,
                     &backend,
                     "sample.sst",
@@ -1289,7 +1313,7 @@ mod tests {
         meta.mut_range().set_end(b"t123_r12".to_vec());
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1334,7 +1358,7 @@ mod tests {
         meta.mut_range().set_end(b"t5_r12".to_vec());
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1379,7 +1403,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
         let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
 
-        let result = importer.download::<TestEngine>(
+        let result = importer.download_sync::<TestEngine>(
             &meta,
             &backend,
             "sample.sst",
@@ -1405,7 +1429,7 @@ mod tests {
         meta.mut_range().set_start(vec![b'x']);
         meta.mut_range().set_end(vec![b'y']);
 
-        let result = importer.download::<TestEngine>(
+        let result = importer.download_sync::<TestEngine>(
             &meta,
             &backend,
             "sample.sst",
@@ -1429,7 +1453,7 @@ mod tests {
         let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db = create_sst_test_engine().unwrap();
 
-        let result = importer.download::<TestEngine>(
+        let result = importer.download_sync::<TestEngine>(
             &meta,
             &backend,
             "sample.sst",
@@ -1467,7 +1491,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1526,7 +1550,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1581,7 +1605,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         let range = importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",
@@ -1629,7 +1653,7 @@ mod tests {
         let db = create_sst_test_engine().unwrap();
 
         importer
-            .download::<TestEngine>(
+            .download_sync::<TestEngine>(
                 &meta,
                 &backend,
                 "sample.sst",

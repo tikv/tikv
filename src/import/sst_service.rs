@@ -8,7 +8,7 @@ use super::make_rpc_error;
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
-use futures::executor::{ThreadPool, ThreadPoolBuilder};
+
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use futures::TryFutureExt;
@@ -80,6 +80,10 @@ where
                 set_io_type(IOType::Import);
             })
             .on_thread_stop(move || tikv_alloc::remove_thread_memory_accessor())
+            // Time reactor is required by `retry`.
+            .enable_time()
+            // IO reactor is required by cloud storages. (Nearly all cloud storage libraries requires tokio runtime...)
+            .enable_io()
             .build()
             .unwrap();
         let threads = Arc::new(threads);

@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
-use futures::executor::ThreadPool;
+
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -242,7 +242,7 @@ mod tests {
     use super::*;
 
     use engine_traits::KvEngine;
-    use futures::executor::ThreadPoolBuilder;
+    
     use std::thread;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
@@ -304,10 +304,10 @@ mod tests {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let cfg = Config::default();
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .create()
+        let threads = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(cfg.num_threads)
+            .thread_name("sst-importer")
+            .build()
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
@@ -342,10 +342,10 @@ mod tests {
             import_mode_timeout: ReadableDuration::millis(300),
             ..Config::default()
         };
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .create()
+        let threads = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(cfg.num_threads)
+            .thread_name("sst-importer")
+            .build()
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);

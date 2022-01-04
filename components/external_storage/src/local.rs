@@ -3,13 +3,13 @@
 use futures::io::AllowStdIo;
 use std::fs::File as StdFile;
 use std::io;
-use std::marker::Unpin;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-use futures_io::AsyncRead;
+
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
 

@@ -3,7 +3,7 @@
 //! To use External storage with protobufs as an application, import this module.
 //! external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -34,12 +34,12 @@ use external_storage::dylib_client;
 use external_storage::grpc_client;
 use external_storage::{
     encrypt_wrap_reader, record_storage_create, BackendConfig, DynAsyncReadRef, DynAsyncWrite,
-    DynAsyncWriteRef, HdfsStorage,
+    HdfsStorage,
 };
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
-use futures_io::AsyncRead;
+
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
 use tikv_util::time::{Instant, Limiter};
