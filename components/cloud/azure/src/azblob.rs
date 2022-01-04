@@ -557,7 +557,7 @@ impl BlobStorage for AzureStorage {
         uploader.run(&mut reader, content_length).await
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + Send + '_> {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
         let t = async move {

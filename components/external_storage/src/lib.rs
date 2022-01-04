@@ -17,6 +17,8 @@ use async_trait::async_trait;
 use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
+use futures::io::AllowStdIo;
+use futures::{AsyncWrite, AsyncWriteExt};
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
@@ -49,8 +51,11 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// This wrapper would remove the lifetime at the argument of the generted async function
 /// in order to make rustc happy. (And reduce the length of signture of write.)
 /// see https://github.com/rust-lang/rust/issues/63033
-pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
-
+pub struct UnpinReader(pub Box<DynAsyncRead>);
+pub type DynAsyncRead = DynAsyncReadRef<'static>;
+pub type DynAsyncReadRef<'a> = dyn AsyncRead + Unpin + Send + 'a;
+pub type DynAsyncWrite = DynAsyncWriteRef<'static>;
+pub type DynAsyncWriteRef<'a> = dyn AsyncWrite + Unpin + Send + 'a;
 #[derive(Debug, Default)]
 pub struct BackendConfig {
     pub s3_multi_part_size: usize,
@@ -69,10 +74,10 @@ pub trait ExternalStorage: 'static + Send + Sync {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+    fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>>;
 
     /// Read from external storage and restore to the given path
-    fn restore(
+    async fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
@@ -81,7 +86,9 @@ pub trait ExternalStorage: 'static + Send + Sync {
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         let reader = self.read(storage_name);
-        let output: &mut dyn Write = &mut File::create(restore_name)?;
+        // Assuming local disk I/O is fast enough to not to block the thread pool.
+        // If we use tokio::File, then we cannot integrate with the I/O snooper.
+        let output: &mut DynAsyncWrite = &mut AllowStdIo::new(File::create(restore_name)?);
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
         // a "TimedOut" error.
@@ -89,13 +96,14 @@ pub trait ExternalStorage: 'static + Send + Sync {
         let min_read_speed: usize = 8192;
         let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
-        block_on_external_io(read_external_storage_into_file(
+        read_external_storage_into_file(
             &mut input,
             output,
             speed_limiter,
             expected_length,
             min_read_speed,
-        ))
+        )
+        .await
     }
 }
 
@@ -113,7 +121,7 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).write(name, reader, content_length).await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>> {
         (**self).read(name)
     }
 }
@@ -132,7 +140,7 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().write(name, reader, content_length).await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>> {
         self.as_ref().read(name)
     }
 }
@@ -141,8 +149,8 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 // Return the reader directly if file_crypter is None
 pub fn encrypt_wrap_reader<'a>(
     file_crypter: Option<FileEncryptionInfo>,
-    reader: Box<dyn AsyncRead + Unpin + 'a>,
-) -> io::Result<Box<dyn AsyncRead + Unpin + 'a>> {
+    reader: Box<DynAsyncReadRef<'a>>,
+) -> io::Result<Box<DynAsyncReadRef<'a>>> {
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
@@ -157,8 +165,8 @@ pub fn encrypt_wrap_reader<'a>(
 }
 
 pub async fn read_external_storage_into_file(
-    input: &mut (dyn AsyncRead + Unpin),
-    output: &mut dyn Write,
+    input: &mut DynAsyncReadRef<'_>,
+    output: &mut DynAsyncWriteRef<'_>,
     speed_limiter: &Limiter,
     expected_length: u64,
     min_read_speed: usize,
@@ -179,7 +187,7 @@ pub async fn read_external_storage_into_file(
             break;
         }
         speed_limiter.consume(bytes_read).await;
-        output.write_all(&buffer[..bytes_read])?;
+        output.write_all(&buffer[..bytes_read]).await?;
         file_length += bytes_read as u64;
     }
 

@@ -8,7 +8,7 @@ use futures_io::AsyncRead;
 
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
-use crate::UnpinReader;
+use crate::{DynAsyncReadRef, UnpinReader};
 
 use super::ExternalStorage;
 
@@ -46,7 +46,7 @@ impl ExternalStorage for NoopStorage {
         Ok(())
     }
 
-    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, _name: &str) -> Box<DynAsyncReadRef<'_>> {
         Box::new(io::empty().compat())
     }
 }

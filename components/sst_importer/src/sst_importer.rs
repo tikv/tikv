@@ -153,7 +153,7 @@ impl SSTImporter {
     //
     // This method returns the *inclusive* key range (`[start, end]`) of SST
     // file created, or returns None if the SST is empty.
-    pub fn download<E: KvEngine>(
+    pub async fn download<E: KvEngine>(
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
@@ -170,15 +170,18 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        match self.do_download::<E>(
-            meta,
-            backend,
-            name,
-            rewrite_rule,
-            crypter,
-            speed_limiter,
-            engine,
-        ) {
+        match self
+            .do_download::<E>(
+                meta,
+                backend,
+                name,
+                rewrite_rule,
+                crypter,
+                speed_limiter,
+                engine,
+            )
+            .await
+        {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "name" => name, "range" => ?r);
                 Ok(r)
@@ -202,7 +205,7 @@ impl SSTImporter {
         self.switcher.get_mode()
     }
 
-    fn do_download<E: KvEngine>(
+    async fn do_download<E: KvEngine>(
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
@@ -218,6 +221,7 @@ impl SSTImporter {
 
             // prepare to download the file from the external_storage
             // TODO: pass a config to support hdfs
+            // NOTE: if we create external storage for each file, that might introduce some overhead about TLS handshaking.
             let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
             let url = ext_storage.url()?.to_string();
 
@@ -245,7 +249,7 @@ impl SSTImporter {
                 file_crypter,
             );
             IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
-            result.map_err(|e| Error::CannotReadExternalStorage {
+            result.await.map_err(|e| Error::CannotReadExternalStorage {
                 url: url.to_string(),
                 name: name.to_owned(),
                 local_path: path.temp.to_owned(),

@@ -395,25 +395,23 @@ where
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
 
-            // FIXME: download() should be an async fn, to allow BR to cancel
-            // a download task.
-            // Unfortunately, this currently can't happen because the S3Storage
-            // is not Send + Sync. See the documentation of S3Storage for reason.
             let cipher = req
                 .cipher_info
                 .to_owned()
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
-            let res = importer.download::<E>(
-                req.get_sst(),
-                req.get_storage_backend(),
-                req.get_name(),
-                req.get_rewrite_rule(),
-                cipher,
-                limiter,
-                engine,
-            );
+            let res = importer
+                .download::<E>(
+                    req.get_sst(),
+                    req.get_storage_backend(),
+                    req.get_name(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    engine,
+                )
+                .await;
             let mut resp = DownloadResponse::default();
             match res {
                 Ok(range) => match range {

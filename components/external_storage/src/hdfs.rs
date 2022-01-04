@@ -7,7 +7,7 @@ use tokio::{io as async_io, process::Command};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 
-use crate::{ExternalStorage, UnpinReader};
+use crate::{DynAsyncReadRef, ExternalStorage, UnpinReader};
 
 /// Convert `hdfs:///path` to `/path`
 fn try_convert_to_path(url: &Url) -> &str {
@@ -131,7 +131,7 @@ impl ExternalStorage for HdfsStorage {
         }
     }
 
-    fn read(&self, _name: &str) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+    fn read(&self, _name: &str) -> Box<DynAsyncReadRef<'_>> {
         unimplemented!("currently only HDFS export is implemented")
     }
 }

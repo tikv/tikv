@@ -46,7 +46,8 @@ pub trait BlobStorage: 'static + Send + Sync {
     async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+    /// Note: maybe make it async?
+    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + Send + '_>;
 }
 
 impl BlobConfig for dyn BlobStorage {
@@ -70,7 +71,7 @@ impl BlobStorage for Box<dyn BlobStorage> {
         fut.await
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + Send + '_> {
         (**self).get(name)
     }
 }

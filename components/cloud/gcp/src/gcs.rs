@@ -339,7 +339,7 @@ impl GCSStorage {
         Ok(res)
     }
 
-    fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> Box<dyn AsyncRead + Unpin>
+    fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> Box<dyn AsyncRead + Unpin + Send>
     where
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
@@ -448,7 +448,7 @@ impl BlobStorage for GCSStorage {
         Ok::<_, io::Error>(())
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + Send + '_> {
         let bucket = self.config.bucket.bucket.to_string();
         let name = self.maybe_prefix_key(name);
         debug!("read file from GCS storage"; "key" => %name);

@@ -12,6 +12,7 @@ pub use aws::{Config as S3Config, S3Storage};
 #[cfg(feature = "cloud-azure")]
 pub use azure::{AzureStorage, Config as AzureConfig};
 use engine_traits::FileEncryptionInfo;
+use futures_util::io::AllowStdIo;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GCSConfig, GCSStorage};
 
@@ -31,7 +32,10 @@ use encryption::DataKeyManager;
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
+use external_storage::{
+    encrypt_wrap_reader, record_storage_create, BackendConfig, DynAsyncReadRef, DynAsyncWrite,
+    DynAsyncWriteRef, HdfsStorage,
+};
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
@@ -317,10 +321,10 @@ impl ExternalStorage for EncryptedExternalStorage {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>> {
         self.storage.read(name)
     }
-    fn restore(
+    async fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
@@ -329,8 +333,8 @@ impl ExternalStorage for EncryptedExternalStorage {
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         let reader = self.read(storage_name);
-        let file_writer: &mut dyn Write =
-            &mut self.key_manager.create_file_for_write(&restore_name)?;
+        let file_writer: &mut DynAsyncWrite =
+            &mut AllowStdIo::new(self.key_manager.create_file_for_write(&restore_name)?);
         let min_read_speed: usize = 8192;
         let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
@@ -358,7 +362,7 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
             .await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>> {
         (**self).get(name)
     }
 }

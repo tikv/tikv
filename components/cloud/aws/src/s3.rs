@@ -531,7 +531,7 @@ impl BlobStorage for S3Storage {
         })
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + Send + '_> {
         let key = self.maybe_prefix_key(name);
         let bucket = self.config.bucket.bucket.clone();
         debug!("read file from s3 storage"; "key" => %key);

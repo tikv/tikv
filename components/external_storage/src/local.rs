@@ -13,7 +13,7 @@ use futures_io::AsyncRead;
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
 
-use crate::UnpinReader;
+use crate::{DynAsyncReadRef, UnpinReader};
 
 use super::ExternalStorage;
 use async_trait::async_trait;
@@ -95,7 +95,7 @@ impl ExternalStorage for LocalStorage {
         self.base_dir.sync_all().await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
         // We used std i/o here for removing the requirement of tokio reactor when restoring.
