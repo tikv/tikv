@@ -1009,7 +1009,10 @@ where
                     }
                 }
             } else if key.term <= compacted_term
-                && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
+                && (key.idx < compacted_idx
+                    || key.idx == compacted_idx
+                        && !is_applying_snap
+                        && !self.fsm.peer.pending_remove)
             {
                 info!(
                     "deleting applied snap file";
@@ -1030,6 +1033,8 @@ where
                     }
                 };
                 self.ctx.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
+            } else if self.fsm.peer.pending_remove {
+                fail_point!("pending_remove_is_true");
             }
         }
     }

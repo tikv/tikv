@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{fs, io, thread};
@@ -231,6 +231,15 @@ fn test_destroy_peer_on_pending_snapshot() {
     let before_handle_normal_3_fp = "before_handle_normal_3";
     fail::cfg(before_handle_normal_3_fp, "pause").unwrap();
 
+    let pending_remove_is_triggered = Arc::new(AtomicBool::new(false));
+    let pending_remove_is_triggered_1 = pending_remove_is_triggered.clone();
+    // Because before_handle_normal_3 could pause the apply thread, so the destroy_peer task is not running.
+    // And thus the window of maybe_destroy and destroy_peer can be large enough for a snapshot gc to run.
+    fail::cfg_callback("pending_remove_is_true", move || {
+        pending_remove_is_triggered_1.store(true, Ordering::Release);
+    })
+    .unwrap();
+
     cluster.clear_send_filters();
     // Wait for leader send msg to peer 3.
     // Then destroy peer 3 and create peer 4.
@@ -240,9 +249,27 @@ fn test_destroy_peer_on_pending_snapshot() {
 
     fail::remove(before_handle_normal_3_fp);
 
+    assert_eq!(pending_remove_is_triggered.load(Ordering::Acquire), true);
+
     cluster.must_put(b"k120", b"v1");
     // After peer 4 has applied snapshot, data should be got.
     must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
+
+    // In the end the snapshot file should be gc-ed anyway, either by new peer or by store
+    let now = Instant::now();
+    loop {
+        let mut snap_files = vec![];
+        let snap_dir = cluster.get_snap_dir(3);
+        // snapfiles should be gc.
+        snap_files.extend(fs::read_dir(snap_dir).unwrap().map(|p| p.unwrap().path()));
+        if snap_files.is_empty() {
+            break;
+        }
+        if now.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("snap files are not gc-ed");
+        }
+        sleep_ms(20);
+    }
 }
 
 #[test]
