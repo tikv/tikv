@@ -281,7 +281,7 @@ fn test_group_by() {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
                 .unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -324,7 +324,7 @@ fn test_aggr_count() {
         let expected_datum = vec![Datum::U64(cnt), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -354,7 +354,7 @@ fn test_aggr_count() {
         expected_datum.extend_from_slice(gk_data.as_slice());
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -402,7 +402,7 @@ fn test_aggr_first() {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -433,7 +433,7 @@ fn test_aggr_first() {
         let expected_datum = vec![name, Datum::I64(count)];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -485,7 +485,7 @@ fn test_aggr_avg() {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -528,7 +528,7 @@ fn test_aggr_sum() {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -596,7 +596,7 @@ fn test_aggr_extre() {
         let expected_datum = vec![max, min, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -674,7 +674,7 @@ fn test_aggr_bit_ops() {
         let expected_datum = vec![bitand, bitor, bitxor, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -994,7 +994,7 @@ fn test_index_group_by() {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
                 .unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1055,7 +1055,7 @@ fn test_index_aggr_count() {
         let expected_datum = vec![Datum::U64(cnt), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1083,7 +1083,7 @@ fn test_index_aggr_count() {
         expected_datum.extend_from_slice(gk_data.as_slice());
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1126,7 +1126,7 @@ fn test_index_aggr_first() {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
 
         assert_eq!(
             &*result_encoded, &*expected_encoded,
@@ -1184,7 +1184,7 @@ fn test_index_aggr_avg() {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1227,7 +1227,7 @@ fn test_index_aggr_sum() {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1294,7 +1294,7 @@ fn test_index_aggr_extre() {
         let expected_datum = vec![max, min, name];
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1804,7 +1804,7 @@ fn test_copr_bypass_or_access_locks() {
         data[1].0,
         vec![
             data[1].0.into(),
-            data[1].1.clone().map(|s| s.as_bytes()).into(),
+            data[1].1.map(|s| s.as_bytes()).into(),
             data[1].2.into(),
         ],
     );
@@ -1816,7 +1816,7 @@ fn test_copr_bypass_or_access_locks() {
         data[5].0,
         vec![
             data[5].0.into(),
-            data[5].1.clone().map(|s| s.as_bytes()).into(),
+            data[5].1.map(|s| s.as_bytes()).into(),
             data[5].2.into(),
         ],
     );
@@ -1878,7 +1878,7 @@ fn test_copr_bypass_or_access_locks() {
         let mut req = Request::default();
         req.set_context(ctx);
         req.set_start_ts(read_ts.into_inner());
-        req.set_ranges(ranges.clone().into());
+        req.set_ranges(ranges.into());
         req.set_tp(REQ_TYPE_CHECKSUM);
         req.set_data(checksum.write_to_bytes().unwrap());
         let resp = handle_request(&endpoint, req);
@@ -1929,7 +1929,7 @@ fn test_rc_read() {
         data[3].0,
         vec![
             data[3].0.into(),
-            data[3].1.clone().map(|s| s.as_bytes()).into(),
+            data[3].1.map(|s| s.as_bytes()).into(),
             data[3].2.into(),
         ],
     );

@@ -139,12 +139,18 @@ pub struct Builder {
     pub pause_counter: Arc<AtomicUsize>,
 }
 
-impl Builder {
-    pub fn new() -> Builder {
+impl Default for Builder {
+    fn default() -> Builder {
         Builder {
             metrics: Arc::default(),
             pause_counter: Arc::new(AtomicUsize::new(0)),
         }
+    }
+}
+
+impl Builder {
+    pub fn new() -> Self {
+        Builder::default()
     }
 }
 

@@ -173,6 +173,6 @@ pub fn test_precision() {
         next_secs
     }) {
         let diff = r - l;
-        assert!(2 <= diff && diff <= 4);
+        assert!((2..=4).contains(&diff));
     }
 }

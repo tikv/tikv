@@ -88,14 +88,13 @@ fn test_priority() {
         .unwrap();
     assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(2));
 
-    let tx_ = tx.clone();
     router
         .send(
             2,
             Message::Callback(Box::new(move |h: &Handler, r: &mut Runner| {
                 assert_eq!(h.get_priority(), Priority::Low);
                 assert_eq!(h.get_priority(), r.get_priority());
-                tx_.send(3).unwrap();
+                tx.send(3).unwrap();
             })),
         )
         .unwrap();

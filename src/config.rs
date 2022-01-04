@@ -4599,7 +4599,7 @@ mod tests {
         });
         assert!(r.is_err());
 
-        // rate-limiter-mode defalut values is 2
+        // rate-limiter-mode default values is 2
         let config_str = r#"
             rate-limiter-mode = 1
         "#;
