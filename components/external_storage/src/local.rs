@@ -1,14 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::io::AllowStdIo;
 use std::fs::File as StdFile;
 use std::io;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
-
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
@@ -98,10 +96,8 @@ impl ExternalStorage for LocalStorage {
     fn read(&self, name: &str) -> Box<DynAsyncReadRef<'_>> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
-        // We used std i/o here for removing the requirement of tokio reactor when restoring.
-        // FIXME: when restore side get ready, use tokio::fs::File for returning.
         match StdFile::open(self.base.join(name)) {
-            Ok(file) => Box::new(AllowStdIo::new(file)) as _,
+            Ok(file) => Box::new(File::from_std(file).compat()) as _,
             Err(e) => Box::new(error_stream(e).into_async_read()) as _,
         }
     }

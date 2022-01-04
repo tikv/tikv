@@ -56,6 +56,7 @@ pub type DynAsyncRead = DynAsyncReadRef<'static>;
 pub type DynAsyncReadRef<'a> = dyn AsyncRead + Unpin + Send + 'a;
 pub type DynAsyncWrite = DynAsyncWriteRef<'static>;
 pub type DynAsyncWriteRef<'a> = dyn AsyncWrite + Unpin + Send + 'a;
+
 #[derive(Debug, Default)]
 pub struct BackendConfig {
     pub s3_multi_part_size: usize,

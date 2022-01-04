@@ -242,7 +242,7 @@ mod tests {
     use super::*;
 
     use engine_traits::KvEngine;
-    
+
     use std::thread;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
