@@ -4621,7 +4621,6 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 }
 
 // The Raft message context for a MsgTransferLeader if it is a reply of a TransferLeader command.
-// It is declared as a const so we don't
 pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
 
 /// A poor version of `Peer` to avoid port generic variables everywhere.
