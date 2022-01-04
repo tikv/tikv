@@ -413,7 +413,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_engine_size_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
+              "expr": "sum(tikv_store_size_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type=\"used\"}) by (instance)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
@@ -2909,103 +2909,6 @@
           }
         },
         {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The storage size per TiKV instance",
-          "editable": true,
-          "error": false,
-          "fill": 5,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 3
-          },
-          "id": 1705,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 0,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": true,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(tikv_engine_size_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Store size",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "decbytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
           "alert": {
             "conditions": [
               {
@@ -3063,8 +2966,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 11
+            "x": 12,
+            "y": 3
           },
           "id": 22,
           "legend": {
@@ -3171,7 +3074,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 11
           },
           "id": 75,
@@ -3303,8 +3206,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 19
+            "x": 12,
+            "y": 11
           },
           "id": 1481,
           "legend": {
@@ -3419,7 +3322,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 19
           },
           "id": 3638,
@@ -3519,8 +3422,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 27
+            "x": 12,
+            "y": 19
           },
           "id": 58,
           "legend": {
@@ -3620,7 +3523,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 27
           },
           "heatmap": {},
@@ -3684,8 +3587,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 35
+            "x": 12,
+            "y": 27
           },
           "id": 57,
           "legend": {
@@ -3784,7 +3687,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 35
           },
           "heatmap": {},
@@ -3840,106 +3743,6 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The ratio of request batch output to input per TiKV instance",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 43
-          },
-          "id": 3718,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_server_request_batch_ratio_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type) / sum(rate(tikv_server_request_batch_ratio_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
-              "format": "time_series",
-              "hide": false,
-              "intervalFactor": 1,
-              "legendFormat": "{{type}} avg",
-              "refId": "B"
-            },
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_server_request_batch_ratio_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, type))",
-              "format": "time_series",
-              "intervalFactor": 1,
-              "legendFormat": "{{type}} 99",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Request batch ratio",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 10,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
           "description": "The size of requests into request batch per TiKV instance",
           "editable": true,
           "error": false,
@@ -3949,7 +3752,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 43
+            "y": 35
           },
           "id": 3720,
           "legend": {
@@ -4048,7 +3851,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 51
+            "y": 43
           },
           "id": 3730,
           "legend": {
@@ -4147,7 +3950,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 51
+            "y": 43
           },
           "id": 7266,
           "legend": {
@@ -4236,7 +4039,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 59
+            "y": 51
           },
           "id": 9560,
           "legend": {
@@ -4330,7 +4133,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 59
+            "y": 51
           },
           "hiddenSeries": false,
           "id": 12971,
@@ -13635,7 +13438,7 @@
             "avg": false,
             "current": false,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -28705,7 +28508,7 @@
             "current": true,
             "hideZero": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "current",
@@ -28812,7 +28615,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "current",
@@ -29381,7 +29184,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -29497,7 +29300,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -29621,7 +29424,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -29729,7 +29532,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -29845,7 +29648,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -29961,7 +29764,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -30185,7 +29988,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "sort": "max",
@@ -35620,6 +35423,103 @@
           "type": "table-old"
         },
         {
+          "type": "graph",
+          "title": "cloud request",
+          "gridPos": {
+            "x": 0,
+            "y": 32,
+            "w": 12,
+            "h": 8
+          },
+          "id": 23763571993,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_cloud_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (cloud, req)",
+              "legendFormat": "{{cloud}}-{{req}}",
+              "interval": "",
+              "exemplar": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "alertThreshold": true
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "pluginVersion": "7.5.7",
+          "renderer": "flot",
+          "yaxes": [
+            {
+              "label": null,
+              "show": true,
+              "logBase": 1,
+              "min": null,
+              "max": null,
+              "format": "short",
+              "$$hashKey": "object:682"
+            },
+            {
+              "label": null,
+              "show": true,
+              "logBase": 1,
+              "min": null,
+              "max": null,
+              "format": "short",
+              "$$hashKey": "object:683"
+            }
+          ],
+          "xaxis": {
+            "show": true,
+            "mode": "time",
+            "name": null,
+            "values": [],
+            "buckets": null
+          },
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          },
+          "lines": true,
+          "fill": 1,
+          "linewidth": 1,
+          "dashLength": 10,
+          "spaceLength": 10,
+          "pointradius": 2,
+          "legend": {
+            "show": true,
+            "values": false,
+            "min": false,
+            "max": false,
+            "current": false,
+            "total": false,
+            "avg": false
+          },
+          "nullPointMode": "null",
+          "tooltip": {
+            "value_type": "individual",
+            "shared": true,
+            "sort": 0
+          },
+          "aliasColors": {},
+          "seriesOverrides": [],
+          "thresholds": [],
+          "timeRegions": [],
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fillGradient": 0,
+          "dashes": false,
+          "hiddenSeries": false,
+          "points": false,
+          "bars": false,
+          "stack": false,
+          "percentage": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null,
+          "description": ""
+        },
+        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -38174,7 +38074,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "total": false,
@@ -38530,7 +38430,7 @@
             "avg": false,
             "current": true,
             "max": true,
-            "min": true,
+            "min": false,
             "rightSide": true,
             "show": true,
             "total": false,

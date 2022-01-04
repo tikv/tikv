@@ -6,10 +6,37 @@
 #![feature(hash_drain_filter)]
 #![feature(core_intrinsics)]
 
+use std::intrinsics::unlikely;
+use std::pin::Pin;
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use recorder::{LocalStorage, LocalStorageRef, STORAGE};
+use tikv_util::warn;
+use tikv_util::worker::{Scheduler, Worker};
+
+pub use collector::Collector;
+pub use config::{Config, ConfigManager};
+pub use model::*;
+pub use recorder::{
+    init_recorder, record_read_keys, record_write_keys, CollectorGuard, CollectorId,
+    CollectorRegHandle, ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder,
+    Recorder, RecorderBuilder, SummaryRecorder,
+};
+pub use reporter::data_sink::DataSink;
+pub use reporter::data_sink_reg::DataSinkRegHandle;
+pub use reporter::pubsub::PubSubService;
+pub use reporter::single_target::{
+    init_single_target, AddressChangeNotifier, SingleTargetDataSink,
+};
+pub use reporter::{
+    init_reporter, ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
+};
+
 mod collector;
 mod config;
 pub mod error;
-mod localstorage;
 mod model;
 mod recorder;
 mod reporter;
@@ -17,30 +44,7 @@ pub mod utils;
 
 pub(crate) mod metrics;
 
-pub use collector::{Collector, CollectorHandle, CollectorId, CollectorRegHandle};
-pub use config::{Config, ConfigManager};
-pub use model::*;
-pub use recorder::{
-    init_recorder, record_read_keys, record_write_keys, CpuRecorder, Recorder, RecorderBuilder,
-    RecorderHandle, SummaryRecorder,
-};
-pub use reporter::data_sink::DataSink;
-pub use reporter::single_target::SingleTargetDataSink;
-pub use reporter::{Reporter, Task};
-
 pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
-pub const TEST_TAG_PREFIX: &[u8] = b"__resource_metering::tests::";
-
-use crate::localstorage::{LocalStorage, LocalStorageRef, STORAGE};
-
-use std::intrinsics::unlikely;
-use std::pin::Pin;
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use crossbeam::channel::Sender;
-use tikv_util::warn;
 
 /// This structure is used as a label to distinguish different request contexts.
 ///
@@ -138,17 +142,20 @@ impl Drop for Guard {
 
 #[derive(Clone)]
 pub struct ResourceTagFactory {
-    tx: Sender<LocalStorageRef>,
+    scheduler: Scheduler<recorder::Task>,
 }
 
 impl ResourceTagFactory {
-    fn new(tx: Sender<LocalStorageRef>) -> Self {
-        Self { tx }
+    fn new(scheduler: Scheduler<recorder::Task>) -> Self {
+        Self { scheduler }
     }
 
     pub fn new_for_test() -> Self {
-        let (tx, _) = crossbeam::channel::unbounded();
-        Self { tx }
+        Self {
+            scheduler: Worker::new("mock-resource-tag-factory")
+                .lazy_build("mock-resource-tag-factory")
+                .scheduler(),
+        }
     }
 
     pub fn new_tag(&self, context: &kvproto::kvrpcpb::Context) -> ResourceMeteringTag {
@@ -164,7 +171,7 @@ impl ResourceTagFactory {
             id: utils::thread_id(),
             storage: storage.clone(),
         };
-        match self.tx.send(lsr) {
+        match self.scheduler.schedule(recorder::Task::ThreadReg(lsr)) {
             Ok(_) => true,
             Err(err) => {
                 warn!("failed to register thread"; "err" => ?err);
@@ -267,15 +274,13 @@ impl TagInfos {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam::channel::unbounded;
 
     #[test]
     fn test_attach() {
         // Use a thread created by ourself. If we use unit test thread directly,
         // the test results may be affected by parallel testing.
         std::thread::spawn(|| {
-            let (tx, _rx) = unbounded();
-            let resource_tag_factory = ResourceTagFactory::new(tx);
+            let resource_tag_factory = ResourceTagFactory::new_for_test();
             let tag = ResourceMeteringTag {
                 infos: Arc::new(TagInfos {
                     store_id: 1,

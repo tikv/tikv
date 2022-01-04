@@ -5323,6 +5323,7 @@ mod tests {
             (b"r\0f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
+        let before_written = ttl_current_ts();
         // Write key-value pairs one by one
         for &(ref key, ref value, ttl) in &test_data {
             storage
@@ -5340,15 +5341,19 @@ mod tests {
 
         for &(ref key, _, ttl) in &test_data {
             let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))
+                .unwrap()
                 .unwrap();
             if ttl != 0 {
-                if ttl > u64::MAX - ttl_current_ts() {
-                    assert_eq!(res, Some(u64::MAX - ttl_current_ts()));
-                } else {
-                    assert_eq!(res, Some(ttl));
-                }
+                let lower_bound = before_written.saturating_add(ttl) - ttl_current_ts();
+                assert!(
+                    res >= lower_bound && res <= ttl,
+                    "{} < {} < {}",
+                    lower_bound,
+                    res,
+                    ttl
+                );
             } else {
-                assert_eq!(res, Some(0));
+                assert_eq!(res, 0);
             }
         }
     }

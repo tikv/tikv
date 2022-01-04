@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::localstorage::LocalStorage;
 use crate::metrics::STAT_TASK_COUNT;
+use crate::recorder::localstorage::LocalStorage;
 use crate::recorder::SubRecorder;
 use crate::utils::{self, Stat};
 use crate::TagInfos;
@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use collections::HashMap;
-use fail::fail_point;
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
 ///
@@ -30,13 +29,6 @@ impl SubRecorder for CpuRecorder {
         let records = &mut records.records;
         self.thread_stats.iter_mut().for_each(|(tid, thread_stat)| {
             let cur_tag = thread_stat.attached_tag.load_full();
-            fail_point!(
-                "cpu-record-test-filter",
-                cur_tag.as_ref().map_or(false, |t| !t
-                    .extra_attachment
-                    .starts_with(crate::TEST_TAG_PREFIX)),
-                |_| {}
-            );
             if let Some(cur_tag) = cur_tag {
                 if let Ok(cur_stat) = utils::stat_task(utils::process_id(), *tid) {
                     STAT_TASK_COUNT.inc();
@@ -69,7 +61,7 @@ impl SubRecorder for CpuRecorder {
         }
     }
 
-    fn reset(
+    fn resume(
         &mut self,
         _records: &mut RawRecords,
         _thread_stores: &mut HashMap<usize, LocalStorage>,

@@ -5,17 +5,6 @@
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
 
-## Log levels: trace, debug, info, warning, error, critical.
-## Note that `debug` and `trace` are only available in development builds.
-# log-level = "info"
-
-## File to store logs.
-## If it is not set, logs will be appended to stderr.
-# log-file = ""
-
-## Log format, one of json, text. Default to text.
-# log-format = "text"
-
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -25,18 +14,8 @@
 ## The minimum operation cost to output relative logs.
 # slow-log-threshold = "1s"
 
-## Timespan between rotating the log files.
-## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
-## timestamp appended to its name and a new file will be created.
-# log-rotation-timespan = "24h"
-
-## Size of log file that triggers the log rotation.
-## Once the size of log file exceeds the threshold value, the log file will be rotated
-## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
-# log-rotation-size = "300MB"
-
 ## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
-## It won't take effect when compiling without BCC_IOSNOOP=1. 
+## It won't take effect when compiling without BCC_IOSNOOP=1.
 # enable-io-snoop = true
 
 ## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
@@ -62,6 +41,25 @@
 ## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
 ## to release memory.
 # memory-usage-limit = "0B"
+
+[log]
+## Log levels: trace, debug, info, warning, error, critical.
+## Note that `debug` and `trace` are only available in development builds.
+# level = "info"
+## log format, one of json, text. Default to text.
+# format = "text"
+## Enable automatic timestamps in log output, if not set, it will be defaulted to true.
+# enable-timestamp = true
+
+[log.file]
+## Usually it is set through command line.
+# filename = ""
+## max log file size in MB (upper limit to 4096MB)
+# max-size = "300MB"
+## max log file keep days
+# max-days = "0d"
+## maximum number of old log files to retain
+# max-backups = 0
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -1047,8 +1045,8 @@
 
 [backup]
 ## Number of threads to perform backup tasks.
-## The default value is set to min(CPU_NUM * 0.75, 32).
-# num-threads = 24
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
 
 ## Number of ranges to backup in one batch.
 # batch-size = 8
@@ -1060,7 +1058,7 @@
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = false 
+# enable-auto-tune = true 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
