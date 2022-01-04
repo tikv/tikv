@@ -10,6 +10,19 @@ abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
 
+<<<<<<< HEAD
+=======
+[log]
+level = "debug"
+format = "json"
+
+[log.file]
+filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
+
+>>>>>>> b44e87f81... logger: improve testcase (#11651) (#11778)
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10

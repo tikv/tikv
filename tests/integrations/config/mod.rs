@@ -59,9 +59,18 @@ fn read_file_in_project_dir(path: &str) -> String {
 #[test]
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
+<<<<<<< HEAD
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
     value.log_format = LogFormat::Json;
+=======
+    value.log.level = Level::Debug;
+    value.log.file.filename = "foo".to_owned();
+    value.log.format = LogFormat::Json;
+    value.log.file.max_size = 1;
+    value.log.file.max_backups = 2;
+    value.log.file.max_days = 3;
+>>>>>>> b44e87f81... logger: improve testcase (#11651) (#11778)
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
