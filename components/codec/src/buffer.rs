@@ -208,7 +208,7 @@ impl<'a> BufferWriter for &'a mut [u8] {
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        let original_self = std::mem::replace(self, &mut []);
+        let original_self = std::mem::take(self);
         *self = &mut original_self[count..];
     }
 
@@ -217,7 +217,7 @@ impl<'a> BufferWriter for &'a mut [u8] {
         if unlikely(self.len() < write_len) {
             return Err(ErrorInner::eof().into());
         }
-        let original_self = std::mem::replace(self, &mut []);
+        let original_self = std::mem::take(self);
         original_self[..write_len].copy_from_slice(values);
         *self = &mut original_self[write_len..];
         Ok(())

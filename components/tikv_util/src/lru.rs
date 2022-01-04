@@ -69,7 +69,7 @@ impl<K> Trace<K> {
     fn promote(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
             cut_out(record.as_mut());
-            suture(record.as_mut(), &mut self.head.next.as_mut());
+            suture(record.as_mut(), self.head.next.as_mut());
             suture(&mut self.head, record.as_mut());
         }
     }

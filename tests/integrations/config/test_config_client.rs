@@ -202,7 +202,7 @@ fn test_update_from_toml_file() {
     let cfg_controller = ConfigController::new(cfg);
     let cfg = cfg_controller.get_current();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
-    cfg_controller.register(Module::Raftstore, Box::new(mgr.clone()));
+    cfg_controller.register(Module::Raftstore, Box::new(mgr));
 
     // update config file
     let c = r#"

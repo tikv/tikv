@@ -131,9 +131,9 @@ impl Display for Datum {
             Datum::Bytes(ref bs) => write!(f, "Bytes(\"{}\")", escape(bs)),
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
             Datum::Time(t) => write!(f, "Time({})", t),
-            Datum::Json(ref j) => write!(f, "Json({})", j.to_string()),
-            Datum::Enum(ref e) => write!(f, "Enum({})", e.to_string()),
-            Datum::Set(ref s) => write!(f, "Set({})", s.to_string()),
+            Datum::Json(ref j) => write!(f, "Json({})", j),
+            Datum::Enum(ref e) => write!(f, "Enum({})", e),
+            Datum::Set(ref s) => write!(f, "Set({})", s),
             Datum::Min => write!(f, "MIN"),
             Datum::Max => write!(f, "MAX"),
         }

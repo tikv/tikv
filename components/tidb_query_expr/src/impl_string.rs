@@ -31,7 +31,7 @@ fn get_utf8_byte_index(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .map(|(i, _)| i)
         .nth(char_idx)
-        .unwrap_or_else(|| s.len())
+        .unwrap_or(s.len())
 }
 
 #[rpn_fn(writer)]
@@ -435,7 +435,7 @@ pub fn left(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesGuard>
         return Ok(writer.write_ref(Some(b"")));
     }
     let rhs = *rhs as usize;
-    let result = if lhs.len() < rhs { &lhs } else { &lhs[..rhs] };
+    let result = if lhs.len() < rhs { lhs } else { &lhs[..rhs] };
 
     Ok(writer.write_ref(Some(result)))
 }
@@ -1079,7 +1079,7 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
     let start = if pos_positive {
         (pos - 1).min(input.len())
     } else {
-        input.len().checked_sub(pos).unwrap_or_else(|| input.len())
+        input.len().checked_sub(pos).unwrap_or(input.len())
     };
     let end = start.saturating_add(len).min(input.len());
     Ok(writer.write_ref(Some(&input[start..end])))
