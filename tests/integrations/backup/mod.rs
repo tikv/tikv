@@ -11,6 +11,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use tempfile::Builder;
 use test_backup::*;
+use tikv_util::stream::block_on_external_io;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
