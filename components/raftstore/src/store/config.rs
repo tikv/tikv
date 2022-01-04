@@ -217,11 +217,19 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
-    /// When the count of concurrent ready exceeds this value, command will not be proposed
+    pub cmd_batch_max_key_num: usize,
+
+    /// When the count of persisting ready exceeds this value, command will not be proposed
     /// until the previous ready has been persisted.
-    /// If `cmd_batch` is 0, this config will have no effect.
+    /// If `cmd_batch` is false, this config will have no effect.
     /// If it is 0, it means no limit.
-    pub cmd_batch_concurrent_ready_max_count: usize,
+    pub cmd_batch_persist_max_count: usize,
+
+    /// When the count of applying ready exceeds this value, command will not be proposed
+    /// until the previous ready has been applied.
+    /// If `cmd_batch` is false, this config will have no effect.
+    /// If it is 0, it means no limit.
+    pub cmd_batch_apply_max_count: usize,
 
     /// When the size of raft db writebatch exceeds this value, write will be triggered.
     pub raft_write_size_limit: ReadableSize,
@@ -327,7 +335,9 @@ impl Default for Config {
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
-            cmd_batch_concurrent_ready_max_count: 1,
+            cmd_batch_max_key_num: 512,
+            cmd_batch_persist_max_count: 1,
+            cmd_batch_apply_max_count: 3,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: false,
             io_reschedule_concurrent_max_count: 4,
@@ -742,8 +752,14 @@ impl Config {
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["cmd_batch_concurrent_ready_max_count"])
-            .set(self.cmd_batch_concurrent_ready_max_count as f64);
+            .with_label_values(&["cmd_batch_max_key_num"])
+            .set(self.cmd_batch_max_key_num as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch_persist_max_count"])
+            .set(self.cmd_batch_persist_max_count as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["cmd_batch_apply_max_count"])
+            .set(self.cmd_batch_apply_max_count as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
