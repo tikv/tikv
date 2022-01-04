@@ -754,11 +754,18 @@ fn test_infinite_lease() {
     // Wait for the leader lease to expire.
     thread::sleep(max_lease);
 
-    // Check if the raft tick proposed a read index and renewed the leader lease.
+    // Check if renew-lease-tick proposed a read index and renewed the leader lease.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     assert_eq!(detector.ctx.rl().len(), 1);
     // Issue a read request to verify the lease.
     must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v0");
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
+    assert_eq!(detector.ctx.rl().len(), 1);
+
+    // renew-lease-tick shouldn't propose any request if the leader lease is not expired.
+    for _ in 0..4 {
+        cluster.must_put(key, b"v0");
+        thread::sleep(max_lease / 4);
+    }
     assert_eq!(detector.ctx.rl().len(), 1);
 }
