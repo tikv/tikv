@@ -183,7 +183,7 @@ fn test_read_keys_coprocessor() {
     let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
         resource_metering::init_recorder(cfg.precision.as_millis());
     let (_, data_sink_reg_handle, reporter_worker) =
-        resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+        resource_metering::init_reporter(cfg, collector_reg_handle);
 
     let data_sink = MockDataSink::new();
     let _reg_guard = data_sink_reg_handle.register(Box::new(data_sink.clone()));

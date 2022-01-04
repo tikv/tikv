@@ -2474,7 +2474,10 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
     type Iter = S::Iter;
-    type Ext<'a> = TxnTestSnapshotExt<'a>;
+    type Ext<'a>
+    where
+        S: 'a,
+    = TxnTestSnapshotExt<'a>;
 
     fn get(&self, key: &Key) -> tikv_kv::Result<Option<Value>> {
         self.snapshot.get(key)
