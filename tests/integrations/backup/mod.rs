@@ -104,7 +104,7 @@ fn test_backup_and_import() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name);
         let mut content = vec![];
-        block_on(reader.read_to_end(&mut content)).unwrap();
+        block_on_external_io(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
@@ -207,7 +207,7 @@ fn test_backup_huge_range_and_import() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name);
         let mut content = vec![];
-        block_on(reader.read_to_end(&mut content)).unwrap();
+        block_on_external_io(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
@@ -358,7 +358,7 @@ fn test_backup_rawkv() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name);
         let mut content = vec![];
-        block_on(reader.read_to_end(&mut content)).unwrap();
+        block_on_external_io(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
