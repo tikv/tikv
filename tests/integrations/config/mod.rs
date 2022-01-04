@@ -845,10 +845,10 @@ fn test_log_backward_compatible() {
     assert_eq!(cfg.log.level, slog::Level::Info);
     assert_eq!(cfg.log.file.filename, "");
     assert_eq!(cfg.log.format, LogFormat::Text);
-    assert_eq!(cfg.log.file.max_size, ReadableSize::mb(300));
+    assert_eq!(cfg.log.file.max_size, 300);
     cfg.compatible_adjust();
     assert_eq!(cfg.log.level, slog::Level::Debug);
     assert_eq!(cfg.log.file.filename, "foo");
     assert_eq!(cfg.log.format, LogFormat::Json);
-    assert_eq!(cfg.log.file.max_size, ReadableSize::mb(1024));
+    assert_eq!(cfg.log.file.max_size, 1024);
 }

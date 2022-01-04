@@ -129,17 +129,17 @@ pub fn set_global_logger(
 /// path. The file writer rotates for the specified timespan.
 pub fn file_writer<N>(
     path: impl AsRef<Path>,
-    rotation_size: ReadableSize,
+    rotation_size: u64,
     max_backups: usize,
-    max_age: ReadableDuration,
+    max_age: u64,
     rename: N,
 ) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path, rename, max_backups, max_age)
-            .add_rotator(RotateBySize::new(rotation_size))
+        RotatingFileLoggerBuilder::new(path, rename, max_backups, ReadableDuration::days(max_age))
+            .add_rotator(RotateBySize::new(ReadableSize::mb(rotation_size)))
             .build()?,
     );
     Ok(logger)
