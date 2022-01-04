@@ -10,6 +10,7 @@ use futures::executor::ThreadPool;
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::runtime::Runtime;
 
 use super::Config;
 use super::Result;
@@ -86,7 +87,7 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+    pub fn start<E: KvEngine>(&self, executor: &Runtime, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -115,7 +116,7 @@ impl ImportModeSwitcher {
                 }
             }
         };
-        executor.spawn_ok(timer_loop);
+        executor.spawn(timer_loop);
     }
 
     pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {

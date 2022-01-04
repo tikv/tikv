@@ -20,6 +20,7 @@ use engine_traits::{
 use file_system::{get_io_rate_limiter, OpenOptions};
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::time::{Instant, Limiter};
+use tokio::runtime::Runtime;
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::import_file::{ImportDir, ImportFile};
@@ -67,7 +68,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &ThreadPool, db: E) {
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &Runtime, db: E) {
         self.switcher.start(executor, db);
     }
 
