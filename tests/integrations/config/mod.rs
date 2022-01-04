@@ -837,3 +837,21 @@ fn test_block_cache_backward_compatible() {
             + cfg.raftdb.defaultcf.block_cache_size.0
     );
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_log_backward_compatible() {
+    let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
+    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg.log.level, slog::Level::Info);
+    assert_eq!(cfg.log.file.filename, "");
+    assert_eq!(cfg.log.format, LogFormat::Text);
+    assert_eq!(cfg.log.file.max_size, 300);
+    cfg.compatible_adjust();
+    assert_eq!(cfg.log.level, slog::Level::Debug);
+    assert_eq!(cfg.log.file.filename, "foo");
+    assert_eq!(cfg.log.format, LogFormat::Json);
+    assert_eq!(cfg.log.file.max_size, 1024);
+}
+>>>>>>> 379727ced... logger: fix config-template's log unit (#11651) (#11777)
