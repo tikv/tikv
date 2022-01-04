@@ -2381,6 +2381,58 @@ impl Default for ResolvedTsConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct File {
+    pub filename: String,
+    pub max_size: ReadableSize,
+    pub max_days: ReadableDuration,
+    pub max_backups: usize,
+}
+
+impl Default for File {
+    fn default() -> Self {
+        Self {
+            filename: "".to_owned(),
+            max_size: ReadableSize::mb(300),
+            max_days: ReadableDuration::days(0),
+            max_backups: 0,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct LogConfig {
+    #[serde(with = "log_level_serde")]
+    pub level: slog::Level,
+    pub format: LogFormat,
+    pub enable_timestamp: bool,
+    pub file: File,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: slog::Level::Info,
+            format: LogFormat::Text,
+            enable_timestamp: true,
+            file: File::default(),
+        }
+    }
+}
+
+impl LogConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.file.max_size.0 > ReadableSize::mb(4096).0 {
+            return Err("Max log file size upper limit to 4096MB".to_string().into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2390,27 +2442,29 @@ pub struct TiKvConfig {
     #[online_config(hidden)]
     pub cfg_path: String,
 
+    // Deprecated! These configuration has been moved to LogConfig.
+    // They are preserved for compatibility check.
+    #[doc(hidden)]
     #[online_config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
-
+    #[doc(hidden)]
     #[online_config(skip)]
     pub log_file: String,
-
+    #[doc(hidden)]
     #[online_config(skip)]
     pub log_format: LogFormat,
+    #[online_config(skip)]
+    pub log_rotation_timespan: ReadableDuration,
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub log_rotation_size: ReadableSize,
 
     #[online_config(skip)]
     pub slow_log_file: String,
 
     #[online_config(skip)]
     pub slow_log_threshold: ReadableDuration,
-
-    #[online_config(skip)]
-    pub log_rotation_timespan: ReadableDuration,
-
-    #[online_config(skip)]
-    pub log_rotation_size: ReadableSize,
 
     #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
@@ -2428,6 +2482,9 @@ pub struct TiKvConfig {
     #[doc(hidden)]
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
+
+    #[online_config(skip)]
+    pub log: LogConfig,
 
     #[online_config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2498,15 +2555,16 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_format: LogFormat::Text,
-            slow_log_file: "".to_owned(),
-            slow_log_threshold: ReadableDuration::secs(1),
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
+            slow_log_file: "".to_owned(),
+            slow_log_threshold: ReadableDuration::secs(1),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
             memory_usage_limit: OptionReadableSize(None),
             memory_usage_high_water: 0.9,
+            log: LogConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2557,6 +2615,7 @@ impl TiKvConfig {
 
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.log.validate()?;
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -2836,6 +2895,56 @@ impl TiKvConfig {
         }
 
         self.readpool.adjust_use_unified_pool();
+
+        let default_tikv_cfg = TiKvConfig::default();
+        let default_log_cfg = LogConfig::default();
+        if self.log_level != default_tikv_cfg.log_level {
+            warn!("deprecated configuration, log-level has been moved to log.level");
+            if self.log.level == default_log_cfg.level {
+                warn!("override log.level with log-level, {:?}", self.log_level);
+                self.log.level = self.log_level;
+            }
+            self.log_level = default_tikv_cfg.log_level;
+        }
+        if self.log_file != default_tikv_cfg.log_file {
+            warn!("deprecated configuration, log-file has been moved to log.file.filename");
+            if self.log.file.filename == default_log_cfg.file.filename {
+                warn!(
+                    "override log.file.filename with log-file, {:?}",
+                    self.log_file
+                );
+                self.log.file.filename = self.log_file.clone();
+            }
+            self.log_file = default_tikv_cfg.log_file;
+        }
+        if self.log_format != default_tikv_cfg.log_format {
+            warn!("deprecated configuration, log-format has been moved to log.format");
+            if self.log.format == default_log_cfg.format {
+                warn!("override log.format with log-format, {:?}", self.log_format);
+                self.log.format = self.log_format;
+            }
+            self.log_format = default_tikv_cfg.log_format;
+        }
+        if self.log_rotation_timespan.as_secs() > 0 {
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored.",
+                "log-rotation-timespan",
+            );
+        }
+        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
+            warn!(
+                "deprecated configuration, \
+                 log-ratation-size has been moved to log.file.max-size"
+            );
+            if self.log.file.max_size == default_log_cfg.file.max_size {
+                warn!(
+                    "override log.file.max_size with log-rotation-size, {:?}",
+                    self.log_rotation_size
+                );
+                self.log.file.max_size = self.log_rotation_size;
+            }
+            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
+        }
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
