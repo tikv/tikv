@@ -416,6 +416,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         loop {
             let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
+
+            // TODO: aquire CPU quota for tenant
+
             if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
