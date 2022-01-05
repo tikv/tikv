@@ -508,6 +508,9 @@ bitflags! {
         const ONE_PC = 0b00000001;
         /// Indicates this request is from a stale read-only transaction.
         const STALE_READ = 0b00000010;
+        /// Indicates this request is a transfer leader command that needs to be proposed
+        /// like a normal command.
+        const TRANSFER_LEADER_PROPOSAL = 0b00000100;
     }
 }
 
