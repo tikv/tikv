@@ -246,7 +246,8 @@ fn test_destroy_peer_on_pending_snapshot() {
     sleep_ms(100);
 
     fail::remove(apply_snapshot_fp);
-
+    // give extra time for gc to finish in case slow ci machine, though 100ms is already 2x of gc interval.
+    sleep_ms(50);
     fail::remove(before_handle_normal_3_fp);
 
     assert_eq!(pending_remove_is_triggered.load(Ordering::Acquire), true);
