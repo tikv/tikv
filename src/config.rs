@@ -2386,8 +2386,10 @@ impl Default for ResolvedTsConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct File {
     pub filename: String,
-    pub max_size: ReadableSize,
-    pub max_days: ReadableDuration,
+    // The unit is MB
+    pub max_size: u64,
+    // The unit is Day
+    pub max_days: u64,
     pub max_backups: usize,
 }
 
@@ -2395,8 +2397,8 @@ impl Default for File {
     fn default() -> Self {
         Self {
             filename: "".to_owned(),
-            max_size: ReadableSize::mb(300),
-            max_days: ReadableDuration::days(0),
+            max_size: 300,
+            max_days: 0,
             max_backups: 0,
         }
     }
@@ -2426,7 +2428,7 @@ impl Default for LogConfig {
 
 impl LogConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.file.max_size.0 > ReadableSize::mb(4096).0 {
+        if self.file.max_size > 4096 {
             return Err("Max log file size upper limit to 4096MB".to_string().into());
         }
         Ok(())
@@ -2941,7 +2943,7 @@ impl TiKvConfig {
                     "override log.file.max_size with log-rotation-size, {:?}",
                     self.log_rotation_size
                 );
-                self.log.file.max_size = self.log_rotation_size;
+                self.log.file.max_size = self.log_rotation_size.as_mb();
             }
             self.log_rotation_size = default_tikv_cfg.log_rotation_size;
         }

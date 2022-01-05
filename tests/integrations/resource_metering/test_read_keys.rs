@@ -29,6 +29,7 @@ use tikv_util::HandyRwLock;
 use tipb::SelectResponse;
 
 #[test]
+#[ignore = "the case is unstable, ref #11765"]
 pub fn test_read_keys() {
     // Create & start receiver server.
     let (tx, rx) = unbounded();
@@ -174,6 +175,7 @@ fn recv_read_keys(rx: &Receiver<Vec<ResourceUsageRecord>>) -> u32 {
 }
 
 #[test]
+#[ignore = "the case is unstable, ref #11765"]
 fn test_read_keys_coprocessor() {
     // Start resource metering.
     let mut cfg = resource_metering::Config::default();

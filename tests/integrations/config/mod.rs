@@ -62,6 +62,9 @@ fn test_serde_custom_tikv_config() {
     value.log.level = Level::Debug;
     value.log.file.filename = "foo".to_owned();
     value.log.format = LogFormat::Json;
+    value.log.file.max_size = 1;
+    value.log.file.max_backups = 2;
+    value.log.file.max_days = 3;
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
@@ -845,10 +848,10 @@ fn test_log_backward_compatible() {
     assert_eq!(cfg.log.level, slog::Level::Info);
     assert_eq!(cfg.log.file.filename, "");
     assert_eq!(cfg.log.format, LogFormat::Text);
-    assert_eq!(cfg.log.file.max_size, ReadableSize::mb(300));
+    assert_eq!(cfg.log.file.max_size, 300);
     cfg.compatible_adjust();
     assert_eq!(cfg.log.level, slog::Level::Debug);
     assert_eq!(cfg.log.file.filename, "foo");
     assert_eq!(cfg.log.format, LogFormat::Json);
-    assert_eq!(cfg.log.file.max_size, ReadableSize::mb(1024));
+    assert_eq!(cfg.log.file.max_size, 1024);
 }
