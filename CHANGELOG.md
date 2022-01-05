@@ -2,6 +2,182 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [5.3.0] - 2021-11-29
+
++ Improvements
+  + Enhance disk space protection to improve storage stability
+  + Simplify the algorithm of L0 flow control [#10879](https://github.com/tikv/tikv/pull/10879)
+  + Improve the error log report in the raft client module [#10944](https://github.com/tikv/tikv/pull/10944)
+  + Improve logging threads to avoid them becoming a performance bottleneck [#10841](https://github.com/tikv/tikv/pull/10841)
+  + Add more statistics types of write queries [#10507](https://github.com/tikv/tikv/pull/10507)
++ Bug Fixes
+  + Fix the issue of unavailable TiKV caused by Raftstore deadlock when migrating Regions. The workaround is to disable the scheduling and restart the unavailable TiKV. [#10909](https://github.com/tikv/tikv/pull/10909)
+  + Fix the issue that CDC adds scan retries frequently due to the Congest error [#11082](https://github.com/tikv/tikv/pull/11082)
+  + Fix the issue that the Raft connection is broken when the channel is full [#11047](https://github.com/tikv/tikv/pull/11047)
+  + Fix the issue that batch messages are too large in Raft client implementation [#9714](https://github.com/tikv/tikv/pull/9714)
+  + Fix the issue that some coroutines leak in resolved_ts [#10965](https://github.com/tikv/tikv/pull/10965)
+  + Fix a panic issue that occurs to the coprocessor when the size of response exceeds 4 GiB [#9012](https://github.com/tikv/tikv/pull/9012)
+  + Fix the issue that snapshot Garbage Collection (GC) misses GC snapshot files when snapshot files cannot be garbage collected [#10813](https://github.com/tikv/tikv/pull/10813)
+  + Fix a panic issue caused by timeout when processing Coprocessor requests [#10852](https://github.com/tikv/tikv/pull/10852)
+  + Fix a memory leak caused by monitoring data of statistics threads [#11195](https://github.com/tikv/tikv/pull/11195)
+  + Fix a panic issue caused by getting the cgroup information from some platforms [#10980](https://github.com/tikv/tikv/pull/10980)
+
+## [5.2.3] - 2021-12-02
++ Bug fix
+  + Fix the issue that the GcKeys task does not work when it is called by multiple keys. Caused by this issue, compaction filer GC might not drop the MVCC deletion information. [#11217](https://github.com/tikv/tikv/pull/11217)
+
+## [5.2.2] - 2021-10-29
+
++ Improvements
+  + Simplify the algorithm of L0 flow control [#10879](https://github.com/tikv/tikv/pull/10879)
+  + Improve the error log report in raft client module [#10983](https://github.com/tikv/tikv/pull/10983)
+  + Make the slow log of TiKV coprocessor only consider the time spent on processing requests [#10841](https://github.com/tikv/tikv/pull/10841)
+  + Drop log instead of blocking threads when the slogger thread is overloaded and the queue is filled up [#10841](https://github.com/tikv/tikv/pull/10841)
+  + Add more statistics types of write queries [#10507](https://github.com/tikv/tikv/pull/10507)
++ Bug Fixes
+  + Fix the issue that CDC add scan retries frequently due to Congest error [#11082](https://github.com/tikv/tikv/pull/11082)
+  + Fix that the raft connection is broken when the channel is full [#11047](https://github.com/tikv/tikv/pull/11047)
+  + Fix the issue that batch messages are too large in Raft client implementation [#9714](https://github.com/tikv/tikv/pull/9714)
+  + Fix the issue that concurrent leaks in resolved_ts [#10965](https://github.com/tikv/tikv/pull/10965)
+  + Fix a panic issue that occurs to coprocessor when response size exceeds 4 GiB [#9012](https://github.com/tikv/tikv/pull/9012)
+  + Fix the issue that snapshot Garbage Collection (GC) misses GC snapshot files when snapshot files cannot be garbage collected [#10813](https://github.com/tikv/tikv/pull/10813)
+  + Fix a panic issue that occurs when processing coprocessor requests times out [#10852](https://github.com/tikv/tikv/pull/10852)
+
+## [5.2.1] - 2021-09-09
+
++ Bug Fixes
+  + Fix the issue of unavailable TiKV caused by Raftstore deadlock when migrating Regions. The workaround is to disable the scheduling and restart the unavailable TiKV. [#10909](https://github.com/tikv/tikv/pull/10909)
+
+## [5.2.0] - 2021-08-27
+
++ Bug Fixes
+  + Fix the wrong tikv_raftstore_hibernated_peer_state metric [#10330](https://github.com/tikv/tikv/pull/10330)
+  + Fix the wrong arguments type of the json_unquote() function in the coprocessor [#10176](https://github.com/tikv/tikv/pull/10176)
+  + Skip clearing callback during graceful shutdown to avoid breaking ACID in some cases [#10353](https://github.com/tikv/tikv/pull/10353) [#10307](https://github.com/tikv/tikv/pull/10307)
+  + Fix a bug that the read index is shared for replica reads on a Leader [#10347](https://github.com/tikv/tikv/pull/10347)
+  + Fix the wrong function that casts DOUBLE to DOUBLE [#25200](https://github.com/tikv/tikv/pull/25200)
+
+## [5.1.3] - 2021-12-03
+
++ Bug fix
+  + Fix the issue that the GcKeys task does not work when it is called by multiple keys. Caused by this issue, compaction filer GC might not drop the MVCC deletion information. [#11217](https://github.com/tikv/tikv/pull/11217)
+
+## [5.1.2] - 2021-09-27
+
++ Improvements
+  + Support dynamically modifying TiCDC configurations [#10645](https://github.com/tikv/tikv/pull/10645)
+  + Reduce the size of Resolved TS message to save network bandwidth [#2448](https://github.com/tikv/tikv/pull/2448)
+  + Limit the counts of peer stats in the heartbeat message reported by a single store [#10621](https://github.com/tikv/tikv/pull/10621)
++ Bug Fixes
+  + Fix a bug that some files are missed to be imported during the process of importing snapshot files when upgrading TiKV from v3.x to v4.x or v5.x [#10902](https://github.com/tikv/tikv/pull/10902)
+  + Fix the issue that the GC (Garbage Collection) failure (such as file corrupted) of a single snapshot file stops the GC process of all other GC-able files [#10813](https://github.com/tikv/tikv/pull/10813)
+  + The slow log of TiKV coprocessor only considers the time spent on processing requests [#10841](https://github.com/tikv/tikv/pull/10841)
+  + Drop log instead of blocking threads when the slogger thread is overloaded and the queue is filled up [#10841](https://github.com/tikv/tikv/pull/10841)
+  + Fix a bug of the panic caused by timeout when processing Coprocessor requests [#10852](https://github.com/tikv/tikv/pull/10852)
+  + Fix the TiKV panic issue that occurs when upgrading from a pre-5.0 version with Titan enabled [#10842](https://github.com/tikv/tikv/pull/10842)
+  + Fix the issue that TiKV of a newer version cannot be rolled back to v5.0.x [#10842](https://github.com/tikv/tikv/pull/10842)
+  + Fix the issue that TiKV might delete files before it ingests to RocksDB [#10438](https://github.com/tikv/tikv/pull/10438)
+  + Fix the parsing failure caused by the left pessimistic locks [#26404](https://github.com/tikv/tikv/pull/26404)
+
+## [5.1.1] - 2021-07-30
+
++ Improvements
+  + Make the prewrite requests as idempotent as possible to reduce the chance of undetermined errors [#10586](https://github.com/tikv/tikv/pull/10586)
+  + Prevent the risk of stack overflow when handling many expired commands [#10502](https://github.com/tikv/tikv/pull/10502)
+  + Avoid excessive commit request retrying by not using the Stale Read request's start_ts to update max_ts [#10451](https://github.com/tikv/tikv/pull/10451)
+  + Handle read ready and write ready separately to reduce read latency [#10592](https://github.com/tikv/tikv/pull/10592)
+  + Reduce the impact on data import speed when the I/O rate limiting is enabled [#10390](https://github.com/tikv/tikv/pull/10390)
+  + Improve the load balance between Raft gRPC connections [#10495](https://github.com/tikv/tikv/pull/10495)
++ Bug fixes
+  + Fix the issue that the duration calculation might panic on certain platforms [#10569](https://github.com/tikv/tikv/pull/10569)
+  + Fix the issue that Load Base Split mistakenly uses the unencoded keys of batch_get_command [#10542](https://github.com/tikv/tikv/pull/10542)
+  + Fix the issue that changing the resolved-ts.advance-ts-interval configuration online cannot take effect immediately [#10426](https://github.com/tikv/tikv/pull/10426)
+  + Fix the issue of follower metadata corruption in rare cases with more than 4 replicas [#10225](https://github.com/tikv/tikv/pull/10225)
+  + Fix the panic issue that occurs when building a snapshot twice if encryption is enabled [#9786](https://github.com/tikv/tikv/pull/9786) [#10407](https://github.com/tikv/tikv/pull/10407)
+  + Fix the wrong tikv_raftstore_hibernated_peer_state metric [#10330](https://github.com/tikv/tikv/pull/10330)
+  + Fix the wrong arguments type of the json_unquote() function in the coprocessor [#10176](https://github.com/tikv/tikv/pull/10176)
+  + Fix a bug that the index keys in a pessimistic transaction might be repeatedly committed [#10468](https://github.com/tikv/tikv/pull/10468)
+  + Fix the issue that the ReadIndex request returns stale result right after the leader is transferred [#9351](https://github.com/tikv/tikv/pull/9351)
+
+## [5.1.0] - 2021-06-24
+
++ Improvements
+  + Use zstd to compress Region snapshots, preventing large space differences between nodes in case of heavy scheduling or scaling [#10005](https://github.com/tikv/tikv/pull/10005)
+  + Solve OOM issues in multiple cases [#10183](https://github.com/tikv/tikv/pull/10183)
+  + Add memory usage tracking for each module
+  + Solve the OOM issue caused by oversized Raft entries cache
+  + Solve the OOM issue caused by stacked GC tasks
+  + Solve the OOM issue caused by fetching too many Raft entries from the Raft log to memory at one time
+  + Split Regions more evenly to mitigate the issue that the growth of Region size exceeds the splitting speed when there are hotspot writes [#9785](https://github.com/tikv/tikv/pull/9785)
++ Bug Fixes
+  + Fix the issue that the coprocessor fails to properly handle the signed or unsigned integer types in the IN expression [#9821](https://github.com/tikv/tikv/pull/9821)
+  + Fix the issue of many empty Regions after batch ingesting SST files [#964](https://github.com/tikv/tikv/pull/964)
+  + Fix a bug that TiKV cannot start up after the file dictionary file is damaged [#9886](https://github.com/tikv/tikv/pull/9886)
+  + Fix a TiCDC OOM issue caused by reading old values [#9996](https://github.com/tikv/tikv/pull/9996) [#9981](https://github.com/tikv/tikv/pull/9981)
+  + Fix the issue of empty value in the secondary index for the clustered primary key column when collation is latin1_bin [#24548](https://github.com/tikv/tikv/pull/24548)
+  + Add the abort-on-panic configuration, which allows TiKV to generate the core dump file when panic occurs. Users still need to correctly configure the environment to enable core dump [#10216](https://github.com/tikv/tikv/pull/10216)
+  + Fix the performance regression issue of point get queries that occurs when TiKV is not busy [#10046](https://github.com/tikv/tikv/pull/10046)
+
+## [5.0.6] - 2021-12-30
+
++ Improvements
+  + Increase the speed of inserting SST files by moving the verification process to the Import thread pool from the Apply thread pool [#11239](https://github.com/tikv/tikv/pull/11239)
+  + Add more metrics for the garbage collection module of Raft logs to locate performance problems in the module [#11374](https://github.com/tikv/tikv/pull/11374)
+  + Collapse some uncommon storage-related metrics in Grafana dashboard [#11681](https://github.com/tikv/tikv/pull/11681)
++ Bug fixes
+  + Fix the issue that a down TiKV node causes the resolved timestamp to lag [#11351](https://github.com/tikv/tikv/pull/11351)
+  + Fix the issue that TiKV cannot detect the memory lock when TiKV perform a reverse table scan [#11440](https://github.com/tikv/tikv/pull/11440)
+  + Fix the issue that the accumulation of GC tasks might cause TiKV to be OOM (out of memory) [#11410](https://github.com/tikv/tikv/pull/11410)
+  + Fix the issue of TiKV panic that occurs when the files do not exist when TiDB Lightning imports data [#10438](https://github.com/tikv/tikv/pull/10438)
+  + Fix the issue that the node of a TiKV replica is down after the node gets snapshots because TiKV cannot modify the metadata accurately [#10225](https://github.com/tikv/tikv/pull/10225)
+  + Fix the leak issue of the backup thread pool [#10287](https://github.com/tikv/tikv/pull/10287)
+  + Fix the issue of casting illegal strings into floating-point numbers [#23322](https://github.com/tikv/tikv/pull/23322)
+
+## [5.0.5] - 2021-12-02
+
++ Bug fix
+  + Fix the issue that the GcKeys task does not work when it is called by multiple keys. Caused by this issue, compaction filer GC might not drop the MVCC deletion information. [#11217](https://github.com/tikv/tikv/pull/11217)
+
+## [5.0.4] - 2021-09-14
+
++ Improvements
+  + Limit the TiCDC sink's memory consumption [#10305](https://github.com/tikv/tikv/pull/10305)
+  + Add the memory-bounded upper limit for the TiCDC old value cache [#10313](https://github.com/tikv/tikv/pull/10313)
++ Bug Fixes
+  + Fix the wrong tikv_raftstore_hibernated_peer_state metric [#10330](https://github.com/tikv/tikv/pull/10330)
+  + Fix the wrong arguments type of the json_unquote() function in the coprocessor [#10176](https://github.com/tikv/tikv/pull/10176)
+  + Skip clearing callback during graceful shutdown to avoid breaking ACID in some cases [#10353](https://github.com/tikv/tikv/pull/10353) [#10307](https://github.com/tikv/tikv/pull/10307)
+  + Fix a bug that the read index is shared for replica reads on a Leader [#10347](https://github.com/tikv/tikv/pull/10347)
+  + Fix the wrong function that casts DOUBLE to DOUBLE [#25200](https://github.com/tikv/tikv/pull/25200)
+
+## [5.0.3] - 2021-07-02
+
++ Improvements
+  + Limit the TiCDC sink's memory consumption [#10305](https://github.com/tikv/tikv/pull/10305)
+  + Add the memory-bounded upper limit for the TiCDC old value cache [#10313](https://github.com/tikv/tikv/pull/10313)
++ Bug Fixes
+  + Fix the wrong tikv_raftstore_hibernated_peer_state metric [#10330](https://github.com/tikv/tikv/pull/10330)
+  + Fix the wrong arguments type of the json_unquote() function in the coprocessor [#10176](https://github.com/tikv/tikv/pull/10176)
+  + Skip clearing callback during graceful shutdown to avoid breaking ACID in some cases [#10353](https://github.com/tikv/tikv/pull/10353) [#10307](https://github.com/tikv/tikv/pull/10307)
+  + Fix a bug that the read index is shared for replica reads on a Leader [#10347](https://github.com/tikv/tikv/pull/10347)
+  + Fix the wrong function that casts DOUBLE to DOUBLE [#25200](https://github.com/tikv/tikv/pull/25200)
+
+## [5.0.2] - 2021-06-09
+
++ New Features
+  + Enable the Hibernate Region feature by default [#10266](https://github.com/tikv/tikv/pull/10266)
++ Improvements
+  + BR now supports the S3-compatible storage using the virtual-host addressing mode [#10243](https://github.com/tikv/tikv/pull/10243)
+  + Support the back pressure for TiCDC's scan speed [#10151](https://github.com/tikv/tikv/pull/10151)
+  + Reduce the memory usage of TiCDC's initial scan [#10133](https://github.com/tikv/tikv/pull/10133)
+  + Improve the cache hit ratio of the TiCDC's Old Value feature in the pessimistic transaction [#10089](https://github.com/tikv/tikv/pull/10089)
+  + Split Regions more evenly [#10086](https://github.com/tikv/tikv/pull/10086)
++ Bug Fixes
+  + Fix a TiCDC OOM issue caused by reading old values [#9996](https://github.com/tikv/tikv/pull/9996) [#9981](https://github.com/tikv/tikv/pull/9981)
+  + Fix the issue of empty value in the secondary index for the clustered primary key column when collation is latin1_bin [#24548](https://github.com/tikv/tikv/pull/24548)
+  + Add the abort-on-panic configuration, which allows TiKV to generate the core dump file when panic occurs. Users still need to correctly configure the environment to enable core dump [#10216](https://github.com/tikv/tikv/pull/10216)
+  + Fix the performance regression issue of point get queries that occurs when TiKV is not busy [#10046](https://github.com/tikv/tikv/pull/10046)
+
 ## [5.0.1] - 2021-04-23
 
 + Improvements
@@ -26,6 +202,77 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Improvements
   + Enable the system to automatically adjust the data compaction speed by default to balance the contention for I/O resources between background tasks and foreground reads and writes
   + Enable the GC Compaction Filter feature by default to reduce GC’s consumption of CPU and I/O resources
+
+## [4.0.16] - 2021-12-17
+
++ Compatibility changes
+  + Before v4.0.16, when TiDB converts an illegal UTF-8 string to a Real type, an error is reported directly. Starting from v4.0.16, TiDB processes the conversion according to the legal UTF-8 prefix in the string [#11466](https://github.com/tikv/tikv/pull/11466)
++ Improvements
+  + Reduce disk space consumption by adopting the zstd algorithm to compress SST files when restoring data using Backup & Restore or importing data using Local-backend of TiDB Lightning [#11469](https://github.com/tikv/tikv/pull/11469)
++ Bug fixes
+  + Fix a panic issue that occurs when Region merge, ConfChange, and Snapshot happen at the same time in extreme conditions [#11475](https://github.com/tikv/tikv/pull/11475)
+  + Fix the issue of negative sign when the decimal divide result is zero [#29586](https://github.com/tikv/tikv/pull/29586)
+  + Fix the issue that the average latency of the by-instance gRPC requests is inaccurate in TiKV metrics [#11299](https://github.com/tikv/tikv/pull/11299)
+  + Fix the issue of TiCDC panic that occurs when the downstream database is missing [#11123](https://github.com/tikv/tikv/pull/11123)
+  + Fix the issue that the Raft connection is broken when the channel is full [#11047](https://github.com/tikv/tikv/pull/11047)
+  + Fix the issue that TiDB cannot correctly identify whether the Int64 types in Max/Min functions are a signed integer or not, which causes the wrong calculation result of Max/Min [#10158](https://github.com/tikv/tikv/pull/10158)
+  + Fix the issue that CDC adds scan retries frequently due to the Congest error [#11082](https://github.com/tikv/tikv/pull/11082)
+
+## [4.0.15] - 2021-09-23
+
++ Feature enhancement
+  + Support changing TiCDC configurations dynamically [#10645](https://github.com/tikv/tikv/pull/10645)
++ Improvements
+  + Handle read ready and write ready separately to reduce read latency [#10475](https://github.com/tikv/tikv/pull/10475)
+  + The slow log of TiKV coprocessor only considers the time spent on processing requests. [#1084](https://github.com/tikv/tikv/pull/1084)
+  + Drop log instead of blocking threads when the slogger thread is overloaded and the queue is filled up [#10841](https://github.com/tikv/tikv/pull/10841)
+  + Reduce the size of Resolved TS messages to save network bandwidth [#2448](https://github.com/tikv/tikv/pull/2448)
++ Bug fixes
+  + Fix the issue that BR reports the "file already exists" error when TDE is enabled during data restore [#10917](https://github.com/tikv/tikv/pull/10917)
+  + Fix the issue that TiKV deletes stale Regions too frequently [#10781](https://github.com/tikv/tikv/pull/10781)
+  + Fix the issue that TiKV frequently reconnects the PD client [#9818](https://github.com/tikv/tikv/pull/9818)
+  + Check stale file information from the encryption file dictionary [#10598](https://github.com/tikv/tikv/pull/10598)
+
+## [4.0.14] - 2021-07-27
+
++ Compatibility changes
+  + Change the default value of merge-check-tick-interval from 10 to 2 to speed up the Region merge process [#9676](https://github.com/tikv/tikv/pull/9676)
++ Feature enhancements
+  + Add a metric pending to monitor the number of pending PD heartbeats, which helps locate the issue of slow PD threads [#10008](https://github.com/tikv/tikv/pull/10008)
+  + Support using the virtual-host addressing mode to make BR support the S3-compatible storage [#10242](https://github.com/tikv/tikv/pull/10242)
++ Improvements
+  + Shutdown the status server first to make sure that the client can correctly check the shutdown status [#10504](https://github.com/tikv/tikv/pull/10504)
+  + Always respond to stale peers to make sure that these peers are cleared quicker [#10400](https://github.com/tikv/tikv/pull/10400)
+  + Limit the TiCDC sink's memory consumption [#10147](https://github.com/tikv/tikv/pull/10147)
+  + When a Region is too large, use the even split to speed up the split process [#10275](https://github.com/tikv/tikv/pull/10275)
++ Bug fixes
+  + Fix the issue that the duration calculation might panic on certain platforms [#related-issue](https://github.com/rust-lang/rust/issues/86470#issuecomment-877557654)
+  + Fix the wrong function that casts DOUBLE to DOUBLE [#25200](https://github.com/tikv/tikv/pull/25200)
+  + Fix the issue that the panic log might be lost when using the async logger [#8998](https://github.com/tikv/tikv/pull/8998)
+  + Fix the panic issue that occurs when building a snapshot twice if encryption is enabled [#9786](https://github.com/tikv/tikv/pull/9786) [#10407](https://github.com/tikv/tikv/pull/10407)
+  + Fix the wrong arguments type of the json_unquote() function in the coprocessor [#10176](https://github.com/tikv/tikv/pull/10176)
+  + Fix the issues of suspicious warnings during shutdown and the non-deterministic response from Raftstore [#10353](https://github.com/tikv/tikv/pull/10353) [#10307](https://github.com/tikv/tikv/pull/10307)
+  + Fix the issue of backup threads leak [#10287](https://github.com/tikv/tikv/pull/10287)
+  + Fix the issue that Region split might panic and corrupt the metadata if the split process is too slow and Region merge is on-going [#8456](https://github.com/tikv/tikv/pull/8456) [#8783](https://github.com/tikv/tikv/pull/8783)
+  + Fix the issue that the Region heartbeats prevent TiKV from splitting large Regions in some situations [#10111](https://github.com/tikv/tikv/pull/10111)
+  + Fix the wrong statistics caused by the format inconsistency of CM Sketch between TiKV and TiDB [#25638](https://github.com/tikv/tikv/pull/25638)
+  + Fix the wrong statistics of the apply wait duration metric [#9893](https://github.com/tikv/tikv/pull/9893)
+  + Fix the "Missing Blob" error after using delete_files_in_range in Titan [#10232](https://github.com/tikv/tikv/pull/10232)
+
+## [4.0.13] - 2021-05-27
+
++ Improvements
+  + Make the calculation process of store used size more precise [#9904](https://github.com/tikv/tikv/pull/9904)
+  + Set more Regions in the EpochNotMatch message to reduce Region misses [#9731](https://github.com/tikv/tikv/pull/9731)
+  + Speed up freeing the memory accumulated in the long-running cluster [#10035](https://github.com/tikv/tikv/pull/10035)
++ Bug Fixes
+  + Fix a bug that TiKV cannot start if the file_dict file is not fully written into the disk that has been full [#9963](https://github.com/tikv/tikv/pull/9963)
+  + Limit TiCDC's scan speed at 128MB/s by default [#9983](https://github.com/tikv/tikv/pull/9983)
+  + Reduce the memory usage of TiCDC's initial scan [#10133](https://github.com/tikv/tikv/pull/10133)
+  + Support the back pressure for TiCDC's scan speed [#10142](https://github.com/tikv/tikv/pull/10142)
+  + Fix a potential OOM issue by avoiding unnecessary reads to get TiCDC old values [#10031](https://github.com/tikv/tikv/pull/10031)
+  + Fix a TiCDC OOM issue caused by reading old values [#10197](https://github.com/tikv/tikv/pull/10197)
+  + Add a timeout mechanism for S3 storages to avoid the client hanging without responses [#10132](https://github.com/tikv/tikv/pull/10132)
 
 ## [4.0.12] - 2021-04-02
 
@@ -212,7 +459,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Fix the issue that KMS key ID is not validated during encryption at rest [#7719](https://github.com/tikv/tikv/pull/7719)
   + Fix the underlying correctness issue of  the Coprocessor in compilers of different architecture  [#7714](https://github.com/tikv/tikv/pull/7714) [#7730](https://github.com/tikv/tikv/pull/7730)
   + Fix the `snapshot ingestion` error when encrytion is enabled [#7815](https://github.com/tikv/tikv/pull/7815)
-  + Fix the `Invalid cross-device link` error when rewriting the configuration file [#7817](<https://github.com/tikv/tikv/pull/7817>
+  + Fix the `Invalid cross-device link` error when rewriting the configuration file [#7817](https://github.com/tikv/tikv/pull/7817)
   + Fix the issue of wrong toml format when writing the configuration file to an empty file [#7817](https://github.com/tikv/tikv/pull/7817)
   + Fix the issue that a destroyed peer in Raftstore can still process requests [#7836](https://github.com/tikv/tikv/pull/7836)
 
@@ -257,7 +504,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Support the configuration of persistent dynamic update [#6684](https://github.com/tikv/tikv/pull/6684)
 + Bugfixes
   + Fix the panic issue caused by empty short values during backup [#6718](https://github.com/tikv/tikv/pull/6718)
-  + Fix the issue that Hibernate Regions might not be woken up correctly [#6772](https://github.com/tikv/tikv/pull/6672) [#6648](https://github.com/tikv/tikv/pull/6648) [#6376](https://github.com/tikv/tikv/pull/6736)
+  + Fix the issue that Hibernate Regions might not be woken up correctly [#6772](https://github.com/tikv/tikv/pull/6672) [#6648](https://github.com/tikv/tikv/pull/6648) [#6736](https://github.com/tikv/tikv/pull/6736)
 
 ## [4.0.0-beta.1] - 2020-02-28
 
