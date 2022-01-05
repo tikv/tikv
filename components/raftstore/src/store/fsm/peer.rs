@@ -1193,6 +1193,11 @@ where
             return;
         }
 
+        fail_point!(
+            "on_raft_base_tick_execution",
+            self.fsm.peer_id() == 1003,
+            |_| {}
+        );
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         let mut res = None;

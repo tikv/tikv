@@ -244,6 +244,58 @@ fn test_destroy_peer_on_pending_snapshot() {
 }
 
 #[test]
+fn test_destroy_peer_on_abort_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 1003));
+
+    cluster.must_put(b"k1", b"v1");
+    // Ensure peer 3 is initialized.
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    for i in 0..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+
+    let apply_snapshot_fp = "region_apply_snap_abort";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+
+    cluster.clear_send_filters();
+    // Wait for leader send snapshot.
+    sleep_ms(100);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    // pause peer_destroy
+    let before_peer_destroy_1003_fp = "before_peer_destroy_1003";
+    fail::cfg(before_peer_destroy_1003_fp, "pause").unwrap();
+    // Wait for leader send msg to peer 1003.
+    // Then destroy peer 1003 and create peer 1004.
+    for i in 0..40 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+    cluster.clear_send_filters();
+
+    sleep_ms(1000);
+    let on_raft_base_tick_execution_fp = "on_raft_base_tick_execution";
+    fail::cfg(on_raft_base_tick_execution_fp, "panic").unwrap();
+    sleep_ms(1000);
+
+    fail::remove(apply_snapshot_fp);
+    fail::remove(before_peer_destroy_1003_fp);
+    fail::remove(on_raft_base_tick_execution_fp);
+}
+
+#[test]
 fn test_shutdown_when_snap_gc() {
     let mut cluster = new_node_cluster(0, 2);
     // So that batch system can handle a snap_gc event before shutting down.
