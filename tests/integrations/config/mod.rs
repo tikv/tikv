@@ -59,7 +59,7 @@ fn read_file_in_project_dir(path: &str) -> String {
 #[test]
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
-    value.log.level = Level::Debug;
+    value.log.level = Level::Critical;
     value.log.file.filename = "foo".to_owned();
     value.log.format = LogFormat::Json;
     value.log.file.max_size = 1;
@@ -850,7 +850,7 @@ fn test_log_backward_compatible() {
     assert_eq!(cfg.log.format, LogFormat::Text);
     assert_eq!(cfg.log.file.max_size, 300);
     cfg.compatible_adjust();
-    assert_eq!(cfg.log.level, slog::Level::Debug);
+    assert_eq!(cfg.log.level, slog::Level::Critical);
     assert_eq!(cfg.log.file.filename, "foo");
     assert_eq!(cfg.log.format, LogFormat::Json);
     assert_eq!(cfg.log.file.max_size, 1024);

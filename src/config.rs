@@ -3649,9 +3649,9 @@ mod tests {
         }
 
         let legal_cases = vec![
-            ("critical", Level::Critical),
+            ("fatal", Level::Critical),
             ("error", Level::Error),
-            ("warning", Level::Warning),
+            ("warn", Level::Warning),
             ("debug", Level::Debug),
             ("trace", Level::Trace),
             ("info", Level::Info),
@@ -3665,7 +3665,7 @@ mod tests {
             assert_eq!(res_value.v, deserialized);
         }
 
-        let compatibility_cases = vec![("warn", Level::Warning)];
+        let compatibility_cases = vec![("warning", Level::Warning), ("critical", Level::Critical)];
         for (serialized, deserialized) in compatibility_cases {
             let variant_string = format!("v = \"{}\"\n", serialized);
             let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();

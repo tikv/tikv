@@ -41,7 +41,7 @@ fn main() {
                 .takes_value(true)
                 .value_name("LEVEL")
                 .possible_values(&[
-                    "trace", "debug", "info", "warn", "warning", "error", "critical",
+                    "trace", "debug", "info", "warn", "warning", "error", "critical", "fatal",
                 ])
                 .help("Set the log level"),
         )
