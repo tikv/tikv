@@ -216,7 +216,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             Some(ReschedulePolicy::Release(l)) => self.release(to_schedule, l),
             Some(ReschedulePolicy::Remove) => self.remove(to_schedule),
             Some(ReschedulePolicy::Schedule) => {
-                router.normal_scheduler.schedule(to_schedule.fsm);
+                router.high_pri_normal_scheduler.schedule(to_schedule.fsm);
                 None
             }
             None => Some(to_schedule),
@@ -466,30 +466,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             while batch.normals.len() < max_batch_size {
                 if let Ok(fsm) = self.high_pri_fsm_receiver.try_recv() {
                     run = batch.push(fsm);
-                }
-                // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
-                // may change state of the handler, we shall deal with it immediately after
-                // calling `begin` of `Handler`.
-                if !run || fsm_cnt >= batch.normals.len() {
-                    break;
-                }
-                let p = batch.normals[fsm_cnt].as_mut().unwrap();
-                let res = self.handler.handle_normal(p);
-                if p.is_stopped() {
-                    p.policy = Some(ReschedulePolicy::Remove);
-                    reschedule_fsms.push(fsm_cnt);
-                } else if let HandleResult::StopAt { progress, skip_end } = res {
-                    p.policy = Some(ReschedulePolicy::Release(progress));
-                    reschedule_fsms.push(fsm_cnt);
-                    if skip_end {
-                        to_skip_end.push(fsm_cnt);
-                    }
-                }
-                fsm_cnt += 1;
-            }
-
-            while batch.normals.len() < max_batch_size {
-                if let Ok(fsm) = self.fsm_receiver.try_recv() {
+                } else if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
@@ -512,7 +489,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
                 fsm_cnt += 1;
             }
-
             self.handler.light_end(&mut batch.normals);
             for offset in &to_skip_end {
                 batch.schedule(&self.router, *offset, true);
