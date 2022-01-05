@@ -63,6 +63,28 @@
 ## to release memory.
 # memory-usage-limit = "0B"
 
+<<<<<<< HEAD
+=======
+[log]
+## Log levels: debug, info, warn, error, fatal.
+## Note that `debug` is only available in development builds.
+# level = "info"
+## log format, one of json, text. Default to text.
+# format = "text"
+## Enable automatic timestamps in log output, if not set, it will be defaulted to true.
+# enable-timestamp = true
+
+[log.file]
+## Usually it is set through command line.
+# filename = ""
+## max log file size in MB (upper limit to 4096MB)
+# max-size = 300
+## max log file keep days
+# max-days = 0
+## maximum number of old log files to retain
+# max-backups = 0
+
+>>>>>>> c1188a90e... logger: change critical to fatal (#11651) (#11780)
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.

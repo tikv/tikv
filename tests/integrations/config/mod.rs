@@ -59,9 +59,18 @@ fn read_file_in_project_dir(path: &str) -> String {
 #[test]
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
+<<<<<<< HEAD
     value.log_level = Level::Debug;
     value.log_file = "foo".to_owned();
     value.log_format = LogFormat::Json;
+=======
+    value.log.level = Level::Critical;
+    value.log.file.filename = "foo".to_owned();
+    value.log.format = LogFormat::Json;
+    value.log.file.max_size = 1;
+    value.log.file.max_backups = 2;
+    value.log.file.max_days = 3;
+>>>>>>> c1188a90e... logger: change critical to fatal (#11651) (#11780)
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
@@ -837,3 +846,21 @@ fn test_block_cache_backward_compatible() {
             + cfg.raftdb.defaultcf.block_cache_size.0
     );
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_log_backward_compatible() {
+    let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
+    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg.log.level, slog::Level::Info);
+    assert_eq!(cfg.log.file.filename, "");
+    assert_eq!(cfg.log.format, LogFormat::Text);
+    assert_eq!(cfg.log.file.max_size, 300);
+    cfg.compatible_adjust();
+    assert_eq!(cfg.log.level, slog::Level::Critical);
+    assert_eq!(cfg.log.file.filename, "foo");
+    assert_eq!(cfg.log.format, LogFormat::Json);
+    assert_eq!(cfg.log.file.max_size, 1024);
+}
+>>>>>>> c1188a90e... logger: change critical to fatal (#11651) (#11780)

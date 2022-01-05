@@ -199,7 +199,8 @@ where
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "critical" => Some(Level::Critical),
+        // We support `critical` due to legacy.
+        "fatal" | "critical" => Some(Level::Critical),
         "error" => Some(Level::Error),
         // We support `warn` due to legacy.
         "warning" | "warn" => Some(Level::Warning),
@@ -214,9 +215,9 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
 // the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
-        Level::Critical => "critical",
+        Level::Critical => "fatal",
         Level::Error => "error",
-        Level::Warning => "warning",
+        Level::Warning => "warn",
         Level::Debug => "debug",
         Level::Trace => "trace",
         Level::Info => "info",
