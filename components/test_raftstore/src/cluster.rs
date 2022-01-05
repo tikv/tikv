@@ -24,8 +24,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
+    WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use pd_client::PdClient;
@@ -1179,25 +1179,6 @@ impl<T: Simulator> Cluster<T> {
         })
         .unwrap();
         kv_wb.write().unwrap();
-    }
-
-    pub fn restore_raft(&self, region_id: u64, store_id: u64, from: &RaftLogEngine) {
-        if let (Some(first), Some(last)) = (from.first_index(region_id), from.last_index(region_id))
-        {
-            let mut entries = Vec::new();
-            from.fetch_entries_to(
-                region_id,
-                first,
-                last + 1,
-                None, /*max_size*/
-                &mut entries,
-            )
-            .unwrap();
-            self.engines[&store_id]
-                .raft
-                .append(region_id, entries)
-                .unwrap();
-        }
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

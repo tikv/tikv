@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raft::eraftpb::MessageType;
+use engine_traits::{RaftEngine, RaftEngineReadOnly};
+use raft::eraftpb::{Entry, MessageType};
+use raft_log_engine::RaftLogEngine;
 use raftstore::store::*;
 use std::time::*;
 use test_raftstore::*;
@@ -21,6 +23,15 @@ enum DataLost {
     AllLost,
 }
 
+fn dump_entries(e: &RaftLogEngine, id: u64) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    if let (Some(first), Some(last)) = (e.first_index(id), e.last_index(id)) {
+        e.fetch_entries_to(id, first, last + 1, None /*max_size*/, &mut entries)
+            .unwrap();
+    }
+    entries
+}
+
 fn test<A, C>(cluster: &mut Cluster<NodeCluster>, action: A, check: C, mode: DataLost)
 where
     A: FnOnce(&mut Cluster<NodeCluster>),
@@ -35,26 +46,38 @@ where
             .direction(Direction::Recv),
     };
     cluster.add_send_filter(CloneFilterFactory(filter));
-    let last_index = cluster.raft_local_state(1, 1).get_last_index();
+
+    let ids = if mode == DataLost::AllLost {
+        vec![1, 2, 3]
+    } else {
+        vec![1]
+    };
+    let last_index: Vec<_> = ids
+        .iter()
+        .map(|id| cluster.raft_local_state(1, *id).get_last_index())
+        .collect();
+
     action(cluster);
-    cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
-    let mut rafts = vec![(1, cluster.get_raft_engine(1))];
-    if mode == DataLost::AllLost {
-        cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
-        rafts.push((2, cluster.get_raft_engine(2)));
-        cluster.wait_last_index(1, 3, last_index + 1, Duration::from_secs(3));
-        rafts.push((3, cluster.get_raft_engine(3)));
-    }
+
+    let snaps: Vec<_> = ids
+        .iter()
+        .zip(last_index)
+        .map(|(id, index)| {
+            cluster.wait_last_index(1, *id, index + 1, Duration::from_secs(3));
+            dump_entries(&cluster.get_raft_engine(*id), *id)
+        })
+        .collect();
+
     cluster.clear_send_filters();
     check(cluster);
-    for (id, _) in &rafts {
+    for id in &ids {
         cluster.stop_node(*id);
     }
     // Simulate data lost in raft cf.
-    for (id, raft) in &rafts {
-        cluster.restore_raft(1, *id, raft);
+    for (id, entries) in ids.iter().zip(snaps) {
+        cluster.get_raft_engine(*id).append(*id, entries).unwrap();
     }
-    for (id, _) in &rafts {
+    for id in &ids {
         cluster.run_node(*id).unwrap();
     }
 
@@ -149,20 +172,20 @@ fn test_update_internal_apply_index() {
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
     cluster.async_put(b"k2", b"v2").unwrap();
-    let mut rafts = Vec::new();
-    for i in 1..3 {
-        cluster.wait_last_index(1, i, last_index + 2, Duration::from_secs(3));
-        rafts.push((i, cluster.get_raft_engine(1)));
+    let mut snaps = Vec::new();
+    for id in 1..3 {
+        cluster.wait_last_index(1, id, last_index + 2, Duration::from_secs(3));
+        snaps.push((id, dump_entries(&cluster.get_raft_engine(id), id)));
     }
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
     // Simulate data lost in raft cf.
-    for (id, raft) in &rafts {
-        cluster.stop_node(*id);
-        cluster.restore_raft(1, *id, raft);
-        cluster.run_node(*id).unwrap();
+    for (id, entries) in snaps.into_iter() {
+        cluster.stop_node(id);
+        cluster.get_raft_engine(id).append(id, entries).unwrap();
+        cluster.run_node(id).unwrap();
     }
 
     let region = cluster.get_region(b"k1");
