@@ -204,7 +204,7 @@ pub async fn region_resolved_ts_store(
     let store_count = store_map.len();
     let mut stores: Vec<_> = store_map
         .into_iter()
-        .map(|(store_id, regions)| {
+        .map(|(to_store, regions)| {
             let tikv_clients = tikv_clients.clone();
             let env = env.clone();
             let pd_client = pd_client.clone();
@@ -214,7 +214,7 @@ pub async fn region_resolved_ts_store(
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
                 let client = box_try!(
-                    get_tikv_client(store_id, pd_client, security_mgr, env, tikv_clients.clone())
+                    get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
                         .await
                 );
                 let mut req = CheckLeaderRequest::default();
@@ -228,17 +228,24 @@ pub async fn region_resolved_ts_store(
                     )
                     .await
                 );
+                let elapsed = start.saturating_elapsed();
+                slow_log!(
+                    elapsed,
+                    "check leader rpc costs too long, store_id: {}, to_store: {}",
+                    store_id,
+                    to_store
+                );
                 RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
                     .with_label_values(&["rpc"])
-                    .observe(start.saturating_elapsed_secs());
+                    .observe(elapsed.as_secs_f64());
                 let resp = match res {
                     Ok(resp) => resp,
                     Err(err) => {
-                        tikv_clients.lock().await.remove(&store_id);
+                        tikv_clients.lock().await.remove(&to_store);
                         return Err(box_err!(err));
                     }
                 };
-                Result::Ok((store_id, resp))
+                Result::Ok((to_store, resp))
             }
             .boxed()
         })
