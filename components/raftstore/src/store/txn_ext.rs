@@ -47,7 +47,47 @@ impl fmt::Debug for TxnExt {
 
 /// Pessimistic locks of a region peer.
 pub struct PeerPessimisticLocks {
-    pub map: HashMap<Key, PessimisticLock>,
+    /// The table that stores pessimistic locks.
+    ///
+    /// The bool marks an ongoing write request (which has been sent to the raftstore while not
+    /// applied yet) will delete this lock. The lock will be really deleted after applying the
+    /// write request. The flag will decide whether this lock should be migrated to other peers
+    /// on leader or region changes:
+    ///
+    /// - Transfer leader
+    ///   The lock with the deleted mark SHOULD NOT be proposed before transferring leader.
+    ///   Considering the following cases with different orders:
+    ///   1. Propose write -> propose locks -> apply write -> apply locks -> transfer leader
+    ///      Because the locks marking deleted will not be proposed. The lock will be deleted when
+    ///      applying the write while not showing up again after applying the locks.
+    ///   2. Propose locks -> propose write -> transfer leader
+    ///      No lock will be lost in normal cases because the write request has been sent to the
+    ///      raftstore, it is likely to be proposed successfully, while the leader will need at
+    ///      least another round to receive the transfer leader message from the transferree.
+    ///  
+    /// - Split region
+    ///   The lock with the deleted mark SHOULD be moved to new regions on region split.
+    ///   Considering the following cases with different orders:
+    ///   1. Propose write -> propose split -> apply write -> execute split
+    ///      The write will be applied earlier than split. So, the lock will be deleted earlier
+    ///      than moving locks to new regions.
+    ///   2. Propose split -> propose write -> ready split -> apply write
+    ///      The write will be skipped because its version is lower than the new region. So, no
+    ///      lock should be deleted in this case.
+    ///   3. Propose split -> ready split -> propose write
+    ///      The write proposal will be rejected because of version mismatch.
+    ///
+    /// - Merge region
+    ///   The lock with the deleted mark SHOULD be included in the catch up logs on region merge.
+    ///   Considering the following cases with different orders:
+    ///   1. Propose write -> propose prepare merge -> apply write -> execute merge
+    ///      The locks marked deleted will be deleted when applying the write request. So, the
+    ///      deleted locks will not be included again in the commit merge request.
+    ///   2. Propose prepare merge -> propose write -> execute merge -> apply write
+    ///      Applying the write will be skipped because of version mismatch. So, no lock should
+    ///      be deleted. It's correct that we include the locks that are marked deleted in the
+    ///      commit merge request.
+    pub map: HashMap<Key, (PessimisticLock, bool)>,
     /// Whether the pessimistic lock map is valid to read or write. If it is invalid,
     /// the in-memory pessimistic lock feature cannot be used at the moment.
     pub is_valid: bool,
@@ -76,5 +116,11 @@ impl Default for PeerPessimisticLocks {
             term: 0,
             version: 0,
         }
+    }
+}
+
+impl PeerPessimisticLocks {
+    pub fn insert(&mut self, key: Key, lock: PessimisticLock) {
+        self.map.insert(key, (lock, false));
     }
 }
