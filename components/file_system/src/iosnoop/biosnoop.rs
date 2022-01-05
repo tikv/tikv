@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
+use tikv_util::sys::thread;
 
 /// Biosnoop leverages BCC to make use of eBPF to get disk IO of TiKV requests.
 /// The BCC code is in `biosnoop.c` which is compiled and attached kernel on
@@ -167,7 +168,7 @@ pub fn init_io_snooper() -> Result<(), String> {
         }
     }
 
-    let code = include_str!("biosnoop.c").replace("##TGID##", &nix::unistd::getpid().to_string());
+    let code = include_str!("biosnoop.c").replace("##TGID##", &thread::process_id().to_string());
 
     // TODO: When using bpf_get_ns_current_pid_tgid of newer kernel, need
     // to get the device id and inode number.
