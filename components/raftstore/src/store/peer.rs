@@ -2245,7 +2245,8 @@ where
             }
 
             let ctx = ProposalContext::from_bytes(&entry.context);
-            if ctx.contains(ProposalContext::PREPARE_MERGE) || ctx.contains(ProposalContext::SPLIT) {
+            if ctx.contains(ProposalContext::PREPARE_MERGE) || ctx.contains(ProposalContext::SPLIT)
+            {
                 has_split_or_merge = true;
             }
 
