@@ -229,7 +229,7 @@ fn test_propose_in_memory_pessimistic_locks() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
-    let txn_ext = snapshot.txn_ext.clone().unwrap();
+    let txn_ext = snapshot.txn_ext.unwrap();
     let lock = PessimisticLock {
         primary: b"key".to_vec().into_boxed_slice(),
         start_ts: 10.into(),
