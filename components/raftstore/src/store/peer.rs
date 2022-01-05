@@ -524,6 +524,8 @@ where
     pub read_progress: Arc<RegionReadProgress>,
 
     pub memtrace_raft_entries: usize,
+
+    is_handling_snapshot: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -626,6 +628,7 @@ where
                 tag,
             )),
             memtrace_raft_entries: 0,
+            is_handling_snapshot: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -790,6 +793,7 @@ where
         }
 
         self.pending_remove = true;
+        self.is_handling_snapshot = false;
 
         Some(DestroyPeerJob {
             initialized: self.get_store().is_initialized(),
@@ -1028,6 +1032,13 @@ where
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         self.get_store().is_applying_snapshot()
+    }
+
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        self.is_handling_snapshot || self.get_store().is_applying_snapshot()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
@@ -1597,6 +1608,7 @@ where
             CheckApplyingSnapStatus::Success => {
                 fail_point!("raft_before_applying_snap_finished");
                 // 0 means snapshot is scheduled after being restarted.
+                self.is_handling_snapshot = false;
                 if self.last_unpersisted_number != 0 {
                     // Because we only handle raft ready when not applying snapshot, so following
                     // line won't be called twice for the same snapshot.
@@ -1752,6 +1764,7 @@ where
                 .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }
 
+        self.is_handling_snapshot = !ready.snapshot().is_empty();
         let invoke_ctx = match self
             .mut_store()
             .handle_raft_ready(ctx, &mut ready, destroy_regions)
