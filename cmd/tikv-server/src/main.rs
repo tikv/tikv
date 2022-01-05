@@ -178,6 +178,7 @@ fn main() {
         });
 
     server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    config.logger_compatible_adjust();
 
     if is_config_check {
         validate_and_persist_config(&mut config, false);

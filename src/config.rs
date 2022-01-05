@@ -2557,7 +2557,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_format: LogFormat::Text,
-            log_rotation_timespan: ReadableDuration::hours(24),
+            log_rotation_timespan: ReadableDuration::hours(0),
             log_rotation_size: ReadableSize::mb(300),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
@@ -2787,6 +2787,59 @@ impl TiKvConfig {
         Ok(())
     }
 
+    // As the init of `logger` is very early, this adjust needs to be separated and called
+    // immediately after parsing the command line.
+    pub fn logger_compatible_adjust(&mut self) {
+        let default_tikv_cfg = TiKvConfig::default();
+        let default_log_cfg = LogConfig::default();
+        if self.log_level != default_tikv_cfg.log_level {
+            println!("deprecated configuration, log-level has been moved to log.level");
+            if self.log.level == default_log_cfg.level {
+                println!("override log.level with log-level, {:?}", self.log_level);
+                self.log.level = self.log_level;
+            }
+            self.log_level = default_tikv_cfg.log_level;
+        }
+        if self.log_file != default_tikv_cfg.log_file {
+            println!("deprecated configuration, log-file has been moved to log.file.filename");
+            if self.log.file.filename == default_log_cfg.file.filename {
+                println!(
+                    "override log.file.filename with log-file, {:?}",
+                    self.log_file
+                );
+                self.log.file.filename = self.log_file.clone();
+            }
+            self.log_file = default_tikv_cfg.log_file;
+        }
+        if self.log_format != default_tikv_cfg.log_format {
+            println!("deprecated configuration, log-format has been moved to log.format");
+            if self.log.format == default_log_cfg.format {
+                println!("override log.format with log-format, {:?}", self.log_format);
+                self.log.format = self.log_format;
+            }
+            self.log_format = default_tikv_cfg.log_format;
+        }
+        if self.log_rotation_timespan.as_secs() > 0 {
+            println!(
+                "deprecated configuration, log-rotation-timespan is no longer used and ignored."
+            );
+        }
+        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
+            println!(
+                "deprecated configuration, \
+                 log-ratation-size has been moved to log.file.max-size"
+            );
+            if self.log.file.max_size == default_log_cfg.file.max_size {
+                println!(
+                    "override log.file.max_size with log-rotation-size, {:?}",
+                    self.log_rotation_size
+                );
+                self.log.file.max_size = self.log_rotation_size.as_mb();
+            }
+            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
+        }
+    }
+
     pub fn compatible_adjust(&mut self) {
         let default_raft_store = RaftstoreConfig::default();
         let default_coprocessor = CopConfig::default();
@@ -2897,56 +2950,6 @@ impl TiKvConfig {
         }
 
         self.readpool.adjust_use_unified_pool();
-
-        let default_tikv_cfg = TiKvConfig::default();
-        let default_log_cfg = LogConfig::default();
-        if self.log_level != default_tikv_cfg.log_level {
-            warn!("deprecated configuration, log-level has been moved to log.level");
-            if self.log.level == default_log_cfg.level {
-                warn!("override log.level with log-level, {:?}", self.log_level);
-                self.log.level = self.log_level;
-            }
-            self.log_level = default_tikv_cfg.log_level;
-        }
-        if self.log_file != default_tikv_cfg.log_file {
-            warn!("deprecated configuration, log-file has been moved to log.file.filename");
-            if self.log.file.filename == default_log_cfg.file.filename {
-                warn!(
-                    "override log.file.filename with log-file, {:?}",
-                    self.log_file
-                );
-                self.log.file.filename = self.log_file.clone();
-            }
-            self.log_file = default_tikv_cfg.log_file;
-        }
-        if self.log_format != default_tikv_cfg.log_format {
-            warn!("deprecated configuration, log-format has been moved to log.format");
-            if self.log.format == default_log_cfg.format {
-                warn!("override log.format with log-format, {:?}", self.log_format);
-                self.log.format = self.log_format;
-            }
-            self.log_format = default_tikv_cfg.log_format;
-        }
-        if self.log_rotation_timespan.as_secs() > 0 {
-            warn!(
-                "deprecated configuration, {} is no longer used and ignored.",
-                "log-rotation-timespan",
-            );
-        }
-        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
-            warn!(
-                "deprecated configuration, \
-                 log-ratation-size has been moved to log.file.max-size"
-            );
-            if self.log.file.max_size == default_log_cfg.file.max_size {
-                warn!(
-                    "override log.file.max_size with log-rotation-size, {:?}",
-                    self.log_rotation_size
-                );
-                self.log.file.max_size = self.log_rotation_size.as_mb();
-            }
-            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
-        }
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
