@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{atomic::Ordering, mpsc, Arc};
+use std::time::Duration;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
@@ -277,6 +278,9 @@ impl Engine {
                         pri.shard_id, pri.shard_ver, err
                     );
                 }
+            }
+            if results.len() == 0 {
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
@@ -717,7 +721,7 @@ impl CompactL0Helper {
             return Ok((pb::TableCreate::new(), Bytes::new()));
         }
         let mut buf = BytesMut::with_capacity(self.builder.estimated_size());
-        let res = self.builder.finish(&mut buf);
+        let res = self.builder.finish(0, &mut buf);
         let mut table_create = pb::TableCreate::new();
         table_create.set_id(id);
         table_create.set_cf(self.cf as i32);
@@ -811,7 +815,7 @@ pub(crate) fn compact_tables(
             continue;
         }
         let mut buf = BytesMut::with_capacity(builder.estimated_size());
-        let res = builder.finish(&mut buf);
+        let res = builder.finish(0, &mut buf);
         let mut tbl_create = pb::TableCreate::new();
         tbl_create.set_id(id);
         tbl_create.set_cf(req.cf as i32);

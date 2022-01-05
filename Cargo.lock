@@ -636,10 +636,11 @@ dependencies = [
 
 [[package]]
 name = "cloud_server"
-version = "0.0.1"
+version = "5.4.0-alpha"
 dependencies = [
  "async-stream",
  "backup",
+ "bytes 1.0.1",
  "cdc",
  "chrono",
  "clap",
@@ -5559,6 +5560,7 @@ dependencies = [
  "backtrace",
  "batch-system",
  "byteorder",
+ "bytes 1.0.1",
  "case_macros",
  "chrono",
  "codec",

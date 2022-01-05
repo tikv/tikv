@@ -72,8 +72,8 @@ impl CFTable {
         self.props = Some(props)
     }
 
-    pub fn get_properties(&self) -> kvenginepb::Properties {
-        self.props.as_ref().unwrap().clone()
+    pub fn get_properties(&self) -> Option<kvenginepb::Properties> {
+        self.props.clone()
     }
 
     pub fn get_version(&self) -> u64 {
@@ -93,6 +93,6 @@ impl CFTable {
     }
 
     pub fn get_split_stage(&self) -> kvenginepb::SplitStage {
-        kvenginepb::SplitStage::from_i32(self.stage.load(Release)).unwrap()
+        kvenginepb::SplitStage::from_i32(self.stage.load(Acquire)).unwrap()
     }
 }

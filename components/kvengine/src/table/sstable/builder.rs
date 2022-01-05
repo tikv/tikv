@@ -163,7 +163,7 @@ impl Builder {
         size
     }
 
-    pub fn finish(&mut self, data_buf: &mut BytesMut) -> BuildResult {
+    pub fn finish(&mut self, base_off: u32, data_buf: &mut BytesMut) -> BuildResult {
         if self.block_builder.block.size > 0 {
             let last_key = self.block_builder.block.tmp_keys.get_last();
             self.biggest.extend_from_slice(last_key);
@@ -178,11 +178,11 @@ impl Builder {
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_data_section_size = self.old_builder.buf.len() as u32;
 
-        self.block_builder.build_index(0, self.checksum_tp);
+        self.block_builder.build_index(base_off, self.checksum_tp);
         data_buf.extend_from_slice(self.block_builder.buf.as_slice());
         let index_section_size = self.block_builder.buf.len() as u32;
         self.old_builder
-            .build_index(data_section_size, self.checksum_tp);
+            .build_index(base_off + data_section_size, self.checksum_tp);
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_index_section_size = self.old_builder.buf.len() as u32;
 
@@ -262,16 +262,6 @@ impl Footer {
 
     pub fn properties_len(&self, table_size: usize) -> usize {
         table_size - self.properties_offset as usize - FOOTER_SIZE
-    }
-
-    pub fn validate(&self, table_size: usize) -> bool {
-        table_size
-            == self.data_len()
-                + self.old_data_len()
-                + self.index_len()
-                + self.old_index_len()
-                + self.properties_len(table_size)
-                + FOOTER_SIZE
     }
 
     pub fn unmarshal(&mut self, data: &[u8]) {
@@ -453,7 +443,7 @@ impl BlockBuilder {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct BlockAddress {
     pub origin_fid: u64,
     pub origin_off: u32,

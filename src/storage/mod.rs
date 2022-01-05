@@ -102,8 +102,10 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
+use rfstore::LOCK_CF;
 use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
+use crate::storage::txn::CloudStore;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -478,15 +480,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
+                    // let snap_store = SnapshotStore::new(
+                    //     snapshot,
+                    //     start_ts,
+                    //     ctx.get_isolation_level(),
+                    //     !ctx.get_not_fill_cache(),
+                    //     bypass_locks,
+                    //     access_locks,
+                    //     false,
+                    // );
+                    let snap_store = CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
                     let result = snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
@@ -634,6 +637,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
+                            if snapshot.get_kvengine_snap().is_some() {
+                                let cloud_store = CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+                                let mut stat = Statistics::default();
+                                let perf_statistics = PerfStatisticsInstant::new();
+                                let v = cloud_store.get(&key, &mut stat);
+                                let delta = perf_statistics.delta();
+                                metrics::tls_collect_read_flow(region_id, &stat);
+                                metrics::tls_collect_perf_stats(CMD, &delta);
+                                statistics.add(&stat);
+                                consumer.consume(
+                                    id,
+                                    v.map_err(|e| Error::from(txn::Error::from(e)))
+                                        .map(|v| (v, stat, delta)),
+                                    begin_instant,
+                                );
+                                continue;
+                            }
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -750,15 +770,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
+                    // let snap_store = SnapshotStore::new(
+                    //     snapshot,
+                    //     start_ts,
+                    //     ctx.get_isolation_level(),
+                    //     !ctx.get_not_fill_cache(),
+                    //     bypass_locks,
+                    //     access_locks,
+                    //     false,
+                    // );
+                    let snap_store = CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+
                     let result = snap_store
                         .batch_get(&keys, &mut statistics)
                         .map_err(Error::from)
@@ -910,16 +932,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let perf_statistics = PerfStatisticsInstant::new();
 
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
-
+                    // let snap_store = SnapshotStore::new(
+                    //     snapshot,
+                    //     start_ts,
+                    //     ctx.get_isolation_level(),
+                    //     !ctx.get_not_fill_cache(),
+                    //     bypass_locks,
+                    //     access_locks,
+                    //     false,
+                    // );
+                    let snap_store = CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
                     let mut scanner =
                         snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
                     let res = scanner.scan(limit, sample_step);
@@ -1040,11 +1062,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let mut reader = MvccReader::new(
-                        snapshot,
-                        Some(ScanMode::Forward),
-                        !ctx.get_not_fill_cache(),
-                    );
+                    let mut reader = mvcc::CloudReader::new(snapshot.get_kvengine_snap().unwrap().clone());
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),

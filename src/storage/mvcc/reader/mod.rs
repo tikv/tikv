@@ -13,6 +13,7 @@ pub use self::scanner::test_util;
 pub use self::scanner::{
     has_data_in_range, seek_for_valid_write, DeltaScanner, EntryScanner, Scanner, ScannerBuilder,
 };
+pub use self::cloud_reader::CloudReader;
 
 use txn_types::{TimeStamp, Write, WriteType};
 

@@ -16,6 +16,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 #[derive(Clone)]
 pub struct SSTable {
@@ -34,7 +35,20 @@ impl SSTable {
         file: Arc<dyn dfs::File>,
         cache: SegmentedCache<BlockCacheKey, Bytes>,
     ) -> Result<Self> {
-        let core = SSTableCore::new(file, cache)?;
+        let size = file.size();
+        let core = SSTableCore::new(file, 0, size, cache)?;
+        Ok(Self {
+            core: Arc::new(core),
+        })
+    }
+
+    pub fn new_l0_cf(
+        file: Arc<dyn dfs::File>,
+        start: u64,
+        end: u64,
+        cache: SegmentedCache<BlockCacheKey, Bytes>,
+    ) -> Result<Self> {
+        let core = SSTableCore::new(file, start, end, cache)?;
         Ok(Self {
             core: Arc::new(core),
         })
@@ -88,6 +102,7 @@ impl SSTable {
 pub struct SSTableCore {
     file: Arc<dyn dfs::File>,
     cache: SegmentedCache<BlockCacheKey, Bytes>,
+    start_off: u64,
     footer: Footer,
     smallest_buf: Bytes,
     biggest_buf: Bytes,
@@ -98,24 +113,29 @@ pub struct SSTableCore {
 impl SSTableCore {
     pub fn new(
         file: Arc<dyn dfs::File>,
+        start_off: u64,
+        end_off: u64,
         cache: SegmentedCache<BlockCacheKey, Bytes>,
     ) -> Result<Self> {
+        let size = end_off - start_off;
         let mut footer = Footer::default();
-        if file.size() < FOOTER_SIZE as u64 {
+        if size < FOOTER_SIZE as u64 {
             return Err(table::Error::InvalidFileSize);
         }
-        let footer_data = file.read(file.size() - FOOTER_SIZE as u64, FOOTER_SIZE)?;
+        let footer_data = file.read(end_off - FOOTER_SIZE as u64, FOOTER_SIZE)?;
         footer.unmarshal(footer_data.chunk());
         if footer.magic != MAGIC_NUMBER {
             return Err(table::Error::InvalidMagicNumber);
         }
-        let idx_data = file.read(footer.index_offset as u64, footer.index_len())?;
+        let idx_data = file.read(start_off + footer.index_offset as u64, footer.index_len())?;
+        let idx_hash = farmhash::fingerprint64(&idx_data);
+
         let idx = Index::new(idx_data.clone(), footer.checksum_type)?;
-        let old_idx_data = file.read(footer.old_index_offset as u64, footer.old_index_len())?;
+        let old_idx_data = file.read(start_off + footer.old_index_offset as u64, footer.old_index_len())?;
         let old_idx = Index::new(old_idx_data.clone(), footer.checksum_type)?;
         let props_data = file.read(
-            footer.properties_offset as u64,
-            footer.properties_len(file.size() as usize),
+            start_off + footer.properties_offset as u64,
+            footer.properties_len(size as usize),
         )?;
         let mut prop_slice = props_data.chunk();
         validate_checksum(prop_slice, footer.checksum_type)?;
@@ -134,6 +154,7 @@ impl SSTableCore {
         Ok(Self {
             file,
             cache,
+            start_off,
             footer,
             smallest_buf,
             biggest_buf,
@@ -148,7 +169,7 @@ impl SSTableCore {
         if pos + 1 < self.idx.num_blocks() {
             length = (self.idx.block_addrs[pos + 1].curr_off - addr.curr_off) as usize;
         } else {
-            length = self.footer.data_len() - addr.curr_off as usize;
+            length = self.start_off as usize + self.footer.data_len() - addr.curr_off as usize;
         }
         self.load_block_by_addr_len(addr, length)
     }
@@ -375,7 +396,7 @@ pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<
         builder.add(k.as_bytes(), Value::decode(val_buf.as_slice()));
     }
     let mut buf = BytesMut::with_capacity(builder.estimated_size());
-    builder.finish(&mut buf);
+    builder.finish(0, &mut buf);
     Arc::new(dfs::InMemFile::new(id, buf.freeze()))
 }
 
@@ -409,7 +430,6 @@ pub(crate) fn test_key(prefix: &str, i: usize) -> String {
 mod tests {
     use bytes::BytesMut;
     use rand::Rng;
-    use std::sync::atomic::AtomicU64;
 
     use crate::Iterator;
 
@@ -438,7 +458,7 @@ mod tests {
             }
         }
         let mut buf = BytesMut::with_capacity(builder.estimated_size());
-        builder.finish(&mut buf);
+        builder.finish(0, &mut buf);
         (Arc::new(dfs::InMemFile::new(id, buf.freeze())), all_cnt)
     }
 

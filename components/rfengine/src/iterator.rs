@@ -109,12 +109,15 @@ pub(crate) fn parse_log(entry: &[u8]) -> RaftLogOp {
     entry = &entry[4..];
     let e_type = LittleEndian::read_i32(entry);
     entry = &entry[4..];
+    let context = entry[0];
+    entry = &entry[1..];
     let data = Bytes::copy_from_slice(entry);
     RaftLogOp {
         region_id,
         index,
         term,
         e_type,
+        context,
         data,
     }
 }

@@ -22,8 +22,12 @@ impl CloudReader {
     fn get_commit_by_item(item: &kvengine::Item, start_ts: TimeStamp) -> Option<TxnCommitRecord> {
         let user_meta = UserMeta::from_slice(item.user_meta());
         if user_meta.start_ts == start_ts.into_inner() {
-            let write_ref = WriteRef::parse(item.get_value()).unwrap();
-            let write = Write::new(write_ref.write_type, write_ref.start_ts, None);
+            let (write_type, short_value) = if item.value_len() > 0 {
+                (WriteType::Put, Some(item.get_value().to_vec()))
+            } else {
+                (WriteType::Delete, None)
+            };
+            let write = Write::new(write_type, TimeStamp::new(user_meta.start_ts), short_value);
             return Some(TxnCommitRecord::SingleRecord {commit_ts: TimeStamp::new(user_meta.commit_ts), write})
         }
         None
@@ -32,10 +36,10 @@ impl CloudReader {
     pub fn get_txn_commit_record(&mut self, key: &Key, start_ts: TimeStamp) -> Result<TxnCommitRecord> {
         let mut raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, 0);
-        if item.is_none() {
+        if item.user_meta_len() == 0 {
             return Ok(TxnCommitRecord::None { overlapped_write: None})
         }
-        if let Some(record) = Self::get_commit_by_item(&item.unwrap(), start_ts) {
+        if let Some(record) = Self::get_commit_by_item(&item, start_ts) {
             return Ok(record)
         }
         let mut data_iter = self.snapshot.new_iterator(WRITE_CF, false, true);
@@ -51,10 +55,9 @@ impl CloudReader {
         }
         raw_key.encode_u64_desc(start_ts.into_inner())?;
         let item = self.snapshot.get(EXTRA_CF, &raw_key, 0);
-        if item.is_none() {
+        if item.value_len() == 0 {
             return Ok(TxnCommitRecord::None { overlapped_write: None})
         }
-        let item = item.unwrap();
         let user_meta = UserMeta::from_slice(item.user_meta());
         let write: Write;
         if user_meta.commit_ts == 0 {
@@ -68,10 +71,9 @@ impl CloudReader {
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         let raw_key = key.to_raw().unwrap();
         let item = self.snapshot.get(LOCK_CF, &raw_key, 0);
-        if item.is_none() {
+        if item.value_len() == 0 {
             return Ok(None);
         }
-        let item = item.unwrap();
         let lock = Lock::parse(item.get_value())?;
         return Ok(Some(lock))
     }
@@ -83,12 +85,9 @@ impl CloudReader {
         _gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<Value>> {
         let raw_key = key.to_raw()?;
-        if let Some(item) = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner()) {
-            let val = item.get_value();
-            if val.len() == 0 {
-                return Ok(None)
-            }
-            return Ok(Some(val.to_vec()))
+        let item = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner());
+        if item.value_len() > 0 {
+            return Ok(Some(item.get_value().to_vec()))
         }
         return Ok(None);
     }
@@ -106,7 +105,8 @@ impl CloudReader {
 
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         let raw_key = key.to_raw()?;
-        if let Some(item) = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner()) {
+        let item = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner());
+        if item.user_meta_len() > 0 {
             let user_meta = UserMeta::from_slice(item.user_meta());
             let write_type: WriteType;
             let short_value: Option<Value>;
@@ -140,5 +140,48 @@ impl CloudReader {
             return Ok(OldValue::value(write.short_value.unwrap()))
         }
         return Ok(OldValue::None)
+    }
+
+    /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
+    /// At most `limit` locks will be returned. If `limit` is set to `0`, it means unlimited.
+    ///
+    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
+    /// remaining locks that can be scanned.
+    pub fn scan_locks<F>(
+        &mut self,
+        start: Option<&Key>,
+        end: Option<&Key>,
+        filter: F,
+        limit: usize,
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
+        where
+        F: Fn(&Lock) -> bool,
+    {
+        let mut locks = vec![];
+        let mut lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
+        if let Some(start) = start {
+            let raw_start = start.to_raw()?;
+            lock_iter.seek(&raw_start);
+        } else {
+            lock_iter.rewind();
+        }
+        while lock_iter.valid() {
+            let key = Key::from_raw(lock_iter.key());
+            if let Some(end) = end {
+                if key >= *end {
+                    return Ok((locks, false));
+                }
+            }
+            let item = lock_iter.item();
+            let lock = Lock::parse(item.get_value())?;
+            if filter(&lock) {
+                locks.push((key, lock));
+                if limit > 0 && locks.len() == limit {
+                    return Ok((locks, true));
+                }
+            }
+            lock_iter.next();
+        }
+        Ok((locks,false))
     }
 }

@@ -201,11 +201,14 @@ impl RFEngine {
             entry = &entry[4..];
             let e_type = LittleEndian::read_i32(entry);
             entry = &entry[4..];
+            let context = entry[0];
+            entry = &entry[1..];
             let op = RaftLogOp {
                 region_id,
                 index,
                 term,
                 e_type,
+                context,
                 data: Bytes::copy_from_slice(entry),
             };
             let entries = get_region_raft_logs(&mut entries_map, region_id);

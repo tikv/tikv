@@ -8,6 +8,7 @@ use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tikv_util::debug;
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::worker::Scheduler;
 
@@ -179,6 +180,7 @@ impl RaftWorker {
         }
         let raft_wb = &mut self.ctx.raft_wb;
         if !raft_wb.is_empty() {
+            debug!("persist_state");
             self.ctx.global.engines.raft.write(raft_wb).unwrap()
         }
         raft_wb.reset();
@@ -190,7 +192,6 @@ impl RaftWorker {
             let inbox = inboxes.inboxes.get_mut(&task.region_id).unwrap();
             let peer = &mut inbox.peer.peer_fsm.lock().unwrap().peer;
             peer.handle_post_persist_task(&mut self.ctx, task);
-            self.maybe_send_apply(&inbox.peer.applier);
         }
     }
 
@@ -211,10 +212,11 @@ impl ApplyWorker {
     pub(crate) fn new(
         engine: kvengine::Engine,
         region_sched: Scheduler<RegionTask>,
+        split_scheduler: Scheduler<SplitTask>,
         router: RaftRouter,
         receiver: Receiver<ApplyBatch>,
     ) -> Self {
-        let ctx = ApplyContext::new(engine, Some(region_sched), Some(router));
+        let ctx = ApplyContext::new(engine, Some(region_sched), Some(split_scheduler), Some(router));
         Self { ctx, receiver }
     }
 

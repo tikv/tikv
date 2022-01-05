@@ -14,6 +14,7 @@ use protobuf::{Message, ProtobufEnum};
 use raft_proto::eraftpb;
 use slog_global::info;
 use std::sync::Arc;
+use tikv_util::{error, warn};
 
 #[derive(Clone)]
 pub struct RecoverHandler {
@@ -104,7 +105,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
         meta: &ShardMeta,
     ) -> kvengine::Result<()> {
         info!("recover region:{}, ver:{}", shard.id, shard.ver);
-        let mut ctx = ApplyContext::new(engine.clone(), None, None);
+        let mut ctx = ApplyContext::new(engine.clone(), None, None, None);
         let applied_index = shard.get_write_sequence();
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
@@ -154,7 +155,10 @@ impl kvengine::RecoverHandler for RecoverHandler {
                             engine.apply_change_set(cs)?;
                         }
                     } else {
-                        applier.exec_custom_log(&mut ctx, &custom);
+                        if let Err(e) = applier.exec_custom_log(&mut ctx, &custom) {
+                            // Only duplicated pre-split may fail, we can ignore this error.
+                            warn!("failed to execute custom log {:?}", e);
+                        }
                     }
                 }
             }

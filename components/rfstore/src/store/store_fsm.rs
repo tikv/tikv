@@ -15,6 +15,7 @@ use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::util;
 use raftstore::store::util::is_initial_msg;
+use raft_proto::eraftpb;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,7 +37,7 @@ struct Workers {
     pd_worker: LazyWorker<PdTask>,
     region_worker: Worker,
     region_apply_worker: Worker,
-    split_check_worker: Worker,
+    split_worker: LazyWorker<SplitTask>,
     coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -96,7 +97,7 @@ impl RaftBatchSystem {
             pd_worker,
             region_worker: Worker::new("region-worker"),
             region_apply_worker: Worker::new("region-apply-worker"),
-            split_check_worker: Worker::new("split-check-worker"),
+            split_worker: LazyWorker::new("split-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
 
@@ -110,11 +111,11 @@ impl RaftBatchSystem {
         let region_scheduler = workers
             .region_worker
             .start("snapshot-worker", region_runner);
-        let split_check_runner = SplitCheckRunner::new(engines.kv.clone(), self.router());
-        let split_check_scheduler = workers
-            .split_check_worker
-            .start("split-check-worker", split_check_runner);
-
+        let pd_scheduler = workers.pd_worker.scheduler();
+        let split_scheduler = workers.split_worker.scheduler();
+        let split_remote = workers.split_worker.remote();
+        let split_runner = SplitRunner::new(engines.kv.clone(), self.router(), split_scheduler.clone(), pd_scheduler.clone(), split_remote);
+        workers.split_worker.start(split_runner);
         let ctx = GlobalContext {
             cfg,
             engines,
@@ -122,13 +123,21 @@ impl RaftBatchSystem {
             store_meta,
             router: self.router.clone(),
             trans,
-            pd_scheduler: workers.pd_worker.scheduler(),
-            split_check_scheduler,
+            pd_scheduler,
+            split_scheduler,
             region_scheduler,
             coprocessor_host,
         };
 
         let mut region_peers = self.load_peers(&ctx)?;
+        {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            for peer_fsm in &region_peers {
+                let peer = peer_fsm.get_peer();
+                meta.readers
+                    .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
+            }
+        }
         let mut region_ids = Vec::with_capacity(region_peers.len());
         for peer in region_peers.drain(..) {
             region_ids.push(peer.peer.region_id);
@@ -159,6 +168,7 @@ impl RaftBatchSystem {
         let mut aw = ApplyWorker::new(
             self.ctx.as_ref().unwrap().engines.kv.clone(),
             self.ctx.as_ref().unwrap().region_scheduler.clone(),
+            self.ctx.as_ref().unwrap().split_scheduler.clone(),
             self.router.clone(),
             apply_recevier,
         );
@@ -281,12 +291,14 @@ impl StoreMeta {
         region: Region,
         peer: &mut crate::store::Peer,
     ) {
-        let prev = self.regions.insert(region.get_id(), region.clone());
-        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
+        let region_id = region.get_id();
+        let prev = self.regions.insert(region_id, region.clone());
+        if prev.map_or(true, |r| r.get_id() != region_id) {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.region_id);
         }
         peer.set_region(host, region);
+        self.readers.insert(region_id, ReadDelegate::from_peer(peer));
     }
 }
 
@@ -300,7 +312,7 @@ pub(crate) struct GlobalContext {
     pub(crate) trans: Box<dyn Transport>,
     pub(crate) pd_scheduler: Scheduler<PdTask>,
     pub(crate) region_scheduler: Scheduler<RegionTask>,
-    pub(crate) split_check_scheduler: Scheduler<SplitCheckTask>,
+    pub(crate) split_scheduler: Scheduler<SplitTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -709,6 +721,7 @@ impl StoreMsgHandler {
     }
 
     fn on_generate_engine_meta_change(&self, change_set: kvenginepb::ChangeSet) {
+        debug!("store on generate engine meta change {:?}", &change_set);
         // GenerateEngineMetaChange message is first sent to store handler,
         // Then send it to the router to create a raft log then propose this log, replicate to
         // followers.

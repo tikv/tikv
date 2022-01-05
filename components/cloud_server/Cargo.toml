@@ -1,6 +1,6 @@
 [package]
 name = "cloud_server"
-version = "0.0.1"
+version = "5.4.0-alpha"
 license = "Apache-2.0"
 edition = "2018"
 publish = false
@@ -29,6 +29,7 @@ nortcheck = ["engine_rocks/nortcheck"]
 [dependencies]
 async-stream = "0.2"
 backup = { path = "../backup", default-features = false }
+bytes = "1.0"
 cdc = { path = "../cdc", default-features = false }
 chrono = "0.4"
 tempfile = "3.0"

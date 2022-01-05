@@ -413,7 +413,7 @@ impl MiscExt for Engine {
     }
 
     fn get_engine_used_size(&self) -> TraitsResult<u64> {
-        panic!()
+        Ok(self.size())
     }
 
     fn roughly_cleanup_ranges(&self, _ranges: &[(Vec<u8>, Vec<u8>)]) -> TraitsResult<()> {

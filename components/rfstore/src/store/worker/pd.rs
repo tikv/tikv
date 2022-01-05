@@ -52,15 +52,17 @@ impl FlowStatsReporter {
 
 impl raftstore::store::FlowStatsReporter for FlowStatsReporter {
     fn report_read_stats(&self, read_stats: ReadStats) {
-        if let Err(e) = self.scheduler.schedule(Task::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
+        // TODO(x): report read stats
+        // if let Err(e) = self.scheduler.schedule(Task::ReadStats { read_stats }) {
+        //     error!("Failed to send read flow statistics"; "err" => ?e);
+        // }
     }
 
     fn report_write_stats(&self, write_stats: WriteStats) {
-        if let Err(e) = self.scheduler.schedule(Task::WriteStats { write_stats }) {
-            error!("Failed to send write flow statistics"; "err" => ?e);
-        }
+        // TODO(x): report read stats
+        // if let Err(e) = self.scheduler.schedule(Task::WriteStats { write_stats }) {
+        //     error!("Failed to send write flow statistics"; "err" => ?e);
+        // }
     }
 }
 

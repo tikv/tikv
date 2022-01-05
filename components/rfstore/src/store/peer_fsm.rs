@@ -21,10 +21,10 @@ use std::{cmp, u64};
 use tikv_util::worker::ScheduleError;
 use tikv_util::{box_err, debug, error, info, trace, warn};
 
-use crate::store::cmd_resp::{bind_term, new_error};
+use crate::store::cmd_resp::{bind_term, err_resp, new_error};
 use crate::store::msg::Callback;
 use crate::store::peer::{ConsistencyState, Peer};
-use crate::store::SplitCheckTask;
+use crate::store::{raft_state_key, SplitMethod, SplitTask, worker};
 use crate::store::{notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask};
 use crate::store::{
     raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
@@ -38,6 +38,7 @@ use crate::store::{
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
+use tikv_util::future::paired_future_callback;
 use txn_types::WriteBatchFlags;
 
 /// Limits the maximum number of regions returned by error.
@@ -192,6 +193,10 @@ impl<'a> PeerMsgHandler<'a> {
                 PeerMsg::ApplyChangeSetResult(res) => {
                     self.on_apply_change_set_result(res);
                 }
+                PeerMsg::CommittedEntries(committed) => {
+                    assert!(self.peer.unhandled_committed.is_none());
+                    self.peer.unhandled_committed = Some(committed);
+                }
             }
         }
     }
@@ -204,6 +209,8 @@ impl<'a> PeerMsgHandler<'a> {
                 callback,
                 source,
             } => {
+                // TODO(x)
+                // callback.invoke_with_response(new_error(box_err!("not supported")))
                 self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
             }
             CasualMessage::HalfSplitRegion {
@@ -318,11 +325,11 @@ impl<'a> PeerMsgHandler<'a> {
             "peer_id" => self.fsm.peer_id(),
             "res" => ?res,
         );
+        self.fsm.peer.post_apply(self.ctx, res.apply_state);
         self.on_ready_result(&mut res.results);
         if self.fsm.stopped {
             return;
         }
-        self.fsm.peer.post_apply(self.ctx, res.apply_state);
         // After applying, several metrics are updated, report it to pd to
         // get fair schedule.
         if self.fsm.peer.is_leader() {
@@ -892,8 +899,6 @@ impl<'a> PeerMsgHandler<'a> {
                 // client query miss.
                 new_peer.peer.heartbeat_pd(&self.ctx);
             }
-
-            new_peer.peer.activate(&mut self.ctx.apply_msgs);
             meta.regions.insert(new_region_id, new_region.clone());
             let not_exist = meta
                 .region_ranges
@@ -928,6 +933,10 @@ impl<'a> PeerMsgHandler<'a> {
         drop(meta);
         if is_leader {
             self.on_split_region_check_tick();
+            let store = self.peer.mut_store();
+            if let Some(cs) = store.pending_flush.take() {
+                self.propose_change_set(cs);
+            }
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
@@ -1129,12 +1138,13 @@ impl<'a> PeerMsgHandler<'a> {
             if estimated_size < cfg_split_size {
                 return;
             }
-            let task = SplitCheckTask::new(
+            let task = SplitTask::new(
                 self.region().clone(),
                 self.peer.peer.clone(),
-                cfg_split_size,
+                Callback::None,
+                SplitMethod::MaxSize(cfg_split_size),
             );
-            if let Err(e) = self.ctx.global.split_check_scheduler.schedule(task) {
+            if let Err(e) = self.ctx.global.split_scheduler.schedule(task) {
                 error!(
                     "failed to schedule split check";
                     "region_id" => self.fsm.region_id(),
@@ -1165,29 +1175,9 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         let region = self.fsm.peer.region();
-        let task = PdTask::AskBatchSplit {
-            region: region.clone(),
-            split_keys,
-            peer: self.fsm.peer.peer.clone(),
-            right_derive: true,
-            callback: cb,
-        };
-        if let Err(ScheduleError::Stopped(t)) = self.ctx.global.pd_scheduler.schedule(task) {
-            error!(
-                "failed to notify pd to split: Stopped";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            match t {
-                PdTask::AskBatchSplit { callback, .. } => {
-                    callback.invoke_with_response(new_error(box_err!(
-                        "{} failed to split: Stopped",
-                        self.fsm.peer.tag()
-                    )));
-                }
-                _ => unreachable!(),
-            }
-        }
+        let peer = &self.fsm.peer.peer;
+        let split_task = SplitTask::new(region.clone(), peer.clone(), cb, SplitMethod::Keys(split_keys.clone()));
+        self.ctx.global.split_scheduler.schedule(split_task).unwrap();
     }
 
     fn validate_split_region(
@@ -1270,13 +1260,35 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_generate_engine_change_set(&mut self, cs: kvenginepb::ChangeSet) {
-        info!("generate meta change event"; "region" => self.peer.tag());
+        let tag = self.peer.tag();
+        info!("generate meta change event {:?}", &cs; "region" => tag);
+        if cs.shard_ver > tag.ver() && cs.has_flush() {
+            // This is the initial flush that has greater version than current.
+            // If we propose now, it would get epoch not match error.
+            // So need to wait for the split, then proposed it.
+            let store = self.peer.mut_store();
+            store.pending_flush = Some(cs);
+            return
+        }
+        self.propose_change_set(cs);
+    }
+
+    fn propose_change_set(&mut self, cs: kvenginepb::ChangeSet) {
+        let tag = self.peer.tag();
         let mut req = self.new_raft_cmd_request();
         let mut builder = CustomBuilder::new();
         builder.set_change_set(cs);
         let custom_req = builder.build();
         req.set_custom_request(custom_req);
-        self.propose_raft_command(req, Callback::None);
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                let err_msg = resp.response.get_header().get_error().get_message();
+                error!("failed to propose engine change set {:?} for {:?}", err_msg, tag);
+            } else {
+                info!("proposed meta change event for {:?}", tag);
+            }
+        }));
+        self.propose_raft_command(req, cb);
     }
 
     fn update_follower_split_file_done(
@@ -1342,7 +1354,7 @@ impl<'a> PeerMsgHandler<'a> {
             })
         }
         let split_stage = self.peer.get_store().split_stage;
-        if change.get_stage().value() >= split_stage.value() {
+        if change.get_stage().value() > split_stage.value() {
             info!("peer storage split stage changed";
                 "region" => tag,
                 "from" => split_stage.value(),

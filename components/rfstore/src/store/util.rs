@@ -204,6 +204,14 @@ impl RegionIDVer {
     pub fn from_region(region: &metapb::Region) -> Self {
         Self::new(region.get_id(), region.get_region_epoch().get_version())
     }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn ver(&self) -> u64 {
+        self.ver
+    }
 }
 
 impl slog::Value for RegionIDVer {

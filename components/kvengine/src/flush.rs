@@ -45,7 +45,9 @@ impl Engine {
         let (res_tx, res_rx) = mpsc::bounded(1);
         let mut cs = new_change_set(task.shard_id, task.shard_ver, task.split_stage);
         cs.set_flush(pb::Flush::new());
-        cs.mut_flush().set_properties(task.mem_tbl.get_properties());
+        if let Some(props) = task.mem_tbl.get_properties() {
+            cs.mut_flush().set_properties(props);
+        }
         let mut result = FlushResult {
             change_set: cs,
             err: None,
@@ -131,6 +133,9 @@ impl Engine {
                     // TODO: handle DFS error by queue the failed operation and retry.
                     panic!("{:?}", err);
                 }
+                let id = result.change_set.shard_id;
+                let ver = result.change_set.shard_ver;
+                debug!("engine on flush result {}:{} {:?}", id, ver, &result.change_set);
                 self.meta_change_listener.on_change_set(result.change_set);
                 let task = result.task;
                 if task.next_mem_tbl_size > 0 {

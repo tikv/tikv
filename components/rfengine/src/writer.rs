@@ -100,6 +100,7 @@ impl WALWriter {
         self.buf.put_u64_le(op.index);
         self.buf.put_u32_le(op.term);
         self.buf.put_i32_le(op.e_type);
+        self.buf.push(op.context);
         self.buf.extend_from_slice(op.data.chunk());
     }
 

@@ -1152,10 +1152,14 @@ fn future_scan<L: LockManager>(
     storage: &Storage<RaftKv, L>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
+    let start_key = Key::from_raw(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
+    let debug_start = bytes::Bytes::copy_from_slice(req.get_start_key());
+    let debug_end = bytes::Bytes::copy_from_slice(req.get_end_key());
+    debug!("scan start:{:?}, end:{:?}, limit: {}", debug_start, debug_end, req.get_limit());
     let v = storage.scan(
         req.take_context(),
-        Key::from_raw(req.get_start_key()),
+        start_key,
         end_key,
         req.get_limit() as usize,
         req.get_sample_step() as usize,
@@ -1172,6 +1176,7 @@ fn future_scan<L: LockManager>(
         } else {
             match v {
                 Ok(kv_res) => {
+                    debug!("scan got pairs {}", kv_res.len());
                     resp.set_pairs(map_kv_pairs(kv_res).into());
                 }
                 Err(e) => {

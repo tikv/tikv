@@ -25,28 +25,28 @@ use tikv_util::{debug, error};
 use time::Timespec;
 
 #[derive(Debug)]
-pub enum Progress {
+pub enum ReadProgress {
     Region(metapb::Region),
     Term(u64),
     AppliedIndexTerm(u64),
     LeaderLease(RemoteLease),
 }
 
-impl Progress {
-    pub fn region(region: metapb::Region) -> Progress {
-        Progress::Region(region)
+impl ReadProgress {
+    pub fn region(region: metapb::Region) -> ReadProgress {
+        ReadProgress::Region(region)
     }
 
-    pub fn term(term: u64) -> Progress {
-        Progress::Term(term)
+    pub fn term(term: u64) -> ReadProgress {
+        ReadProgress::Term(term)
     }
 
-    pub fn applied_index_term(applied_index_term: u64) -> Progress {
-        Progress::AppliedIndexTerm(applied_index_term)
+    pub fn applied_index_term(applied_index_term: u64) -> ReadProgress {
+        ReadProgress::AppliedIndexTerm(applied_index_term)
     }
 
-    pub fn leader_lease(lease: RemoteLease) -> Progress {
-        Progress::LeaderLease(lease)
+    pub fn leader_lease(lease: RemoteLease) -> ReadProgress {
+        ReadProgress::LeaderLease(lease)
     }
 }
 
@@ -59,10 +59,10 @@ pub trait ReadExecutor {
 
         let region_snap = self.get_snapshot(region.get_id());
         let cf_num = cf_name_to_num(req.get_get().get_cf());
-        let val = region_snap.snap.get(cf_num, key, u64::MAX);
+        let item = region_snap.snap.get(cf_num, key, u64::MAX);
         let mut resp = Response::default();
-        if let Some(res) = val {
-            resp.mut_get().set_value(res.get_value().to_vec());
+        if item.value_len() > 0 {
+            resp.mut_get().set_value(item.get_value().to_vec());
         }
         Ok(resp)
     }
@@ -159,6 +159,29 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
             track_ver: TrackVer::new(),
+        }
+    }
+
+    fn fresh_valid_ts(&mut self) {
+        self.last_valid_ts = monotonic_raw_now();
+    }
+
+    pub fn update(&mut self, progress: ReadProgress) {
+        self.fresh_valid_ts();
+        self.track_ver.inc();
+        match progress {
+            ReadProgress::Region(region) => {
+                self.region = Arc::new(region);
+            }
+            ReadProgress::Term(term) => {
+                self.term = term;
+            }
+            ReadProgress::AppliedIndexTerm(applied_index_term) => {
+                self.applied_index_term = applied_index_term;
+            }
+            ReadProgress::LeaderLease(leader_lease) => {
+                self.leader_lease = Some(leader_lease);
+            }
         }
     }
 
@@ -326,7 +349,8 @@ impl LocalReader {
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
             self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by epoch not match"; "tag" => &delegate.tag);
+            let delegate_ver = delegate.region.get_region_epoch().get_version();
+            debug!("rejected by epoch not match req {:?}", req; "delegate_ver" => delegate_ver);
             return Ok(None);
         }
 

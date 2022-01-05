@@ -141,13 +141,21 @@ impl ShardMeta {
             return true;
         }
         if cs.has_pre_split() {
-            return self.pre_split.is_some();
+            let dup = self.pre_split.is_some();
+            if dup {
+                info!("{}:{} is already pre_split", self.id, self.ver);
+            }
+            return dup;
         }
         if cs.has_flush() {
             return false;
         }
         if cs.has_split_files() {
-            return self.split_stage == cs.stage;
+            let dup =  self.split_stage == cs.stage;
+            if dup {
+                info!("{}:{} is already split files done", self.id, self.ver);
+            }
+            return dup;
         }
         if cs.has_compaction() {
             let comp = cs.mut_compaction();
@@ -166,12 +174,20 @@ impl ShardMeta {
             for i in 0..comp.get_top_deletes().len() {
                 let id = comp.get_top_deletes()[i];
                 if self.is_compaction_file_deleted(id, comp) {
+                    info!(
+                        "{}:{} skip duplicated compaction file {} is deleted",
+                        self.id, self.ver, id
+                    );
                     return true;
                 }
             }
             for i in 0..comp.get_bottom_deletes().len() {
                 let id = comp.get_bottom_deletes()[i];
                 if self.is_compaction_file_deleted(id, comp) {
+                    info!(
+                        "{}:{} skip duplicated compaction file {} is deleted",
+                        self.id, self.ver, id
+                    );
                     return true;
                 }
             }
@@ -257,7 +273,7 @@ impl ShardMeta {
         self.split_stage = pb::SplitStage::SplitFileDone;
     }
 
-    pub fn apply_split(&mut self, cs: pb::ChangeSet) -> Vec<ShardMeta> {
+    pub fn apply_split(&mut self, cs: pb::ChangeSet, initial_seq: u64) -> Vec<ShardMeta> {
         let old = self;
         let split = cs.get_split();
         let new_shards_len = split.get_new_shards().len();
@@ -282,7 +298,7 @@ impl ShardMeta {
                 meta.seq = old.seq;
             } else {
                 meta.base_ts = old.base_ts + cs.sequence;
-                meta.seq = 1;
+                meta.seq = initial_seq;
             }
             new_shards.push(meta);
         }

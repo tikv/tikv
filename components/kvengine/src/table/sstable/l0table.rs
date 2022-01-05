@@ -7,7 +7,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use moka::sync::SegmentedCache;
 
-use crate::{dfs, table::Value, NUM_CFS};
+use crate::{dfs, table::Value, NUM_CFS, Iterator};
 
 use super::*;
 use crate::table::table::Result;
@@ -81,16 +81,14 @@ impl L0TableCore {
         let mut cfs: [Option<SSTable>; NUM_CFS] = [None, None, None];
         for i in 0..NUM_CFS {
             let start_off = cf_offs[i] as u64;
-            let mut end_off = cf_offs_off as usize;
+            let mut end_off = cf_offs_off;
             if i + 1 < NUM_CFS {
-                end_off = cf_offs[i + 1] as usize;
+                end_off = cf_offs[i + 1] as u64;
             }
-            let cf_data = file.read(start_off, end_off - start_off as usize)?;
-            if cf_data.is_empty() {
+            if start_off == end_off {
                 continue;
             }
-            let mem_file = dfs::InMemFile::new(file.id(), cf_data);
-            let tbl = sstable::SSTable::new(Arc::new(mem_file), cache.clone())?;
+            let tbl = sstable::SSTable::new_l0_cf(file.clone(), start_off, end_off, cache.clone())?;
             cfs[i] = Some(tbl)
         }
         let (smallest, biggest) = Self::compute_smallest_biggest(&cfs);
@@ -183,9 +181,10 @@ impl L0Builder {
         let mut buf = BytesMut::with_capacity(estimated_size);
         let mut offsets = Vec::with_capacity(NUM_CFS);
         for builder in &mut self.builders {
-            offsets.push(buf.len() as u32);
+            let offset = buf.len() as u32;
+            offsets.push(offset);
             if !builder.is_empty() {
-                builder.finish(&mut buf);
+                builder.finish(offset, &mut buf);
             }
         }
         for offset in offsets {

@@ -11,6 +11,7 @@ use bytes::Bytes;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::{metapb, pdpb, raft_serverpb as rspb};
+use raft::LightReady;
 use raft_proto::eraftpb;
 use raftstore::store::util::KeysInfoFormatter;
 
@@ -30,6 +31,7 @@ pub enum PeerMsg {
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
     WaitFollowerSplitFiles(MsgWaitFollowerSplitFiles),
     ApplyChangeSetResult(MsgApplyChangeSetResult),
+    CommittedEntries(Vec<eraftpb::Entry>),
 }
 
 impl PeerMsg {

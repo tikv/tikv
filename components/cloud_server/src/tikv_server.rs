@@ -703,7 +703,9 @@ impl TiKVServer {
         let mut rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
 
         let dfs = Arc::new(kvengine::dfs::InMemFS::new());
-        let opts = Arc::new(kvengine::Options::default());
+        let mut kv_opts = kvengine::Options::default();
+        kv_opts.dir = PathBuf::from(&conf.storage.data_dir);
+        let opts = Arc::new(kv_opts);
         let recoverer = rfstore::store::RecoverHandler::new(rf_engine.clone());
         let meta_iter = recoverer.clone();
         let id_allocator = Arc::new(PdIDAllocator { pd });

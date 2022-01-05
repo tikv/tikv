@@ -13,6 +13,7 @@ use std::{
     sync::mpsc::SyncSender,
     thread::{self, JoinHandle},
 };
+use slog_global::debug;
 use thiserror::Error as ThisError;
 
 use crate::*;
@@ -109,16 +110,19 @@ pub(crate) struct RaftLogOp {
     pub(crate) index: u64,
     pub(crate) term: u32,
     pub(crate) e_type: i32,
+    pub(crate) context: u8,
     pub(crate) data: Bytes,
 }
 
 impl RaftLogOp {
     fn new(region_id: u64, entry: &eraftpb::Entry) -> Self {
+        let context = *entry.context.last().unwrap_or(&0);
         Self {
             region_id,
             index: entry.index,
             term: entry.term as u32,
             e_type: entry.entry_type.value(),
+            context,
             data: entry.data.clone(),
         }
     }
@@ -389,6 +393,9 @@ impl RegionRaftLogs {
         entry.set_entry_type(eraftpb::EntryType::from_i32(op.e_type).unwrap());
         entry.set_term(op.term as u64);
         entry.set_index(index);
+        if op.context > 0 {
+            entry.set_context(vec![op.context].into());
+        }
         entry.set_data(op.data.clone());
         Some(entry)
     }

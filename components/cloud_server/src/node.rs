@@ -19,7 +19,7 @@ use rfengine::RFEngine;
 use rfstore::router::{LocalReadRouter, RaftRouter, RaftStoreRouter};
 use rfstore::store::store_fsm::StoreMeta;
 use rfstore::store::{self, Config as StoreConfig, Engines};
-use rfstore::store::{PdTask, RaftBatchSystem, SplitCheckTask, Transport};
+use rfstore::store::{PdTask, RaftBatchSystem, SplitTask, Transport};
 use tikv::import::SSTImporter;
 use tikv::read_pool::ReadPoolHandle;
 use tikv::server::lock_manager::LockManager;

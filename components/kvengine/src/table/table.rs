@@ -154,18 +154,33 @@ impl Value {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.meta == 0 && self.ptr == ptr::null()
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         !self.is_empty()
     }
 
+    #[inline(always)]
+    pub(crate) fn is_deleted(&self) -> bool {
+        is_deleted(self.meta)
+    }
+
+    pub fn value_len(&self) -> usize {
+        self.val_len as usize
+    }
+
+    pub fn user_meta_len(&self) -> usize {
+        self.user_meta_len as usize
+    }
+
+    #[inline(always)]
     pub fn user_meta(&self) -> &[u8] {
         unsafe { slice::from_raw_parts::<u8>(self.ptr, self.user_meta_len as usize) }
     }
 
+    #[inline(always)]
     pub fn get_value(&self) -> &[u8] {
         unsafe {
             slice::from_raw_parts::<u8>(
@@ -177,10 +192,6 @@ impl Value {
 
     pub fn encoded_size(&self) -> usize {
         self.user_meta_len as usize + self.val_len as usize + VALUE_PTR_OFF
-    }
-
-    pub fn is_deleted(&self) -> bool {
-        is_deleted(self.meta)
     }
 }
 pub struct EmptyIterator;

@@ -1,17 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::*;
-use crate::{
-    meta::is_move_down,
-    table::sstable::{self, SSTable},
-};
+use crate::{Iterator, meta::is_move_down, table::sstable::{self, SSTable}};
 use crossbeam_epoch as epoch;
 use kvenginepb as pb;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {
+        debug!("apply change set {:?}", &cs);
         self.pre_load_files(&cs)?;
         let shard = self.get_shard(cs.shard_id);
         if shard.is_none() {
@@ -34,10 +33,10 @@ impl Engine {
         if cs.has_flush() {
             self.apply_flush(&shard, cs)?
         } else if cs.has_compaction() {
-            let resut = self.apply_compaction(&shard, cs);
+            let result = self.apply_compaction(&shard, cs);
             store_bool(&shard.compacting, false);
-            if resut.is_err() {
-                return resut;
+            if result.is_err() {
+                return result;
             }
         } else if cs.has_split_files() {
             self.apply_split_files(&shard, cs)?
@@ -154,6 +153,7 @@ impl Engine {
         let mut new_level = &mut new_scf.levels[level_idx];
         let old_level = &old_scf.levels[level_idx];
         new_level.total_size = 0;
+        new_level.tables.truncate(0);
         let mut need_update = false;
         for create in creates {
             if create.cf as usize != cf {
@@ -182,7 +182,13 @@ impl Engine {
         new_level
             .tables
             .sort_by(|a, b| a.smallest().cmp(b.smallest()));
-        assert_tables_order(&new_level.tables);
+        if !check_tables_order(&new_level.tables) {
+            panic!("invalid table order, shard:[{}:{}][{:?},{:?}][{:?}], cf:{}, level:{}, creates:{:?}, deletes:{:?}, tables:{:?}",
+                shard.id, shard.ver, &shard.start, &shard.end,
+                   shard.get_all_files(), cf, level, creates, del_ids,
+                new_level.tables.iter().map(|t| t.id()).collect::<Vec<u64>>(),
+            );
+        };
         if !cas_resource(&shard.cfs[cf], g, shared, Arc::new(new_scf)) {
             error!("there maybe concurrent apply compaction.");
             panic!("failed to update level_handler")
@@ -306,9 +312,9 @@ impl Engine {
     }
 }
 
-pub(crate) fn assert_tables_order(tables: &Vec<SSTable>) {
+pub(crate) fn check_tables_order(tables: &Vec<SSTable>) -> bool {
     if tables.len() <= 1 {
-        return;
+        return true;
     }
     for i in 0..(tables.len() - 1) {
         let ti = &tables[i];
@@ -317,16 +323,8 @@ pub(crate) fn assert_tables_order(tables: &Vec<SSTable>) {
             || ti.smallest() >= tj.smallest()
             || ti.biggest() >= tj.biggest()
         {
-            error!(
-                "ti:{}[{:x?},{:x?}], tj:{}[{:x?}, {:x?}]",
-                ti.id(),
-                ti.smallest(),
-                ti.biggest(),
-                tj.id(),
-                tj.smallest(),
-                tj.biggest()
-            );
-            panic!("the order of tables is invalid")
+            return false
         }
     }
+    true
 }

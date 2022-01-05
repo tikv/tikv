@@ -12,6 +12,7 @@ use std::{
     },
     time::Instant,
 };
+use std::sync::Mutex;
 
 use crate::*;
 use crate::{
@@ -137,7 +138,7 @@ pub struct Shard {
 
     size_stats: Atomic<ShardSizeStats>,
 
-    pub(crate) compact_lock: tokio::sync::Mutex<()>,
+    pub(crate) compact_lock: Mutex<()>,
 }
 
 pub const MEM_TABLE_SIZE_KEY: &str = "_mem_table_size";
@@ -174,7 +175,7 @@ impl Shard {
             write_sequence: Default::default(),
             ingest_pre_split_seq: Default::default(),
             size_stats: Default::default(),
-            compact_lock: tokio::sync::Mutex::new(()),
+            compact_lock: Mutex::new(()),
         };
         if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {
             shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()))
@@ -388,6 +389,7 @@ impl Shard {
     }
 
     pub(crate) fn set_split_stage(&self, stage: pb::SplitStage) {
+        debug!("shard {}:{} set split stage {:?}", self.id, self.ver, &stage);
         self.split_stage.store(stage.value(), Release);
     }
 

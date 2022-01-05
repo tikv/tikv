@@ -165,7 +165,6 @@ mod tests {
         build_test_table_with_kvs, build_test_table_with_prefix, new_test_cache, SSTable,
     };
     use crate::table::Iterator;
-    use std::sync::Arc;
 
     #[test]
     fn test_concat_iterator_one_table() {

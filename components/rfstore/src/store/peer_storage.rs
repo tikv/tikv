@@ -20,7 +20,8 @@ use raft_proto::eraftpb::{ConfState, HardState};
 use raftstore::store::util;
 use raftstore::store::util::conf_state_from_region;
 use rfengine;
-use tikv_util::{box_err, info};
+use rfengine::WriteBatch;
+use tikv_util::{box_err, debug, info};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -69,7 +70,7 @@ pub(crate) struct PeerStorage {
 
     pub(crate) peer_id: u64,
     region: metapb::Region,
-    raft_state: RaftState,
+    pub(crate) raft_state: RaftState,
     apply_state: RaftApplyState,
     last_term: u64,
 
@@ -78,6 +79,7 @@ pub(crate) struct PeerStorage {
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
     pub(crate) split_stage: kvenginepb::SplitStage,
+    pub(crate) pending_flush: Option<kvenginepb::ChangeSet>,
 }
 
 impl raft::Storage for PeerStorage {
@@ -126,10 +128,16 @@ impl raft::Storage for PeerStorage {
         if self.shard_meta.is_none() {
             return Ok(0);
         }
+        if idx == self.last_index() {
+            return Ok(self.last_term())
+        }
         if idx == self.truncated_index() {
-            return Ok(RAFT_INIT_LOG_TERM);
+            return Ok(self.truncated_term())
         }
         self.check_range(idx, idx + 1)?;
+        if self.truncated_term() == self.last_term {
+            return Ok(self.last_term);
+        }
         Ok(self
             .engines
             .raft
@@ -184,10 +192,8 @@ impl PeerStorage {
         let mut shard_meta: Option<ShardMeta> = None;
         let (mut meta_index, mut meta_term) = (0u64, 0u64);
         if apply_state.applied_index > 0 {
-            let shard_meta_bin = engines
-                .raft
-                .get_state(region.get_id(), KV_ENGINE_META_KEY)
-                .unwrap();
+            let res = engines.raft.get_state(region.get_id(), KV_ENGINE_META_KEY);
+            let shard_meta_bin = res.unwrap();
             let mut change_set = kvenginepb::ChangeSet::default();
             change_set.merge_from_bytes(&shard_meta_bin).unwrap();
             let meta = kvengine::ShardMeta::new(change_set);
@@ -211,6 +217,7 @@ impl PeerStorage {
             initial_flushed,
             shard_meta,
             split_stage: kvenginepb::SplitStage::Initial,
+            pending_flush: None,
         })
     }
 
@@ -290,7 +297,10 @@ impl PeerStorage {
     pub fn truncated_term(&self) -> u64 {
         self.shard_meta
             .as_ref()
-            .map_or(0, |m| m.get_property(TERM_KEY).unwrap().get_u64_le())
+            .map_or(0, |m| {
+                debug!("get property term key");
+                m.get_property(TERM_KEY).unwrap().get_u64_le()
+            })
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -363,19 +373,17 @@ impl PeerStorage {
         res
     }
 
-    pub fn handle_persisted_light_ready(
+    pub fn update_commit_index(
         &mut self,
         ctx: &mut RaftContext,
-        light_ready: raft::LightReady,
+        commit_idx: u64,
     ) {
-        if let Some(commit_idx) = light_ready.commit_index() {
-            assert!(self.raft_state.commit < commit_idx);
-            self.raft_state.commit = commit_idx;
-            self.write_raft_state(ctx);
-        }
+        assert!(self.raft_state.commit < commit_idx);
+        self.raft_state.commit = commit_idx;
+        self.write_raft_state(ctx);
     }
 
-    fn write_raft_state(&mut self, ctx: &mut RaftContext) {
+    pub fn write_raft_state(&mut self, ctx: &mut RaftContext) {
         let key = raft_state_key(self.region.get_region_epoch().get_version());
         ctx.raft_wb
             .set_state(self.get_region_id(), &key, &self.raft_state.marshal());

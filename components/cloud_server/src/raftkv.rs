@@ -634,11 +634,17 @@ fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
         match m {
             Modify::Put(cf, key, val) => match cf {
                 CF_DEFAULT => {
-                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    let raw_key = key.to_raw().unwrap();
+
+
                     values.insert(raw_key, val);
                 }
                 CF_LOCK => {
                     let raw_key = key.to_raw().unwrap();
+                    if raw_key[0] == 'm' as u8 {
+                        let debug_key = bytes::Bytes::copy_from_slice(&raw_key);
+                        debug!("lock raw_key {:?}", debug_key);
+                    }
                     let mut lock = Lock::parse(&val).unwrap();
                     if lock.lock_type == LockType::Put && lock.short_value.is_none() {
                         lock.short_value = values.remove(&raw_key);
@@ -658,7 +664,7 @@ fn build_commit(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
             Modify::Put(cf, key, val) => match cf {
                 CF_WRITE => {
                     let commit_ts = key.decode_ts().unwrap();
-                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    let raw_key = key.to_raw().unwrap();
                     builder.append_commit(&raw_key, commit_ts.into_inner());
                 }
                 _ => unreachable!(),
@@ -677,12 +683,12 @@ fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
         match m {
             Modify::Put(cf, key, val) => match cf {
                 CF_DEFAULT => {
-                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    let raw_key = key.to_raw().unwrap();
                     values.insert(raw_key, val);
                 }
                 CF_WRITE => {
                     let commit_ts = key.decode_ts().unwrap().into_inner();
-                    let raw_key = key.truncate_ts().unwrap().to_raw().unwrap();
+                    let raw_key = key.to_raw().unwrap();
                     let write = WriteRef::parse(&val).unwrap();
                     let mut value = vec![];
                     if write.write_type == WriteType::Put {
@@ -696,9 +702,9 @@ fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                     let start_ts = write.start_ts.into_inner();
                     builder.append_one_pc(&raw_key, &value, is_extra, start_ts, commit_ts);
                 }
-                _ => unreachable!(),
+                _ => unreachable!("cf {:?}", cf),
             },
-            _ => unreachable!(),
+            _ => unreachable!("{:?}", m),
         }
     }
 }
@@ -722,7 +728,7 @@ fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
             Modify::Put(cf, key, val) => {
                 assert_eq!(*cf, CF_WRITE);
                 let start_ts = key.decode_ts().unwrap().into_inner();
-                let raw_key = key.clone().truncate_ts().unwrap().to_raw().unwrap();
+                let raw_key = key.to_raw().unwrap();
                 let delete_lock = is_same_key_del_lock(&modifies, i + 1, key);
                 builder.append_rollback(&raw_key, start_ts, delete_lock);
             }
@@ -746,7 +752,7 @@ fn is_same_key_del_lock(modifies: &Vec<Modify>, next_idx: usize, key: &Key) -> b
             }
             let next_encoded = next_key.as_encoded();
             let key_encoded_with_ts = key.as_encoded();
-            let key_encoded = &key_encoded_with_ts[..key_encoded_with_ts.len() - 1];
+            let key_encoded = &key_encoded_with_ts[..key_encoded_with_ts.len() - 8];
             next_encoded == key_encoded
         }
         _ => false,

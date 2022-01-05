@@ -1,8 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::cmd_resp::err_resp;
-use crate::store::worker::split_check::{finish_split, split_shard_files};
-use crate::store::{Callback, MsgWaitFollowerSplitFiles, PeerMsg, RegionIDVer};
+use crate::store::{Callback, MsgApplyChangeSetResult, MsgWaitFollowerSplitFiles, PeerMsg, RegionIDVer};
 use crate::RaftRouter;
 use bytes::Bytes;
 use kvenginepb::SplitStage;
@@ -10,6 +9,7 @@ use kvproto::{metapb, raft_cmdpb};
 use protobuf::{ProtobufEnum, RepeatedField};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
+use yatp::Remote;
 use tikv_util::mpsc::Receiver;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{error, info, warn};
@@ -19,16 +19,6 @@ use tikv_util::{error, info, warn};
 pub enum Task {
     ApplyChangeSet {
         change: kvenginepb::ChangeSet,
-    },
-    RecoverSplit {
-        region: metapb::Region,
-        peer: metapb::Peer,
-        split_keys: Vec<Bytes>,
-        stage: kvenginepb::SplitStage,
-    },
-    FinishSplit {
-        region: metapb::Region,
-        wait: MsgWaitFollowerSplitFiles,
     },
     RejectChangeSet {
         change: kvenginepb::ChangeSet,
@@ -40,21 +30,9 @@ impl Display for Task {
         match self {
             Task::ApplyChangeSet { change } => write!(
                 f,
-                "Snap apply for {}:{}",
+                "ApplyChangeSet for {}:{}",
                 change.get_shard_id(),
                 change.get_shard_ver()
-            ),
-            Task::FinishSplit { region, wait: _ } => write!(
-                f,
-                "FinishSplit {}:{}",
-                region.get_id(),
-                region.get_region_epoch().get_version(),
-            ),
-            Task::RecoverSplit { region, stage, .. } => write!(
-                f,
-                "recover split for {}, at stage {}",
-                RegionIDVer::from_region(region),
-                stage.value(),
             ),
             Task::RejectChangeSet { change, .. } => write!(
                 f,
@@ -65,10 +43,25 @@ impl Display for Task {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct ChangeSetKey {
+    region_id: u64,
+    sequence: u64
+}
+
+impl ChangeSetKey {
+    fn new(region_id: u64, sequence: u64) -> Self {
+        Self {
+            region_id,
+            sequence,
+        }
+    }
+}
+
 pub struct Runner {
     kv: kvengine::Engine,
     router: RaftRouter,
-    rejects: HashMap<RegionIDVer, kvenginepb::ChangeSet>,
+    rejects: HashMap<ChangeSetKey, kvenginepb::ChangeSet>,
     apply_scheduler: Scheduler<ApplyTask>,
 }
 
@@ -92,8 +85,9 @@ impl Runner {
     ) -> Option<Receiver<crate::Result<Task>>> {
         let kv = &self.kv;
         let tp = get_change_set_type(&change_set);
+        let change_set_key = ChangeSetKey::new(change_set.get_shard_id(), change_set.get_sequence());
         let id_ver = RegionIDVer::new(change_set.get_shard_id(), change_set.get_shard_ver());
-        if let Some(meta_change) = self.rejects.remove(&id_ver) {
+        if let Some(meta_change) = self.rejects.remove(&change_set_key) {
             if let Some(shard) = self.kv.get_shard(change_set.get_shard_id()) {
                 warn!("shard reject change set";
                     "region" => id_ver,
@@ -160,13 +154,8 @@ impl Runnable for Runner {
                 }
             }
             Task::RejectChangeSet { change } => {
-                let id_ver = RegionIDVer::new(change.get_shard_id(), change.get_shard_ver());
-                self.rejects.insert(id_ver, change);
-            }
-            _ => {
-                let (sender, receiver) = tikv_util::mpsc::bounded(1);
-                sender.send(Ok(task));
-                self.apply_scheduler.schedule(ApplyTask { desc, receiver });
+                let key = ChangeSetKey::new(change.get_shard_id(), change.get_sequence());
+                self.rejects.insert(key, change);
             }
         }
     }
@@ -192,34 +181,6 @@ impl ApplyRunner {
             return Ok(());
         }
         self.kv.apply_change_set(change.clone())?;
-        Ok(())
-    }
-
-    pub fn handle_recover_split(
-        &self,
-        region: metapb::Region,
-        peer: metapb::Peer,
-        split_keys: Vec<Bytes>,
-        stage: kvenginepb::SplitStage,
-    ) -> crate::Result<()> {
-        let tag = RegionIDVer::from_region(&region);
-        info!("handle recover split"; "region" => tag);
-        match stage {
-            SplitStage::Initial => {}
-            SplitStage::PreSplit => {
-                panic!("region {} the region worker will be blocked", tag);
-            }
-            SplitStage::PreSplitFlushDone => {
-                split_shard_files(&self.router, &self.kv, &region, &peer)?;
-            }
-            SplitStage::SplitFileDone => {}
-        }
-        let msg = MsgWaitFollowerSplitFiles {
-            split_keys,
-            callback: Callback::None,
-        };
-        self.router
-            .send(region.get_id(), PeerMsg::WaitFollowerSplitFiles(msg));
         Ok(())
     }
 }
@@ -248,39 +209,17 @@ impl Runnable for ApplyRunner {
         match task {
             Task::ApplyChangeSet { change } => {
                 let id_ver = RegionIDVer::new(change.shard_id, change.shard_ver);
+                let mut err_str = None;
                 if let Err(err) = self.handle_apply_change_set(&change) {
+                    err_str = Some(format!("{:?}", err));
                     warn!("failed to apply change set"; "region" => id_ver, "error" => ?err);
                 }
-            }
-            Task::RecoverSplit {
-                region,
-                peer,
-                split_keys,
-                stage,
-            } => {
-                let id_ver = RegionIDVer::from_region(&region);
-                if let Err(err) = self.handle_recover_split(region, peer, split_keys, stage) {
-                    warn!("failed to handle recover split"; "region" => id_ver, "error" => ?err);
-                }
-            }
-            Task::FinishSplit { region, wait } => {
-                let id_ver = RegionIDVer::from_region(&region);
-                match finish_split(&self.router, &region, wait.split_keys) {
-                    Ok(regions) => {
-                        let mut splits = raft_cmdpb::BatchSplitResponse::default();
-                        splits.set_regions(RepeatedField::from(regions));
-                        let mut admin_resp = raft_cmdpb::AdminResponse::default();
-                        admin_resp.set_splits(splits);
-                        let mut resp = raft_cmdpb::RaftCmdResponse::default();
-                        resp.set_admin_response(admin_resp);
-                        wait.callback.invoke_with_response(resp);
-                    }
-                    Err(err) => {
-                        error!("failed to finish split"; "region" => id_ver, "err" => ?err);
-                        let resp = err_resp(err, 0);
-                        wait.callback.invoke_with_response(resp);
-                    }
-                }
+                let msg_result = MsgApplyChangeSetResult {
+                    change_set: change,
+                    err: err_str,
+                };
+                let apply_result = PeerMsg::ApplyChangeSetResult(msg_result);
+                self.router.send(id_ver.id(), apply_result);
             }
             Task::RejectChangeSet { .. } => unreachable!(),
         };

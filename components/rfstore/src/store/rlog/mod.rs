@@ -265,8 +265,7 @@ pub fn is_engine_meta_log(data: &[u8]) -> bool {
         TYPE_FLUSH
         | TYPE_COMPACTION
         | TYPE_PRE_SPLIT
-        | TYPE_SPLIT_FILES
-        | TYPE_NEX_MEM_TABLE_SIZE => true,
+        | TYPE_SPLIT_FILES => true,
         _ => false,
     }
 }

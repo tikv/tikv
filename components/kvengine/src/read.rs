@@ -13,6 +13,7 @@ use crossbeam_epoch as epoch;
 
 pub struct Item<'a> {
     val: table::Value,
+    pub path: AccessPath,
     phantom: PhantomData<&'a i32>,
 }
 
@@ -25,12 +26,21 @@ impl std::ops::Deref for Item<'_> {
 }
 
 impl Item<'_> {
-    fn new(val: table::Value) -> Self {
+    fn new() -> Self {
         Self {
-            val,
+            val: table::Value::new(),
+            path: AccessPath::default(),
             phantom: Default::default(),
         }
     }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct AccessPath {
+    pub splitting: u8,
+    pub mem_table: u8,
+    pub l0: u8,
+    pub ln: u8,
 }
 
 pub struct SnapAccess {
@@ -112,27 +122,24 @@ impl SnapAccess {
         }
     }
 
-    pub fn get(&self, cf: usize, key: &[u8], version: u64) -> Option<Item> {
+    /// get an Item by key. Caller need to call is_some() before get_value.
+    /// We don't return Option because we may need AccessPath even if the item is none.
+    pub fn get(&self, cf: usize, key: &[u8], version: u64) -> Item {
         let mut version = version;
         if version == 0 {
             version = u64::MAX;
         }
-        let val = self.get_value(cf, key, version);
-        if val.is_empty() {
-            return None;
-        }
-        if val.is_deleted() {
-            return None;
-        }
-        let item = Item::new(val);
-        Some(item)
+        let mut item = Item::new();
+        item.val = self.get_value(cf, key, version, &mut item.path);
+        item
     }
 
-    fn get_value(&self, cf: usize, key: &[u8], version: u64) -> table::Value {
+    fn get_value(&self, cf: usize, key: &[u8], version: u64, path: &mut AccessPath) -> table::Value {
         let key_hash = farmhash::fingerprint64(key);
         if let Some(split_ctx) = self.splitting.clone() {
             let tbl = split_ctx.get_spliting_table(key);
             let v = tbl.get_cf(cf).get(key, version);
+            path.splitting += 1;
             if v.is_valid() {
                 return v;
             }
@@ -140,6 +147,7 @@ impl SnapAccess {
         for i in 0..self.mem_tbls.tbls.len() {
             let tbl = self.mem_tbls.tbls[i].get_cf(cf);
             let v = tbl.get(key, version);
+            path.mem_table += 1;
             if v.is_valid() {
                 return v;
             }
@@ -147,6 +155,7 @@ impl SnapAccess {
         for l0 in &self.l0_tbls.tbls {
             if let Some(tbl) = &l0.get_cf(cf) {
                 let v = tbl.get(key, version, key_hash);
+                path.l0 += 1;
                 if v.is_valid() {
                     return v;
                 }
@@ -155,6 +164,7 @@ impl SnapAccess {
         let scf = &self.scfs[cf];
         for lh in &scf.levels {
             let v = lh.get(key, version, key_hash);
+            path.ln += 1;
             if v.is_valid() {
                 return v;
             }
@@ -162,7 +172,7 @@ impl SnapAccess {
         return table::Value::new();
     }
 
-    pub fn multi_get(&self, cf: usize, keys: &[Vec<u8>], version: u64) -> Vec<Option<Item>> {
+    pub fn multi_get(&self, cf: usize, keys: &[Vec<u8>], version: u64) -> Vec<Item> {
         let mut items = Vec::with_capacity(keys.len());
         for key in keys {
             let item = self.get(cf, key, version);
@@ -246,6 +256,7 @@ impl Iterator {
     pub fn item(&self) -> Item {
         Item {
             val: self.val,
+            path: AccessPath::default(),
             phantom: Default::default(),
         }
     }

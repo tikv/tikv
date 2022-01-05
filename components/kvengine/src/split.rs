@@ -8,6 +8,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use crossbeam_epoch as epoch;
 use futures::future::try_join_all;
+use futures::task::SpawnExt;
 use kvenginepb as pb;
 use slog_global::{info, warn};
 
@@ -35,7 +36,7 @@ impl Engine {
         Ok(())
     }
 
-    pub async fn split_shard_files(&self, shard_id: u64, shard_ver: u64) -> Result<pb::ChangeSet> {
+    pub fn split_shard_files(&self, shard_id: u64, shard_ver: u64) -> Result<pb::ChangeSet> {
         let g = &epoch::pin();
         let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
         if !shard.is_splitting() {
@@ -43,10 +44,9 @@ impl Engine {
         }
         let mut cs = new_change_set(shard_id, shard_ver, pb::SplitStage::SplitFileDone);
 
-        let _ = shard.compact_lock.lock().await;
-        self.wait_for_pre_split_flush_state(&shard).await;
-        self.split_shard_l0_files(&shard, cs.mut_split_files())
-            .await?;
+        let guard = shard.compact_lock.lock().unwrap();
+        self.wait_for_pre_split_flush_state(&shard);
+        self.split_shard_l0_files(&shard, cs.mut_split_files());
 
         let dfs_opts = dfs::Options::new(shard_id, shard_ver);
         for cf in 0..NUM_CFS {
@@ -58,14 +58,13 @@ impl Engine {
                     lh,
                     shard.get_ref_split_keys(g),
                     cs.mut_split_files(),
-                )
-                .await?;
+                )?;
             }
         }
         Ok(cs)
     }
 
-    async fn wait_for_pre_split_flush_state(&self, shard: &Shard) {
+    fn wait_for_pre_split_flush_state(&self, shard: &Shard) {
         loop {
             info!(
                 "shard {}:{} split stage {:?}",
@@ -83,7 +82,7 @@ impl Engine {
         }
     }
 
-    async fn split_shard_l0_files(
+    fn split_shard_l0_files(
         &self,
         shard: &Shard,
         split_files: &mut pb::SplitFiles,
@@ -95,7 +94,7 @@ impl Engine {
             if !need_split_l0(split_keys, l0) {
                 continue;
             }
-            let mut new_l0s = self.split_shard_l0_table(shard, l0, split_keys).await?;
+            let mut new_l0s = self.split_shard_l0_table(shard, l0, split_keys)?;
             for new_l0 in new_l0s.drain(..) {
                 split_files.mut_l0_creates().push(new_l0);
             }
@@ -104,7 +103,7 @@ impl Engine {
         Ok(())
     }
 
-    async fn split_shard_l0_table(
+    fn split_shard_l0_table(
         &self,
         shard: &Shard,
         l0: &sstable::L0Table,
@@ -140,15 +139,22 @@ impl Engine {
             }
         }
         let dfs_opts = dfs::Options::new(shard.id, shard.ver);
-        let mut futures = Vec::new();
+        let pool = self.fs.get_future_pool();
+        let (tx, rx) = tikv_util::mpsc::bounded(l0_creates.len());
         for (idx, l0_create) in l0_creates.iter().enumerate() {
             let fs = self.fs.clone();
             let id = l0_create.get_id();
             let data = l0_datas[idx].clone();
-            let future = async move { fs.create(id, data, dfs_opts).await };
-            futures.push(future);
+            let f_tx = tx.clone();
+            let future = async move {
+                let res = fs.create(id, data, dfs_opts).await;
+                let _ = f_tx.send(res);
+            };
+            pool.spawn_ok(future);
         }
-        try_join_all(futures).await?;
+        for _ in 0..l0_creates.len() {
+            rx.recv().unwrap()?;
+        }
         Ok(l0_creates)
     }
 
@@ -185,7 +191,7 @@ impl Engine {
         Ok(Some((l0_create, data)))
     }
 
-    async fn split_tables(
+    fn split_tables(
         &self,
         dfs_opts: dfs::Options,
         cf: usize,
@@ -195,7 +201,9 @@ impl Engine {
     ) -> Result<()> {
         let mut to_del_ids = HashSet::new();
         let mut related_keys = vec![];
-        let mut futures = vec![];
+        let pool = self.fs.get_future_pool();
+        let (tx, rx) = tikv_util::mpsc::unbounded();
+        let mut future_cnt = 0;
         for tbl in lh.tables.iter() {
             related_keys.truncate(0);
             for key in keys {
@@ -229,13 +237,20 @@ impl Engine {
                 )? {
                     split_files.mut_table_creates().push(create);
                     let fs = self.fs.clone();
-                    let future = async move { fs.create(id, data, dfs_opts).await };
-                    futures.push(future);
+                    let f_tx = tx.clone();
+                    let future = async move {
+                        let res = fs.create(id, data, dfs_opts).await;
+                        let _ = f_tx.send(res);
+                    };
+                    pool.spawn_ok(future);
+                    future_cnt += 1;
                 }
             }
             split_files.mut_table_deletes().push(tbl.id());
         }
-        try_join_all(futures).await?;
+        for _ in 0..future_cnt {
+            rx.recv().unwrap()?
+        }
         Ok(())
     }
 
@@ -260,7 +275,7 @@ impl Engine {
             return Ok(None);
         }
         let mut buf = BytesMut::with_capacity(b.estimated_size());
-        let result = b.finish(&mut buf);
+        let result = b.finish(0, &mut buf);
         let mut table_create = pb::TableCreate::new();
         table_create.set_id(id);
         table_create.set_cf(cf as i32);
@@ -271,7 +286,7 @@ impl Engine {
         Ok(Some((table_create, buf.freeze())))
     }
 
-    pub fn finish_split(&self, cs: pb::ChangeSet) -> Result<()> {
+    pub fn finish_split(&self, cs: pb::ChangeSet, initial_seq: u64) -> Result<()> {
         let shard = self.get_shard_with_ver(cs.shard_id, cs.shard_ver)?;
         if shard.get_split_stage() != pb::SplitStage::SplitFileDone {
             return Err(Error::WrongSplitStage);
@@ -280,7 +295,7 @@ impl Engine {
         let g = &epoch::pin();
         let split_ctx = shard.get_split_ctx(g);
         assert_eq!(split.get_new_shards().len(), split_ctx.mem_tbls.len());
-        self.build_split_shards(&shard, split, cs.get_sequence())
+        self.build_split_shards(&shard, split, cs.get_sequence(), initial_seq)
     }
 
     fn build_split_shards(
@@ -288,6 +303,7 @@ impl Engine {
         old_shard: &Shard,
         split: &pb::Split,
         sequence: u64,
+        initial_seq: u64,
     ) -> Result<()> {
         let g = &epoch::pin();
         let split_ctx = old_shard.get_split_ctx(g);
@@ -321,8 +337,8 @@ impl Engine {
                 store_u64(&new_shard.max_mem_table_size, mem_size);
             } else {
                 new_shard.base_ts = old_shard.base_ts + sequence;
-                store_u64(&new_shard.meta_seq, 1);
-                store_u64(&new_shard.write_sequence, 1);
+                store_u64(&new_shard.meta_seq, initial_seq);
+                store_u64(&new_shard.write_sequence, initial_seq);
             }
             new_shard.atomic_add_mem_table(g, mem_tbl.clone());
             new_shard.atomic_remove_mem_table(g);
@@ -358,6 +374,7 @@ impl Engine {
         for shard in new_shards.drain(..) {
             shard.refresh_estimated_size();
             let id = shard.id;
+            debug!("split insert shard {}:{}", id, shard.ver);
             self.shards.insert(id, shard.clone());
             let mem_ts = shard.load_mem_table_ts();
             let mem_tbl = self.switch_mem_table(&shard, mem_ts);

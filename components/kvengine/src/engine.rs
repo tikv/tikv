@@ -197,7 +197,7 @@ impl EngineCore {
 
     pub fn remove_shard(&self, shard_id: u64) -> bool {
         let x = self.shards.remove(&shard_id);
-        if let Some((_, ptr)) = x {
+        if let Some((_, _ptr)) = x {
             return true;
         }
         false

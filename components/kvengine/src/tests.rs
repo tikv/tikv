@@ -2,7 +2,6 @@
 
 use crate::{dfs::InMemFS, *};
 use bytes::{Buf, Bytes};
-use crossbeam_epoch as epoch;
 use kvenginepb as pb;
 use kvenginepb::ChangeSet;
 use protobuf::RepeatedField;
@@ -72,11 +71,9 @@ fn test_engine() {
     });
 
     let (begin, end) = (0, 10000);
-    let cf = 0;
-    let val_repeat = 10;
-    load_data(engine.opts.clone(), begin, end, 0, 10, applier_tx.clone());
-    check_get(begin, end, cf, val_repeat, &keys, &engine);
-    check_iterater(begin, end, cf, val_repeat, &engine);
+    load_data(engine.opts.clone(), begin, end, applier_tx.clone());
+    check_get(begin, end, &keys, &engine);
+    check_iterater(begin, end, &engine);
 }
 
 #[derive(Clone)]
@@ -177,11 +174,9 @@ impl MetaListener {
     fn run(&self) {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_listener_a");
-            info!("meta_listener got cs {:?}", &cs);
             let (tx, rx) = mpsc::bounded(1);
             let task = ApplyTask::new_cs(cs, tx);
             self.applier_tx.send(task).unwrap();
-            info!("meta_listener sent cs");
             let res = unwrap_or_return!(rx.recv(), "meta_listener_b");
             unwrap_or_return!(res, "meta_listener_c");
         }
@@ -218,7 +213,6 @@ impl Applier {
             }
             if let Some(mut cs) = task.cs.take() {
                 cs.set_sequence(seq);
-                info!("applier got cs task {:?}", &cs);
                 if cs.has_pre_split() {
                     unwrap_or_return!(self.engine.pre_split(cs), "apply pre split");
                     info!("applier executed pre_split");
@@ -227,7 +221,7 @@ impl Applier {
                     for new_shard in cs.get_split().get_new_shards() {
                         ids.push(new_shard.shard_id);
                     }
-                    unwrap_or_return!(self.engine.finish_split(cs), "apply split");
+                    unwrap_or_return!(self.engine.finish_split(cs, 1), "apply split");
                     for id in ids {
                         let shard = self.engine.get_shard(id).unwrap();
                         shard.set_active(true);
@@ -280,9 +274,7 @@ impl MetaApplier {
     fn run(&self) {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
-            info!("meta_applier got change set {:?}", &cs);
             unwrap_or_return!(self.engine.apply_change_set(cs), "meta_applier cs");
-            info!("meta_applier applied change set");
         }
     }
 }
@@ -348,7 +340,7 @@ impl Splitter {
             self.shard_ver
         );
         let cs =
-            futures::executor::block_on(self.engine.split_shard_files(1, self.shard_ver)).unwrap();
+            self.engine.split_shard_files(1, self.shard_ver).unwrap();
         self.send_task(cs);
         info!("splitter sent split-files task to applier");
     }
@@ -418,6 +410,11 @@ fn new_test_options() -> Options {
     opts.dynamic_mem_table_size = false;
     opts.base_size = 4 << 15;
     opts.num_compactors = 1;
+    opts.cfs = [
+        CFConfig::new(true, 3),
+        CFConfig::new(false, 3),
+        CFConfig::new(true, 3),
+    ];
     opts
 }
 
@@ -429,15 +426,16 @@ fn load_data(
     opts: Arc<Options>,
     begin: usize,
     end: usize,
-    cf: usize,
-    val_repeat: usize,
     tx: mpsc::Sender<ApplyTask>,
 ) {
     let mut wb = WriteBatch::new(1, opts.cfs.clone());
     for i in begin..end {
         let key = format!("key{:06}", i);
-        let val = key.repeat(val_repeat);
-        wb.put(cf, key.as_bytes(), val.as_bytes(), 0, &[], 1);
+        for cf in 0..3 {
+            let val = key.repeat(cf + 2);
+            let version = if cf == 1 { 0 } else { 1 };
+            wb.put(cf, key.as_bytes(), val.as_bytes(), 0, &[], version);
+        }
         if i % 100 == 99 {
             info!("load data {}:{}", i - 99, i);
             write_data(wb, &tx);
@@ -460,8 +458,6 @@ fn write_data(wb: WriteBatch, applier_tx: &mpsc::Sender<ApplyTask>) {
 fn check_get(
     begin: usize,
     end: usize,
-    cf: usize,
-    val_repeat: usize,
     split_keys: &Vec<Vec<u8>>,
     en: &Engine,
 ) {
@@ -469,40 +465,46 @@ fn check_get(
         let key = format!("key{:06}", i);
         let shard = get_shard_for_key(key.as_bytes(), en);
         let snap = SnapAccess::new(&shard);
-        if let Some(item) = snap.get(cf, key.as_bytes(), 2) {
-            assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
-        } else {
-            panic!(
-                "failed to get key {}, shard {}:{}, start {:?}, end {:?}",
-                key,
-                shard.id,
-                shard.ver,
-                bytes_to_str(&shard.start),
-                bytes_to_str(&shard.end)
-            );
+        for cf in 0..3 {
+            let version = if cf == 1 { 0 } else { 2 };
+            let item = snap.get(cf, key.as_bytes(), version);
+            if item.is_valid() {
+                assert_eq!(item.get_value(), key.repeat(cf + 2).as_bytes());
+            } else {
+                panic!(
+                    "failed to get key {}, shard {}:{}, start {:?}, end {:?}",
+                    key,
+                    shard.id,
+                    shard.ver,
+                    bytes_to_str(&shard.start),
+                    bytes_to_str(&shard.end)
+                );
+            }
         }
     }
 }
 
-fn check_iterater(begin: usize, end: usize, cf: usize, val_repeat: usize, en: &Engine) {
+fn check_iterater(begin: usize, end: usize, en: &Engine) {
     thread::sleep(Duration::from_secs(1));
-    let ids = vec![2, 3, 4, 5, 1];
-    let mut i = begin;
-    for id in ids {
-        let shard = en.get_shard(id).unwrap();
-        let snap = SnapAccess::new(&shard);
-        let mut iter = snap.new_iterator(cf, false, false);
-        iter.rewind();
-        while iter.valid() {
-            let key = format!("key{:06}", i);
-            assert_eq!(iter.key(), key.as_bytes());
-            let item = iter.item();
-            assert_eq!(item.get_value(), key.repeat(val_repeat).as_bytes());
-            i += 1;
-            iter.next();
+    for cf in 0..3 {
+        let mut i = begin;
+        let ids = vec![2, 3, 4, 5, 1];
+        for id in ids {
+            let shard = en.get_shard(id).unwrap();
+            let snap = SnapAccess::new(&shard);
+            let mut iter = snap.new_iterator(cf, false, false);
+            iter.rewind();
+            while iter.valid() {
+                let key = format!("key{:06}", i);
+                assert_eq!(iter.key(), key.as_bytes());
+                let item = iter.item();
+                assert_eq!(item.get_value(), key.repeat(cf + 2).as_bytes());
+                i += 1;
+                iter.next();
+            }
         }
+        assert_eq!(i, end);
     }
-    assert_eq!(i, end);
 }
 
 fn bytes_to_str(bin: &Bytes) -> String {

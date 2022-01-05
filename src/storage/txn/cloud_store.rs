@@ -2,7 +2,8 @@ use std::borrow::Cow;
 use std::io::Seek;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use rfstore::store::RegionSnapshot;
+use kvengine::Item;
+use rfstore::store::{RegionIDVer, RegionSnapshot};
 use tikv_kv::{Snapshot, Statistics};
 use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value};
 use crate::storage::lock_manager::WaitTimeout::Default;
@@ -26,33 +27,22 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
     type Scanner = CloudStoreScanner;
 
     fn get(&self, user_key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        let val = Self::get_inner(user_key, &self.snapshot, self.start_ts, &self.bypass_locks, statistics)?;
-        Ok(val)
-        //
-        // let raw_key = user_key.to_raw()?;
-        // statistics.lock.get += 1;
-        // let val = self.snapshot.get(LOCK_CF, &raw_key, 0);
-        // if let Some(ref lock_item) = val {
-        //     let lock = Lock::parse(lock_item.get_value()).unwrap();
-        //     let res = Lock::check_ts_conflict(Cow::Borrowed(&lock), user_key, TimeStamp::new(self.start_ts), &self.bypass_locks);
-        //     res.map_err(| e | mvcc::Error::from(e))?
-        // }
-        // statistics.write.processed_keys += 1;
-        // let val = self.snapshot.get(WRITE_CF, &raw_key, self.start_ts);
-        // statistics.processed_size += user_key.len();
-        // if let Some(item) = val {
-        //     statistics.processed_size += item.get_value().len();
-        //     return Ok(Some(item.get_value().to_vec()))
-        // }
-        // Ok(None)
+        let item = Self::get_inner(user_key, &self.snapshot, self.start_ts, &self.bypass_locks, statistics)?;
+        if item.value_len() > 0 {
+            Ok(Some(item.get_value().to_vec()))
+        } else {
+            Ok(None)
+        }
     }
-
-
 
     fn incremental_get(&mut self, user_key: &Key) -> Result<Option<Value>> {
         let mut stat = &mut self.stats;
-        let val = Self::get_inner(user_key, &self.snapshot, self.start_ts, &self.bypass_locks, stat)?;
-        Ok(val)
+        let item = Self::get_inner(user_key, &self.snapshot, self.start_ts, &self.bypass_locks, stat)?;
+        if item.value_len() > 0 {
+            Ok(Some(item.get_value().to_vec()))
+        } else {
+            Ok(None)
+        }
     }
 
     fn incremental_get_take_statistics(&mut self) -> Statistics {
@@ -102,22 +92,21 @@ impl<S: Snapshot> CloudStore<S> {
         }
     }
 
-    fn get_inner(user_key: &Key, snap: &kvengine::SnapAccess, start_ts: u64, bypass_locks: &TsSet, statistics: &mut Statistics) -> mvcc::Result<Option<Value>> {
+    fn get_inner<'a>(user_key: &Key, snap: &'a kvengine::SnapAccess, start_ts: u64, bypass_locks: &TsSet, statistics: &mut Statistics) -> mvcc::Result<Item<'a>> {
         let raw_key = user_key.to_raw()?;
         statistics.lock.get += 1;
-        let val = snap.get(LOCK_CF, &raw_key, 0);
-        if let Some(ref lock_item) = val {
-            let lock = Lock::parse(lock_item.get_value()).unwrap();
+        let item = snap.get(LOCK_CF, &raw_key, 0);
+        if item.value_len() > 0 {
+            let debug_key = bytes::Bytes::copy_from_slice(&raw_key);
+            debug!("get inner lock value {:?} for key {:?}", item.get_value(), debug_key);
+            let lock = Lock::parse(item.get_value()).unwrap();
             Lock::check_ts_conflict(Cow::Borrowed(&lock), user_key, TimeStamp::new(start_ts), bypass_locks)?;
         }
         statistics.write.processed_keys += 1;
-        let val = snap.get(WRITE_CF, &raw_key, start_ts);
+        let item = snap.get(WRITE_CF, &raw_key, start_ts);
         statistics.processed_size += user_key.len();
-        if let Some(item) = val {
-            statistics.processed_size += item.get_value().len();
-            return Ok(Some(item.get_value().to_vec()))
-        }
-        Ok(None)
+        statistics.processed_size += item.value_len();
+        Ok(item)
     }
 
     fn check_locks(
@@ -184,6 +173,7 @@ impl super::Scanner for CloudStoreScanner {
             self.iter.next();
         } else {
             self.init();
+            self.is_started = true;
         }
         loop {
             if !self.iter.valid() {
@@ -209,7 +199,9 @@ impl super::Scanner for CloudStoreScanner {
             let val = item.get_value();
             if val.len() > 0 {
                 let key = Key::from_raw(iter_key);
-                return Ok(Some((key, val.to_vec())))
+                let debug_key = bytes::Bytes::copy_from_slice(iter_key);
+                debug!("scan key {:?} got value {}", debug_key, val.len());
+                return Ok(Some((key, val.to_vec())));
             }
             // Skip delete record.
             self.iter.next();
