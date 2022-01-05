@@ -541,7 +541,7 @@ fn test_read_index_stale_in_suspect_lease() {
     // Unpark all pending messages and clear all filters.
     let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     'LOOP: loop {
-        for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        for raft_msg in mem::take::<Vec<_>>(dropped_msgs.lock().unwrap().as_mut()) {
             let msg_type = raft_msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgHeartbeatResponse {
                 router.send_raft_message(raft_msg).unwrap();

@@ -103,7 +103,7 @@ fn test_update_server_config() {
     svr_cfg.snap_max_write_bytes_per_sec = ReadableSize::mb(512);
     svr_cfg.concurrent_send_snap_limit = 100;
     // config should be updated
-    assert_eq!(snap_mgr.get_speed_limit(), 536870912 as f64);
+    assert_eq!(snap_mgr.get_speed_limit() as u64, 536870912);
     validate(&snap_worker.scheduler(), move |cfg: &ServerConfig| {
         assert_eq!(cfg, &svr_cfg);
     });

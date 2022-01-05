@@ -1,12 +1,15 @@
+log-level = "debug"
+log-file = "foo"
+log-format = "json"
+log-rotation-size = "1024MB"
+
 [log]
 
 [log.file]
 
-[readpool.unified]
+[readpool.coprocessor]
 
 [readpool.storage]
-
-[readpool.coprocessor]
 
 [server]
 
@@ -38,10 +41,6 @@
 
 [raftdb.defaultcf]
 
-[raft-engine]
-
 [security]
 
 [import]
-
-[gc]

@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for IORateLimitMode {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&"invalid IO rate limit mode".to_string()),
+                            Unexpected::Other("invalid IO rate limit mode"),
                             &self,
                         ));
                     }

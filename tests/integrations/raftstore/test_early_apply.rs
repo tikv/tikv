@@ -38,8 +38,7 @@ where
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     action(cluster);
     cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
-    let mut rafts = Vec::new();
-    rafts.push((1, cluster.get_raft_engine(1)));
+    let mut rafts = vec![(1, cluster.get_raft_engine(1))];
     if mode == DataLost::AllLost {
         cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
         rafts.push((2, cluster.get_raft_engine(2)));
