@@ -18,6 +18,7 @@ use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
+use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
 use tokio::runtime::{Builder, Runtime};
@@ -26,7 +27,7 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
-use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
+use crate::metrics::*;
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -219,6 +220,7 @@ pub async fn region_resolved_ts_store(
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
+                let start = Instant::now_coarse();
                 let res = box_try!(
                     tokio::time::timeout(
                         Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
@@ -226,6 +228,9 @@ pub async fn region_resolved_ts_store(
                     )
                     .await
                 );
+                RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                    .with_label_values(&["rpc"])
+                    .observe(start.saturating_elapsed_secs());
                 let resp = match res {
                     Ok(resp) => resp,
                     Err(err) => {
@@ -238,6 +243,12 @@ pub async fn region_resolved_ts_store(
             .boxed()
         })
         .collect();
+    let start = Instant::now_coarse();
+    defer!({
+        RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+            .with_label_values(&["all"])
+            .observe(start.saturating_elapsed_secs());
+    });
     for _ in 0..store_count {
         // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
         let (res, _, remains) = select_all(stores).await;
@@ -328,11 +339,13 @@ async fn get_tikv_client(
     let client = match clients.get(&store_id) {
         Some(client) => client.clone(),
         None => {
+            let start = Instant::now_coarse();
             let store = box_try!(pd_client.get_store_async(store_id).await);
             let cb = ChannelBuilder::new(env.clone());
             let channel = security_mgr.connect(cb, &store.address);
             let client = TikvClient::new(channel);
             clients.insert(store_id, client.clone());
+            RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
             client
         }
     };
