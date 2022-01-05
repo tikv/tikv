@@ -2,7 +2,7 @@
 
 use crate::engine::PanicEngine;
 use crate::write_batch::PanicWriteBatch;
-use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
+use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
@@ -30,6 +30,7 @@ impl RaftEngineReadOnly for PanicEngine {
 impl RaftEngine for PanicEngine {
     type LogBatch = PanicWriteBatch;
     type ConsumeAsyncFut<'a> = std::future::Ready<Result<usize>>;
+    type BatchGCAsyncFut = std::future::Ready<Result<usize>>;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         panic!()
@@ -74,6 +75,10 @@ impl RaftEngine for PanicEngine {
     }
 
     fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
+        panic!()
+    }
+
+    fn batch_gc_async(&self, tasks: Vec<RaftLogGCTask>) -> Self::BatchGCAsyncFut {
         panic!()
     }
 

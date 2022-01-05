@@ -247,6 +247,7 @@ impl RaftEngineReadOnly for RaftLogEngine {
 impl RaftEngine for RaftLogEngine {
     type LogBatch = RaftLogBatch;
     type ConsumeAsyncFut<'a> = impl std::future::Future<Output = Result<usize>> + 'a;
+    type BatchGCAsyncFut = impl std::future::Future<Output = Result<usize>>;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         RaftLogBatch(LogBatch::with_capacity(capacity))
@@ -257,16 +258,23 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
-        self.0.write(&mut batch.0, sync).map_err(transfer_error)
+        // no critical path uses it, only start up
+        let ex = glommio::LocalExecutor::default();
+        ex.run(self.consume_async(batch, sync))
     }
 
     fn consume_async<'a, 'b>(
         &'a self,
         batch: &'b mut Self::LogBatch,
-        sync: bool,
+        _sync: bool,
     ) -> Self::ConsumeAsyncFut<'b> {
         let engine = self.0.clone();
-        async move { engine.write(&mut batch.0, sync).map_err(transfer_error) }
+        async move {
+            engine
+                .write_async(&mut batch.0)
+                .await
+                .map_err(transfer_error)
+        }
     }
 
     fn consume_and_shrink(
@@ -304,7 +312,11 @@ impl RaftEngine for RaftLogEngine {
             .0
             .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        // it only happens in raftstore thread
+        let engine = self.clone();
+        glommio::executor()
+            .spawn_local(async move { engine.consume_async(&mut batch, false).await })
+            .detach();
         Ok(())
     }
 
@@ -336,6 +348,34 @@ impl RaftEngine for RaftLogEngine {
             }
         }
         Ok(total as usize)
+    }
+
+    fn batch_gc_async(&self, tasks: Vec<RaftLogGCTask>) -> Self::BatchGCAsyncFut {
+        let mut batch = self.log_batch(tasks.len());
+        let mut old_first_index = Vec::with_capacity(tasks.len());
+        for task in &tasks {
+            batch
+                .0
+                .add_command(task.raft_group_id, Command::Compact { index: task.to });
+            old_first_index.push(self.0.first_index(task.raft_group_id));
+        }
+
+        let engine = self.0.clone();
+        async move {
+            engine
+                .write_async(&mut batch.0)
+                .await
+                .map_err(transfer_error)?;
+
+            let mut total = 0;
+            for (old_first_index, task) in old_first_index.iter().zip(tasks) {
+                let new_first_index = engine.first_index(task.raft_group_id);
+                if let (Some(old), Some(new)) = (old_first_index, new_first_index) {
+                    total += new.saturating_sub(*old);
+                }
+            }
+            Ok(total as usize)
+        }
     }
 
     fn purge_expired_files(&self) -> Result<Vec<u64>> {

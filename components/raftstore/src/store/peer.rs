@@ -83,6 +83,8 @@ use super::util::{
 };
 use super::DestroyPeerJob;
 
+use batch_system::GATE;
+
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
@@ -935,7 +937,7 @@ where
 
         // Set Tombstone state explicitly
         let mut kv_wb = engines.kv.write_batch();
-        let mut raft_wb = engines.raft.log_batch(1024);
+        let mut raft_wb = engines.raft.log_batch(1);
         self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
 
         // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
@@ -952,13 +954,18 @@ where
             self.pending_merge_state.clone(),
         )?;
         // write kv rocksdb first in case of restart happen between two write
+        perf_context.start_observe();
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         kv_wb.write_opt(&write_opts)?;
-
-        perf_context.start_observe();
-        engines.raft.consume(&mut raft_wb, true)?;
         perf_context.report_metrics();
+
+        let raft_db = engines.raft.clone();
+        GATE.with(move |g| {
+            g.spawn(async move { raft_db.consume_async(&mut raft_wb, true).await })
+                .unwrap()
+                .detach()
+        });
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

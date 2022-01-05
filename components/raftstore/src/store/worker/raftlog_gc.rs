@@ -14,8 +14,14 @@ use tikv_util::{box_try, debug, error, warn};
 
 use crate::store::worker::metrics::*;
 
+use glommio::LocalExecutor;
+
 const MAX_GC_REGION_BATCH: usize = 512;
 const MAX_REGION_NORMAL_GC_LOG_NUBER: u64 = 10240;
+
+thread_local! {
+    static LOCAL_EX: LocalExecutor = LocalExecutor::default();
+}
 
 pub enum Task {
     Gc {
@@ -76,7 +82,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
     /// Does the GC job and returns the count of logs collected.
     fn gc_raft_log(&mut self, regions: Vec<RaftLogGCTask>) -> Result<usize, Error> {
-        let deleted = box_try!(self.engines.raft.batch_gc(regions));
+        let deleted =
+            box_try!(LOCAL_EX.with(|ex| ex.run(self.engines.raft.batch_gc_async(regions))));
         Ok(deleted)
     }
 

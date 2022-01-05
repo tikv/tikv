@@ -21,3 +21,4 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
 raft-engine = { git = "https://github.com/TPC-TiKV/raft-engine.git", branch = "tpc" }
 protobuf = "2"
+glommio = { git = "https://github.com/TPC-TiKV/glommio.git", branch = "tpc" }

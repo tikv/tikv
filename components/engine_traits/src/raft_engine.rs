@@ -29,6 +29,7 @@ pub struct RaftLogGCTask {
 pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
     type ConsumeAsyncFut<'a>: std::future::Future<Output = Result<usize>> + 'a;
+    type BatchGCAsyncFut: std::future::Future<Output = Result<usize>>;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;
 
@@ -79,6 +80,8 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
         }
         Ok(total)
     }
+
+    fn batch_gc_async(&self, tasks: Vec<RaftLogGCTask>) -> Self::BatchGCAsyncFut;
 
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.

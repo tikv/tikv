@@ -499,6 +499,7 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
         raft_state.last_index = RAFT_INIT_LOG_INDEX;
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
+        // NOTE(TPC): seems it only happens in raftstore threads.
         engines.raft.put_raft_state(region.get_id(), &raft_state)?;
     }
     Ok(raft_state)
@@ -1490,6 +1491,7 @@ where
 
         // Save raft state if it has changed or there is a snapshot.
         if prev_raft_state != self.raft_state || !ready.snapshot().is_empty() {
+            // TODO(TPC): it has order.
             write_task.raft_state = Some(self.raft_state.clone());
         }
 

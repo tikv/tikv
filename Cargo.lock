@@ -3607,13 +3607,15 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/TPC-TiKV/raft-engine.git?branch=tpc#7842aad23f36ffe836b47762f85fc752b5d7ad48"
+source = "git+https://github.com/TPC-TiKV/raft-engine.git?branch=tpc#0bacc943c1bb3015cf44ee3018ccf2774ef19a1a"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
  "fail",
  "fs2",
+ "futures-lite",
+ "glommio",
  "hashbrown 0.11.2",
  "hex 0.4.2",
  "lazy_static",
@@ -3649,6 +3651,7 @@ dependencies = [
  "encryption",
  "engine_traits",
  "file_system",
+ "glommio",
  "kvproto",
  "lazy_static",
  "num_cpus",

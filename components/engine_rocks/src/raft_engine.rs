@@ -138,6 +138,7 @@ impl RocksEngine {
 impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatch;
     type ConsumeAsyncFut<'a> = Ready<Result<usize>>;
+    type BatchGCAsyncFut = std::future::Ready<Result<usize>>;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch {
         RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
@@ -222,6 +223,10 @@ impl RaftEngine for RocksEngine {
             raft_wb.write()?;
         }
         Ok(total)
+    }
+
+    fn batch_gc_async(&self, tasks: Vec<RaftLogGCTask>) -> Self::BatchGCAsyncFut {
+        future::ready(self.batch_gc(tasks))
     }
 
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
