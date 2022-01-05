@@ -1036,7 +1036,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(1);
-            assert!(!result.is_drained.is_err());
+            assert!(result.is_drained.is_ok());
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1096,7 +1096,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(!result.is_drained.is_err());
+            assert!(result.is_drained.is_ok());
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());

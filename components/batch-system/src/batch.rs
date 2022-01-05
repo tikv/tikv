@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, after, SendError};
+use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
@@ -335,7 +335,6 @@ pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
-    pub before_pause_wait: Option<Duration>,
     pub joinable_workers: Option<Arc<Mutex<Vec<ThreadId>>>>,
 }
 
@@ -372,21 +371,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            if let Some(d) = self.before_pause_wait {
-                channel::select! {
-                    recv(self.high_pri_fsm_receiver) -> msg => {
-                        if let Ok(fsm) = msg {
-                            return batch.push(fsm);
-                        }
-                    }
-                    recv(self.fsm_receiver) -> msg => {
-                        if let Ok(fsm) = msg {
-                            return batch.push(fsm);
-                        }
-                    }
-                    recv(after(d)) -> _ => { }
-                }
-            }
             self.handler.pause();
             channel::select! {
                 recv(self.high_pri_fsm_receiver) -> msg => {
@@ -548,7 +532,6 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
     reschedule_duration: Duration,
     low_priority_pool_size: usize,
-    before_pause_wait: Option<Duration>,
     pool_state_builder: Option<PoolStateBuilder<N, C>>,
 }
 
@@ -593,7 +576,6 @@ where
             handler,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
-            before_pause_wait: self.before_pause_wait,
             joinable_workers: if priority == Priority::Normal {
                 Some(Arc::clone(&self.joinable_workers))
             } else {
@@ -661,7 +643,6 @@ where
 struct PoolStateBuilder<N, C> {
     max_batch_size: usize,
     reschedule_duration: Duration,
-    before_pause_wait: Option<Duration>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     high_pri_fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     fsm_sender: channel::Sender<FsmTypes<N, C>>,
@@ -690,7 +671,6 @@ impl<N, C> PoolStateBuilder<N, C> {
             expected_pool_size: self.pool_size,
             max_batch_size: self.max_batch_size,
             reschedule_duration: self.reschedule_duration,
-            before_pause_wait: self.before_pause_wait,
             id_base,
         }
     }
@@ -708,7 +688,6 @@ pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
     pub joinable_workers: Arc<Mutex<Vec<ThreadId>>>,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
-    pub before_pause_wait: Option<Duration>,
     pub id_base: usize,
 }
 
@@ -742,7 +721,6 @@ pub fn create_system<N: Fsm, C: Fsm>(
     let pool_state_builder = PoolStateBuilder {
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
-        before_pause_wait: cfg.before_pause_wait,
         fsm_receiver: rx.clone(),
         high_pri_fsm_receiver: rx3.clone(),
         fsm_sender: tx,
@@ -767,7 +745,6 @@ pub fn create_system<N: Fsm, C: Fsm>(
         joinable_workers: Arc::new(Mutex::new(Vec::new())),
         reschedule_duration: cfg.reschedule_duration.0,
         low_priority_pool_size: cfg.low_priority_pool_size,
-        before_pause_wait: cfg.before_pause_wait,
         pool_state_builder: Some(pool_state_builder),
     };
     (router, system)
