@@ -23,7 +23,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Fix a panic issue caused by getting the cgroup information from some platforms [#10980](https://github.com/tikv/tikv/pull/10980)
 
 ## [5.2.3] - 2021-12-02
-+ Bug fix
++ Bug Fixes
   + Fix the issue that the GcKeys task does not work when it is called by multiple keys. Caused by this issue, compaction filer GC might not drop the MVCC deletion information. [#11217](https://github.com/tikv/tikv/pull/11217)
 
 ## [5.2.2] - 2021-10-29
@@ -59,7 +59,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [5.1.3] - 2021-12-03
 
-+ Bug fix
++ Bug Fixes
   + Fix the issue that the GcKeys task does not work when it is called by multiple keys. Caused by this issue, compaction filer GC might not drop the MVCC deletion information. [#11217](https://github.com/tikv/tikv/pull/11217)
 
 ## [5.1.2] - 2021-09-27
@@ -88,7 +88,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Handle read ready and write ready separately to reduce read latency [#10592](https://github.com/tikv/tikv/pull/10592)
   + Reduce the impact on data import speed when the I/O rate limiting is enabled [#10390](https://github.com/tikv/tikv/pull/10390)
   + Improve the load balance between Raft gRPC connections [#10495](https://github.com/tikv/tikv/pull/10495)
-+ Bug fixes
++ Bug Fixes
   + Fix the issue that the duration calculation might panic on certain platforms [#10569](https://github.com/tikv/tikv/pull/10569)
   + Fix the issue that Load Base Split mistakenly uses the unencoded keys of batch_get_command [#10542](https://github.com/tikv/tikv/pull/10542)
   + Fix the issue that changing the resolved-ts.advance-ts-interval configuration online cannot take effect immediately [#10426](https://github.com/tikv/tikv/pull/10426)
@@ -124,7 +124,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Increase the speed of inserting SST files by moving the verification process to the Import thread pool from the Apply thread pool [#11239](https://github.com/tikv/tikv/pull/11239)
   + Add more metrics for the garbage collection module of Raft logs to locate performance problems in the module [#11374](https://github.com/tikv/tikv/pull/11374)
   + Collapse some uncommon storage-related metrics in Grafana dashboard [#11681](https://github.com/tikv/tikv/pull/11681)
-+ Bug fixes
++ Bug Fixes
   + Fix the issue that a down TiKV node causes the resolved timestamp to lag [#11351](https://github.com/tikv/tikv/pull/11351)
   + Fix the issue that TiKV cannot detect the memory lock when TiKV perform a reverse table scan [#11440](https://github.com/tikv/tikv/pull/11440)
   + Fix the issue that the accumulation of GC tasks might cause TiKV to be OOM (out of memory) [#11410](https://github.com/tikv/tikv/pull/11410)
@@ -135,7 +135,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [5.0.5] - 2021-12-02
 
-+ Bug fix
++ Bug Fixes
   + Fix the issue that the GcKeys task does not work when it is called by multiple keys. Caused by this issue, compaction filer GC might not drop the MVCC deletion information. [#11217](https://github.com/tikv/tikv/pull/11217)
 
 ## [5.0.4] - 2021-09-14
@@ -190,7 +190,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [5.0.0] - 2021-04-07
 
-+ Compatibility changes
++ Compatibility Changes
   + Replace the `rocksdb.auto-tuned` configuration item with [`rocksdb.rate-limiter-auto-tuned`](/tikv-configuration-file.md#rate-limiter-auto-tuned-new-in-v50)
   + Delete the `raftstore.sync-log` configuration item. By default, written data is forcibly spilled to the disk. Before v5.0, you can explicitly disable `raftstore.sync-log`. Since v5.0, the configuration value is forcibly set to `true`
   + Change the default value of the `gc.enable-compaction-filter` configuration item from `false` to `true`
@@ -205,11 +205,11 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [4.0.16] - 2021-12-17
 
-+ Compatibility changes
++ Compatibility Changes
   + Before v4.0.16, when TiDB converts an illegal UTF-8 string to a Real type, an error is reported directly. Starting from v4.0.16, TiDB processes the conversion according to the legal UTF-8 prefix in the string [#11466](https://github.com/tikv/tikv/pull/11466)
 + Improvements
   + Reduce disk space consumption by adopting the zstd algorithm to compress SST files when restoring data using Backup & Restore or importing data using Local-backend of TiDB Lightning [#11469](https://github.com/tikv/tikv/pull/11469)
-+ Bug fixes
++ Bug Fixes
   + Fix a panic issue that occurs when Region merge, ConfChange, and Snapshot happen at the same time in extreme conditions [#11475](https://github.com/tikv/tikv/pull/11475)
   + Fix the issue of negative sign when the decimal divide result is zero [#29586](https://github.com/tikv/tikv/pull/29586)
   + Fix the issue that the average latency of the by-instance gRPC requests is inaccurate in TiKV metrics [#11299](https://github.com/tikv/tikv/pull/11299)
@@ -220,14 +220,14 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [4.0.15] - 2021-09-23
 
-+ Feature enhancement
++ Feature Enhancement
   + Support changing TiCDC configurations dynamically [#10645](https://github.com/tikv/tikv/pull/10645)
 + Improvements
   + Handle read ready and write ready separately to reduce read latency [#10475](https://github.com/tikv/tikv/pull/10475)
   + The slow log of TiKV coprocessor only considers the time spent on processing requests. [#1084](https://github.com/tikv/tikv/pull/1084)
   + Drop log instead of blocking threads when the slogger thread is overloaded and the queue is filled up [#10841](https://github.com/tikv/tikv/pull/10841)
   + Reduce the size of Resolved TS messages to save network bandwidth [#2448](https://github.com/tikv/tikv/pull/2448)
-+ Bug fixes
++ Bug Fixes
   + Fix the issue that BR reports the "file already exists" error when TDE is enabled during data restore [#10917](https://github.com/tikv/tikv/pull/10917)
   + Fix the issue that TiKV deletes stale Regions too frequently [#10781](https://github.com/tikv/tikv/pull/10781)
   + Fix the issue that TiKV frequently reconnects the PD client [#9818](https://github.com/tikv/tikv/pull/9818)
@@ -235,9 +235,9 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [4.0.14] - 2021-07-27
 
-+ Compatibility changes
++ Compatibility Changes
   + Change the default value of merge-check-tick-interval from 10 to 2 to speed up the Region merge process [#9676](https://github.com/tikv/tikv/pull/9676)
-+ Feature enhancements
++ Feature Enhancements
   + Add a metric pending to monitor the number of pending PD heartbeats, which helps locate the issue of slow PD threads [#10008](https://github.com/tikv/tikv/pull/10008)
   + Support using the virtual-host addressing mode to make BR support the S3-compatible storage [#10242](https://github.com/tikv/tikv/pull/10242)
 + Improvements
@@ -245,7 +245,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + Always respond to stale peers to make sure that these peers are cleared quicker [#10400](https://github.com/tikv/tikv/pull/10400)
   + Limit the TiCDC sink's memory consumption [#10147](https://github.com/tikv/tikv/pull/10147)
   + When a Region is too large, use the even split to speed up the split process [#10275](https://github.com/tikv/tikv/pull/10275)
-+ Bug fixes
++ Bug Fixes
   + Fix the issue that the duration calculation might panic on certain platforms [#related-issue](https://github.com/rust-lang/rust/issues/86470#issuecomment-877557654)
   + Fix the wrong function that casts DOUBLE to DOUBLE [#25200](https://github.com/tikv/tikv/pull/25200)
   + Fix the issue that the panic log might be lost when using the async logger [#8998](https://github.com/tikv/tikv/pull/8998)
@@ -502,7 +502,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 + New Features
   + Support the configuration of persistent dynamic update [#6684](https://github.com/tikv/tikv/pull/6684)
-+ Bugfixes
++ Bug Fixes
   + Fix the panic issue caused by empty short values during backup [#6718](https://github.com/tikv/tikv/pull/6718)
   + Fix the issue that Hibernate Regions might not be woken up correctly [#6772](https://github.com/tikv/tikv/pull/6672) [#6648](https://github.com/tikv/tikv/pull/6648) [#6736](https://github.com/tikv/tikv/pull/6736)
 
@@ -513,7 +513,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + New Features
   + Support fetching configuration items from the status port via HTTP API [#6480](https://github.com/tikv/tikv/pull/6480)
   + Optimize the performance of `Chunk Encoder` in Coprocessor [#6341](https://github.com/tikv/tikv/pull/6341)
-+ Bugfixes
++ Bug Fixes
   + Fix the inconsistent behaviors of the `CAST` function in TiDB and TiKV [#6463](https://github.com/tikv/tikv/pull/6463) [#6461](https://github.com/tikv/tikv/pull/6461) [#6459](https://github.com/tikv/tikv/pull/6459) [#6474](https://github.com/tikv/tikv/pull/6474) [#6492](https://github.com/tikv/tikv/pull/6492) [#6569](https://github.com/tikv/tikv/pull/6569)
 
 ## [4.0.0-beta] - 2020-01-17
@@ -566,7 +566,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add the `end_point_slow_log_threshold` configuration item [#9145](https://github.com/tikv/tikv/pull/9145)
 
 ## [3.0.19]
-### Bugfixes
+### Bug Fixes
 - Fix the bug that TiKV panics when parsing responses with missing reason phrases [#8540](https://github.com/tikv/tikv/pull/8540)
 
 ### Improvements
@@ -577,7 +577,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Change gc failure log to warning [#8444](https://github.com/tikv/tikv/pull/8444)
 
 ## [3.0.17]
-### Bugfixes
+### Bug Fixes
 - Fix a bug that might read stale data during region merging [#8111](https://github.com/tikv/tikv/pull/8111)
 - Fix memory leak during scheduling [#8355](https://github.com/tikv/tikv/pull/8355)
 
@@ -585,7 +585,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add the `hibernate-timeout` configuration that delays region hibernation to improve rolling update performance [#8207](https://github.com/tikv/tikv/pull/8207)
 
 ## [3.0.16]
-### Bugfixes
+### Bug Fixes
 - Fix the potential wrong result read from ingested files [#8039](https://github.com/tikv/tikv/pull/8039)
 - Fix the issue that a peer can not be removed when its store is isolated during multiple merge processes [#8005](https://github.com/tikv/tikv/pull/8005)
 
@@ -594,7 +594,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Improve the PD client log [#8091](https://github.com/tikv/tikv/pull/8091)
 
 ## [3.0.15]
-### Bugfixes
+### Bug Fixes
 - Fix a panic issue that Titan GC may delete an already deleted blob file [#7970](https://github.com/tikv/tikv/pull/7970)
 - Fix the issue that clean snapshot files which were in used after restarting [#7925](https://github.com/tikv/tikv/pull/7925)
 - Change schedule tick failure log to debug level to make logs less verbose [#7904](https://github.com/tikv/tikv/pull/7904)
@@ -605,7 +605,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 ### Features
 - Improve the performance when many conflicts and the `BatchRollback` condition exist in optimistic transactions [#7605](https://github.com/tikv/tikv/pull/7605)
 - Fix the issue of decreased performance that occurs because the pessimistic lock `waiter` is frequently awakened when many conflicts exist in pessimistic transactions [#7584](https://github.com/tikv/tikv/pull/7584)
-### Bugfixes
+### Bug Fixes
 - Fix the issue that the node cannot be deleted correctly after the isolation recovery in some cases [#7703](https://github.com/tikv/tikv/pull/7703)
 - Fix the issue of data loss during network isolation caused by the Region Merge operation [#7679](https://github.com/tikv/tikv/pull/7679)
 - Fix the issue that learner cannot be removed correctly in some cases [#7598](https://github.com/tikv/tikv/pull/7598)
@@ -616,12 +616,12 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Fix the issue that repeated requests on the cleanup of lock might destroy the atomicity of the transaction [#7388](https://github.com/tikv/tikv/pull/7388)
 
 ## [3.0.12]
-### Bugfixes
+### Bug Fixes
 - Fix the issue of conflict detection failure or data index inconsistency caused by inserting an existing key into a transaction and then deleting it immediately when disabling the consistency check parameter [#7054](https://github.com/tikv/tikv/pull/7054)
 - Introduce a flow control mechanism in Raftstore to solve the problem that without flow control, it might lead to too slow tracking and cause the cluster to be stuck, and the transaction size might cause frequent reconnection of TiKV connections [#7072](https://github.com/tikv/tikv/pull/7072), [#7076](https://github.com/tikv/tikv/pull/7076)
 
 ## [3.0.11]
-### Bugfixes
+### Bug Fixes
 - Optimize the log output by removing unnecessary logs [#6657](https://github.com/tikv/tikv/pull/6657)
 - Fix the panic that might occur when the peer is removed under high loads [#6704](https://github.com/tikv/tikv/pull/6704)
 - Fix the issue that Hibernate Regions are not waken up in some cases [#6732](https://github.com/tikv/tikv/pull/6732) [#6738](https://github.com/tikv/tikv/pull/6738)
@@ -1032,7 +1032,7 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 - Add the support for the `truncate_int` function [#3532](https://github.com/tikv/tikv/pull/3532)
 - Add the support for the `year` function [#3622](https://github.com/tikv/tikv/pull/3622)
 - Add the support for the `truncate_real` function [#3633](https://github.com/tikv/tikv/pull/3633)
-### Bug fixes
+### Bug Fixes
 - Fix the reporting error behavior related to time functions [#3487](https://github.com/tikv/tikv/pull/3487), [#3615](https://github.com/tikv/tikv/pull/3615)
 - Fix the issue that the time parsed from string is inconsistent with that in TiDB [#3589](https://github.com/tikv/tikv/pull/3589)
 
@@ -1046,7 +1046,7 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 * Add the `max-open-engines` configuration to limit the number of engines opened by `tikv-importer` simultaneously [#3496](https://github.com/tikv/tikv/pull/3496)
 * Limit the cleanup speed of garbage data to reduce the impact on `snapshot apply` [#3547](https://github.com/tikv/tikv/pull/3547)
 * Broadcast the commit message for crucial Raft messages to avoid unnecessary delay [#3592](https://github.com/tikv/tikv/pull/3592)
-### Bug fixes
+### Bug Fixes
 * Fix the leader election issue caused by discarding the `PreVote` message of the newly split Region [#3557](https://github.com/tikv/tikv/pull/3557)
 * Fix follower related statistics after merging Regions [#3573](https://github.com/tikv/tikv/pull/3573)
 * Fix the issue that the local reader uses obsolete Region information [#3565](https://github.com/tikv/tikv/pull/3565)
@@ -1074,7 +1074,7 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 * Support customizing the log format
 * Integrate tikv-fail in tikv-ctl
 * Add I/O metrics of threads
-### Bug fixes
+### Bug Fixes
 * Fix decimal related issues
 * Fix the issue that `gRPC max_send_message_len` is set mistakenly
 * Fix the issue caused by misconfiguration of `region_size`
@@ -1105,7 +1105,7 @@ Improve the performance of detecting deadlocks [#5089](https://github.com/tikv/t
 * Fix the CompactFiles issue in RocksDB #3789
 
 ## [2.0.8] - 2018-10-15
-### Bug fix
+### Bug Fixes
 * Fix the issue that the memory consumed by Raftstore EntryCache keeps increasing when a node goes down 3529
 
 ## [2.0.7] - 2018-09-17
