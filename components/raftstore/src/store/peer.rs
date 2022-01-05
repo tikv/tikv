@@ -3724,7 +3724,7 @@ where
             // But if the current leader is disk full, and send such request, we should allow it,
             // because it may be a read leader balance request.
             || (!matches!(ctx.self_disk_usage, DiskUsage::Normal) &&
-            matches!(peer_disk_usage,DiskUsage::Normal))
+            matches!(peer_disk_usage, DiskUsage::Normal))
         {
             info!(
                 "reject transferring leader";

@@ -5,7 +5,9 @@ use std::{sync::Arc, thread, time::Duration};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
 
 /// When a follower applies log slowly, leader should not transfer leader
@@ -41,6 +43,98 @@ fn test_transfer_leader_slow_apply() {
     cluster.must_transfer_leader(r1, new_peer(3, 1003));
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+}
+
+#[test]
+fn test_transfer_leader_other_region_apply_log_lag() {
+    // 3 nodes cluster.
+    let mut cluster = new_node_cluster(0, 3);
+
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    let r1 = cluster.get_region(b"");
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.must_put(b"k9", b"v9");
+    cluster.must_split(&r1, b"k6");
+    let r1 = cluster.get_region(b"");
+    let r2 = cluster.get_region(b"k6");
+    cluster.must_transfer_leader(r2.get_id(), new_peer(1, 1));
+
+    // r1 on store 3 has apply log lag, r2 reject transfer leader to the peer on store 3
+    let fp = "on_handle_apply_1003";
+    fail::cfg(fp, "pause").unwrap();
+    for i in 0..=cluster.cfg.raft_store.leader_transfer_max_log_lag {
+        let bytes = format!("k{:03}", i).into_bytes();
+        cluster.must_put(&bytes, &bytes);
+    }
+    cluster.transfer_leader(r2.get_id(), new_peer(3, 3));
+    cluster.must_put(b"k6", b"v6");
+    must_get_equal(&cluster.get_engine(1), b"k6", b"v6");
+    assert_ne!(
+        cluster.leader_of_region(r2.get_id()).unwrap(),
+        new_peer(3, 3)
+    );
+    fail::remove(fp);
+    cluster.must_transfer_leader(r2.get_id(), new_peer(3, 3));
+    cluster.must_put(b"k7", b"v7");
+    must_get_equal(&cluster.get_engine(3), b"k7", b"v7");
+}
+
+#[test]
+fn test_transfer_leader_other_region_replicate_log_lag() {
+    // 3 nodes cluster.
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    let r1 = cluster.get_region(b"");
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.must_put(b"k9", b"v9");
+    cluster.must_split(&r1, b"k6");
+    let r1 = cluster.get_region(b"");
+    let r2 = cluster.get_region(b"k6");
+    println!("here {:?}", r2);
+    cluster.must_transfer_leader(r2.get_id(), new_peer(1, 1));
+
+    // r1 on store 3 has replicate log lag, r2 reject transfer leader to the peer on store 3
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1.get_id(), 3)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+
+    for i in 0..=cluster.cfg.raft_store.leader_transfer_max_log_lag {
+        let bytes = format!("k{:03}", i).into_bytes();
+        cluster.must_put(&bytes, &bytes);
+    }
+    thread::sleep_ms(10);
+    cluster.transfer_leader(r2.get_id(), new_peer(3, 3));
+    cluster.must_put(b"k6", b"v6");
+    must_get_equal(&cluster.get_engine(1), b"k6", b"v6");
+    assert_ne!(
+        cluster.leader_of_region(r2.get_id()).unwrap(),
+        new_peer(3, 3)
+    );
+    cluster.clear_send_filters();
+    thread::sleep_ms(10);
+    cluster.must_transfer_leader(r2.get_id(), new_peer(3, 3));
+    cluster.must_put(b"k7", b"v7");
+    must_get_equal(&cluster.get_engine(3), b"k7", b"v7");
 }
 
 #[test]
