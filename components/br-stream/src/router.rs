@@ -1,7 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     collections::{BTreeMap, HashMap},
+    io,
     path::{Path, PathBuf},
+    result,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
@@ -19,18 +21,20 @@ use crate::{
 use super::errors::Result;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 
-use external_storage::BackendConfig;
+use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 
+use file_system::Sha256Reader;
+use futures::{io::AllowStdIo, AsyncRead};
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{box_err, info, time::Limiter, warn, worker::Scheduler};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use tokio::{fs::File, sync::RwLock};
+use tokio::{fs::read, io::AsyncWriteExt};
+use tokio::{fs::File, fs::remove_file, sync::RwLock};
 use txn_types::{Key, TimeStamp};
 
 #[derive(Debug)]
@@ -153,7 +157,7 @@ pub struct RouterInner {
     /// which range a point belongs to.
     ranges: SyncRwLock<BTreeMap<KeyRange, TaskRange>>,
     /// The temporary files associated to some task.
-    temp_files_of_task: Mutex<HashMap<String, Arc<StreamTaskInfo>>>,
+    tasks: Mutex<HashMap<String, Arc<StreamTaskInfo>>>,
     /// The temporary directory for all tasks.
     prefix: PathBuf,
 
@@ -167,7 +171,7 @@ impl std::fmt::Debug for RouterInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RouterInner")
             .field("ranges", &self.ranges)
-            .field("temp_files_of_task", &self.temp_files_of_task)
+            .field("tasks", &self.tasks)
             .field("prefix", &self.prefix)
             .finish()
     }
@@ -177,7 +181,7 @@ impl RouterInner {
     pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
         RouterInner {
             ranges: SyncRwLock::new(BTreeMap::default()),
-            temp_files_of_task: Mutex::new(HashMap::default()),
+            tasks: Mutex::new(HashMap::default()),
             prefix,
             scheduler,
             temp_file_size_limit,
@@ -225,12 +229,11 @@ impl RouterInner {
         // register task info
         let prefix_path = self
             .prefix
-            .join(&task_name)
-            .join(format!("{}", TimeStamp::physical_now()));
-        let stream_task = StreamTaskInfo::new(prefix_path, task)?;
+            .join(&task_name);
+        let stream_task = StreamTaskInfo::new(prefix_path, task).await?;
 
         let _ = self
-            .temp_files_of_task
+            .tasks
             .lock()
             .await
             .insert(task_name, Arc::new(stream_task));
@@ -265,8 +268,8 @@ impl RouterInner {
                 "key" => &log_wrappers::Value::key(&kv.key),
             );
             let inner_router = {
-                let mut tasks = self.temp_files_of_task.lock().await;
-                assert!(!tasks.contains_key(&task), "task not existed");
+                let mut tasks = self.tasks.lock().await;
+                assert!(tasks.contains_key(&task), "task not existed");
 
                 tasks.get_mut(&task).unwrap().clone()
             };
@@ -275,27 +278,25 @@ impl RouterInner {
             // When this event make the size of temporary files exceeds the size limit, make a flush.
             // Note that we only flush if the size is less than the limit before the event,
             // or we may send multiplied flush requests.
-
             debug!(
                 "backup stream statics size";
                 "task" => ?task,
                 "next_size" => inner_router.total_size(),
                 "size_limit" => self.temp_file_size_limit,
             );
-
             let cur_size = inner_router.total_size();
-            if cur_size > self.temp_file_size_limit && !inner_router.flushed.load(Ordering::SeqCst)
+            if cur_size > self.temp_file_size_limit && !inner_router.flushing.load(Ordering::SeqCst)
             {
                 info!("try flushing task"; "task" => %task, "size" => %cur_size);
                 if inner_router
-                    .flushed
+                    .flushing
                     .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok()
                 {
                     // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
                     if self.scheduler.schedule(Task::Flush(task)).is_err() {
                         // oops... we failed, let's leave the chance to next challenger.
-                        inner_router.flushed.store(false, Ordering::SeqCst);
+                        inner_router.flushing.store(false, Ordering::SeqCst);
                     }
                 }
             }
@@ -304,7 +305,7 @@ impl RouterInner {
     }
 
     pub async fn take_temporary_files(&self, task: &str) -> Result<StreamTaskInfo> {
-        let mut arc = self.temp_files_of_task.lock().await.remove(task).map_or(
+        let mut arc = self.tasks.lock().await.remove(task).map_or(
             Err(Error::NoSuchTask {
                 task_name: task.to_owned(),
             }),
@@ -324,8 +325,13 @@ impl RouterInner {
     }
 
     pub async fn do_flush(&self, task_name: &str) {
-        if let Some(task_info) = self.temp_files_of_task.lock().await.get(task_name){
-            task_info.do_flush().await;
+        debug!("backup stream do flush"; "task" => task_name);
+        if let Some(task_info) = self.tasks.lock().await.get(task_name) {
+            if let Err(e) = task_info.do_flush().await {
+                warn!("backup steam do flush fail"; "err" => ?e);
+            }
+            // set false to flushing whether success or fail
+            task_info.flushing.store(false, Ordering::SeqCst);
         }
     }
 }
@@ -368,13 +374,27 @@ impl TempFileKey {
     fn temp_file_name(&self) -> String {
         if self.is_meta {
             format!(
-                "meta_{:08}_{}_{:?}.temp.log",
-                self.region_id, self.cf, self.cmd_type
+                "meta_{:08}_{}_{:?}_{}.temp.log",
+                self.region_id, self.cf, self.cmd_type, TimeStamp::physical_now(),
             )
         } else {
             format!(
-                "{:08}_{:08}_{}_{:?}.temp.log",
-                self.table_id, self.region_id, self.cf, self.cmd_type
+                "{:08}_{:08}_{}_{:?}_{}.temp.log",
+                self.table_id, self.region_id, self.cf, self.cmd_type, TimeStamp::physical_now(),
+            )
+        }
+    }
+
+    fn file_name(&self, min_ts: TimeStamp) -> String {
+        if self.is_meta {
+            format!(
+                "m{:08}_{:?}_{:?}_{:?}.log",
+                self.region_id, min_ts, self.cf, self.cmd_type
+            )
+        } else {
+            format!(
+                "t{:08}_{:08}_{:?}_{:?}_{:?}.log",
+                self.table_id, self.region_id, min_ts, self.cf, self.cmd_type
             )
         }
     }
@@ -388,6 +408,8 @@ pub struct StreamTaskInfo {
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
     files: SlotMap<TempFileKey, DataFile>,
+    /// flushing_files contains files pending flush.
+    flushing_files: SlotMap<TempFileKey, DataFile>,
     /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
@@ -399,7 +421,7 @@ pub struct StreamTaskInfo {
     /// scheduler for flushing the files then.
     ///
     /// If the request failed, that thread can set it to `false` back then.
-    flushed: AtomicBool,
+    flushing: AtomicBool,
 }
 
 impl std::fmt::Debug for StreamTaskInfo {
@@ -414,8 +436,8 @@ impl std::fmt::Debug for StreamTaskInfo {
 
 impl StreamTaskInfo {
     /// Create a new temporary file set at the `temp_dir`.
-    pub fn new(temp_dir: PathBuf, task: StreamTask) -> Result<Self> {
-        //tokio::fs::create_dir_all(&temp_dir).await?;
+    pub async fn new(temp_dir: PathBuf, task: StreamTask) -> Result<Self> {
+        tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = create_storage(task.info.get_storage(), BackendConfig::default())?;
         Ok(Self {
             task,
@@ -423,8 +445,9 @@ impl StreamTaskInfo {
             temp_dir,
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
+            flushing_files: SlotMap::default(),
             total_size: AtomicUsize::new(0),
-            flushed: AtomicBool::new(false),
+            flushing: AtomicBool::new(false),
         })
     }
 
@@ -508,18 +531,38 @@ impl StreamTaskInfo {
         Ok(result)
     }
 
-    pub async fn do_flush(&self) {
-        let mut tmp_data_files = self.files.write().await;
-        for (k, v) in tmp_data_files.drain() {
-            let data_file = v.lock().await;
-            self.storage.restore(
-                data_file.local_path.clone().to_str().unwrap(),
-                data_file.local_path.clone(),
-                0,
-                &Limiter::new(std::f64::INFINITY),
-                None,
-            );
+    pub async fn do_flush(&self) -> io::Result<()> {
+        if let mut w = self.files.write().await {
+            for (k, v) in w.drain() {
+                self.flushing_files.write().await.insert(k, v);
+            }
         }
+
+        for (k, v) in self.flushing_files.write().await.drain() {
+            let data_file = v.lock().await;
+            let limiter = Limiter::builder(std::f64::INFINITY).build();
+            let reader = std::fs::File::open(data_file.local_path.clone()).unwrap();
+            let (reader, hasher) = Sha256Reader::new(reader).unwrap();
+            let reader = UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader))));
+            let filename = k.file_name(data_file.min_ts);
+
+            let ret = self.storage.write(&filename, reader, 1024).await;
+            match ret {
+                Ok(_) => {
+                    debug!(
+                        "backup stream flush success";
+                        "tmp file" => ?data_file.local_path,
+                        "storage file" => ?filename,
+                    );
+                    data_file.remove_temp_file();
+                }
+                Err(e) => warn!("backup stream flush failed";
+                    "file" => ?data_file.local_path,
+                    "err" => ?e,
+                ),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -580,6 +623,10 @@ impl DataFile {
             end_key: vec![],
             local_path: local_path.as_ref().to_owned(),
         })
+    }
+
+    async fn remove_temp_file(&self){
+        remove_file(&self.local_path).await;
     }
 
     /// Add a new KV pair to the file, returning its size.

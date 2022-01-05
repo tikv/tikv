@@ -221,18 +221,10 @@ where
         };
     }
 
-    pub async fn do_flush(router: Router, task: String) -> Result<()> {
-        // TODO flush the files to external storage
-        router.do_flush(&task).await;
-        //info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
-        Ok({})
-    }
-
     pub fn on_flush(&self, task: String) {
         let router = self.range_router.clone();
         self.pool.spawn(async move {
-            // TODO handle the error
-            let _ = Self::do_flush(router, task).await;
+            router.do_flush(&task).await;
         });
     }
 
