@@ -62,7 +62,7 @@ thread_local! {
     static IDX: IdxWrapper = unsafe {
         let idx = IDX_ALLOCATOR.allocate();
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let tid = nix::unistd::gettid().as_raw() as u32;
+            let tid = thread::thread_id();
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
             ctx.type_table.set(
                 &mut tid.to_ne_bytes(),
