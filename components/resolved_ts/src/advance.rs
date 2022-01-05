@@ -6,6 +6,7 @@ use std::time::Duration;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
+#[cfg(feature = "failpoints")]
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::select_all;
