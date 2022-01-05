@@ -44,6 +44,8 @@ use crate::store::metrics::{
 use crate::store::peer_storage::JOB_STATUS_CANCELLING;
 use crate::{Error as RaftStoreError, Result as RaftStoreResult};
 
+use crate::store::sst_reader;
+
 #[path = "snap/io.rs"]
 pub mod snap_io;
 
@@ -779,6 +781,56 @@ impl fmt::Debug for Snapshot {
 }
 
 impl Snapshot {
+    pub unsafe fn replicate_snapshot(
+        &self,
+        region: &kvproto::metapb::Region,
+    ) {
+        let mut sst_views = vec![];
+        for cf_file in &self.cf_files {
+            if cf_file.size == 0 {
+                // Skip empty cf file.
+                continue;
+            }
+
+            if plain_file_used(cf_file.cf) {
+                assert!(cf_file.cf == CF_LOCK);
+            }
+
+            sst_views.push((
+                cf_file.path.to_str().unwrap().as_bytes(),
+                sst_reader::name_to_cf(cf_file.cf),
+            ));
+            // match cf_file.cf {
+            //     CF_LOCK => ,
+            //     CF_WRITE => ,
+            //     CF_DEFAULT => ,
+            // }
+        }
+
+
+        let key_mgr = self.mgr.encryption_key_manager.as_ref();
+        let key_manager = if key_mgr.is_some() {
+            Some(key_mgr.unwrap().to_owned())
+        }else{
+            None
+        };
+        for i in 0..sst_views.len() {
+            let mut snapshot = sst_views[i].0;
+            let t = sst_views[i].1;
+            let mut sst_reader_ptr = sst_reader::ffi_get_sst_reader(snapshot, t, &key_manager);
+            while sst_reader::ffi_remained(sst_reader_ptr.clone(), t) {
+                let key = sst_reader::ffi_key(sst_reader_ptr.clone(), t);
+                let value = sst_reader::ffi_val(sst_reader_ptr.clone(), t);
+
+                let cf_index = t;
+
+                println!("!!!!! Snapshot key {:?} v {:?}", key, value);
+
+                sst_reader::ffi_next(sst_reader_ptr.clone(), t);
+            }
+        }
+    }
+
     pub fn build<EK: KvEngine>(
         &mut self,
         engine: &EK,

@@ -1432,6 +1432,7 @@ where
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
+            peer_id: self.peer_id,
             status,
         };
 

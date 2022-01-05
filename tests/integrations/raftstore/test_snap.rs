@@ -269,6 +269,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 fn test_node_cf_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     test_cf_snapshot(&mut cluster);
+    panic!("AAAAAA");
 }
 
 #[test]
