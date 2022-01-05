@@ -8174,13 +8174,16 @@ mod tests {
             let lock = pessimistic_locks.map.get(&k1).unwrap();
             assert_eq!(
                 lock,
-                &PessimisticLock {
-                    primary: Box::new(*b"k1"),
-                    start_ts: 10.into(),
-                    ttl: 3000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 11.into(),
-                }
+                &(
+                    PessimisticLock {
+                        primary: Box::new(*b"k1"),
+                        start_ts: 10.into(),
+                        ttl: 3000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 11.into(),
+                    },
+                    false
+                )
             );
         }
 
