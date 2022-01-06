@@ -3462,11 +3462,6 @@ checksum = "0941606b9934e2d98a3677759a971756eb821f75764d0e0d26946d08e74d9104"
 dependencies = [
  "bitflags",
  "byteorder",
-<<<<<<< HEAD
- "chrono",
- "flate2",
-=======
->>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
  "hex 0.4.2",
  "lazy_static",
  "libc 0.2.106",
