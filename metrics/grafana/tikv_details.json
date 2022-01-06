@@ -33928,7 +33928,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 37
       },
       "id": 8389,
       "panels": [
@@ -33953,7 +33953,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 63
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 8385,
@@ -34061,7 +34061,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 63
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 9162,
@@ -34169,7 +34169,7 @@
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 63
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 9164,
@@ -34276,7 +34276,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 71
+            "y": 46
           },
           "hiddenSeries": false,
           "id": 8387,
@@ -34368,6 +34368,419 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The gap between resolved tso of leaders and current time",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 46
+          },
+          "hiddenSeries": false,
+          "id": 23763572077,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(tikv_resolved_ts_min_leader_resolved_ts_gap_millis{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}",
+              "refId": "A",
+              "step": 60
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Max Leader Resolved TS gap",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ms",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The region that has minimal resolved ts",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 0,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 54
+          },
+          "hiddenSeries": false,
+          "id": 23763572078,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "total",
+              "lines": false
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(tikv_resolved_ts_min_resolved_ts_region{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}) by (instance)",
+              "format": "time_series",
+              "hide": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Min Resolved TS Region",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "$$hashKey": "object:143",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "$$hashKey": "object:144",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The region that its leader has minimal resolved ts.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 0,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 54
+          },
+          "hiddenSeries": false,
+          "id": 23763572079,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "total",
+              "lines": false
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(tikv_resolved_ts_min_leader_resolved_ts_region{tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\"}) by (instance)",
+              "format": "time_series",
+              "hide": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Min Leader Resolved TS Region",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "$$hashKey": "object:143",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "$$hashKey": "object:144",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed when handle a check leader request",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 62
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 9168,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "sum(delta(tikv_resolved_ts_check_leader_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
+              "format": "heatmap",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Check leader duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": false
+          },
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 0,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The status of resolved-ts observe regions",
           "editable": true,
@@ -34383,7 +34796,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 71
+            "y": 62
           },
           "hiddenSeries": false,
           "id": 8377,
@@ -34476,75 +34889,112 @@
           }
         },
         {
-          "cards": {
-            "cardPadding": null,
-            "cardRound": null
-          },
-          "color": {
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed when handle a check leader request",
+          "description": "Bucketed histogram of region count in a check leader request",
+          "editable": true,
+          "error": false,
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
+          "fill": 1,
+          "fillGradient": 0,
+          "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 79
+            "y": 70
           },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 9168,
+          "hiddenSeries": false,
+          "id": 12308,
           "legend": {
-            "show": false
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
           },
+          "lines": true,
+          "linewidth": 1,
           "links": [],
-          "reverseYBuckets": false,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(delta(tikv_resolved_ts_check_leader_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
-              "format": "heatmap",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "format": "time_series",
+              "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "metric": "",
+              "legendFormat": "{{instance}}",
+              "metric": "tikv_snapshot_size_bucket",
               "refId": "A",
-              "step": 4
+              "step": 40
             }
           ],
+          "thresholds": [],
           "timeFrom": null,
+          "timeRegions": [],
           "timeShift": null,
-          "title": "Check leader duration",
+          "title": "99% CheckLeader request region count",
           "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
             "show": true,
-            "showHistogram": false
+            "values": []
           },
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 0,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
         },
         {
           "aliasColors": {},
@@ -34567,7 +35017,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 79
+            "y": 70
           },
           "hiddenSeries": false,
           "id": 9166,
@@ -34666,33 +35116,34 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Bucketed histogram of region count in a check leader request",
+          "decimals": 1,
+          "description": "Total bytes in memory of resolved-ts observe regions's lock heap",
           "editable": true,
           "error": false,
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
-          "fill": 1,
+          "fill": 0,
           "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 87
+            "y": 78
           },
           "hiddenSeries": false,
-          "id": 12308,
+          "id": 8379,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "hideEmpty": true,
             "max": true,
             "min": false,
             "rightSide": true,
             "show": true,
+            "sideWidth": null,
             "sort": "current",
             "sortDesc": true,
             "total": false,
@@ -34701,7 +35152,7 @@
           "lines": true,
           "linewidth": 1,
           "links": [],
-          "nullPointMode": "null as zero",
+          "nullPointMode": "null",
           "options": {
             "alertThreshold": true
           },
@@ -34716,21 +35167,19 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "expr": "avg(tikv_resolved_ts_lock_heap_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "format": "time_series",
-              "hide": false,
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
-              "metric": "tikv_snapshot_size_bucket",
               "refId": "A",
-              "step": 40
+              "step": 10
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "99% CheckLeader request region count",
+          "title": "Lock heap size",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -34747,11 +35196,11 @@
           },
           "yaxes": [
             {
-              "format": "short",
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -34788,7 +35237,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 87
+            "y": 78
           },
           "hiddenSeries": false,
           "id": 8383,
@@ -34891,113 +35340,6 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "Total bytes in memory of resolved-ts observe regions's lock heap",
-          "editable": true,
-          "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 0,
-          "fillGradient": 0,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 95
-          },
-          "hiddenSeries": false,
-          "id": 8379,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.7",
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "avg(tikv_resolved_ts_lock_heap_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Lock heap size",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "bytes",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
           "description": "Total bytes of pending commands in the channel",
           "editable": true,
           "error": false,
@@ -35012,7 +35354,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 95
+            "y": 86
           },
           "hiddenSeries": false,
           "id": 8381,
