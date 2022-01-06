@@ -299,6 +299,7 @@ fn parse_cpu_cores(value: &str) -> HashSet<usize> {
             }
         } else if let Ok(s) = capping_parse_int::<usize>(v) {
             cores.insert(s);
+            continue;
         }
         warn!("fail to parse cpu cores: {}", v);
     }
