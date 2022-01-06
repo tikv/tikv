@@ -102,6 +102,7 @@ pub fn init_data_with_details<E: Engine>(
         cm,
         PerfLevel::EnableCount,
         ResourceTagFactory::new_for_test(),
+        None,
     );
     (store, copr)
 }

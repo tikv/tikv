@@ -402,6 +402,7 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
             res_tag_factory,
+            None,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
