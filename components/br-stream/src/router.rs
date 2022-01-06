@@ -34,7 +34,7 @@ use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{box_err, info, time::Limiter, warn, worker::Scheduler};
 use tokio::sync::Mutex;
 use tokio::{fs::read, io::AsyncWriteExt};
-use tokio::{fs::File, fs::remove_file, sync::RwLock};
+use tokio::{fs::remove_file, fs::File, sync::RwLock};
 use txn_types::{Key, TimeStamp};
 
 #[derive(Debug)]
@@ -227,9 +227,7 @@ impl RouterInner {
         self.register_ranges(&task_name, ranges);
 
         // register task info
-        let prefix_path = self
-            .prefix
-            .join(&task_name);
+        let prefix_path = self.prefix.join(&task_name);
         let stream_task = StreamTaskInfo::new(prefix_path, task).await?;
 
         let _ = self
@@ -267,13 +265,15 @@ impl RouterInner {
                 "cf" => ?kv.cf,
                 "key" => &log_wrappers::Value::key(&kv.key),
             );
-            let inner_router = {
-                let mut tasks = self.tasks.lock().await;
-                assert!(tasks.contains_key(&task), "task not existed");
 
-                tasks.get_mut(&task).unwrap().clone()
+            let task_info = match self.tasks.lock().await.get(&task) {
+                Some(t) => t.clone(),
+                None => {
+                    info!("backup stream no task"; "task" => ?task);
+                    return Err(Error::NoSuchTask { task_name: task });
+                }
             };
-            inner_router.on_event(kv).await?;
+            task_info.on_event(kv).await?;
 
             // When this event make the size of temporary files exceeds the size limit, make a flush.
             // Note that we only flush if the size is less than the limit before the event,
@@ -281,14 +281,13 @@ impl RouterInner {
             debug!(
                 "backup stream statics size";
                 "task" => ?task,
-                "next_size" => inner_router.total_size(),
+                "next_size" => task_info.total_size(),
                 "size_limit" => self.temp_file_size_limit,
             );
-            let cur_size = inner_router.total_size();
-            if cur_size > self.temp_file_size_limit && !inner_router.flushing.load(Ordering::SeqCst)
-            {
+            let cur_size = task_info.total_size();
+            if cur_size > self.temp_file_size_limit && !task_info.flushing.load(Ordering::SeqCst) {
                 info!("try flushing task"; "task" => %task, "size" => %cur_size);
-                if inner_router
+                if task_info
                     .flushing
                     .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok()
@@ -296,7 +295,7 @@ impl RouterInner {
                     // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
                     if self.scheduler.schedule(Task::Flush(task)).is_err() {
                         // oops... we failed, let's leave the chance to next challenger.
-                        inner_router.flushing.store(false, Ordering::SeqCst);
+                        task_info.flushing.store(false, Ordering::SeqCst);
                     }
                 }
             }
@@ -375,12 +374,19 @@ impl TempFileKey {
         if self.is_meta {
             format!(
                 "meta_{:08}_{}_{:?}_{}.temp.log",
-                self.region_id, self.cf, self.cmd_type, TimeStamp::physical_now(),
+                self.region_id,
+                self.cf,
+                self.cmd_type,
+                TimeStamp::physical_now(),
             )
         } else {
             format!(
                 "{:08}_{:08}_{}_{:?}_{}.temp.log",
-                self.table_id, self.region_id, self.cf, self.cmd_type, TimeStamp::physical_now(),
+                self.table_id,
+                self.region_id,
+                self.cf,
+                self.cmd_type,
+                TimeStamp::physical_now(),
             )
         }
     }
@@ -388,12 +394,12 @@ impl TempFileKey {
     fn file_name(&self, min_ts: TimeStamp) -> String {
         if self.is_meta {
             format!(
-                "m{:08}_{:?}_{:?}_{:?}.log",
+                "m{:08}_{}_{:?}_{:?}.log",
                 self.region_id, min_ts, self.cf, self.cmd_type
             )
         } else {
             format!(
-                "t{:08}_{:08}_{:?}_{:?}_{:?}.log",
+                "t{:08}_{:08}_{}_{:?}_{:?}.log",
                 self.table_id, self.region_id, min_ts, self.cf, self.cmd_type
             )
         }
@@ -456,21 +462,27 @@ impl StreamTaskInfo {
     /// i.e. No guarantee of persistence.
     pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
         let key = TempFileKey::of(&kv);
-        if !self.files.read().await.contains_key(&key) {
-            // slow path: try to insert the element.
-            let mut w = self.files.write().await;
-            // double check before insert. there may be someone already insert that
-            // when we are waiting for the write lock.
-            if !w.contains_key(&key) {
-                let path = self.temp_dir.join(key.temp_file_name());
-                let val = Mutex::new(DataFile::new(path).await?);
-                w.insert(key.to_owned(), val);
-            }
+
+        if let Some(f) = self.files.read().await.get(&key) {
+            self.total_size
+                .fetch_add(f.lock().await.on_event(kv).await?, Ordering::SeqCst);
+            return Ok(());
         }
-        let r = self.files.read().await;
-        let f = r.get(&key).unwrap();
+
+        // slow path: try to insert the element.
+        let mut w = self.files.write().await;
+        // double check before insert. there may be someone already insert that
+        // when we are waiting for the write lock.
+        if !w.contains_key(&key) {
+            let path = self.temp_dir.join(key.temp_file_name());
+            let val = Mutex::new(DataFile::new(path).await?);
+            w.insert(key.clone(), val);
+        }
+
+        let f = w.get(&key).unwrap();
         self.total_size
             .fetch_add(f.lock().await.on_event(kv).await?, Ordering::SeqCst);
+
         Ok(())
     }
 
@@ -538,6 +550,7 @@ impl StreamTaskInfo {
             }
         }
 
+        // if failed to write storage, we should retry write flushing_files.
         for (k, v) in self.flushing_files.write().await.drain() {
             let data_file = v.lock().await;
             let limiter = Limiter::builder(std::f64::INFINITY).build();
@@ -554,7 +567,9 @@ impl StreamTaskInfo {
                         "tmp file" => ?data_file.local_path,
                         "storage file" => ?filename,
                     );
-                    data_file.remove_temp_file();
+                    self.total_size
+                        .fetch_sub(data_file.file_size, Ordering::SeqCst);
+                    data_file.remove_temp_file().await;
                 }
                 Err(e) => warn!("backup stream flush failed";
                     "file" => ?data_file.local_path,
@@ -576,6 +591,7 @@ struct DataFile {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     number_of_entries: usize,
+    file_size: usize,
     local_path: PathBuf,
 }
 
@@ -619,13 +635,14 @@ impl DataFile {
             inner: File::create(local_path.as_ref()).await?,
             sha256,
             number_of_entries: 0,
+            file_size: 0,
             start_key: vec![],
             end_key: vec![],
             local_path: local_path.as_ref().to_owned(),
         })
     }
 
-    async fn remove_temp_file(&self){
+    async fn remove_temp_file(&self) {
         remove_file(&self.local_path).await;
     }
 
@@ -639,6 +656,8 @@ impl DataFile {
         self.max_ts = self.max_ts.max(ts);
         self.resolved_ts = self.resolved_ts.max(kv.region_resolved_ts.into());
         self.inner.write_all(encoded.as_slice()).await?;
+        self.number_of_entries += 1;
+        self.file_size += size;
         self.sha256
             .update(encoded.as_slice())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to update: {}", err)))?;
