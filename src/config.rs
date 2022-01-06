@@ -1129,19 +1129,20 @@ impl DbConfig {
 
         // Since the following configuration supports online update, in order to
         // prevent mistakenly inputting too large values, the max limit is made
-        // according to the cpu quota.
-        let cpu_num = SysQuota::cpu_cores_quota() as i32;
-        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+        // according to the cpu quota * 10. Notice 10 is only an estimate, not an
+        // empirical value.
+        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
-                cpu_num,
+                limit,
             )
             .into());
         }
-        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+        if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
-                cpu_num,
+                limit,
             )
             .into());
         }
@@ -1498,10 +1499,6 @@ impl DBConfigManger {
     }
 
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
-        if max_background_jobs < opt.get_max_background_jobs() {
-            return Err("unable to shrink background jobs while the instance is running".into());
-        }
         self.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
         Ok(())
     }
@@ -1510,10 +1507,6 @@ impl DBConfigManger {
         &self,
         max_background_flushes: i32,
     ) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
-        if max_background_flushes < opt.get_max_background_flushes() {
-            return Err("unable to shrink background jobs while the instance is running".into());
-        }
         self.set_db_config(&[(
             "max_background_flushes",
             &max_background_flushes.to_string(),
@@ -2386,8 +2379,10 @@ impl Default for ResolvedTsConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct File {
     pub filename: String,
-    pub max_size: ReadableSize,
-    pub max_days: ReadableDuration,
+    // The unit is MB
+    pub max_size: u64,
+    // The unit is Day
+    pub max_days: u64,
     pub max_backups: usize,
 }
 
@@ -2395,8 +2390,8 @@ impl Default for File {
     fn default() -> Self {
         Self {
             filename: "".to_owned(),
-            max_size: ReadableSize::mb(300),
-            max_days: ReadableDuration::days(0),
+            max_size: 300,
+            max_days: 0,
             max_backups: 0,
         }
     }
@@ -2426,7 +2421,7 @@ impl Default for LogConfig {
 
 impl LogConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.file.max_size.0 > ReadableSize::mb(4096).0 {
+        if self.file.max_size > 4096 {
             return Err("Max log file size upper limit to 4096MB".to_string().into());
         }
         Ok(())
@@ -2555,7 +2550,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_format: LogFormat::Text,
-            log_rotation_timespan: ReadableDuration::hours(24),
+            log_rotation_timespan: ReadableDuration::hours(0),
             log_rotation_size: ReadableSize::mb(300),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
@@ -2785,6 +2780,59 @@ impl TiKvConfig {
         Ok(())
     }
 
+    // As the init of `logger` is very early, this adjust needs to be separated and called
+    // immediately after parsing the command line.
+    pub fn logger_compatible_adjust(&mut self) {
+        let default_tikv_cfg = TiKvConfig::default();
+        let default_log_cfg = LogConfig::default();
+        if self.log_level != default_tikv_cfg.log_level {
+            println!("deprecated configuration, log-level has been moved to log.level");
+            if self.log.level == default_log_cfg.level {
+                println!("override log.level with log-level, {:?}", self.log_level);
+                self.log.level = self.log_level;
+            }
+            self.log_level = default_tikv_cfg.log_level;
+        }
+        if self.log_file != default_tikv_cfg.log_file {
+            println!("deprecated configuration, log-file has been moved to log.file.filename");
+            if self.log.file.filename == default_log_cfg.file.filename {
+                println!(
+                    "override log.file.filename with log-file, {:?}",
+                    self.log_file
+                );
+                self.log.file.filename = self.log_file.clone();
+            }
+            self.log_file = default_tikv_cfg.log_file;
+        }
+        if self.log_format != default_tikv_cfg.log_format {
+            println!("deprecated configuration, log-format has been moved to log.format");
+            if self.log.format == default_log_cfg.format {
+                println!("override log.format with log-format, {:?}", self.log_format);
+                self.log.format = self.log_format;
+            }
+            self.log_format = default_tikv_cfg.log_format;
+        }
+        if self.log_rotation_timespan.as_secs() > 0 {
+            println!(
+                "deprecated configuration, log-rotation-timespan is no longer used and ignored."
+            );
+        }
+        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
+            println!(
+                "deprecated configuration, \
+                 log-ratation-size has been moved to log.file.max-size"
+            );
+            if self.log.file.max_size == default_log_cfg.file.max_size {
+                println!(
+                    "override log.file.max_size with log-rotation-size, {:?}",
+                    self.log_rotation_size
+                );
+                self.log.file.max_size = self.log_rotation_size.as_mb();
+            }
+            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
+        }
+    }
+
     pub fn compatible_adjust(&mut self) {
         let default_raft_store = RaftstoreConfig::default();
         let default_coprocessor = CopConfig::default();
@@ -2895,56 +2943,6 @@ impl TiKvConfig {
         }
 
         self.readpool.adjust_use_unified_pool();
-
-        let default_tikv_cfg = TiKvConfig::default();
-        let default_log_cfg = LogConfig::default();
-        if self.log_level != default_tikv_cfg.log_level {
-            warn!("deprecated configuration, log-level has been moved to log.level");
-            if self.log.level == default_log_cfg.level {
-                warn!("override log.level with log-level, {:?}", self.log_level);
-                self.log.level = self.log_level;
-            }
-            self.log_level = default_tikv_cfg.log_level;
-        }
-        if self.log_file != default_tikv_cfg.log_file {
-            warn!("deprecated configuration, log-file has been moved to log.file.filename");
-            if self.log.file.filename == default_log_cfg.file.filename {
-                warn!(
-                    "override log.file.filename with log-file, {:?}",
-                    self.log_file
-                );
-                self.log.file.filename = self.log_file.clone();
-            }
-            self.log_file = default_tikv_cfg.log_file;
-        }
-        if self.log_format != default_tikv_cfg.log_format {
-            warn!("deprecated configuration, log-format has been moved to log.format");
-            if self.log.format == default_log_cfg.format {
-                warn!("override log.format with log-format, {:?}", self.log_format);
-                self.log.format = self.log_format;
-            }
-            self.log_format = default_tikv_cfg.log_format;
-        }
-        if self.log_rotation_timespan.as_secs() > 0 {
-            warn!(
-                "deprecated configuration, {} is no longer used and ignored.",
-                "log-rotation-timespan",
-            );
-        }
-        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
-            warn!(
-                "deprecated configuration, \
-                 log-ratation-size has been moved to log.file.max-size"
-            );
-            if self.log.file.max_size == default_log_cfg.file.max_size {
-                warn!(
-                    "override log.file.max_size with log-rotation-size, {:?}",
-                    self.log_rotation_size
-                );
-                self.log.file.max_size = self.log_rotation_size;
-            }
-            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
-        }
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
@@ -3647,9 +3645,9 @@ mod tests {
         }
 
         let legal_cases = vec![
-            ("critical", Level::Critical),
+            ("fatal", Level::Critical),
             ("error", Level::Error),
-            ("warning", Level::Warning),
+            ("warn", Level::Warning),
             ("debug", Level::Debug),
             ("trace", Level::Trace),
             ("info", Level::Info),
@@ -3663,7 +3661,7 @@ mod tests {
             assert_eq!(res_value.v, deserialized);
         }
 
-        let compatibility_cases = vec![("warn", Level::Warning)];
+        let compatibility_cases = vec![("warning", Level::Warning), ("critical", Level::Critical)];
         for (serialized, deserialized) in compatibility_cases {
             let variant_string = format!("v = \"{}\"\n", serialized);
             let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
@@ -4599,7 +4597,7 @@ mod tests {
         });
         assert!(r.is_err());
 
-        // rate-limiter-mode defalut values is 2
+        // rate-limiter-mode default values is 2
         let config_str = r#"
             rate-limiter-mode = 1
         "#;

@@ -196,7 +196,7 @@ impl<'de> Deserialize<'de> for IOPriority {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&"invalid IO priority".to_string()),
+                            Unexpected::Other("invalid IO priority"),
                             &self,
                         ));
                     }

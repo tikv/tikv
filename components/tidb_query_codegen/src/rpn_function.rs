@@ -1309,7 +1309,6 @@ struct NormalRpnFn {
     evaluator_ident: Ident,
     arg_types: Vec<TokenStream>,
     arg_types_anonymous: Vec<TokenStream>,
-    arg_types_no_ref: Vec<TokenStream>,
     ret_type: TypePath,
 }
 
@@ -1334,7 +1333,6 @@ impl NormalRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
-        let mut arg_types_no_ref = Vec::new();
         let take_cnt = item_fn.sig.inputs.len() - attr.captures.len() - attr.writer as usize;
         let fn_args = item_fn
             .sig
@@ -1346,7 +1344,6 @@ impl NormalRpnFn {
             let arg_type = Self::get_arg_type(&attr, fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
-            arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));
         }
         let ret_type = if attr.writer {
             parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
@@ -1382,7 +1379,6 @@ impl NormalRpnFn {
             evaluator_ident,
             arg_types,
             arg_types_anonymous,
-            arg_types_no_ref,
             ret_type: ret_type.eval_type,
         })
     }

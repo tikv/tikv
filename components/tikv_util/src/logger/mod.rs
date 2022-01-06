@@ -63,7 +63,7 @@ where
             //  ...
             // ```
             // Here get the highest level module name to check.
-            let module = record.module().splitn(2, "::").next().unwrap();
+            let module = record.module().split("::").next().unwrap();
             disabled_targets.iter().all(|target| target != module)
         } else {
             true
@@ -129,17 +129,17 @@ pub fn set_global_logger(
 /// path. The file writer rotates for the specified timespan.
 pub fn file_writer<N>(
     path: impl AsRef<Path>,
-    rotation_size: ReadableSize,
+    rotation_size: u64,
     max_backups: usize,
-    max_age: ReadableDuration,
+    max_age: u64,
     rename: N,
 ) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path, rename, max_backups, max_age)
-            .add_rotator(RotateBySize::new(rotation_size))
+        RotatingFileLoggerBuilder::new(path, rename, max_backups, ReadableDuration::days(max_age))
+            .add_rotator(RotateBySize::new(ReadableSize::mb(rotation_size)))
             .build()?,
     );
     Ok(logger)
@@ -213,7 +213,8 @@ where
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "critical" => Some(Level::Critical),
+        // We support `critical` due to legacy.
+        "fatal" | "critical" => Some(Level::Critical),
         "error" => Some(Level::Error),
         // We support `warn` due to legacy.
         "warning" | "warn" => Some(Level::Warning),
@@ -228,9 +229,9 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
 // the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
-        Level::Critical => "critical",
+        Level::Critical => "fatal",
         Level::Error => "error",
-        Level::Warning => "warning",
+        Level::Warning => "warn",
         Level::Debug => "debug",
         Level::Trace => "trace",
         Level::Info => "info",

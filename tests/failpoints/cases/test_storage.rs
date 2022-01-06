@@ -17,6 +17,7 @@ use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::*;
 use tikv::storage::lock_manager::DummyLockManager;
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
 use tikv::storage::{
@@ -82,6 +83,9 @@ fn test_scheduler_leader_change_twice() {
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
             box KvErrorInner::Request(ref e),
+        ))))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         ))))))
         | Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))) => {
             assert!(e.has_stale_command(), "{:?}", e);

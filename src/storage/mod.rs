@@ -2474,7 +2474,10 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
     type Iter = S::Iter;
-    type Ext<'a> = TxnTestSnapshotExt<'a>;
+    type Ext<'a>
+    where
+        S: 'a,
+    = TxnTestSnapshotExt<'a>;
 
     fn get(&self, key: &Key) -> tikv_kv::Result<Option<Value>> {
         self.snapshot.get(key)
@@ -8171,13 +8174,16 @@ mod tests {
             let lock = pessimistic_locks.map.get(&k1).unwrap();
             assert_eq!(
                 lock,
-                &PessimisticLock {
-                    primary: Box::new(*b"k1"),
-                    start_ts: 10.into(),
-                    ttl: 3000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 11.into(),
-                }
+                &(
+                    PessimisticLock {
+                        primary: Box::new(*b"k1"),
+                        start_ts: 10.into(),
+                        ttl: 3000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 11.into(),
+                    },
+                    false
+                )
             );
         }
 

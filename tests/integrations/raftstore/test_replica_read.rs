@@ -102,7 +102,7 @@ fn test_replica_read_not_applied() {
 
     // Unpark all append responses so that the new leader can commit its first entry.
     let router = cluster.sim.wl().get_router(2).unwrap();
-    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+    for raft_msg in mem::take::<Vec<_>>(dropped_msgs.lock().unwrap().as_mut()) {
         router.send_raft_message(raft_msg).unwrap();
     }
 
