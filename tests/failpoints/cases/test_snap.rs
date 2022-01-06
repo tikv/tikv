@@ -246,6 +246,9 @@ fn test_destroy_peer_on_pending_snapshot() {
 #[test]
 fn test_destroy_peer_on_abort_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 25; // > lease 240ms
+    cluster.cfg.raft_store.hibernate_regions = false;
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -275,24 +278,14 @@ fn test_destroy_peer_on_abort_snapshot() {
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
-    // pause peer_destroy
-    let before_peer_destroy_1003_fp = "before_peer_destroy_1003";
-    fail::cfg(before_peer_destroy_1003_fp, "pause").unwrap();
-    // Wait for leader send msg to peer 1003.
-    // Then destroy peer 1003 and create peer 1004.
     for i in 0..40 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
     cluster.clear_send_filters();
 
     sleep_ms(1000);
-    let on_raft_base_tick_execution_fp = "on_raft_base_tick_execution";
-    fail::cfg(on_raft_base_tick_execution_fp, "panic").unwrap();
-    sleep_ms(1000);
 
     fail::remove(apply_snapshot_fp);
-    fail::remove(before_peer_destroy_1003_fp);
-    fail::remove(on_raft_base_tick_execution_fp);
 }
 
 #[test]
