@@ -494,12 +494,13 @@ impl Config {
 
         // Since the following configuration supports online update, in order to
         // prevent mistakenly inputting too large values, the max limit is made
-        // according to the cpu quota.
-        let cpu_num = SysQuota::cpu_cores_quota() as usize;
-        if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > cpu_num {
+        // according to the cpu quota * 10. Notice 10 is only an estimate, not an
+        // empirical value.
+        let limit = SysQuota::cpu_cores_quota() as usize * 10;
+        if self.apply_batch_system.pool_size == 0 || self.apply_batch_system.pool_size > limit {
             return Err(box_err!(
                 "apply-pool-size should be greater than 0 and less than or equal to: {}",
-                cpu_num
+                limit
             ));
         }
         if let Some(size) = self.apply_batch_system.max_batch_size {
@@ -509,10 +510,10 @@ impl Config {
         } else {
             self.apply_batch_system.max_batch_size = Some(256);
         }
-        if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > cpu_num {
+        if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > limit {
             return Err(box_err!(
                 "store-pool-size should be greater than 0 and less than or equal to: {}",
-                cpu_num
+                limit
             ));
         }
         if self.store_batch_system.low_priority_pool_size > 0 {
