@@ -598,7 +598,8 @@ impl SoftLimitKeeper {
             warn!("error during appling the soft limit for backup.";
                 "current_limit" => %self.limit.current_cap(),
                 "to_set_value" => %quota_val,
-                "err" => %err);
+                "err" => %err,
+            );
             Error::Other(box_err!("failed to resize softlimit: {}", err))
         })?;
 
