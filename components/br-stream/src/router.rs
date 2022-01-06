@@ -8,7 +8,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
-    time::Duration,
 };
 
 use crate::{
@@ -25,16 +24,16 @@ use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 
 use file_system::Sha256Reader;
-use futures::{io::AllowStdIo, AsyncRead};
+use futures::io::AllowStdIo;
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{box_err, info, time::Limiter, warn, worker::Scheduler};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use tokio::{fs::read, io::AsyncWriteExt};
-use tokio::{fs::remove_file, fs::File, sync::RwLock};
+use tokio::{fs::remove_file, fs::File};
 use txn_types::{Key, TimeStamp};
 
 #[derive(Debug)]
@@ -285,42 +284,18 @@ impl RouterInner {
                 "size_limit" => self.temp_file_size_limit,
             );
             let cur_size = task_info.total_size();
-            if cur_size > self.temp_file_size_limit && !task_info.flushing.load(Ordering::SeqCst) {
+            if cur_size > self.temp_file_size_limit && !task_info.is_flushing() {
                 info!("try flushing task"; "task" => %task, "size" => %cur_size);
-                if task_info
-                    .flushing
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
+                if task_info.set_flushing_status_cas(false, true).is_ok() {
                     // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
                     if self.scheduler.schedule(Task::Flush(task)).is_err() {
                         // oops... we failed, let's leave the chance to next challenger.
-                        task_info.flushing.store(false, Ordering::SeqCst);
+                        task_info.set_flushing_status(false);
                     }
                 }
             }
         }
         Ok(())
-    }
-
-    pub async fn take_temporary_files(&self, task: &str) -> Result<StreamTaskInfo> {
-        let mut arc = self.tasks.lock().await.remove(task).map_or(
-            Err(Error::NoSuchTask {
-                task_name: task.to_owned(),
-            }),
-            |data| Ok(data),
-        )?;
-        // TODO: use channels / condvars to replace the busy waiting.
-        loop {
-            match Arc::try_unwrap(arc) {
-                Ok(files) => return Ok(files),
-                Err(arc_returned) => {
-                    arc = arc_returned;
-                    warn!("busy waiting the temporary files write done."; "task" => %task);
-                    tokio::time::sleep(Duration::from_millis(800)).await
-                }
-            }
-        }
     }
 
     pub async fn do_flush(&self, task_name: &str) {
@@ -330,7 +305,7 @@ impl RouterInner {
                 warn!("backup steam do flush fail"; "err" => ?e);
             }
             // set false to flushing whether success or fail
-            task_info.flushing.store(false, Ordering::SeqCst);
+            task_info.set_flushing_status(false);
         }
     }
 }
@@ -408,8 +383,8 @@ impl TempFileKey {
 
 pub struct StreamTaskInfo {
     task: StreamTask,
+    /// support external storage. eg local/s3.
     storage: Box<dyn ExternalStorage>,
-
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
@@ -432,7 +407,8 @@ pub struct StreamTaskInfo {
 
 impl std::fmt::Debug for StreamTaskInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TemporaryFiles")
+        f.debug_struct("StreamTaskInfo")
+            .field("task", &self.task.info.name)
             .field("temp_dir", &self.temp_dir)
             .field("min_resolved_ts", &self.min_resolved_ts)
             .field("total_size", &self.total_size)
@@ -503,13 +479,14 @@ impl StreamTaskInfo {
         self.total_size.load(Ordering::SeqCst) as _
     }
 
+    #[warn(dead_code)]
     /// Flush all files and generate corresponding metadata.
-    pub async fn generate_metadata(self) -> Result<MetadataOfFlush> {
-        let mut w = RwLock::into_inner(self.files);
+    pub async fn generate_metadata(&self) -> Result<MetadataOfFlush> {
+        let w = self.flushing_files.read().await;
         // Let's flush all files first...
         futures::future::join_all(
-            w.values_mut()
-                .map(|f| async move { f.lock().await.inner.sync_all().await }),
+            w.iter()
+                .map(|(_, f)| async move { f.lock().await.inner.sync_all().await }),
         )
         .await
         .into_iter()
@@ -526,36 +503,54 @@ impl StreamTaskInfo {
                 ..
             },
             data_file,
-        ) in w.into_iter()
+        ) in w.iter()
         {
-            let data_file = Mutex::into_inner(data_file);
+            let mut data_file = data_file.lock().await;
             let mut file_meta = data_file.generate_metadata()?;
-            let path = if is_meta {
+            let path = if *is_meta {
                 Self::path_to_schema_file(file_meta.meta.min_ts)
             } else {
-                Self::path_to_log_file(table_id, file_meta.meta.min_ts)
+                Self::path_to_log_file(*table_id, file_meta.meta.min_ts)
             };
             file_meta.meta.set_path(path);
-            file_meta.meta.set_cf(cf);
-            file_meta.meta.set_region_id(region_id as _);
+            file_meta.meta.set_cf(cf.clone());
+            file_meta.meta.set_region_id(*region_id as _);
             result.push(file_meta)
         }
         Ok(result)
     }
 
+    pub fn set_flushing_status_cas(&self, expect: bool, new: bool) -> result::Result<bool, bool> {
+        self.flushing
+            .compare_exchange(expect, new, Ordering::SeqCst, Ordering::SeqCst)
+    }
+
+    pub fn set_flushing_status(&self, set_flushing: bool) {
+        self.flushing.store(set_flushing, Ordering::SeqCst);
+    }
+
+    pub fn is_flushing(&self) -> bool {
+        self.flushing.load(Ordering::SeqCst)
+    }
+
     pub async fn do_flush(&self) -> io::Result<()> {
-        if let mut w = self.files.write().await {
+        // move need-flushing files to flushing_files.
+        if self.is_flushing() {
+            let mut w = self.files.write().await;
             for (k, v) in w.drain() {
                 self.flushing_files.write().await.insert(k, v);
             }
         }
+
+        // generage meta data and prepare to flush to storage
+        let _ = self.generate_metadata();
 
         // if failed to write storage, we should retry write flushing_files.
         for (k, v) in self.flushing_files.write().await.drain() {
             let data_file = v.lock().await;
             let limiter = Limiter::builder(std::f64::INFINITY).build();
             let reader = std::fs::File::open(data_file.local_path.clone()).unwrap();
-            let (reader, hasher) = Sha256Reader::new(reader).unwrap();
+            let (reader, _) = Sha256Reader::new(reader).unwrap();
             let reader = UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader))));
             let filename = k.file_name(data_file.min_ts);
 
@@ -569,7 +564,7 @@ impl StreamTaskInfo {
                     );
                     self.total_size
                         .fetch_sub(data_file.file_size, Ordering::SeqCst);
-                    data_file.remove_temp_file().await;
+                    let _ = data_file.remove_temp_file().await;
                 }
                 Err(e) => warn!("backup stream flush failed";
                     "file" => ?data_file.local_path,
@@ -642,8 +637,8 @@ impl DataFile {
         })
     }
 
-    async fn remove_temp_file(&self) {
-        remove_file(&self.local_path).await;
+    async fn remove_temp_file(&self) -> io::Result<()>{
+        remove_file(&self.local_path).await
     }
 
     /// Add a new KV pair to the file, returning its size.
@@ -663,12 +658,8 @@ impl DataFile {
         self.min_ts = self.min_ts.min(ts);
         self.max_ts = self.max_ts.max(ts);
         self.resolved_ts = self.resolved_ts.max(kv.region_resolved_ts.into());
-        self.inner.write_all(encoded.as_slice()).await?;
         self.number_of_entries += 1;
         self.file_size += size;
-        self.sha256
-            .update(encoded.as_slice())
-            .map_err(|err| Error::Other(box_err!("openssl hasher failed to update: {}", err)))?;
         self.update_key_bound(key.into_encoded());
         Ok(size)
     }
@@ -691,7 +682,7 @@ impl DataFile {
     }
 
     /// generate the metadata in protocol buffer of the file.
-    fn generate_metadata(mut self) -> Result<DataFileWithMeta> {
+    fn generate_metadata(&mut self) -> Result<DataFileWithMeta> {
         let mut meta = DataFileInfo::new();
         meta.set_sha_256(
             self.sha256
@@ -709,7 +700,7 @@ impl DataFile {
         meta.set_end_key(std::mem::take(&mut self.end_key));
         let file_with_meta = DataFileWithMeta {
             meta,
-            local_path: self.local_path,
+            local_path: self.local_path.clone(),
         };
         Ok(file_with_meta)
     }
