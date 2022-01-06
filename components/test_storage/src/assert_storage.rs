@@ -90,7 +90,7 @@ impl AssertionStorage<SimulateEngine> {
     ) -> Option<Value> {
         let ts = ts.into();
         for _ in 0..3 {
-            let res = self.store.get(self.ctx.clone(), key.to_vec(), ts);
+            let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
             if let Ok((data, ..)) = res {
                 return data;
             }
@@ -228,27 +228,23 @@ impl AssertionStorage<SimulateEngine> {
 
 impl<E: Engine> AssertionStorage<E> {
     pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
+        let key = Key::from_raw(key);
         assert_eq!(
-            self.store
-                .get(self.ctx.clone(), key.to_vec(), ts.into())
-                .unwrap()
-                .0,
+            self.store.get(self.ctx.clone(), &key, ts.into()).unwrap().0,
             None
         );
     }
 
     pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
-        assert!(
-            self.store
-                .get(self.ctx.clone(), key.to_vec(), ts.into())
-                .is_err()
-        );
+        let key = Key::from_raw(key);
+        assert!(self.store.get(self.ctx.clone(), &key, ts.into()).is_err());
     }
 
     pub fn get_ok(&self, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
+        let key = Key::from_raw(key);
         assert_eq!(
             self.store
-                .get(self.ctx.clone(), key.to_vec(), ts.into())
+                .get(self.ctx.clone(), &key, ts.into())
                 .unwrap()
                 .0
                 .unwrap(),
@@ -257,7 +253,7 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_ok(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>, expect: Vec<&[u8]>) {
-        let keys: Vec<Vec<u8>> = keys.iter().map(|x| x.to_vec()).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         let result: Vec<Vec<u8>> = self
             .store
             .batch_get(self.ctx.clone(), &keys, ts.into())
@@ -271,7 +267,7 @@ impl<E: Engine> AssertionStorage<E> {
     }
 
     pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
-        let keys: Vec<Vec<u8>> = keys.iter().map(|x| x.to_vec()).collect();
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         assert!(
             self.store
                 .batch_get(self.ctx.clone(), &keys, ts.into())
@@ -425,14 +421,23 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = start_key.to_owned();
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -442,24 +447,47 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn scan_err(&self, start_key: &[u8], limit: usize, ts: impl Into<TimeStamp>) {
-        let key_address = start_key.to_owned();
+    pub fn scan_err(
+        &self,
+        start_key: &[u8],
+        end_key: Option<&[u8]>,
+        limit: usize,
+        ts: impl Into<TimeStamp>,
+    ) {
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         self.store
-            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap_err();
     }
 
     pub fn reverse_scan_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = start_key.to_owned();
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .reverse_scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -472,14 +500,16 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_key_only_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<&[u8]>>,
     ) {
-        let key_address = start_key.to_owned();
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, true, ts.into())
+            .scan(self.ctx.clone(), start_key, end_key, limit, true, ts.into())
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -686,8 +716,16 @@ impl<E: Engine> AssertionStorage<E> {
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
-        let start_key = txn_types::raw_key_maybe_unbounded_into_option(start_key.to_vec());
-        let end_key = txn_types::raw_key_maybe_unbounded_into_option(end_key.to_vec());
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(start_key))
+        };
+        let end_key = if end_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(end_key))
+        };
 
         assert_eq!(
             self.store
@@ -704,8 +742,16 @@ impl<E: Engine> AssertionStorage<E> {
         end_key: &[u8],
         limit: usize,
     ) {
-        let start_key = txn_types::raw_key_maybe_unbounded_into_option(start_key.to_vec());
-        let end_key = txn_types::raw_key_maybe_unbounded_into_option(end_key.to_vec());
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(start_key))
+        };
+        let end_key = if end_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(end_key))
+        };
 
         self.store
             .scan_locks(self.ctx.clone(), max_ts.into(), start_key, end_key, limit)
@@ -761,8 +807,8 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .delete_range(
                 self.ctx.clone(),
-                start_key.to_owned(),
-                end_key.to_owned(),
+                Key::from_raw(start_key),
+                Key::from_raw(end_key),
                 false,
             )
             .unwrap();
@@ -772,8 +818,8 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .delete_range(
                 self.ctx.clone(),
-                start_key.to_owned(),
-                end_key.to_owned(),
+                Key::from_raw(start_key),
+                Key::from_raw(end_key),
                 false,
             )
             .unwrap_err();

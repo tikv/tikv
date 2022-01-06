@@ -21,7 +21,7 @@ impl TimeStamp {
     }
 
     pub const fn max() -> TimeStamp {
-        TimeStamp(std::u64::MAX)
+        TimeStamp(u64::MAX)
     }
 
     pub const fn new(ts: u64) -> TimeStamp {
@@ -88,7 +88,7 @@ impl From<&u64> for TimeStamp {
 }
 
 impl fmt::Display for TimeStamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }
@@ -96,7 +96,7 @@ impl fmt::Display for TimeStamp {
 impl slog::Value for TimeStamp {
     fn serialize(
         &self,
-        record: &slog::Record,
+        record: &slog::Record<'_>,
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {

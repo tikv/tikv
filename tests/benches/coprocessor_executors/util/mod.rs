@@ -58,7 +58,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
 pub struct InnerBenchCase<I, M, F>
 where
     M: Measurement + 'static,
-    F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+    F: Fn(&mut criterion::Bencher<'_, M>, &I) + Copy + 'static,
 {
     pub _phantom_input: PhantomData<I>,
     pub _phantom_measurement: PhantomData<M>,
@@ -66,7 +66,7 @@ where
     pub f: F,
 }
 
-type BenchFn<M, I> = Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static>;
+type BenchFn<M, I> = Box<dyn Fn(&mut criterion::Bencher<'_, M>, &I) + 'static>;
 
 pub trait IBenchCase {
     type M: Measurement + 'static;
@@ -80,7 +80,7 @@ pub trait IBenchCase {
 impl<I, M, F> IBenchCase for InnerBenchCase<I, M, F>
 where
     M: Measurement + 'static,
-    F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+    F: Fn(&mut criterion::Bencher<'_, M>, &I) + Copy + 'static,
 {
     type M = M;
     type I = I;
@@ -108,7 +108,7 @@ where
 {
     pub fn new<F>(name: &'static str, f: F) -> Self
     where
-        F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+        F: Fn(&mut criterion::Bencher<'_, M>, &I) + Copy + 'static,
     {
         Self {
             inner: Box::new(InnerBenchCase {

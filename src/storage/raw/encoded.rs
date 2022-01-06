@@ -4,32 +4,33 @@
 use crate::storage::kv::{Iterator, Result, Snapshot, TTL_TOMBSTONE};
 use crate::storage::Statistics;
 
-use engine_traits::raw_value::{ttl_current_ts, RawValue};
+use api_version::APIVersion;
+use engine_traits::raw_ttl::ttl_current_ts;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, ReadOptions};
-use kvproto::kvrpcpb::ApiVersion;
+use std::marker::PhantomData;
 use txn_types::{Key, Value};
 
 #[derive(Clone)]
-pub struct RawEncodeSnapshot<S: Snapshot> {
+pub struct RawEncodeSnapshot<S: Snapshot, API: APIVersion> {
     snap: S,
     current_ts: u64,
-    api_version: ApiVersion,
+    _phantom: PhantomData<API>,
 }
 
-impl<S: Snapshot> RawEncodeSnapshot<S> {
-    pub fn from_snapshot(snap: S, api_version: ApiVersion) -> Self {
+impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
+    pub fn from_snapshot(snap: S) -> Self {
         RawEncodeSnapshot {
             snap,
             current_ts: ttl_current_ts(),
-            api_version,
+            _phantom: PhantomData,
         }
     }
 
     fn map_value(&self, value: Result<Option<Value>>) -> Result<Option<Value>> {
         match value? {
             Some(v) => {
-                let raw_value = RawValue::from_owned_bytes(v, self.api_version)?;
+                let raw_value = API::decode_raw_value_owned(v)?;
                 if raw_value
                     .expire_ts
                     .map(|expire_ts| expire_ts <= self.current_ts)
@@ -53,7 +54,7 @@ impl<S: Snapshot> RawEncodeSnapshot<S> {
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
         if let Some(v) = self.snap.get_cf(cf, key)? {
             stats.data.flow_stats.read_bytes += v.len();
-            let raw_value = RawValue::from_bytes(&v, self.api_version)?;
+            let raw_value = API::decode_raw_value_owned(v)?;
             return match raw_value.expire_ts {
                 Some(expire_ts) if expire_ts <= self.current_ts => Ok(None),
                 Some(expire_ts) => Ok(Some(expire_ts - self.current_ts)),
@@ -64,9 +65,12 @@ impl<S: Snapshot> RawEncodeSnapshot<S> {
     }
 }
 
-impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
-    type Iter = RawEncodeIterator<S::Iter>;
-    type Ext<'a> = S::Ext<'a>;
+impl<S: Snapshot, API: APIVersion> Snapshot for RawEncodeSnapshot<S, API> {
+    type Iter = RawEncodeIterator<S::Iter, API>;
+    type Ext<'a>
+    where
+        S: 'a,
+    = S::Ext<'a>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.map_value(self.snap.get(key))
@@ -84,7 +88,6 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
         Ok(RawEncodeIterator::new(
             self.snap.iter(iter_opt)?,
             self.current_ts,
-            self.api_version,
         ))
     }
 
@@ -92,7 +95,6 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
         Ok(RawEncodeIterator::new(
             self.snap.iter_cf(cf, iter_opt)?,
             self.current_ts,
-            self.api_version,
         ))
     }
 
@@ -111,20 +113,20 @@ impl<S: Snapshot> Snapshot for RawEncodeSnapshot<S> {
     }
 }
 
-pub struct RawEncodeIterator<I: Iterator> {
+pub struct RawEncodeIterator<I: Iterator, API: APIVersion> {
     inner: I,
     current_ts: u64,
     skip_ttl: usize,
-    api_version: ApiVersion,
+    _phantom: PhantomData<API>,
 }
 
-impl<I: Iterator> RawEncodeIterator<I> {
-    fn new(inner: I, current_ts: u64, api_version: ApiVersion) -> Self {
+impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
+    fn new(inner: I, current_ts: u64) -> Self {
         RawEncodeIterator {
             inner,
             current_ts,
             skip_ttl: 0,
-            api_version,
+            _phantom: PhantomData,
         }
     }
 
@@ -135,7 +137,7 @@ impl<I: Iterator> RawEncodeIterator<I> {
             }
 
             if *res.as_ref().unwrap() {
-                let raw_value = RawValue::from_bytes(self.inner.value(), self.api_version)?;
+                let raw_value = API::decode_raw_value(self.inner.value())?;
                 if raw_value
                     .expire_ts
                     .map(|expire_ts| expire_ts <= self.current_ts)
@@ -156,7 +158,7 @@ impl<I: Iterator> RawEncodeIterator<I> {
     }
 }
 
-impl<I: Iterator> Drop for RawEncodeIterator<I> {
+impl<I: Iterator, API: APIVersion> Drop for RawEncodeIterator<I, API> {
     fn drop(&mut self) {
         TTL_TOMBSTONE.with(|m| {
             *m.borrow_mut() += self.skip_ttl;
@@ -164,7 +166,7 @@ impl<I: Iterator> Drop for RawEncodeIterator<I> {
     }
 }
 
-impl<I: Iterator> Iterator for RawEncodeIterator<I> {
+impl<I: Iterator, API: APIVersion> Iterator for RawEncodeIterator<I, API> {
     fn next(&mut self) -> Result<bool> {
         let res = self.inner.next();
         self.find_valid_value(res, true)
@@ -208,7 +210,7 @@ impl<I: Iterator> Iterator for RawEncodeIterator<I> {
     }
 
     fn value(&self) -> &[u8] {
-        RawValue::from_bytes(self.inner.value(), self.api_version)
+        API::decode_raw_value(self.inner.value())
             .unwrap()
             .user_value
     }

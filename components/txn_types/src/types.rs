@@ -244,25 +244,6 @@ impl Display for Key {
     }
 }
 
-/// Convert a maybe unbounded raw key into `Option`, for a explicit meaning of "Unbounded".
-///
-/// # Example
-///
-/// ```
-/// use txn_types::raw_key_maybe_unbounded_into_option;
-///
-/// assert_eq!(raw_key_maybe_unbounded_into_option(b"".to_vec()), None);
-/// assert_eq!(raw_key_maybe_unbounded_into_option(b"abc".to_vec()), Some(b"abc".to_vec()));
-/// ```
-#[inline]
-pub fn raw_key_maybe_unbounded_into_option(raw_key: Vec<u8>) -> Option<Vec<u8>> {
-    if raw_key.is_empty() {
-        None
-    } else {
-        Some(raw_key)
-    }
-}
-
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MutationType {
     Put,
@@ -527,6 +508,9 @@ bitflags! {
         const ONE_PC = 0b00000001;
         /// Indicates this request is from a stale read-only transaction.
         const STALE_READ = 0b00000010;
+        /// Indicates this request is a transfer leader command that needs to be proposed
+        /// like a normal command.
+        const TRANSFER_LEADER_PROPOSAL = 0b00000100;
     }
 }
 

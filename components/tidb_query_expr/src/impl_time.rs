@@ -2415,7 +2415,7 @@ mod tests {
                 .push_param(duration2)
                 .evaluate::<Duration>(ScalarFuncSig::DurationDurationTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 
@@ -2475,7 +2475,7 @@ mod tests {
                 .push_param(duration)
                 .evaluate::<Duration>(ScalarFuncSig::StringDurationTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 
@@ -2535,7 +2535,7 @@ mod tests {
                 .push_param(string2)
                 .evaluate::<Duration>(ScalarFuncSig::StringStringTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 
@@ -2595,7 +2595,7 @@ mod tests {
                 .push_param(string)
                 .evaluate::<Duration>(ScalarFuncSig::DurationStringTimeDiff)
                 .unwrap();
-            assert_eq!(output, expected, "got {}", output.unwrap().to_string());
+            assert_eq!(output, expected, "got {}", output.unwrap());
         }
     }
 }

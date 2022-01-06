@@ -184,14 +184,12 @@ fn test_node_switch_api_version() {
             cluster.put(b"k1", b"").unwrap();
             cluster.shutdown();
 
+            cluster.cfg.storage.set_api_version(to_api);
             if from_api == to_api {
-                // Should start with if there is no api version change
-                cluster.cfg.storage.set_api_version(to_api);
                 cluster.start().unwrap();
                 cluster.shutdown();
             } else {
-                // Should not be able to switch to `to_api`
-                cluster.cfg.storage.set_api_version(to_api);
+                // Should not be able to switch to `to_api`.
                 assert!(cluster.start().is_err());
             }
         }

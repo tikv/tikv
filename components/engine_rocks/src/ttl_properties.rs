@@ -1,13 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
-use engine_traits::key_prefix;
-use engine_traits::raw_value::RawValue;
+use api_version::{APIVersion, KeyMode, RawValue};
 use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
-use kvproto::kvrpcpb::ApiVersion;
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
 
@@ -59,12 +58,12 @@ impl TtlPropertiesExt for RocksEngine {
 }
 
 /// Can only be used for default CF.
-pub struct TtlPropertiesCollector {
-    api_version: ApiVersion,
+pub struct TtlPropertiesCollector<API: APIVersion> {
     prop: TtlProperties,
+    _phantom: PhantomData<API>,
 }
 
-impl TablePropertiesCollector for TtlPropertiesCollector {
+impl<API: APIVersion> TablePropertiesCollector for TtlPropertiesCollector<API> {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if entry_type != DBEntryType::Put {
             return;
@@ -74,20 +73,11 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
             return;
         }
         // Only consider raw keys.
-        match self.api_version {
-            // TTL is not enabled in V1.
-            ApiVersion::V1 => unreachable!(),
-            // In V1TTL, txnkv is disabled, so all data keys are raw keys.
-            ApiVersion::V1ttl => (),
-            ApiVersion::V2 => {
-                let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
-                if !key_prefix::is_raw_key(origin_key) {
-                    return;
-                }
-            }
+        if API::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
+            return;
         }
 
-        match RawValue::from_bytes(value, self.api_version) {
+        match API::decode_raw_value(value) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..
@@ -119,15 +109,18 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
     }
 }
 
-pub struct TtlPropertiesCollectorFactory {
-    pub api_version: ApiVersion,
+#[derive(Default)]
+pub struct TtlPropertiesCollectorFactory<API: APIVersion> {
+    _phantom: PhantomData<API>,
 }
 
-impl TablePropertiesCollectorFactory<TtlPropertiesCollector> for TtlPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector {
+impl<API: APIVersion> TablePropertiesCollectorFactory<TtlPropertiesCollector<API>>
+    for TtlPropertiesCollectorFactory<API>
+{
+    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector<API> {
         TtlPropertiesCollector {
-            api_version: self.api_version,
             prop: Default::default(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -135,19 +128,21 @@ impl TablePropertiesCollectorFactory<TtlPropertiesCollector> for TtlPropertiesCo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use api_version::{APIV1TTL, APIV2};
+    use kvproto::kvrpcpb::ApiVersion;
     use tikv_util::time::UnixSecs;
 
     #[test]
     fn test_ttl_properties() {
-        test_ttl_properties_impl(ApiVersion::V1ttl);
-        test_ttl_properties_impl(ApiVersion::V2);
+        test_ttl_properties_impl::<APIV1TTL>();
+        test_ttl_properties_impl::<APIV2>();
     }
 
-    fn test_ttl_properties_impl(api_version: ApiVersion) {
+    fn test_ttl_properties_impl<API: APIVersion>() {
         let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
-            let mut collector = TtlPropertiesCollector {
-                api_version,
+            let mut collector = TtlPropertiesCollector::<API> {
                 prop: Default::default(),
+                _phantom: PhantomData,
             };
             for &(k, ts) in case {
                 let v = RawValue {
@@ -156,7 +151,7 @@ mod tests {
                 };
                 collector.add(
                     k.as_bytes(),
-                    &v.to_bytes(api_version),
+                    &API::encode_raw_value(v),
                     DBEntryType::Put,
                     0,
                     0,
@@ -179,7 +174,7 @@ mod tests {
         ];
         let props = get_properties(&case1).unwrap();
         assert_eq!(props.max_expire_ts, u64::MAX);
-        match api_version {
+        match API::TAG {
             ApiVersion::V1 => unreachable!(),
             ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
             // expire_ts = 0 is no longer a special case in API V2

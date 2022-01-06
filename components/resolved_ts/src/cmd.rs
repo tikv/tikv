@@ -71,7 +71,7 @@ impl ChangeLog {
     fn encode_rows(changes: HashMap<Key, RowChange>, is_one_pc: bool) -> Vec<ChangeRow> {
         changes
             .into_iter()
-            .map(|(key, row)| match (row.write, row.lock, row.default) {
+            .filter_map(|(key, row)| match (row.write, row.lock, row.default) {
                 (Some(KeyOp::Put(mut commit_ts, write)), _, default) => {
                     decode_write(key.as_encoded(), &write, true).map(|write| {
                         let Write {
@@ -125,7 +125,6 @@ impl ChangeLog {
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
-            .flatten()
             .collect()
     }
 }

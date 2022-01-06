@@ -74,7 +74,7 @@ struct MockReceiverService {
 impl ResourceUsageAgent for MockReceiverService {
     fn report(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut stream: RequestStream<ResourceUsageRecord>,
         sink: ClientStreamingSink<EmptyResponse>,
     ) {

@@ -249,7 +249,11 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(
+        &mut self,
+        _ctx: &mut EvalContext,
+        value: Option<EnumRef<'_>>,
+    ) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
@@ -334,7 +338,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
@@ -760,7 +764,7 @@ mod tests {
                 update!(
                     state,
                     &mut ctx,
-                    Some(&String::from(arg).into_bytes() as BytesRef)
+                    Some(&String::from(arg).into_bytes() as BytesRef<'_>)
                 )
                 .unwrap();
             }

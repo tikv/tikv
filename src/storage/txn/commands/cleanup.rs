@@ -46,7 +46,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
             &mut context.statistics,
         );
 
