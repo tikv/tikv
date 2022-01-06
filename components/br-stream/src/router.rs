@@ -637,7 +637,7 @@ impl DataFile {
         })
     }
 
-    async fn remove_temp_file(&self) -> io::Result<()>{
+    async fn remove_temp_file(&self) -> io::Result<()> {
         remove_file(&self.local_path).await
     }
 
