@@ -1023,7 +1023,7 @@ impl RegionReadProgress {
     }
 
     // Dump the `LeaderInfo` and the peer list
-    fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
+    pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
         let mut leader_info = LeaderInfo::default();
         let core = self.core.lock().unwrap();
         let read_state = {

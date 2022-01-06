@@ -83,4 +83,19 @@ lazy_static! {
         exponential_buckets(0.005, 2.0, 20).unwrap(),
     )
     .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts_region",
+        "The region which its leader peer has minimal resolved ts"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts",
+        "The minimal (non-zero) resolved ts for observe leader peers"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
+        "The minimal (non-zero) resolved ts gap for observe leader peers"
+    )
+    .unwrap();
 }

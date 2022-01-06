@@ -28,6 +28,7 @@ use txn_types::TimeStamp;
 use crate::endpoint::Task;
 use crate::errors::Result;
 use crate::metrics::*;
+use crate::util;
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -178,7 +179,7 @@ pub async fn region_resolved_ts_store(
     for (region_id, (peer_list, leader_info)) in info_map {
         let leader_id = leader_info.get_peer_id();
         // Check if the leader in this store
-        if find_store_id(&peer_list, leader_id) != Some(store_id) {
+        if util::find_store_id(&peer_list, leader_id) != Some(store_id) {
             continue;
         }
         for peer in &peer_list {
@@ -324,15 +325,6 @@ fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
         (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
 
     has_incoming_majority && has_demoting_majority
-}
-
-fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
-    for peer in peer_list {
-        if peer.id == peer_id {
-            return Some(peer.store_id);
-        }
-    }
-    None
 }
 
 async fn get_tikv_client(
