@@ -177,7 +177,7 @@ struct BackgroundJobLimits {
 }
 
 const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
-    max_background_jobs: 10,
+    max_background_jobs: 9,
     max_background_flushes: 3,
     max_sub_compactions: 3,
     max_titan_background_gc: 4,
@@ -197,7 +197,7 @@ fn get_background_job_limits_impl(
 ) -> BackgroundJobLimits {
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
-    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num));
+    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
@@ -4234,9 +4234,9 @@ mod tests {
         assert_eq!(
             get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
-                max_background_jobs: 4,
+                max_background_jobs: 3,
                 max_background_flushes: 1,
-                max_sub_compactions: 2,
+                max_sub_compactions: 1,
                 max_titan_background_gc: 4,
             }
         );
@@ -4246,9 +4246,9 @@ mod tests {
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
-                max_background_jobs: 4,
+                max_background_jobs: 3,
                 max_background_flushes: 1,
-                max_sub_compactions: 2,
+                max_sub_compactions: 1,
                 max_titan_background_gc: 4,
             }
         );
@@ -4256,7 +4256,7 @@ mod tests {
         assert_eq!(
             get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
-                max_background_jobs: 8,
+                max_background_jobs: 7,
                 max_background_flushes: 2,
                 max_sub_compactions: 3,
                 max_titan_background_gc: 4,
