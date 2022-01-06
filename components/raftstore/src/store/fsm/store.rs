@@ -43,6 +43,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::{get_disk_status, DiskUsage};
+use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
@@ -1250,6 +1251,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK, ER>>,
     store_writers: StoreWriters<EK, ER>,
+    tenant_quota_limiter: Arc<TenantQuotaLimiter>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
@@ -1507,6 +1509,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
+            Arc::clone(&self.tenant_quota_limiter),
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1547,6 +1550,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
 pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
     cfg: &Config,
+    tenant_quota_limiter: Arc<TenantQuotaLimiter>,
 ) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(cfg);
@@ -1560,6 +1564,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_system,
         router: raft_router.clone(),
         store_writers: StoreWriters::new(),
+        tenant_quota_limiter,
     };
     (raft_router, system)
 }

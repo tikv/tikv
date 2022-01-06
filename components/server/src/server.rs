@@ -92,6 +92,7 @@ use tikv_util::{
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
     sys::{disk, register_memory_usage_high_water, SysQuota},
+    tenant_quota_limiter::TenantQuotaLimiter,
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Worker},
@@ -189,6 +190,7 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    tenant_quota_limter: Arc<TenantQuotaLimiter>,
 }
 
 struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
@@ -236,8 +238,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
+        // Create the tenant_quota_limiter
+        let tenant_quota_limiter = Arc::new(TenantQuotaLimiter::new());
+
         // Initialize raftstore channels.
-        let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+        let (router, system) =
+            fsm::create_raft_batch_system(&config.raft_store, tenant_quota_limiter);
 
         let thread_count = config.server.background_thread_count;
         let background_worker = WorkerBuilder::new("background")
@@ -279,6 +285,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            tenant_quota_limiter,
         }
     }
 

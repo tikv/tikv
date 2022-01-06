@@ -46,6 +46,7 @@ use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
+use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
@@ -683,6 +684,7 @@ where
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
     slow_score: SlowScore,
+    tenant_quota_limiter: Arc<TenantQuotaLimiter>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -705,6 +707,7 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
+        tenant_quota_limiter: Arc<TenantQuotaLimiter>,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -733,6 +736,7 @@ where
             snap_mgr,
             remote,
             slow_score: SlowScore::new(cfg.inspect_interval.0),
+            tenant_quota_limiter,
         }
     }
 
@@ -1083,6 +1087,7 @@ where
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
+        let tenant_quota_limiter = Arc::clone(&self.tenant_quota_limiter);
         let resp = self.pd_client.store_heartbeat(stats, optional_report);
         let f = async move {
             match resp.await {
@@ -1090,6 +1095,22 @@ where
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
+
+                    // Refresh tenant quota
+                    let tenant_quota: Vec<(u32, (u64, u32))> = resp
+                        .get_tenant_quota()
+                        .into_iter()
+                        .map(|quota| {
+                            (
+                                quota.tenant_id,
+                                (quota.write_bytes_per_sec, quota.read_milli_cpu),
+                            )
+                        })
+                        .collect();
+                    if !tenant_quota.is_empty() {
+                        tenant_quota_limiter.refresh_quota(tenant_quota);
+                    }
+
                     if resp.get_require_detailed_report() {
                         info!("required to send detailed report in the next heartbeat");
                         let task = Task::StoreHeartbeat {
