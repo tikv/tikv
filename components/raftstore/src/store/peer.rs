@@ -4431,6 +4431,12 @@ where
         ctx: &PollContext<EK, ER, T>,
         renew_bound: Timespec,
     ) -> bool {
+        if !matches!(
+            self.leader_lease.inspect(Some(renew_bound)),
+            LeaseState::Expired
+        ) {
+            return false;
+        }
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
         let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
             // If there is any read index whose lease can cover till next heartbeat
@@ -4444,13 +4450,7 @@ where
                 .propose_time
                 .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
         });
-        if has_overlapped_reads || has_overlapped_writes {
-            return false;
-        }
-        matches!(
-            self.leader_lease.inspect(Some(renew_bound)),
-            LeaseState::Expired
-        )
+        !has_overlapped_reads && !has_overlapped_writes
     }
 }
 
