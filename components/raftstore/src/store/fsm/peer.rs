@@ -3987,7 +3987,7 @@ where
             self.register_raft_gc_log_tick();
             return;
         } else {
-            replicated_idx
+            std::cmp::min(replicated_idx, applied_idx)
         };
         assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.

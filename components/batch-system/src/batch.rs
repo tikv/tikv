@@ -63,10 +63,7 @@ macro_rules! impl_sched {
 
             #[inline]
             fn schedule(&self, fsm: Box<Self::Fsm>) {
-                let sender = match fsm.get_priority() {
-                    Priority::Normal => &self.sender,
-                    Priority::Low => &self.low_sender,
-                };
+                let sender = &self.sender;
                 // It's an unbounded queue so try_send is adequate.
                 match sender.try_send($ty(fsm)) {
                     Ok(()) => {}
@@ -806,13 +803,13 @@ pub fn create_system<N: Fsm, C: Fsm>(
         sender: tx.clone(),
         low_sender: tx2,
     };
-    let pool_state_builder = PoolStateBuilder {
-        max_batch_size: cfg.max_batch_size(),
-        reschedule_duration: cfg.reschedule_duration.0,
-        fsm_receiver: rx.clone(),
-        fsm_sender: tx,
-        pool_size: cfg.pool_size,
-    };
+    // let pool_state_builder = PoolStateBuilder {
+    // max_batch_size: cfg.max_batch_size(),
+    // reschedule_duration: cfg.reschedule_duration.0,
+    // fsm_receiver: rx.clone(),
+    // fsm_sender: tx,
+    // pool_size: cfg.pool_size,
+    // };
     let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
     let system = BatchSystem {
         name_prefix: None,
@@ -825,7 +822,8 @@ pub fn create_system<N: Fsm, C: Fsm>(
         joinable_workers: Arc::new(Mutex::new(Vec::new())),
         reschedule_duration: cfg.reschedule_duration.0,
         low_priority_pool_size: cfg.low_priority_pool_size,
-        pool_state_builder: Some(pool_state_builder),
+        // pool_state_builder: Some(pool_state_builder),
+        pool_state_builder: None,
     };
     (router, system)
 }
