@@ -326,10 +326,10 @@ fn parse_cpu_quota_v2(line: &str) -> Option<f64> {
 }
 
 fn parse_cpu_quota_v1(line1: &str, line2: &str) -> Option<f64> {
-    if let Ok(max) = capping_parse_int::<i64>(line1) {
-        if max > 0 {
-            if let Ok(period) = capping_parse_int::<i64>(line2) {
-                if period > 0 {
+    if let Ok(max) = line1.parse::<f64>() {
+        if max > 0.0 {
+            if let Ok(period) = line2.parse::<f64>() {
+                if period > 0.0 {
                     return Some(max as f64 / period as f64);
                 }
             }
