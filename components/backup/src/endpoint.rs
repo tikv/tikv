@@ -595,7 +595,8 @@ impl SoftLimitKeeper {
         }
 
         self.limit.resize(quota_val).await.map_err(|err| {
-            warn!("error during appling the soft limit for backup.";
+            warn!(
+                "error during appling the soft limit for backup.";
                 "current_limit" => %self.limit.current_cap(),
                 "to_set_value" => %quota_val,
                 "err" => %err,
