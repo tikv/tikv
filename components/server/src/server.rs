@@ -190,7 +190,7 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
-    tenant_quota_limter: Arc<TenantQuotaLimiter>,
+    tenant_quota_limiter: Arc<TenantQuotaLimiter>,
 }
 
 struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
@@ -243,7 +243,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Initialize raftstore channels.
         let (router, system) =
-            fsm::create_raft_batch_system(&config.raft_store, tenant_quota_limiter);
+            fsm::create_raft_batch_system(&config.raft_store, Arc::clone(&tenant_quota_limiter));
 
         let thread_count = config.server.background_thread_count;
         let background_worker = WorkerBuilder::new("background")
@@ -682,6 +682,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_controller,
             pd_sender.clone(),
             resource_tag_factory.clone(),
+            Arc::clone(&self.tenant_quota_limiter),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

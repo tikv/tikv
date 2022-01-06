@@ -26,7 +26,7 @@ use engine_traits::CF_LOCK;
 use parking_lot::{Mutex, MutexGuard};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, u64};
 
@@ -38,7 +38,9 @@ use kvproto::pdpb::QueryKind;
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{time::Instant, time::Limiter, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    tenant_quota_limiter::TenantQuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
+};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
@@ -203,9 +205,7 @@ struct SchedulerInner<L: LockManager> {
 
     resource_tag_factory: ResourceTagFactory,
 
-    // Writing rate limiter for multiple tenants.
-    tenant_limiters_updating: AtomicBool,
-    tenant_limiters: RwLock<HashMap<u32, Arc<Limiter>>>,
+    tenant_quota_limiter: Arc<TenantQuotaLimiter>,
 }
 
 #[inline]
@@ -265,48 +265,6 @@ impl<L: LockManager> SchedulerInner<L> {
             || self.flow_controller.should_drop()
     }
 
-    fn get_tenant_limiter(&self, tenant_id: u32) -> Option<Arc<Limiter>> {
-        let limiters = self.tenant_limiters.read();
-        limiters.unwrap().get(&tenant_id).map(|l| Arc::clone(l))
-    }
-
-    // Update tenant write limiter if there are some changes
-    fn update_tenant_write_limiter(&mut self, tenant_write_quota: Vec<(u32, u64)>) {
-        if self
-            .tenant_limiters_updating
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            // Acuire read lock to check if there is any change
-            let mut idxs = vec![];
-            {
-                let limiters = self.tenant_limiters.read().unwrap();
-                for (idx, quota) in tenant_write_quota.iter().enumerate() {
-                    if let Some(l) = limiters.get(&quota.0) {
-                        if l.speed_limit() as u64 != quota.1 {
-                            idxs.push(idx);
-                        }
-                    } else {
-                        idxs.push(idx);
-                    }
-                }
-            }
-            // Acquire write lock to update changes
-            if !idxs.is_empty() {
-                let mut limiters = self.tenant_limiters.write().unwrap();
-                for idx in idxs {
-                    let quota = tenant_write_quota[idx];
-                    let limiter = limiters
-                        .entry(quota.0)
-                        .or_insert_with(|| Arc::new(Limiter::new(quota.1 as f64)));
-                    (*limiter).set_speed_limit(quota.1 as f64);
-                }
-            }
-
-            self.tenant_limiters_updating.store(false, Ordering::SeqCst);
-        }
-    }
-
     /// Tries to acquire all the required latches for a command when waken up by
     /// another finished command.
     ///
@@ -359,6 +317,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        tenant_quota_limiter: Arc<TenantQuotaLimiter>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -392,8 +351,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
             resource_tag_factory,
-            tenant_limiters_updating: AtomicBool::new(false),
-            tenant_limiters: Default::default(),
+            tenant_quota_limiter,
         });
 
         slow_log!(
@@ -517,14 +475,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let sched = self.clone();
 
         // limit the write flow by tenant
-        let tenant_delay = if let Some(limiter) = sched
-            .inner
-            .get_tenant_limiter(task.cmd.ctx().get_tenant_id())
-        {
-            limiter.consume_duration(task.cmd.write_bytes())
-        } else {
-            Duration::ZERO
-        };
+        let tenant_delay = self.inner.tenant_quota_limiter.as_ref().consume_write(
+            task.cmd.ctx().get_tenant_id(),
+            task.cmd.write_bytes() as u64,
+        );
 
         self.get_sched_pool(task.cmd.priority())
             .pool
@@ -1308,6 +1262,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(TenantQuotaLimiter::default()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1364,6 +1319,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(TenantQuotaLimiter::default()),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1420,6 +1376,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(TenantQuotaLimiter::default()),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1484,6 +1441,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(TenantQuotaLimiter::default()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1539,6 +1497,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(TenantQuotaLimiter::default()),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

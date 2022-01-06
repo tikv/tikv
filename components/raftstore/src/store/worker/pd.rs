@@ -1099,7 +1099,7 @@ where
                     // Refresh tenant quota
                     let tenant_quota: Vec<(u32, (u64, u32))> = resp
                         .get_tenant_quota()
-                        .into_iter()
+                        .iter()
                         .map(|quota| {
                             (
                                 quota.tenant_id,
@@ -1108,7 +1108,7 @@ where
                         })
                         .collect();
                     if !tenant_quota.is_empty() {
-                        tenant_quota_limiter.refresh_quota(tenant_quota);
+                        tenant_quota_limiter.as_ref().refresh_quota(tenant_quota);
                     }
 
                     if resp.get_require_detailed_report() {

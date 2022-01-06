@@ -31,6 +31,7 @@ use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager,
 use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
+use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -48,6 +49,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     flow_controller: Arc<FlowController>,
     reporter: R,
     resource_tag_factory: ResourceTagFactory,
+    tenant_quota_limiter: Arc<TenantQuotaLimiter>,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -63,6 +65,7 @@ where
         flow_controller,
         reporter,
         resource_tag_factory,
+        tenant_quota_limiter,
     )?;
     Ok(store)
 }

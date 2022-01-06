@@ -51,7 +51,7 @@ impl TenantQuotaLimiter {
 
     // Update quota if there are some changes
     // tenant_quotas: tenant_id -> (write_bytes_per_sec, read_milli_cpu)
-    pub fn refresh_quota(&mut self, tenant_quotas: Vec<(u32, (u64, u32))>) {
+    pub fn refresh_quota(&self, tenant_quotas: Vec<(u32, (u64, u32))>) {
         if self
             .quota_is_updating
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
