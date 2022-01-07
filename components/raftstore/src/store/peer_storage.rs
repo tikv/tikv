@@ -815,8 +815,10 @@ where
                 .raft
                 .get_entry(self.get_region_id(), idx)
                 .unwrap()
-                .unwrap()
-                .get_term())
+                .map_or_else(|| {
+                    warn!("failed to get term"; "region_id" => self.get_region_id(), "idx" => idx);
+                    0
+                }, |e| e.get_term()))
         }
     }
 

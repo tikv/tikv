@@ -4006,12 +4006,14 @@ where
         let region_id = self.fsm.peer.region().get_id();
         let peer = self.fsm.peer.peer.clone();
         let term = self.fsm.peer.get_index_term(compact_idx);
-        let request = new_compact_log_request(region_id, peer, compact_idx, term);
-        self.propose_raft_command_internal(
-            request,
-            Callback::None,
-            DiskFullOpt::AllowedOnAlmostFull,
-        );
+        if term != 0 {
+            let request = new_compact_log_request(region_id, peer, compact_idx, term);
+            self.propose_raft_command_internal(
+                request,
+                Callback::None,
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
+        }
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
