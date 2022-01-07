@@ -5,10 +5,12 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::compat::Future01CompatExt;
+
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::{deadline::Deadline, time::Instant};
+use tikv_util::{deadline::Deadline, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tipb::StreamResponse;
 use tipb::{self, ExecType, ExecutorExecutionSummary, FieldType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
@@ -17,7 +19,6 @@ use yatp::task::future::reschedule;
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 
-use futures_timer::Delay;
 use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
@@ -419,16 +420,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut record_all = 0;
 
         let mut time_slice_start = Instant::now();
+        let mut start_was_reset = false;
         loop {
             let time_slice_len = time_slice_start.saturating_elapsed();
+
             // Check whether we should yield from the execution
             if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
+                start_was_reset = true;
             }
 
             let mut chunk = Chunk::default();
-
             let (drained, record_len) = self.internal_handle_request(
                 false,
                 batch_size,
@@ -439,12 +442,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             // Because we don't know what's the internal_handle_request cost, just wait after the call.
             if let Some(limiter) = &self.limiter {
-                let new_time_slice_len = time_slice_start.saturating_elapsed();
-                let wait = limiter.consume_read(
-                    (new_time_slice_len.as_micros() - time_slice_len.as_micros()) as u32,
-                );
+                let time_cost = if start_was_reset {
+                    time_slice_start.saturating_elapsed()
+                } else {
+                    time_slice_start.saturating_elapsed() - time_slice_len
+                };
+                start_was_reset = false;
+
+                let wait = limiter.consume_read(time_cost.as_micros() as u32);
                 if !wait.is_zero() {
-                    Delay::new(wait).await;
+                    GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + wait)
+                        .compat()
+                        .await
+                        .unwrap();
                 }
             }
 
@@ -531,13 +542,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             // Because we don't know what's the internal_handle_request cost, just wait after the call.
             if let Some(limiter) = &self.limiter {
-                let new_time_slice_len = time_slice_start.saturating_elapsed();
-                let wait = limiter.consume_read(
-                    (new_time_slice_len.as_micros() - time_slice_len.as_micros()) as u32,
-                );
+                let wait = limiter.consume_read(time_slice_len.as_micros() as u32);
                 if !wait.is_zero() {
                     // TODO: is there any way to sleep but without blocking current thread in non-sync fn?
-                    std::thread::sleep(wait); // BLOCKING current thread!!
                 }
             }
         }
