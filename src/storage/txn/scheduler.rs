@@ -493,9 +493,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tenant_id = task.cmd.ctx().get_tenant_id();
         if tenant_id > 0 {
             info!("process write for tenant"; "tenant-id" => tenant_id, "write-bytes" => task.cmd.write_bytes());
-            if !tenant_delay.is_zero() {
-                info!("delay triggered by quota"; "tenant-id" => tenant_id, "quota delay" => ?tenant_delay);
-            }
         }
 
         self.get_sched_pool(task.cmd.priority())
