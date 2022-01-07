@@ -6,7 +6,6 @@ use std::time::Duration;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-#[cfg(feature = "failpoints")]
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::select_all;
@@ -158,7 +157,6 @@ pub async fn region_resolved_ts_store(
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     min_ts: TimeStamp,
 ) -> Vec<u64> {
-    #[cfg(feature = "failpoints")]
     fail_point!("before_sync_replica_read_state", |_| regions.clone());
 
     let store_id = match store_meta.lock().unwrap().store_id {

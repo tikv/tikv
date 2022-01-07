@@ -3451,7 +3451,7 @@ where
         }
     }
 
-    #[allow(unused_mut)]
+    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
