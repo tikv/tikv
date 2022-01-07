@@ -258,34 +258,37 @@ fn test_destroy_peer_on_abort_snapshot() {
     pd_client.must_add_peer(r1, new_peer(3, 1003));
 
     cluster.must_put(b"k1", b"v1");
+    let region = cluster.get_region(b"k1");
     // Ensure peer 3 is initialized.
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    let apply_snapshot_fp = "region_apply_snap_abort";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
 
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
     for i in 0..20 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
 
-    let apply_snapshot_fp = "region_apply_snap_abort";
-    fail::cfg(apply_snapshot_fp, "return()").unwrap();
-
-    cluster.clear_send_filters();
     // Wait for leader send snapshot.
-    sleep_ms(100);
+    let (sx, rx) = mpsc::sync_channel::<bool>(10);
+    let recv_snapshot_filter = RegionPacketFilter::new(region.get_id(), 3)
+        .direction(Direction::Recv)
+        .msg_type(MessageType::MsgSnapshot)
+        .allow(1)
+        .set_msg_callback(Arc::new(move |_| {
+            sx.send(true).unwrap();
+        }));
+    cluster.add_recv_filter(CloneFilterFactory(recv_snapshot_filter));
 
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-
-    for i in 0..40 {
-        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
-    }
+    cluster.clear_send_filters(); // allow snapshot to sent over to peer 3
+    rx.recv().unwrap(); // got the snapshot message
+    cluster.add_send_filter(IsolationFilterFactory::new(3)); // partition the peer 3 again
+    sleep_ms(500);
     cluster.clear_send_filters();
-
-    sleep_ms(1000);
-
-    fail::remove(apply_snapshot_fp);
+    cluster.clear_recv_filters();
 }
 
 #[test]
