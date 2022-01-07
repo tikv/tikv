@@ -490,11 +490,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task.cmd.write_bytes() as u64,
         );
 
-        let tenant_id = task.cmd.ctx().get_tenant_id();
-        if tenant_id > 0 {
-            info!("process write for tenant"; "tenant-id" => tenant_id, "write-bytes" => task.cmd.write_bytes());
-        }
-
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
