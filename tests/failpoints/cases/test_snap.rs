@@ -243,8 +243,13 @@ fn test_destroy_peer_on_pending_snapshot() {
     must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
 }
 
+// This test is to repro the issue #11618.
+// Basically it aborts a snapshot and wait for an election done. (without fix, raft will panic)
+// The test step is make peer 3 partitioned with rest.
+// And then recover from partition and the leader will try to send a snapshot to peer3.
+// Abort the snapshot and then wait for a election happening, we expect raft will panic
 #[test]
-fn test_destroy_peer_on_abort_snapshot() {
+fn test_abort_snapshot_and_wait_election() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 25; // > lease 240ms
@@ -286,7 +291,7 @@ fn test_destroy_peer_on_abort_snapshot() {
     cluster.clear_send_filters(); // allow snapshot to sent over to peer 3
     rx.recv().unwrap(); // got the snapshot message
     cluster.add_send_filter(IsolationFilterFactory::new(3)); // partition the peer 3 again
-    sleep_ms(500);
+    sleep_ms(500); // wait for election happen and expect raft will panic
     cluster.clear_send_filters();
     cluster.clear_recv_filters();
 }
