@@ -6,8 +6,7 @@ use super::time::Limiter;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub struct ReadQuotaLimiter(Limiter);

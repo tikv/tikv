@@ -254,6 +254,7 @@ fn init_coprocessor_with_data(
         cm,
         PerfLevel::EnableCount,
         tag_factory,
+        None,
     )
 }
 

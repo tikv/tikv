@@ -34,6 +34,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
+use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::time::Instant;
 use txn_types::Lock;
 
@@ -70,6 +71,8 @@ pub struct Endpoint<E: Engine> {
     slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
+
+    tenant_quota_limiters: Option<Arc<TenantQuotaLimiter>>,
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -81,6 +84,7 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         perf_level: PerfLevel,
         resource_tag_factory: ResourceTagFactory,
+        tenant_quota_limiters: Option<Arc<TenantQuotaLimiter>>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -104,6 +108,7 @@ impl<E: Engine> Endpoint<E> {
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
+            tenant_quota_limiters,
         }
     }
 
@@ -160,6 +165,11 @@ impl<E: Engine> Endpoint<E> {
             req.take_ranges().to_vec(),
             req.get_start_ts(),
         );
+        let tenant_id = context.get_tenant_id();
+        let mut limiter = None;
+        if let Some(tenant_quota_limiters) = &self.tenant_quota_limiters {
+            limiter = tenant_quota_limiters.get_read_quota_limiter(tenant_id);
+        }
         let cache_match_version = if req.get_is_cache_enabled() {
             Some(req.get_cache_if_match_version())
         } else {
@@ -233,6 +243,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        limiter,
                     )
                     .data_version(data_version)
                     .build()
@@ -819,6 +830,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         // a normal request
@@ -860,6 +872,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
         copr.recursion_limit = 100;
 
@@ -898,6 +911,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -921,6 +935,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let mut req = coppb::Request::default();
@@ -967,6 +982,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1015,6 +1031,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let handler_builder =
@@ -1040,6 +1057,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         // Fail immediately
@@ -1093,6 +1111,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1121,6 +1140,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1220,6 +1240,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1288,6 +1309,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1616,6 +1638,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
 
         {
@@ -1679,6 +1702,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            None,
         );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);

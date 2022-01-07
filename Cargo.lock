@@ -5414,6 +5414,7 @@ dependencies = [
  "codec",
  "collections",
  "fail",
+ "futures-timer",
  "itertools 0.10.0",
  "kvproto",
  "log_wrappers",

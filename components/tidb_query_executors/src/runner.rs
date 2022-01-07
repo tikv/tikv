@@ -17,11 +17,13 @@ use yatp::task::future::reschedule;
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 
+use futures_timer::Delay;
 use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
+use tikv_util::tenant_quota_limiter::ReadQuotaLimiter;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -69,6 +71,8 @@ pub struct BatchExecutorsRunner<SS> {
 
     /// If it's a paging request, paging_size indicates to the required size for current page.
     paging_size: Option<u64>,
+
+    limiter: Option<Arc<ReadQuotaLimiter>>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -347,6 +351,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         stream_row_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        limiter: Option<Arc<ReadQuotaLimiter>>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -391,6 +396,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             stream_row_limit,
             encode_type,
             paging_size,
+            limiter,
         })
     }
 
@@ -416,9 +422,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         loop {
             let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
-
-            // TODO: aquire CPU quota for tenant
-
             if time_slice_len > MAX_TIME_SLICE {
                 reschedule().await;
                 time_slice_start = Instant::now();
@@ -433,6 +436,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 &mut warnings,
                 &mut ctx,
             )?;
+
+            // Because we don't know what's the internal_handle_request cost, just wait after the call.
+            if let Some(limiter) = &self.limiter {
+                let new_time_slice_len = time_slice_start.saturating_elapsed();
+                let wait = limiter.consume_read(
+                    (new_time_slice_len.as_micros() - time_slice_len.as_micros()) as u32,
+                );
+                if !wait.is_zero() {
+                    Delay::new(wait).await;
+                }
+            }
 
             if record_len > 0 {
                 chunks.push(chunk);
@@ -496,8 +510,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut ctx = EvalContext::new(self.config.clone());
         let batch_size = self.stream_row_limit.min(BATCH_MAX_SIZE);
 
+        let time_slice_start = Instant::now();
+
         // record count less than batch size and is not drained
         while record_len < self.stream_row_limit && !is_drained {
+            let time_slice_len = time_slice_start.saturating_elapsed();
             let mut current_chunk = Chunk::default();
             let (drained, len) = self.internal_handle_request(
                 true,
@@ -511,6 +528,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 .extend_from_slice(current_chunk.get_rows_data());
             record_len += len;
             is_drained = drained;
+
+            // Because we don't know what's the internal_handle_request cost, just wait after the call.
+            if let Some(limiter) = &self.limiter {
+                let new_time_slice_len = time_slice_start.saturating_elapsed();
+                let wait = limiter.consume_read(
+                    (new_time_slice_len.as_micros() - time_slice_len.as_micros()) as u32,
+                );
+                if !wait.is_zero() {
+                    // TODO: is there any way to sleep but without blocking current thread in non-sync fn?
+                    std::thread::sleep(wait); // BLOCKING current thread!!
+                }
+            }
         }
 
         if !is_drained || record_len > 0 {
