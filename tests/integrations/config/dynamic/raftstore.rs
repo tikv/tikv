@@ -20,6 +20,7 @@ use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
+use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
 
 #[derive(Clone)]
@@ -67,7 +68,8 @@ fn start_raftstore(
     ApplyRouter<RocksEngine>,
     RaftBatchSystem<RocksEngine, RocksEngine>,
 ) {
-    let (raft_router, mut system) = create_raft_batch_system(&cfg.raft_store);
+    let (raft_router, mut system) =
+        create_raft_batch_system(&cfg.raft_store, Arc::new(TenantQuotaLimiter::default()));
     let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {

@@ -1,5 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-
+/*
 use engine_traits::CF_DEFAULT;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use libc::{getpid, pid_t};
@@ -128,3 +128,4 @@ fn test_decrease_pool() {
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
+*/

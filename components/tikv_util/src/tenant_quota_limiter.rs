@@ -132,7 +132,11 @@ impl TenantQuotaLimiter {
                     let limiter = wlimiters
                         .entry(quota.0)
                         .or_insert_with(|| Arc::new(WriteQuotaLimiter::new(quota.1.0)));
-                    (*limiter).0.set_speed_limit(quota.1.0 as f64);
+                    if quota.1.0 == 0 {
+                        (*limiter).0.set_speed_limit(f64::INFINITY);
+                    } else {
+                        (*limiter).0.set_speed_limit(quota.1.0 as f64);
+                    }
                 }
             }
             if !idxs_read.is_empty() {
@@ -142,11 +146,40 @@ impl TenantQuotaLimiter {
                     let limiter = rlimiters
                         .entry(quota.0)
                         .or_insert_with(|| Arc::new(ReadQuotaLimiter::new(quota.1.1)));
-                    (*limiter).0.set_speed_limit(quota.1.1 as f64 * 1000_f64);
+                    if quota.1.1 == 0 {
+                        (*limiter).0.set_speed_limit(f64::INFINITY);
+                    } else {
+                        (*limiter).0.set_speed_limit(quota.1.1 as f64 * 1000_f64);
+                    }
                 }
             }
 
             self.quota_is_updating.store(false, Ordering::SeqCst);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_refresh_quota() {
+        let quota_limiter = TenantQuotaLimiter::new();
+        let quota = vec![(1, (100, 200)), (2, (300, 400))];
+        quota_limiter.refresh_quota(quota);
+
+        let wlimiter1 = quota_limiter.get_write_quota_limiter(1).unwrap();
+        assert!((wlimiter1.0.speed_limit() - 100_f64).abs() < f64::EPSILON);
+        let rlimiter1 = quota_limiter.get_read_quota_limiter(1).unwrap();
+        assert!((rlimiter1.0.speed_limit() - 200_f64).abs() < f64::EPSILON);
+
+        let rlimiter2 = quota_limiter.get_write_quota_limiter(2).unwrap();
+        assert!((rlimiter2.0.speed_limit() - 300_f64).abs() < f64::EPSILON);
+        let wlimiter2 = quota_limiter.get_read_quota_limiter(1).unwrap();
+        assert!((wlimiter2.0.speed_limit() - 400_f64).abs() < f64::EPSILON);
+
+        assert!(quota_limiter.get_read_quota_limiter(3).is_none());
+        assert!(quota_limiter.get_write_quota_limiter(3).is_none());
     }
 }

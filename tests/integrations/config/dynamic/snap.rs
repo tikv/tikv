@@ -17,6 +17,7 @@ use engine_rocks::RocksEngine;
 use security::SecurityManager;
 use tempfile::TempDir;
 use tikv_util::config::{ReadableSize, VersionTrack};
+use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 fn start_server(
@@ -40,7 +41,10 @@ fn start_server(
             .name_prefix(thd_name!("test-server"))
             .build(),
     );
-    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RocksEngine>(&cfg.raft_store);
+    let (raft_router, _) = create_raft_batch_system::<RocksEngine, RocksEngine>(
+        &cfg.raft_store,
+        Arc::new(TenantQuotaLimiter::default()),
+    );
     let mut snap_worker = Worker::new("snap-handler").lazy_build("snap-handler");
     let snap_worker_scheduler = snap_worker.scheduler();
     let server_config = Arc::new(VersionTrack::new(cfg.server.clone()));
