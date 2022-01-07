@@ -5,7 +5,7 @@
 
 use std::io::{Error, ErrorKind, Result};
 
-use lazy_static::lazy_static;
+use crate::sys::thread;
 use prometheus::core::{Collector, Desc};
 use prometheus::{proto, Counter, Gauge, Opts};
 use std::sync::Mutex;
@@ -99,7 +99,7 @@ impl Collector for ProcessCollector {
         // cpu
         let cpu_total_mfs = {
             let cpu_total = self.cpu_total.lock().unwrap();
-            let total = (p.stat.utime + p.stat.stime) as f64 / *CLK_TCK;
+            let total = (p.stat.utime + p.stat.stime) as f64 / thread::clock_tick() as f64;
             let past = cpu_total.get();
             let delta = total - past;
             if delta > 0.0 {
