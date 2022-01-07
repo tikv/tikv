@@ -1,5 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This module provides unified APIs for accessing thread/process related information.
+//! Only Linux platform is implemented correctly, for other platform, it only guarantees
+//! successful compilation.
+
 use std::io;
 
 /// A cross-platform CPU statistics data structure.
