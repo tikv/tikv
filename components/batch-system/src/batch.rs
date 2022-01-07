@@ -23,7 +23,7 @@ use tikv_util::time::Instant;
 use tikv_util::{debug, error, info, safe_panic, thd_name, warn};
 
 use async_channel::{self, Receiver, Sender, TrySendError};
-use glommio::{self, sync::Gate, Latency, LocalExecutorBuilder, Placement, Shares};
+use glommio::{self, sync::Gate, CpuSet, Latency, LocalExecutorBuilder, Placement, Shares};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
@@ -601,6 +601,8 @@ where
         name_prefix: String,
         cfg1: &mut HandlerConfig<N, C, B>,
         cfg2: &mut HandlerConfig<N2, C2, B2>,
+        pin_cpu: bool,
+        spin_before_park: Option<Duration>,
     ) where
         B: HandlerBuilder<N, C>,
         B::Handler: Send + 'static,
@@ -609,15 +611,23 @@ where
         B2: HandlerBuilder<N2, C2>,
         B2::Handler: Send + 'static,
     {
+        let mut cpu_iter = CpuSet::online().unwrap().into_iter();
         for _ in 0..self.pool_size {
             let mut poller1 = self.build_poller(cfg1);
             let mut poller2 = self.build_poller(cfg2);
             let (tq1_cfg, tq2_cfg) = (cfg1.tq_cfg.clone(), cfg2.tq_cfg.clone());
 
+            let placement = if pin_cpu {
+                Placement::Fixed(cpu_iter.next().unwrap().cpu)
+            } else {
+                Placement::Unbound
+            };
+            let mut builder = LocalExecutorBuilder::new(placement).name(&name_prefix);
+            if let Some(spin) = spin_before_park {
+                builder = builder.spin_before_park(spin);
+            }
             let props = tikv_util::thread_group::current_properties();
-            // TODO(TPC): pin CPU and tune
-            let t = LocalExecutorBuilder::new(Placement::Unbound)
-                .name(&name_prefix)
+            let t = builder
                 .spawn(move || async move {
                     tikv_util::thread_group::set_properties(props);
                     set_io_type(IOType::ForegroundWrite);

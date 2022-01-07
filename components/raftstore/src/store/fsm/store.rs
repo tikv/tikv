@@ -1492,8 +1492,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             builder: apply_poller_builder.clone(),
         };
         let tag = format!("raftstore-{}", store.get_id());
-        self.system
-            .spawn_2_pollers(tag, &mut store_cfg, &mut apply_cfg);
+        self.system.spawn_2_pollers(
+            tag,
+            &mut store_cfg,
+            &mut apply_cfg,
+            cfg.pin_cpu,
+            (!is_zero_duration(&cfg.spin_before_park.0)).then(|| cfg.spin_before_park.0),
+        );
         // self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());

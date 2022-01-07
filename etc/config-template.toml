@@ -428,8 +428,10 @@
 ## threads to generate raft snapshots
 # snap-generator-pool-size = 2
 
-# glommio::Latency::Matters(x)
 # latency-matters = "0s"
+# pin-cpu = true
+# spin-before-park = "0s"
+
 
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region

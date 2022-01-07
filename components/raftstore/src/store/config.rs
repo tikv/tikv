@@ -258,6 +258,14 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(skip)]
     pub latency_matters: ReadableDuration,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub pin_cpu: bool,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub spin_before_park: ReadableDuration,
 }
 
 impl Default for Config {
@@ -343,7 +351,10 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
+
             latency_matters: ReadableDuration::millis(0),
+            pin_cpu: true,
+            spin_before_park: ReadableDuration::millis(0),
         }
     }
 }
