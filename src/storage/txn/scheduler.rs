@@ -39,7 +39,8 @@ use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{
-    tenant_quota_limiter::TenantQuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
+    tenant_quota_limiter::ReadQuotaLimiter, tenant_quota_limiter::TenantQuotaLimiter,
+    time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
 use txn_types::TimeStamp;
 
@@ -378,6 +379,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
         self.schedule_command(cmd, callback);
+    }
+
+    pub(in crate::storage) fn get_read_quota_limiter(
+        &self,
+        tenant_id: u32,
+    ) -> Option<Arc<ReadQuotaLimiter>> {
+        self.inner
+            .tenant_quota_limiter
+            .get_read_quota_limiter(tenant_id)
     }
 
     /// Releases all the latches held by a command.

@@ -83,6 +83,7 @@ use crate::storage::{
 use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -105,6 +106,7 @@ use std::{
 use tikv_kv::SnapshotExt;
 use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -527,6 +529,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
+        let tenant_id = ctx.get_tenant_id();
+        let tenant_read_quota_limiter = self.sched.get_read_quota_limiter(tenant_id);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -568,32 +572,36 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
-                    let result = snap_store
+                    let (result, delta) = {
+                        let perf_statistics = PerfStatisticsInstant::new();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                            bypass_locks,
+                            access_locks,
+                            false,
+                        );
+                        (
+                            snap_store
                         .get(&key, &mut statistics)
                         // map storage::txn::Error -> storage::Error
                         .map_err(Error::from)
                         .map(|r| {
                             KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                             r
-                        });
-
-                    let delta = perf_statistics.delta();
+                        }),
+                            perf_statistics.delta(),
+                        )
+                    };
+                    let cost_time = begin_instant.saturating_elapsed();
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
+                        .observe(cost_time.as_millis() as f64 / 1000_f64);
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
@@ -613,6 +621,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         wait_wall_time_ms: duration_to_ms(wait_wall_time),
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
+
+                    if let Some(limiter) = tenant_read_quota_limiter {
+                        let wait = limiter.consume_read(cost_time.as_micros() as u32);
+                        if !wait.is_zero() {
+                            GLOBAL_TIMER_HANDLE
+                                .delay(std::time::Instant::now() + wait)
+                                .compat()
+                                .await
+                                .unwrap();
+                        }
+                    };
+
                     Ok((
                         result?,
                         KvGetStatistics {
