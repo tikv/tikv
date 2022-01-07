@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwapOption;
 use collections::HashMap;
+use tikv_util::sys::thread::Pid;
 
 thread_local! {
     /// `STORAGE` is a thread-localized instance of [LocalStorage].
@@ -35,6 +36,6 @@ pub struct LocalStorage {
 /// See [ResourceTagFactory::register_local_storage] for more information.
 #[derive(Clone)]
 pub struct LocalStorageRef {
-    pub id: usize,
+    pub id: Pid,
     pub storage: LocalStorage,
 }
