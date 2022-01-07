@@ -6,6 +6,7 @@ use crate::collector::Collector;
 use crate::{Config, RawRecords, ResourceTagFactory};
 
 use std::fmt::{self, Display, Formatter};
+use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -145,9 +146,10 @@ impl Recorder {
     fn cleanup(&mut self) {
         if self.last_cleanup.saturating_elapsed().as_secs() > CLEANUP_INTERVAL_SECS {
             // Clean up the data of the destroyed threads.
-            if let Ok(ids) = thread::thread_ids::<HashSet<_>>(thread::process_id()) {
+            if let Ok(ids) = thread::thread_ids(thread::process_id()) {
+                let lookup = HashSet::from_iter(ids.iter().cloned());
                 self.thread_stores.retain(|k, v| {
-                    let retain = ids.contains(&(*k as i32));
+                    let retain = lookup.contains(&(*k as Pid));
                     assert!(retain || v.attached_tag.load().is_none());
                     retain
                 });

@@ -41,7 +41,6 @@ mod imp {
     use libc::c_int;
     use std::fs;
     use std::io::{self, Error};
-    use std::iter::FromIterator;
 
     pub use libc::pid_t as Pid;
     pub use procinfo::pid::{self, Stat as FullStat};
@@ -79,7 +78,7 @@ mod imp {
 
     /// Gets thread ids of the given process id.
     /// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
-    pub fn thread_ids<C: FromIterator<Pid>>(pid: Pid) -> io::Result<C> {
+    pub fn thread_ids(pid: Pid) -> io::Result<Vec<Pid>> {
         let dir = fs::read_dir(format!("/proc/{}/task", pid))?;
         Ok(dir
             .filter_map(|task| {
@@ -184,7 +183,6 @@ mod imp {
 #[cfg(not(target_os = "linux"))]
 mod imp {
     use std::io;
-    use std::iter::FromIterator;
 
     pub type Pid = u32;
     pub type FullStat = super::ThreadStat;
@@ -207,11 +205,16 @@ mod imp {
     /// Gets the ID of the current thread.
     #[inline]
     pub fn thread_id() -> Pid {
-        std::thread::current().id().as_u64() as Pid
+        let v = std::thread::current().id().as_u64().get();
+        if v > std::u32::MAX as u64 {
+            panic!("thread id is too large")
+        } else {
+            v as u32
+        }
     }
 
-    pub fn thread_ids<C: FromIterator<Pid>>(pid: Pid) -> io::Result<C> {
-        Ok(Some(thread_id()))
+    pub fn thread_ids(_pid: Pid) -> io::Result<Vec<Pid>> {
+        Ok(vec![thread_id()])
     }
 
     pub fn full_thread_stat(_pid: Pid, _tid: Pid) -> io::Result<FullStat> {
@@ -229,11 +232,21 @@ mod imp {
 
 pub use self::imp::*;
 
+#[cfg(target_os = "linux")]
 pub fn thread_stat(pid: Pid, tid: Pid) -> io::Result<ThreadStat> {
     let full_stat = full_thread_stat(pid, tid)?;
     Ok(ThreadStat {
         s_time: full_stat.stime as _,
         u_time: full_stat.utime as _,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn thread_stat(pid: Pid, tid: Pid) -> io::Result<ThreadStat> {
+    let full_stat = full_thread_stat(pid, tid)?;
+    Ok(ThreadStat {
+        s_time: full_stat.s_time as _,
+        u_time: full_stat.u_time as _,
     })
 }
 
