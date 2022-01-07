@@ -41,7 +41,7 @@ fn main() {
                 .takes_value(true)
                 .value_name("LEVEL")
                 .possible_values(&[
-                    "trace", "debug", "info", "warn", "warning", "error", "critical",
+                    "trace", "debug", "info", "warn", "warning", "error", "critical", "fatal",
                 ])
                 .help("Set the log level"),
         )
@@ -178,6 +178,7 @@ fn main() {
         });
 
     server::setup::overwrite_config_with_cmd_args(&mut config, &matches);
+    config.logger_compatible_adjust();
 
     if is_config_check {
         validate_and_persist_config(&mut config, false);
