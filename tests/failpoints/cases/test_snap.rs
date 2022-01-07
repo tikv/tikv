@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{fs, io, thread};
@@ -231,12 +231,11 @@ fn test_destroy_peer_on_pending_snapshot() {
     let before_handle_normal_3_fp = "before_handle_normal_3";
     fail::cfg(before_handle_normal_3_fp, "pause").unwrap();
 
-    let pending_remove_is_triggered = Arc::new(AtomicBool::new(false));
-    let pending_remove_is_triggered_1 = pending_remove_is_triggered.clone();
+    let (sx, rx) = mpsc::sync_channel::<bool>(10);
     // Because before_handle_normal_3 could pause the apply thread, so the destroy_peer task is not running.
     // And thus the window of maybe_destroy and destroy_peer can be large enough for a snapshot gc to run.
     fail::cfg_callback("pending_remove_is_true", move || {
-        pending_remove_is_triggered_1.store(true, Ordering::Release);
+        sx.send(true).unwrap();
     })
     .unwrap();
 
@@ -247,10 +246,8 @@ fn test_destroy_peer_on_pending_snapshot() {
 
     fail::remove(apply_snapshot_fp);
     // give extra time for gc to finish in case slow ci machine, though 100ms is already 2x of gc interval.
-    sleep_ms(50);
+    rx.recv_timeout(Duration::from_millis(50)).unwrap();
     fail::remove(before_handle_normal_3_fp);
-
-    assert_eq!(pending_remove_is_triggered.load(Ordering::Acquire), true);
 
     cluster.must_put(b"k120", b"v1");
     // After peer 4 has applied snapshot, data should be got.
