@@ -1471,8 +1471,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 name: "store-batch-system".to_string(),
                 // default is 1000.
                 shares: 1000,
-                // TODO(TPC): tune
-                latency: glommio::Latency::Matters(Duration::from_millis(1)),
+                latency: if is_zero_duration(&cfg.latency_matters.0) {
+                    glommio::Latency::NotImportant
+                } else {
+                    glommio::Latency::Matters(cfg.latency_matters.0)
+                },
             },
             builder: builder.clone(),
         };
