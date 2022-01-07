@@ -758,8 +758,8 @@ fn test_infinite_lease() {
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
     assert_eq!(detector.ctx.rl().len(), 1);
     // Issue a read request to verify the lease.
-    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v0");
-    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
+    must_read_on_peer(&mut cluster, peer.clone(), region, key, b"v0");
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer));
     assert_eq!(detector.ctx.rl().len(), 1);
 
     // renew-lease-tick shouldn't propose any request if the leader lease is not expired.
