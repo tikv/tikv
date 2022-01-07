@@ -275,7 +275,10 @@ where
         security_mgr: Arc<SecurityManager>,
         sinker: C,
     ) -> Self {
-        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
+        let (region_read_progress, store_id) = {
+            let meta = store_meta.lock().unwrap();
+            (meta.region_read_progress.clone(), meta.store_id)
+        };
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
@@ -287,7 +290,7 @@ where
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
-            store_id: None,
+            store_id,
             cfg: cfg.clone(),
             cfg_version: 0,
             scheduler,
@@ -384,7 +387,7 @@ where
 
             info!(
                 "deregister observe region";
-                "store_id" => ?self.store_meta.lock().unwrap().store_id,
+                "store_id" => ?self.get_or_init_store_id(),
                 "region_id" => region_id,
                 "observe_id" => ?handle.id
             );
