@@ -4,6 +4,7 @@
 
 use super::time::Limiter;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -30,7 +31,8 @@ impl ReadQuotaLimiter {
     // Consume read cpu quota
     // If the quota is not enough, the returned duration will > 0, or return Duration::ZERO
     pub fn consume_read(&self, time_slice_micro_secs: u32) -> Duration {
-        self.limiter.consume_duration(time_slice_micro_secs as usize)
+        self.limiter
+            .consume_duration(time_slice_micro_secs as usize)
     }
 }
 
@@ -202,7 +204,7 @@ mod tests {
         for _i in 1..12 {
             let wait = read_limiter.consume_read(100);
             //std::thread::sleep(wait);
-            total += wait.as_micros(); 
+            total += wait.as_micros();
         }
         println!("total:{}", total);
     }
