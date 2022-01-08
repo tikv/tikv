@@ -104,7 +104,7 @@ use std::{
     },
 };
 use tikv_kv::SnapshotExt;
-use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
+use tikv_util::tenant_quota_limiter::{adjust_kv_req_cost, TenantQuotaLimiter};
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
@@ -626,8 +626,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let mutex = limiter.get_mutex();
                         let _guard = mutex.lock().await;
 
-                        // because kv get is a short request, it has other overheads
-                        let real_cost_time = cost_time.checked_mul(3).unwrap();
+                        // Because kv get is a short request, it has other overheads
+                        let real_cost_time = adjust_kv_req_cost(cost_time);
                         let wait = limiter.consume_read(real_cost_time.as_micros() as u32);
                         if !wait.is_zero() {
                             GLOBAL_TIMER_HANDLE
