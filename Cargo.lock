@@ -568,6 +568,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cesu8"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
+
+[[package]]
 name = "cexpr"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -616,9 +622,9 @@ version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f54d78e30b388d4815220c8dd03fea5656b6c6d32adb59e89061552a102f8da1"
 dependencies = [
- "glob",
+ "glob 0.3.0",
  "libc 0.2.106",
- "libloading",
+ "libloading 0.7.0",
 ]
 
 [[package]]
@@ -1044,6 +1050,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30baa043103c9d0c2a57cf537cc2f35623889dc0d405e6c3cccfadbc81c71309"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs-next"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1061,6 +1076,17 @@ checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
 dependencies = [
  "cfg-if 1.0.0",
  "dirs-sys-next",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03d86534ed367a67548dc68113a0f5db55432fdfbb6e6f9d77704397d95d5780"
+dependencies = [
+ "libc 0.2.106",
+ "redox_users",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -1300,7 +1326,7 @@ dependencies = [
  "grpcio",
  "kvproto",
  "lazy_static",
- "libloading",
+ "libloading 0.7.0",
  "matches",
  "prometheus",
  "protobuf",
@@ -1339,7 +1365,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "libc 0.2.106",
- "libloading",
+ "libloading 0.7.0",
  "matches",
  "nix 0.11.1",
  "once_cell",
@@ -1797,6 +1823,12 @@ checksum = "f0a01e0497841a3b2db4f8afa483cce65f7e96a3498bd6c541734792aeac8fe7"
 
 [[package]]
 name = "glob"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be18de09a56b60ed0edf84bc9df007e30040691af7acd1c41874faac5895bfb"
+
+[[package]]
+name = "glob"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
@@ -2176,6 +2208,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
 
 [[package]]
+name = "j4rs"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de204777df8f1b7ddd414468755d6a7e5919ad62834aca23bf6166ecb557fac9"
+dependencies = [
+ "cesu8",
+ "dirs",
+ "fs_extra",
+ "java-locator",
+ "jni-sys",
+ "lazy_static",
+ "libc 0.2.106",
+ "libloading 0.6.7",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "java-locator"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62402993f775e51f6d3bab6d64b38aece6d15cbf37c845bda65005220fa0f9df"
+dependencies = [
+ "glob 0.2.11",
+ "lazy_static",
+]
+
+[[package]]
+name = "jni-sys"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
+
+[[package]]
 name = "jobserver"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2262,6 +2330,16 @@ checksum = "fb789afcc589a08928d1e466087445ab740a0f70a2ee23d9349a0e3723d65e1b"
 dependencies = [
  "arbitrary",
  "cc",
+]
+
+[[package]]
+name = "libloading"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "351a32417a12d5f7e82c368a66781e307834dae04c6ce0cd4456d52989229883"
+dependencies = [
+ "cfg-if 1.0.0",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -3560,6 +3638,7 @@ dependencies = [
  "futures-util",
  "into_other",
  "itertools 0.10.0",
+ "j4rs",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5313,7 +5392,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "libc 0.2.106",
- "libloading",
+ "libloading 0.7.0",
  "log",
  "log_wrappers",
  "match_template",
@@ -6192,7 +6271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec24a9273d24437afb8e71b16f3d9a5d569193cccdb7896213b59f552f387674"
 dependencies = [
  "cc",
- "glob",
+ "glob 0.3.0",
  "itertools 0.9.0",
  "libc 0.2.106",
 ]
