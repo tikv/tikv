@@ -449,6 +449,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 };
                 start_was_reset = false;
 
+                let mutex = limiter.get_mutex();
+                let _guard = mutex.lock().await;
                 let wait = limiter.consume_read(time_cost.as_micros() as u32);
                 if !wait.is_zero() {
                     GLOBAL_TIMER_HANDLE
