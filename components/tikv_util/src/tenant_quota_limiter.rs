@@ -9,17 +9,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-const KV_REQ_1DEGREE: Duration = Duration::from_micros(100);
-const KV_REQ_2DEGREE: Duration = Duration::from_micros(200);
-
 pub fn adjust_kv_req_cost(cost_time: Duration) -> Duration {
-    if cost_time.lt(&KV_REQ_1DEGREE) {
-        cost_time.checked_mul(3).unwrap()
-    } else if cost_time.lt(&KV_REQ_2DEGREE) {
-        cost_time.checked_mul(2).unwrap()
-    } else {
-        cost_time
-    }
+    cost_time.add(Duration::from_micros(100))
 }
 
 pub struct ReadQuotaLimiter {
