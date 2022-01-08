@@ -50,6 +50,11 @@ impl WriteQuotaLimiter {
     pub fn consume_write(&self, write_bytes: u64) -> Duration {
         self.0.consume_duration(write_bytes as usize)
     }
+
+    pub fn consume_write_vcpu(&self, req_cnt: u64, write_bytes: u64) -> Duration {
+        let cost_micro_cpu = 200 * req_cnt + write_bytes / 4;
+        self.0.consume_duration(cost_micro_cpu as usize)
+    }
 }
 
 pub struct TenantQuotaLimiter {
@@ -93,6 +98,13 @@ impl TenantQuotaLimiter {
     pub fn consume_write(&self, tenant_id: u32, write_bytes: u64) -> Duration {
         if let Some(limiter) = self.tenant_write_limiters.read().unwrap().get(&tenant_id) {
             return limiter.as_ref().consume_write(write_bytes);
+        }
+        Duration::ZERO
+    }
+
+    pub fn consume_write_vcpu(&self, tenant_id: u32, req_cnt: u64, write_bytes: u64) -> Duration {
+        if let Some(limiter) = self.tenant_write_limiters.read().unwrap().get(&tenant_id) {
+            return limiter.as_ref().consume_write_vcpu(req_cnt, write_bytes);
         }
         Duration::ZERO
     }

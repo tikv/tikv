@@ -485,8 +485,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let sched = self.clone();
 
         // limit the write flow by tenant
-        let tenant_delay = self.inner.tenant_quota_limiter.as_ref().consume_write(
+        let tenant_delay = self.inner.tenant_quota_limiter.as_ref().consume_write_vcpu(
             task.cmd.ctx().get_tenant_id(),
+            1_u64,
             task.cmd.write_bytes() as u64,
         );
 
