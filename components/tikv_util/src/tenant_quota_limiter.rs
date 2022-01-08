@@ -4,24 +4,33 @@
 
 use super::time::Limiter;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-pub struct ReadQuotaLimiter(Limiter);
+pub struct ReadQuotaLimiter {
+    limiter: Limiter,
+    control_mutex: Arc<tokio::sync::Mutex<bool>>,
+}
 pub struct WriteQuotaLimiter(Limiter);
 
 impl ReadQuotaLimiter {
     // millicpu same as the k8s
     pub fn new(milli_cpu: u32) -> Self {
-        Self(Limiter::new(milli_cpu as f64 * 1000_f64))
+        Self {
+            limiter: Limiter::new(milli_cpu as f64 * 1000_f64),
+            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
+        }
+    }
+
+    pub fn get_mutex(&self) -> Arc<tokio::sync::Mutex<bool>> {
+        self.control_mutex.clone()
     }
 
     // Consume read cpu quota
     // If the quota is not enough, the returned duration will > 0, or return Duration::ZERO
     pub fn consume_read(&self, time_slice_micro_secs: u32) -> Duration {
-        self.0.consume_duration(time_slice_micro_secs as usize)
+        self.limiter.consume_duration(time_slice_micro_secs as usize)
     }
 }
 
@@ -115,7 +124,7 @@ impl TenantQuotaLimiter {
                     }
 
                     if let Some(l) = rlimiters.get(&quota.0) {
-                        if l.0.speed_limit() as u64 != quota.1.1 as u64 * 1000 {
+                        if l.limiter.speed_limit() as u64 != quota.1.1 as u64 * 1000 {
                             idxs_read.push(idx)
                         }
                     } else if quota.1.1 > 0 {
@@ -146,9 +155,11 @@ impl TenantQuotaLimiter {
                         .entry(quota.0)
                         .or_insert_with(|| Arc::new(ReadQuotaLimiter::new(quota.1.1)));
                     if quota.1.1 == 0 {
-                        (*limiter).0.set_speed_limit(f64::INFINITY);
+                        (*limiter).limiter.set_speed_limit(f64::INFINITY);
                     } else {
-                        (*limiter).0.set_speed_limit(quota.1.1 as f64 * 1000_f64);
+                        (*limiter)
+                            .limiter
+                            .set_speed_limit(quota.1.1 as f64 * 1000_f64);
                     }
                 }
             }
@@ -171,14 +182,28 @@ mod tests {
         let wlimiter1 = quota_limiter.get_write_quota_limiter(1).unwrap();
         assert!((wlimiter1.0.speed_limit() - 100_f64).abs() < f64::EPSILON);
         let rlimiter1 = quota_limiter.get_read_quota_limiter(1).unwrap();
-        assert!((rlimiter1.0.speed_limit() - 200_f64 * 1000_f64).abs() < f64::EPSILON);
+        assert!((rlimiter1.limiter.speed_limit() - 200_f64 * 1000_f64).abs() < f64::EPSILON);
 
         let wlimiter2 = quota_limiter.get_write_quota_limiter(2).unwrap();
         assert!((wlimiter2.0.speed_limit() - 300_f64).abs() < f64::EPSILON);
         let rlimiter2 = quota_limiter.get_read_quota_limiter(2).unwrap();
-        assert!((rlimiter2.0.speed_limit() - 400_f64 * 1000_f64).abs() < f64::EPSILON);
+        assert!((rlimiter2.limiter.speed_limit() - 400_f64 * 1000_f64).abs() < f64::EPSILON);
 
         assert!(quota_limiter.get_write_quota_limiter(3).is_none());
         assert!(quota_limiter.get_read_quota_limiter(3).is_none());
+    }
+
+    #[test]
+    fn test_consume_read() {
+        let read_limiter = ReadQuotaLimiter::new(1);
+        read_limiter.consume_read(100);
+        std::thread::sleep_ms(2000);
+        let mut total = 0;
+        for _i in 1..12 {
+            let wait = read_limiter.consume_read(100);
+            //std::thread::sleep(wait);
+            total += wait.as_micros(); 
+        }
+        println!("total:{}", total);
     }
 }

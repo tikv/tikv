@@ -623,6 +623,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     };
 
                     if let Some(limiter) = tenant_read_quota_limiter {
+                        let mutex = limiter.get_mutex();
+                        let _guard = mutex.lock().await;
                         let wait = limiter.consume_read(cost_time.as_micros() as u32);
                         if !wait.is_zero() {
                             GLOBAL_TIMER_HANDLE
