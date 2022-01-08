@@ -52,7 +52,7 @@ impl WriteQuotaLimiter {
     }
 
     pub fn consume_write_vcpu(&self, req_cnt: u64, write_bytes: u64) -> Duration {
-        let cost_micro_cpu = 200 * req_cnt + write_bytes / 4;
+        let cost_micro_cpu = 200 * req_cnt + write_bytes / 3;
         self.0.consume_duration(cost_micro_cpu as usize)
     }
 }
