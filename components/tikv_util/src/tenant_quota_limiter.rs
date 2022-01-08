@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub fn adjust_kv_req_cost(cost_time: Duration) -> Duration {
-    cost_time.add(Duration::from_micros(100))
+    cost_time + Duration::from_micros(100)
 }
 
 pub struct ReadQuotaLimiter {
