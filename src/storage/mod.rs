@@ -625,7 +625,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     if let Some(limiter) = tenant_read_quota_limiter {
                         let mutex = limiter.get_mutex();
                         let _guard = mutex.lock().await;
-                        let wait = limiter.consume_read(cost_time.as_micros() as u32);
+
+                        // because kv get is a short request, it has other overheads
+                        let real_cost_time = cost_time.checked_mul(3).unwrap();
+                        let wait = limiter.consume_read(real_cost_time.as_micros() as u32);
                         if !wait.is_zero() {
                             GLOBAL_TIMER_HANDLE
                                 .delay(std::time::Instant::now() + wait)
