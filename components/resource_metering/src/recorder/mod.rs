@@ -147,7 +147,7 @@ impl Recorder {
             // Clean up the data of the destroyed threads.
             if let Ok(ids) = thread::thread_ids::<HashSet<_>>(thread::process_id()) {
                 self.thread_stores.retain(|k, v| {
-                    let retain = ids.contains(&(*k as i32));
+                    let retain = ids.contains(&(*k as _));
                     assert!(retain || v.attached_tag.load().is_none());
                     retain
                 });
