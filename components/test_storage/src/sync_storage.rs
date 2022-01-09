@@ -9,9 +9,9 @@ use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use std::sync::{atomic::AtomicU64, Arc};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
+use tikv::server::service::tracing::RequestTracer;
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::server::service::tracing::RequestTracer;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
     test_util::GetConsumer, txn::commands, Engine, KvGetStatistics, PrewriteResult, Result,
