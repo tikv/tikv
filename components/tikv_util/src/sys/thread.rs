@@ -190,8 +190,6 @@ mod imp {
 
     #[derive(Default)]
     pub struct FullStat {
-        // libc::clock_t is not used here because the definition of
-        // clock_t is different on linux and bsd.
         pub stime: i64,
         pub utime: i64,
         pub command: String,
