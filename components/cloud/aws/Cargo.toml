@@ -13,7 +13,6 @@ bytes = "1.0"
 cloud = { path = "../", default-features = false }
 fail = "0.5"
 futures = "0.3"
-futures-util = { version = "0.3", default-features = false, features = ["io"] }
 # This is only a dependency to vendor openssl for rusoto. It's not clear exactly
 # how openssl is built for tikv, but it seems to be controlled by grpcio. This
 # makes `cargo test -p aws` link correctly.
@@ -38,5 +37,4 @@ lazy_static = "1.3"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 
 [dev-dependencies]
-futures = "0.3"
 rusoto_mock = "0.46.0"

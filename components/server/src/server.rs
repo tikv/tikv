@@ -77,7 +77,7 @@ use tikv::{
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
         resolve,
-        service::{DebugService, DiagnosticsService},
+        service::{tracing::init_tracing, DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
@@ -654,6 +654,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(cfg_manager),
         );
 
+        // Start tracing
+        let (tracing_service, tracing_handle, tracing_cfg_mgr) = init_tracing(&self.config.tracing);
+        tracing_service.register_service();
+        cfg_controller.register(tikv::config::Module::Tracing, Box::new(tracing_cfg_mgr));
+
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -784,6 +789,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
+            tracing_handle,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

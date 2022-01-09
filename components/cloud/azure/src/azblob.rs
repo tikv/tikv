@@ -9,7 +9,7 @@ use chrono::{Duration as ChronoDuration, Utc};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
-use futures_util::{
+use futures::{
     io::{AsyncRead, AsyncReadExt},
     stream,
     stream::StreamExt,
@@ -660,7 +660,7 @@ mod tests {
     #[cfg(feature = "azurite")]
     // test in Azurite emulator
     async fn test_azblob_storage() {
-        use futures_util::stream;
+        use futures::stream;
         let mut input = InputConfig::default();
         input.set_account_name("devstoreaccount1".to_owned());
         input.set_bucket("test".to_owned());

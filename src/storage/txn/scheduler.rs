@@ -34,6 +34,7 @@ use engine_traits::CF_LOCK;
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
+use minitrace::prelude::*;
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
@@ -704,12 +705,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
             tls_collect_read_duration(tag.get_str(), elapsed);
         }
+        .in_span(Span::enter_with_local_parent(
+            "Scheduler::process_by_worker",
+        ))
         .in_resource_metering_tag(resource_tag)
         .await;
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
+    #[trace("Scheduler::process_read")]
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -725,6 +730,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
+    #[trace("Scheduler::process_write")]
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
@@ -1107,7 +1113,7 @@ mod tests {
         txn::{commands, latch::*},
         TestEngineBuilder,
     };
-    use futures_executor::block_on;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::config::ReadableSize;

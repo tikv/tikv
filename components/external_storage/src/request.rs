@@ -31,7 +31,7 @@ pub fn write_sender(
                     .await
                     .context(msg("create"))?;
                 let mut writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Box::pin(f.compat()));
-                futures_util::io::copy(reader, &mut writer)
+                futures::io::copy(reader, &mut writer)
                     .await
                     .context(msg("copy"))
             })

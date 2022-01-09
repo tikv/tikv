@@ -177,7 +177,7 @@ mod tests {
         futures::pin_mut!(deadline);
         let mut t1_finished = false;
         loop {
-            futures_util::select! {
+            futures::select! {
                 _ = t1 => {
                     t1_finished = true;
                 },

@@ -11,12 +11,12 @@ use std::sync::{atomic::AtomicU64, Arc};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
+use tikv::server::service::tracing::RequestTracer;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
     test_util::GetConsumer, txn::commands, Engine, KvGetStatistics, PrewriteResult, Result,
     Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
-use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -166,10 +166,12 @@ impl<E: Engine> SyncTestStorage<E> {
             })
             .collect();
         let p = GetConsumer::new();
-        block_on(
-            self.store
-                .batch_get_command(requests, ids, p.clone(), Instant::now()),
-        )?;
+        block_on(self.store.batch_get_command(
+            requests,
+            ids,
+            vec![RequestTracer::new_noop(); keys.len()],
+            p.clone(),
+        ))?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
             values.push(value?);
@@ -360,18 +362,23 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<Vec<Option<Vec<u8>>>> {
         let mut ids = vec![];
         let requests: Vec<RawGetRequest> = keys
-            .into_iter()
+            .iter()
             .map(|key| {
                 let mut req = RawGetRequest::default();
                 req.set_context(ctx.clone());
-                req.set_key(key);
+                req.set_key(key.clone());
                 req.set_cf(cf.to_owned());
                 ids.push(ids.len() as u64);
                 req
             })
             .collect();
         let p = GetConsumer::new();
-        block_on(self.store.raw_batch_get_command(requests, ids, p.clone()))?;
+        block_on(self.store.raw_batch_get_command(
+            requests,
+            ids,
+            vec![RequestTracer::new_noop(); keys.len()],
+            p.clone(),
+        ))?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
             values.push(value?);

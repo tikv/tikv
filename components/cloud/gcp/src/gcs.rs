@@ -5,11 +5,8 @@ use async_trait::async_trait;
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
-use futures_util::{
-    future::TryFutureExt,
-    io::{AsyncRead, AsyncReadExt, Cursor},
-    stream::{StreamExt, TryStreamExt},
-};
+use futures::io::Cursor;
+use futures::prelude::*;
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};

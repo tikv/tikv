@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
+use futures::io::AsyncRead;
 use futures::stream::{self, Stream};
-use futures_util::io::AsyncRead;
 use http::status::StatusCode;
 use rand::{thread_rng, Rng};
 use rusoto_core::{request::HttpDispatchError, RusotoError};
@@ -70,7 +70,7 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 /// otherwise the executor's states may be disrupted.
 ///
 /// This means the future must only use async functions.
-// FIXME: get rid of this function, so that futures_executor::block_on is sufficient.
+// FIXME: get rid of this function, so that futures::executor::block_on is sufficient.
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
     // we need a Tokio runtime, Tokio futures require Tokio executor.
     Builder::new_current_thread()

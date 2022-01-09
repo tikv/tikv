@@ -5,7 +5,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 use fail::fail_point;
-use futures_util::{
+use futures::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,

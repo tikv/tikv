@@ -5,7 +5,7 @@ use std::{
     pin::Pin,
 };
 
-use futures_util::{
+use futures::{
     io::AsyncRead,
     task::{Context, Poll},
 };

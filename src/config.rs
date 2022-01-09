@@ -60,6 +60,7 @@ use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
+use crate::server::service::tracing::TracingConfig;
 use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -2541,6 +2542,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(skip)]
+    pub tracing: TracingConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2580,6 +2584,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            tracing: TracingConfig::default(),
         }
     }
 }
@@ -3332,6 +3337,7 @@ pub enum Module {
     CDC,
     ResolvedTs,
     ResourceMetering,
+    Tracing,
     Unknown(String),
 }
 
@@ -3357,6 +3363,7 @@ impl From<&str> for Module {
             "cdc" => Module::CDC,
             "resolved_ts" => Module::ResolvedTs,
             "resource_metering" => Module::ResourceMetering,
+            "tracing" => Module::Tracing,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -4554,6 +4561,7 @@ mod tests {
             ("cdc", Module::CDC),
             ("resolved_ts", Module::ResolvedTs),
             ("resource_metering", Module::ResourceMetering),
+            ("tracing", Module::Tracing),
             ("unknown", Module::Unknown("unknown".to_string())),
         ];
         for (name, module) in cases {

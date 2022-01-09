@@ -4,7 +4,7 @@ use std::marker::Unpin;
 use tokio::io;
 
 use async_trait::async_trait;
-use futures_io::AsyncRead;
+use futures::prelude::*;
 
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
@@ -54,7 +54,7 @@ impl ExternalStorage for NoopStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::io::AsyncReadExt;
+    use futures::io::AsyncReadExt;
 
     #[tokio::test]
     async fn test_noop_storage() {

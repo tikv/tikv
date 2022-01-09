@@ -16,6 +16,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use kvproto::tikvpb::TikvClient;
 use tempfile::TempDir;
+use tikv::server::service::tracing::init_tracing;
 use tikv::storage::kv::SnapContext;
 use tokio::runtime::Builder as TokioBuilder;
 
@@ -337,6 +338,10 @@ impl Simulator for ServerCluster {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
+        // Start tracing
+        let (tracing_service, tracing_handle, _tracing_cfg_mgr) = init_tracing(&cfg.tracing);
+        tracing_service.register_service();
+
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
@@ -451,6 +456,7 @@ impl Simulator for ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
+                tracing_handle.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

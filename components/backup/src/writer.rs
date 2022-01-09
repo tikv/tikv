@@ -11,7 +11,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage_export::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
-use futures_util::io::AllowStdIo;
+use futures::io::AllowStdIo;
 use kvproto::brpb::{CipherInfo, File};
 use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;

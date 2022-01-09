@@ -60,6 +60,7 @@ name = "tikv"
 
 [dependencies]
 api_version = { path = "components/api_version", default-features = false }
+arc-swap = "1.5"
 anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
@@ -83,9 +84,7 @@ error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
-futures-executor = "0.3.1"
 futures-timer = "3.0"
-futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.9", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
@@ -138,6 +137,7 @@ sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = "0.16"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
+minitrace = { git = "https://github.com/andylokandy/minitrace-rust.git", branch = "publish" }
 paste = "1.0"
 thiserror = "1.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
@@ -198,8 +198,8 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b7
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = {git = "https://github.com/your_github_id/kvproto", branch="your_branch"}
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = {git = "https://github.com/andylokandy/kvproto", branch="trace"}
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

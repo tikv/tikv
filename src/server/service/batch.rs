@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::new_request_tracer;
 // #[PerformanceCriticalPath]
-use crate::server::metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC};
-use crate::server::service::kv::{
-    batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse,
-};
+use crate::server::metrics::REQUEST_BATCH_SIZE_HISTOGRAM_VEC;
+use crate::server::service::kv::{batch_commands_response, TracedSingleResponse};
+use crate::server::service::tracing::{RequestTracer, TracingHandle};
 use crate::storage::kv::{PerfStatisticsDelta, Statistics};
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
@@ -14,9 +14,9 @@ use crate::storage::{
 };
 use crate::storage::{ResponseBatchConsumer, Result};
 use kvproto::kvrpcpb::*;
+use minitrace::prelude::*;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
-use tikv_util::time::Instant;
 
 pub const MAX_BATCH_GET_REQUEST_COUNT: usize = 10;
 pub const MIN_BATCH_GET_REQUEST_COUNT: usize = 4;
@@ -27,19 +27,20 @@ pub struct ReqBatcher {
     raw_gets: Vec<RawGetRequest>,
     get_ids: Vec<u64>,
     raw_get_ids: Vec<u64>,
-    begin_instant: Instant,
+    get_tracers: Vec<RequestTracer>,
+    raw_get_tracers: Vec<RequestTracer>,
     batch_size: usize,
 }
 
 impl ReqBatcher {
     pub fn new(batch_size: usize) -> ReqBatcher {
-        let begin_instant = Instant::now_coarse();
         ReqBatcher {
             gets: vec![],
             raw_gets: vec![],
             get_ids: vec![],
             raw_get_ids: vec![],
-            begin_instant,
+            get_tracers: vec![],
+            raw_get_tracers: vec![],
             batch_size: std::cmp::min(batch_size, MAX_BATCH_GET_REQUEST_COUNT),
         }
     }
@@ -52,46 +53,78 @@ impl ReqBatcher {
         req.get_context().get_priority() == CommandPri::Normal
     }
 
-    pub fn add_get_request(&mut self, req: GetRequest, id: u64) {
+    pub fn add_get_request(
+        &mut self,
+        mut req: GetRequest,
+        id: u64,
+        tracing_handle: &TracingHandle,
+    ) {
+        let tracer = new_request_tracer!(kv_get, &mut req, tracing_handle);
+
         self.gets.push(req);
         self.get_ids.push(id);
+        self.get_tracers.push(tracer);
     }
 
-    pub fn add_raw_get_request(&mut self, req: RawGetRequest, id: u64) {
+    pub fn add_raw_get_request(
+        &mut self,
+        mut req: RawGetRequest,
+        id: u64,
+        tracing_handle: &TracingHandle,
+    ) {
+        let tracer = new_request_tracer!(raw_get, &mut req, tracing_handle);
+
         self.raw_gets.push(req);
         self.raw_get_ids.push(id);
+        self.raw_get_tracers.push(tracer);
     }
 
     pub fn maybe_commit<E: Engine, L: LockManager>(
         &mut self,
         storage: &Storage<E, L>,
-        tx: &Sender<MeasuredSingleResponse>,
+        tx: &Sender<TracedSingleResponse>,
     ) {
         if self.gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.gets);
             let ids = std::mem::take(&mut self.get_ids);
-            future_batch_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
+            let tracers = std::mem::take(&mut self.get_tracers);
+
+            let span = Span::enter_with_parents(
+                "RawGetCommand",
+                tracers.iter().map(|tracer| &tracer.root_span),
+            );
+            let _g = span.set_local_parent();
+
+            future_batch_get_command(storage, ids, gets, tracers, tx.clone());
         }
 
         if self.raw_gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.raw_gets);
             let ids = std::mem::take(&mut self.raw_get_ids);
-            future_batch_raw_get_command(storage, ids, gets, tx.clone(), self.begin_instant);
+            let tracers = std::mem::take(&mut self.raw_get_tracers);
+
+            let span = Span::enter_with_parents(
+                "BatchRawGetCommand",
+                tracers.iter().map(|tracer| &tracer.root_span),
+            );
+            let _g = span.set_local_parent();
+
+            future_batch_raw_get_command(storage, ids, gets, tracers, tx.clone());
         }
     }
 
     pub fn commit<E: Engine, L: LockManager>(
         self,
         storage: &Storage<E, L>,
-        tx: &Sender<MeasuredSingleResponse>,
+        tx: &Sender<TracedSingleResponse>,
     ) {
         if !self.gets.is_empty() {
             future_batch_get_command(
                 storage,
                 self.get_ids,
                 self.gets,
+                self.get_tracers,
                 tx.clone(),
-                self.begin_instant,
             );
         }
         if !self.raw_gets.is_empty() {
@@ -99,8 +132,8 @@ impl ReqBatcher {
                 storage,
                 self.raw_get_ids,
                 self.raw_gets,
+                self.raw_get_tracers,
                 tx.clone(),
-                self.begin_instant,
             );
         }
     }
@@ -137,7 +170,7 @@ impl BatcherBuilder {
 }
 
 pub struct GetCommandResponseConsumer {
-    tx: Sender<MeasuredSingleResponse>,
+    tx: Sender<TracedSingleResponse>,
 }
 
 impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
@@ -147,7 +180,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
         &self,
         id: u64,
         res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
-        begin: Instant,
+        tracer: RequestTracer,
     ) {
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&res) {
@@ -171,8 +204,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
             cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
             ..Default::default()
         };
-        let mesure = GrpcRequestDuration::new(begin, GrpcTypeKind::kv_batch_get_command);
-        let task = MeasuredSingleResponse::new(id, res, mesure);
+        let task = TracedSingleResponse::new(id, res, tracer);
         if self.tx.send_and_notify(task).is_err() {
             error!("KvService response batch commands fail");
         }
@@ -180,7 +212,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
 }
 
 impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
-    fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, begin: Instant) {
+    fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, tracer: RequestTracer) {
         let mut resp = RawGetResponse::default();
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
@@ -195,8 +227,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
             cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
             ..Default::default()
         };
-        let mesure = GrpcRequestDuration::new(begin, GrpcTypeKind::raw_batch_get_command);
-        let task = MeasuredSingleResponse::new(id, res, mesure);
+        let task = TracedSingleResponse::new(id, res, tracer);
         if self.tx.send_and_notify(task).is_err() {
             error!("KvService response batch commands fail");
         }
@@ -205,20 +236,19 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
 
 fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    requests: Vec<u64>,
+    ids: Vec<u64>,
     gets: Vec<GetRequest>,
-    tx: Sender<MeasuredSingleResponse>,
-    begin_instant: tikv_util::time::Instant,
+    tracers: Vec<RequestTracer>,
+    tx: Sender<TracedSingleResponse>,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .kv_get
         .observe(gets.len() as f64);
-    let ids = requests.clone();
     let res = storage.batch_get_command(
         gets,
-        requests,
+        ids.clone(),
+        tracers.clone(),
         GetCommandResponseConsumer { tx: tx.clone() },
-        begin_instant,
     );
     let f = async move {
         // This error can only cause by readpool busy.
@@ -226,14 +256,12 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
         if let Some(e) = extract_region_error(&res) {
             let mut resp = GetResponse::default();
             resp.set_region_error(e);
-            for id in ids {
+            for (id, tracer) in ids.into_iter().zip(tracers) {
                 let res = batch_commands_response::Response {
                     cmd: Some(batch_commands_response::response::Cmd::Get(resp.clone())),
                     ..Default::default()
                 };
-                let measure =
-                    GrpcRequestDuration::new(begin_instant, GrpcTypeKind::kv_batch_get_command);
-                let task = MeasuredSingleResponse::new(id, res, measure);
+                let task = TracedSingleResponse::new(id, res, tracer);
                 if tx.send_and_notify(task).is_err() {
                     error!("KvService response batch commands fail");
                 }
@@ -245,18 +273,18 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
 
 fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    requests: Vec<u64>,
+    ids: Vec<u64>,
     gets: Vec<RawGetRequest>,
-    tx: Sender<MeasuredSingleResponse>,
-    begin_instant: tikv_util::time::Instant,
+    tracers: Vec<RequestTracer>,
+    tx: Sender<TracedSingleResponse>,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .raw_get
         .observe(gets.len() as f64);
-    let ids = requests.clone();
     let res = storage.raw_batch_get_command(
         gets,
-        requests,
+        ids.clone(),
+        tracers.clone(),
         GetCommandResponseConsumer { tx: tx.clone() },
     );
     let f = async move {
@@ -265,14 +293,12 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
         if let Some(e) = extract_region_error(&res) {
             let mut resp = RawGetResponse::default();
             resp.set_region_error(e);
-            for id in ids {
+            for (id, tracer) in ids.into_iter().zip(tracers) {
                 let res = batch_commands_response::Response {
                     cmd: Some(batch_commands_response::response::Cmd::RawGet(resp.clone())),
                     ..Default::default()
                 };
-                let measure =
-                    GrpcRequestDuration::new(begin_instant, GrpcTypeKind::raw_batch_get_command);
-                let task = MeasuredSingleResponse::new(id, res, measure);
+                let task = TracedSingleResponse::new(id, res, tracer);
                 if tx.send_and_notify(task).is_err() {
                     error!("KvService response batch commands fail");
                 }

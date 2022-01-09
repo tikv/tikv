@@ -6,8 +6,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
+use futures::compat::Future01CompatExt;
 use futures::executor::ThreadPool;
-use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 

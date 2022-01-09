@@ -35,7 +35,7 @@ use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
-use futures_io::AsyncRead;
+use futures::prelude::*;
 use kvproto::brpb::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
 use tikv_util::time::{Instant, Limiter};

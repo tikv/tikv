@@ -567,7 +567,7 @@ fn async_commit_timestamps(
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
     let key_guard = CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
-        ::futures_executor::block_on(txn.concurrency_manager.lock_key(key))
+        futures::executor::block_on(txn.concurrency_manager.lock_key(key))
     });
 
     let final_min_commit_ts = key_guard.with_lock(|l| {

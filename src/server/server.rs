@@ -33,6 +33,7 @@ use super::load_statistics::*;
 use super::metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC};
 use super::raft_client::{ConnectionBuilder, RaftClient};
 use super::resolve::StoreAddrResolver;
+use super::service::tracing::TracingHandle;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::ServerTransport;
@@ -93,6 +94,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
+        tracing_handle: TracingHandle,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -126,6 +128,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             cfg.value().enable_request_batch,
             proxy,
             cfg.value().reject_messages_on_memory_ratio,
+            tracing_handle,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -404,6 +407,7 @@ mod tests {
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
+    use crate::server::service::tracing::TracingConfig;
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
     use grpcio::EnvBuilder;
@@ -461,6 +465,9 @@ mod tests {
             addr: "127.0.0.1:0".to_owned(),
             ..Default::default()
         };
+
+        let (_tracing_service, tracing_handle, _tracing_cfg_mgr) =
+            tracing::init_tracing(&TracingConfig::default());
 
         let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
             .build()
@@ -530,6 +537,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
+            tracing_handle,
         )
         .unwrap();
 

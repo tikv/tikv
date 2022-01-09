@@ -241,7 +241,6 @@ dependencies = [
  "cloud",
  "fail",
  "futures 0.3.15",
- "futures-util",
  "grpcio",
  "http",
  "hyper",
@@ -1074,6 +1073,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e98e2ad1a782e33928b96fc3948e7c355e5af34ba4de7670fe8bac2a3b2006d"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "darling"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1239,7 +1248,6 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "futures-util",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -1433,9 +1441,6 @@ dependencies = [
  "ffi-support",
  "file_system",
  "futures 0.3.15",
- "futures-executor",
- "futures-io",
- "futures-util",
  "grpcio",
  "kvproto",
  "lazy_static",
@@ -1471,9 +1476,6 @@ dependencies = [
  "ffi-support",
  "file_system",
  "futures 0.3.15",
- "futures-executor",
- "futures-io",
- "futures-util",
  "gcp",
  "grpcio",
  "kvproto",
@@ -1870,7 +1872,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "cloud",
- "futures-util",
+ "futures 0.3.15",
  "http",
  "hyper",
  "hyper-tls",
@@ -2363,7 +2365,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7a8280c36daf05e44f72130f3fd4e585ea2c62d8"
+source = "git+https://github.com/andylokandy/kvproto?branch=trace#40cec920f3302b1c244eb8bb1d955d4827d1f41b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2615,6 +2617,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
 
 [[package]]
+name = "minitrace"
+version = "0.2.0"
+source = "git+https://github.com/andylokandy/minitrace-rust.git?branch=publish#6e7f375979338e3d5c3cfed290a034a11ed89f44"
+dependencies = [
+ "crossbeam",
+ "minitrace-macro",
+ "minstant",
+ "pin-project",
+ "smallvec",
+]
+
+[[package]]
+name = "minitrace-macro"
+version = "0.2.0"
+source = "git+https://github.com/andylokandy/minitrace-rust.git?branch=publish#6e7f375979338e3d5c3cfed290a034a11ed89f44"
+dependencies = [
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2631,6 +2656,17 @@ checksum = "a92518e98c078586bc6c934028adcca4c92a53d6a958196de835170a01d84e4b"
 dependencies = [
  "adler",
  "autocfg",
+]
+
+[[package]]
+name = "minstant"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cb320648b7883b43ce5dfbc5c6f4a84038194c3f67b4fcb7d05c994e6006557"
+dependencies = [
+ "ctor",
+ "libc 0.2.106",
+ "wasi 0.7.0",
 ]
 
 [[package]]
@@ -4801,7 +4837,6 @@ dependencies = [
  "external_storage_export",
  "file_system",
  "futures 0.3.15",
- "futures-util",
  "grpcio",
  "keys",
  "kvproto",
@@ -5476,6 +5511,7 @@ version = "5.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
+ "arc-swap 1.5.0",
  "async-stream",
  "async-trait",
  "backtrace",
@@ -5501,9 +5537,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "futures-executor",
  "futures-timer",
- "futures-util",
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",
@@ -5523,6 +5557,7 @@ dependencies = [
  "match_template",
  "memory_trace_macros",
  "mime",
+ "minitrace",
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
@@ -5746,7 +5781,6 @@ dependencies = [
  "error_code",
  "fail",
  "futures 0.3.15",
- "futures-util",
  "gag",
  "grpcio",
  "http",

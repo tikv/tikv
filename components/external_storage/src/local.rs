@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-use futures_io::AsyncRead;
-use futures_util::stream::TryStreamExt;
+use futures::io::AsyncRead;
+use futures::stream::TryStreamExt;
 use rand::Rng;
 
 use crate::UnpinReader;

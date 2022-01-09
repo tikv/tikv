@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures = { version = "0.3" }
 async-trait = "0.1"
 http = "0.2.0"
 hyper = "0.14"

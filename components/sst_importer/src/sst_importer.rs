@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_read_external_storage_into_file_timed_out() {
-        use futures_util::stream::{pending, TryStreamExt};
+        use futures::stream::{pending, TryStreamExt};
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();

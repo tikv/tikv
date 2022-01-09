@@ -63,11 +63,14 @@ pub use self::{
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
-use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
 use crate::storage::txn::flow_controller::FlowController;
+use crate::{
+    read_pool::{ReadPool, ReadPoolHandle},
+    server::service::tracing::RequestTracer,
+};
 
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::{
@@ -90,6 +93,7 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use minitrace::prelude::*;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -620,6 +624,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     ))
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::get"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -639,8 +644,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
+        tracers: Vec<RequestTracer>,
         consumer: P,
-        begin_instant: tikv_util::time::Instant,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -666,7 +671,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
 
-                for (mut req, id) in requests.into_iter().zip(ids) {
+                for ((mut req, id), tracer) in requests.into_iter().zip(ids).zip(tracers) {
                     let mut ctx = req.take_context();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
@@ -706,7 +711,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), tracer);
                             continue;
                         }
                     };
@@ -722,6 +727,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         access_locks,
                         region_id,
                         id,
+                        tracer,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -736,6 +742,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         access_locks,
                         region_id,
                         id,
+                        tracer,
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
@@ -759,20 +766,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                         id,
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
                                             .map(|v| (v, stat, delta)),
-                                        begin_instant,
+                                        tracer,
                                     );
                                 }
                                 Err(e) => {
                                     consumer.consume(
                                         id,
                                         Err(Error::from(txn::Error::from(e))),
-                                        begin_instant,
+                                        tracer,
                                     );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), tracer);
                         }
                     }
                 }
@@ -783,6 +790,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 Ok(())
             }
+            .in_span(Span::enter_with_local_parent("Storage::batch_get_command"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -923,6 +931,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     ))
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::batch_get"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -1084,6 +1093,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     })
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::scan"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -1222,6 +1232,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok(locks)
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::scan_lock"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -1385,6 +1396,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     r
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::raw_get"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -1401,6 +1413,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
+        tracers: Vec<RequestTracer>,
         consumer: P,
     ) -> impl Future<Output = Result<()>> {
         const CMD: CommandKind = CommandKind::raw_batch_get_command;
@@ -1445,18 +1458,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
-                for (req, id) in gets.into_iter().zip(ids) {
+                for ((req, id), tracer) in gets.into_iter().zip(ids).zip(tracers) {
                     let snap_ctx = SnapContext {
                         pb_ctx: req.get_context(),
                         read_id: read_id.clone(),
                         ..Default::default()
                     };
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
-                    snaps.push((id, req, snap));
+                    snaps.push((id, req, snap, tracer));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 let begin_instant = Instant::now_coarse();
-                for (id, mut req, snap) in snaps {
+                for (id, mut req, snap, tracer) in snaps {
                     let ctx = req.take_context();
                     let cf = req.take_cf();
                     let key = req.take_key();
@@ -1475,17 +1488,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                                 &mut stats,
                                             )
                                             .map_err(Error::from),
-                                        begin_instant,
+                                        tracer,
                                     );
                                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(e), begin_instant);
+                                    consumer.consume(id, Err(e), tracer);
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), tracer);
                         }
                     }
                 }
@@ -1498,6 +1511,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .observe(command_duration.saturating_elapsed_secs());
                 Ok(())
             }
+            .in_span(Span::enter_with_local_parent(
+                "Storage::raw_batch_get_command",
+            ))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -1926,6 +1942,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     result
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::raw_scan"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -2052,6 +2069,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok(result)
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::raw_batch_scan"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -2120,6 +2138,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     r
                 }
             }
+            .in_span(Span::enter_with_local_parent("Storage::raw_get_key_ttl"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -2297,6 +2316,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 ret
             }
+            .in_span(Span::enter_with_local_parent("Storage::raw_checksum"))
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
@@ -2629,7 +2649,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
-    fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
+    fn consume(&self, id: u64, res: Result<ConsumeResponse>, tracer: RequestTracer);
 }
 
 pub mod test_util {
@@ -2809,7 +2829,7 @@ pub mod test_util {
             &self,
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
-            _: tikv_util::time::Instant,
+            _: RequestTracer,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -2819,7 +2839,7 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: RequestTracer) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
@@ -3043,8 +3063,8 @@ mod tests {
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 1), create_get_request(b"d", 1)],
             vec![1, 2],
+            vec![RequestTracer::new_noop(); 2],
             consumer.clone(),
-            Instant::now(),
         ))
         .unwrap();
         let data = consumer.take_data();
@@ -3733,8 +3753,8 @@ mod tests {
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 2), create_get_request(b"d", 2)],
             vec![1, 2],
+            vec![RequestTracer::new_noop(); 2],
             consumer.clone(),
-            Instant::now(),
         ))
         .unwrap();
         let mut x = consumer.take_data();
@@ -3773,8 +3793,8 @@ mod tests {
                 create_get_request(b"b", 5),
             ],
             vec![1, 2, 3, 4],
+            vec![RequestTracer::new_noop(); 4],
             consumer.clone(),
-            Instant::now(),
         ))
         .unwrap();
 
@@ -4526,9 +4546,16 @@ mod tests {
                 req
             })
             .collect();
-        let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
+        let results: Vec<Option<Vec<u8>>> =
+            test_data.iter().map(|(_, v)| Some(v.clone())).collect();
         let consumer = GetConsumer::new();
-        block_on(storage.raw_batch_get_command(cmds, ids, consumer.clone())).unwrap();
+        block_on(storage.raw_batch_get_command(
+            cmds,
+            ids,
+            vec![RequestTracer::new_noop(); test_data.len()],
+            consumer.clone(),
+        ))
+        .unwrap();
         let x: Vec<Option<Vec<u8>>> = consumer
             .take_data()
             .into_iter()
@@ -7089,8 +7116,8 @@ mod tests {
             block_on(storage.batch_get_command(
                 vec![req1.clone(), req2],
                 vec![1, 2],
+                vec![RequestTracer::new_noop(); 2],
                 consumer.clone(),
-                Instant::now(),
             ))
             .unwrap();
             consumer.take_data()
@@ -7162,8 +7189,13 @@ mod tests {
         req.set_key(k1.clone());
         req.set_version(110);
         let consumer = GetConsumer::new();
-        block_on(storage.batch_get_command(vec![req], vec![1], consumer.clone(), Instant::now()))
-            .unwrap();
+        block_on(storage.batch_get_command(
+            vec![req],
+            vec![1],
+            vec![RequestTracer::new_noop(); 1],
+            consumer.clone(),
+        ))
+        .unwrap();
         let res = consumer.take_data();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_ref().unwrap(), &Some(v1.clone()));

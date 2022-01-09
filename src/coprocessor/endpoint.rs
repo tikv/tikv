@@ -8,6 +8,7 @@ use std::{borrow::Cow, time::Duration};
 use async_stream::try_stream;
 use futures::channel::mpsc;
 use futures::prelude::*;
+use minitrace::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tokio::sync::Semaphore;
 
@@ -441,6 +442,9 @@ impl<E: Engine> Endpoint<E> {
             .read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .in_span(Span::enter_with_local_parent(
+                        "Endpoint::handle_unary_request_impl",
+                    ))
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
@@ -453,6 +457,7 @@ impl<E: Engine> Endpoint<E> {
     /// errors during parsing or handling, they will be converted into a `Response` as the success
     /// result of the future.
     #[inline]
+    #[trace("Endpoint::parse_and_handle_unary_request")]
     pub fn parse_and_handle_unary_request(
         &self,
         req: coppb::Request,
