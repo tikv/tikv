@@ -24,9 +24,13 @@ use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 
 use file_system::Sha256Reader;
-use futures::io::AllowStdIo;
-use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
+use futures::io::{AllowStdIo, Cursor};
+use kvproto::{
+    brpb::{DataFileInfo, FileType, Metadata},
+    raft_cmdpb::CmdType,
+};
 use openssl::hash::{Hasher, MessageDigest};
+use protobuf::{Message, RepeatedField};
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
@@ -298,10 +302,10 @@ impl RouterInner {
         Ok(())
     }
 
-    pub async fn do_flush(&self, task_name: &str) {
+    pub async fn do_flush(&self, task_name: &str, store_id: u64) {
         debug!("backup stream do flush"; "task" => task_name);
         if let Some(task_info) = self.tasks.lock().await.get(task_name) {
-            if let Err(e) = task_info.do_flush().await {
+            if let Err(e) = task_info.do_flush(store_id).await {
                 warn!("backup steam do flush fail"; "err" => ?e);
             }
             // set false to flushing whether success or fail
@@ -344,6 +348,18 @@ impl TempFileKey {
         }
     }
 
+    fn get_file_type(&self) -> FileType {
+        let file_type = match self.cmd_type {
+            CmdType::Put => FileType::Put,
+            CmdType::Delete => FileType::Delete,
+            _ => {
+                warn!("error cmdtype"; "cmdtype" => ?self.cmd_type);
+                panic!("error CmdType");
+            }
+        };
+        file_type
+    }
+
     /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
         if self.is_meta {
@@ -366,17 +382,26 @@ impl TempFileKey {
         }
     }
 
+    fn path_to_log_file(&self, min_ts: u64) -> String {
+        format!(
+            // "/v1/t{:012}/{:012}-{}.log",
+            "v1_t{:012}_{:012}-{}.log",
+            self.table_id,
+            min_ts,
+            uuid::Uuid::new_v4()
+        )
+    }
+
+    fn path_to_schema_file(min_ts: u64) -> String {
+        // format!("/v1/m/{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
+        format!("v1_m{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
+    }
+
     fn file_name(&self, min_ts: TimeStamp) -> String {
         if self.is_meta {
-            format!(
-                "m{:08}_{}_{:?}_{:?}.log",
-                self.region_id, min_ts, self.cf, self.cmd_type
-            )
+            Self::path_to_schema_file(min_ts.into_inner())
         } else {
-            format!(
-                "t{:08}_{:08}_{}_{:?}_{:?}.log",
-                self.table_id, self.region_id, min_ts, self.cf, self.cmd_type
-            )
+            self.path_to_log_file(min_ts.into_inner())
         }
     }
 }
@@ -462,26 +487,12 @@ impl StreamTaskInfo {
         Ok(())
     }
 
-    fn path_to_log_file(table_id: i64, min_ts: u64) -> String {
-        format!(
-            "/v1/t{:012}/{:012}-{}.log",
-            table_id,
-            min_ts,
-            uuid::Uuid::new_v4()
-        )
-    }
-
-    fn path_to_schema_file(min_ts: u64) -> String {
-        format!("/v1/m/{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
-    }
-
     pub fn total_size(&self) -> u64 {
         self.total_size.load(Ordering::SeqCst) as _
     }
 
-    #[warn(dead_code)]
     /// Flush all files and generate corresponding metadata.
-    pub async fn generate_metadata(&self) -> Result<MetadataOfFlush> {
+    pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let w = self.flushing_files.read().await;
         // Let's flush all files first...
         futures::future::join_all(
@@ -493,31 +504,14 @@ impl StreamTaskInfo {
         .map(|r| r.map_err(Error::from))
         .fold(Ok(()), Result::and)?;
 
-        let mut result = MetadataOfFlush::with_capacity(w.len());
-        for (
-            TempFileKey {
-                table_id,
-                cf,
-                region_id,
-                is_meta,
-                ..
-            },
-            data_file,
-        ) in w.iter()
-        {
+        let mut metadata = MetadataInfo::with_capacity(w.len());
+        metadata.set_store_id(store_id);
+        for (file_key, data_file) in w.iter() {
             let mut data_file = data_file.lock().await;
-            let mut file_meta = data_file.generate_metadata()?;
-            let path = if *is_meta {
-                Self::path_to_schema_file(file_meta.meta.min_ts)
-            } else {
-                Self::path_to_log_file(*table_id, file_meta.meta.min_ts)
-            };
-            file_meta.meta.set_path(path);
-            file_meta.meta.set_cf(cf.clone());
-            file_meta.meta.set_region_id(*region_id as _);
-            result.push(file_meta)
+            let file_meta = data_file.generate_metadata(file_key)?;
+            metadata.push(file_meta)
         }
-        Ok(result)
+        Ok(metadata)
     }
 
     pub fn set_flushing_status_cas(&self, expect: bool, new: bool) -> result::Result<bool, bool> {
@@ -533,34 +527,37 @@ impl StreamTaskInfo {
         self.flushing.load(Ordering::SeqCst)
     }
 
-    pub async fn do_flush(&self) -> io::Result<()> {
+    pub async fn do_flush(&self, store_id: u64) -> Result<()> {
+        // do nothing if not flushing status.
+        if !self.is_flushing() {
+            return Ok(());
+        }
+
         // move need-flushing files to flushing_files.
-        if self.is_flushing() {
-            let mut w = self.files.write().await;
-            for (k, v) in w.drain() {
-                self.flushing_files.write().await.insert(k, v);
-            }
+        let mut w = self.files.write().await;
+        for (k, v) in w.drain() {
+            self.flushing_files.write().await.insert(k, v);
         }
 
         // generage meta data and prepare to flush to storage
-        let _ = self.generate_metadata();
+        let metadata_info = self.generate_metadata(store_id).await?;
 
         // if failed to write storage, we should retry write flushing_files.
-        for (k, v) in self.flushing_files.write().await.drain() {
+        for (_, v) in self.flushing_files.write().await.drain() {
             let data_file = v.lock().await;
             let limiter = Limiter::builder(std::f64::INFINITY).build();
             let reader = std::fs::File::open(data_file.local_path.clone()).unwrap();
             let (reader, _) = Sha256Reader::new(reader).unwrap();
             let reader = UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader))));
-            let filename = k.file_name(data_file.min_ts);
+            let filepath = &data_file.storage_path;
 
-            let ret = self.storage.write(&filename, reader, 1024).await;
+            let ret = self.storage.write(filepath, reader, 1024).await;
             match ret {
                 Ok(_) => {
                     debug!(
                         "backup stream flush success";
                         "tmp file" => ?data_file.local_path,
-                        "storage file" => ?filename,
+                        "storage file" => ?filepath,
                     );
                     self.total_size
                         .fetch_sub(data_file.file_size, Ordering::SeqCst);
@@ -572,6 +569,19 @@ impl StreamTaskInfo {
                 ),
             }
         }
+
+        let meta_path = metadata_info.path_to_meta();
+        let meta_buff = metadata_info.marshar_to()?;
+        let buflen = meta_buff.len();
+
+        self.storage
+            .write(
+                &meta_path,
+                UnpinReader(Box::new(Cursor::new(meta_buff))),
+                buflen as _,
+            )
+            .await?;
+
         Ok(())
     }
 }
@@ -588,32 +598,53 @@ struct DataFile {
     number_of_entries: usize,
     file_size: usize,
     local_path: PathBuf,
+    storage_path: String,
 }
 
 #[derive(Debug)]
-pub struct DataFileWithMeta {
-    pub meta: DataFileInfo,
-    pub local_path: PathBuf,
-}
-
-#[derive(Debug)]
-pub struct MetadataOfFlush {
-    pub files: Vec<DataFileWithMeta>,
+pub struct MetadataInfo {
+    pub files: Vec<DataFileInfo>,
     pub min_resolved_ts: u64,
+    pub store_id: u64,
 }
 
-impl MetadataOfFlush {
+impl MetadataInfo {
     fn with_capacity(cap: usize) -> Self {
         Self {
             files: Vec::with_capacity(cap),
             min_resolved_ts: u64::MAX,
+            store_id: 0,
         }
     }
 
-    fn push(&mut self, file: DataFileWithMeta) {
-        let rts = file.meta.resolved_ts;
+    fn set_store_id(&mut self, store_id: u64) {
+        self.store_id = store_id;
+    }
+
+    fn push(&mut self, file: DataFileInfo) {
+        let rts = file.resolved_ts;
         self.min_resolved_ts = self.min_resolved_ts.min(rts);
         self.files.push(file);
+    }
+
+    fn marshar_to(self) -> Result<Vec<u8>> {
+        let mut metadata = Metadata::new();
+        metadata.set_file(RepeatedField::<DataFileInfo>::from_vec(self.files));
+        metadata.set_store_id(self.store_id as _);
+        metadata.set_resloved_ts(self.min_resolved_ts as _);
+
+        metadata
+            .write_to_bytes()
+            .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))
+    }
+
+    fn path_to_meta(&self) -> String {
+        format!(
+            // "/v1/backupmeta/{:012}-{}.meta",
+            "v1_backupmeta_{:012}-{}.meta",
+            self.min_resolved_ts,
+            uuid::Uuid::new_v4()
+        )
     }
 }
 
@@ -634,6 +665,7 @@ impl DataFile {
             start_key: vec![],
             end_key: vec![],
             local_path: local_path.as_ref().to_owned(),
+            storage_path: String::default(),
         })
     }
 
@@ -681,8 +713,15 @@ impl DataFile {
         }
     }
 
+    /// generage path for log file before flushing to Storage
+    fn generage_storage_path(&mut self, path: String) {
+        self.storage_path = path;
+    }
+
     /// generate the metadata in protocol buffer of the file.
-    fn generate_metadata(&mut self) -> Result<DataFileWithMeta> {
+    fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
+        self.generage_storage_path(file_key.file_name(self.min_ts));
+
         let mut meta = DataFileInfo::new();
         meta.set_sha_256(
             self.sha256
@@ -692,17 +731,19 @@ impl DataFile {
                     Error::Other(box_err!("openssl hasher failed to finish: {}", err))
                 })?,
         );
+        meta.set_path(self.storage_path.clone());
         meta.set_number_of_entries(self.number_of_entries as _);
         meta.set_max_ts(self.max_ts.into_inner() as _);
         meta.set_min_ts(self.min_ts.into_inner() as _);
         meta.set_resolved_ts(self.resolved_ts.into_inner() as _);
         meta.set_start_key(std::mem::take(&mut self.start_key));
         meta.set_end_key(std::mem::take(&mut self.end_key));
-        let file_with_meta = DataFileWithMeta {
-            meta,
-            local_path: self.local_path.clone(),
-        };
-        Ok(file_with_meta)
+
+        meta.set_cf(file_key.cf.clone());
+        meta.set_region_id(file_key.region_id as i64);
+        meta.set_type(file_key.get_file_type());
+
+        Ok(meta)
     }
 }
 
@@ -868,7 +909,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let end_ts = TimeStamp::physical_now();
-        let files = router.take_temporary_files("dummy").await?;
+        let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         let meta = files.generate_metadata().await?;
         assert_eq!(meta.files.len(), 3);
         assert!(
