@@ -5,7 +5,7 @@ use prometheus::*;
 
 lazy_static! {
     pub static ref RTS_CHANNEL_PENDING_CMD_BYTES: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_channel_penging_cmd_bytes_total",
+        "tikv_resolved_ts_channel_pending_cmd_bytes_total",
         "Total bytes of pending commands in the channel"
     )
     .unwrap();
@@ -68,6 +68,34 @@ lazy_static! {
         "tikv_resolved_ts_region_resolve_status",
         "The status of resolved-ts observe regions",
         &["type"]
+    )
+    .unwrap();
+    pub static ref RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_resolved_ts_check_leader_duration_seconds",
+        "Bucketed histogram of resolved-ts check leader duration",
+        &["type"],
+        exponential_buckets(0.005, 2.0, 20).unwrap(),
+    )
+    .unwrap();
+    pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_resolved_ts_tikv_client_init_duration_seconds",
+        "Bucketed histogram of resolved-ts tikv client initializing duration",
+        exponential_buckets(0.005, 2.0, 20).unwrap(),
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts_region",
+        "The region which its leader peer has minimal resolved ts"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts",
+        "The minimal (non-zero) resolved ts for observe leader peers"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
+        "The minimal (non-zero) resolved ts gap for observe leader peers"
     )
     .unwrap();
 }
