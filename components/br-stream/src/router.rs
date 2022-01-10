@@ -23,7 +23,6 @@ use engine_traits::{CF_DEFAULT, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 
-use file_system::Sha256Reader;
 use futures::io::{AllowStdIo, Cursor};
 use kvproto::{
     brpb::{DataFileInfo, FileType, Metadata},
@@ -529,7 +528,7 @@ impl StreamTaskInfo {
     }
 
     /// move need-flushing files to flushing_files.
-    pub async fn move_files_to_flushing_fils(&self) -> &Self {
+    pub async fn move_to_flushing_files(&self) -> &Self {
         let mut w = self.files.write().await;
         for (k, v) in w.drain() {
             self.flushing_files.write().await.insert(k, v);
@@ -541,9 +540,9 @@ impl StreamTaskInfo {
         // if failed to write storage, we should retry write flushing_files.
         for (_, v) in self.flushing_files.write().await.drain() {
             let data_file = v.lock().await;
+            // to do: limiter to storage
             let limiter = Limiter::builder(std::f64::INFINITY).build();
             let reader = std::fs::File::open(data_file.local_path.clone()).unwrap();
-            let (reader, _) = Sha256Reader::new(reader).unwrap();
             let reader = UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader))));
             let filepath = &data_file.storage_path;
 
@@ -592,7 +591,7 @@ impl StreamTaskInfo {
 
         // generage meta data and prepare to flush to storage
         let metadata_info = self
-            .move_files_to_flushing_fils()
+            .move_to_flushing_files()
             .await
             .generate_metadata(store_id)
             .await?;
