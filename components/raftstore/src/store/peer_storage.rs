@@ -1579,6 +1579,8 @@ where
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
     box_try!(engines.raft.clean(region_id, raft_state, raft_wb));
 
+    // sleep when triggerred.
+    fail_point!("seek_first_log_index_duration");
     info!(
         "finish clear peer meta";
         "region_id" => region_id,
