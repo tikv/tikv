@@ -148,7 +148,7 @@ impl Recorder {
             if let Ok(ids) = thread::thread_ids::<HashSet<_>>(thread::process_id()) {
                 self.thread_stores.retain(|k, v| {
                     let retain = ids.contains(&(*k as i32));
-                    assert!(retain || v.attached_tag.swap(None).is_none());
+                    debug_assert!(retain || v.attached_tag.swap(None).is_none());
                     retain
                 });
             }
