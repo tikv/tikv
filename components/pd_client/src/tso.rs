@@ -163,7 +163,7 @@ struct TsoRequestStream<'a> {
 impl<'a> Stream for TsoRequestStream<'a> {
     type Item = (TsoRequest, WriteFlags);
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let pending_requests = self.pending_requests.clone();
         let mut pending_requests = pending_requests.borrow_mut();
         let mut requests = Vec::new();

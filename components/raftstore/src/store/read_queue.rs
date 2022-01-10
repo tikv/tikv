@@ -84,9 +84,9 @@ where
             cmds: MustConsumeVec::new("noop"),
             propose_time,
             read_index: None,
+            in_contexts: false,
             addition_request: None,
             locked: None,
-            in_contexts: false,
             cmds_heap_size: 0,
         }
     }
@@ -217,6 +217,10 @@ where
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<S>> {
         self.reads.back_mut()
+    }
+
+    pub fn back(&self) -> Option<&ReadIndexRequest<S>> {
+        self.reads.back()
     }
 
     pub fn last_ready(&self) -> Option<&ReadIndexRequest<S>> {

@@ -24,6 +24,7 @@ make_auto_flush_static_metric! {
         transfer_leader,
         conf_change,
         batch,
+        dropped_read_index,
     }
 
     pub label_enum AdminCmdType {
@@ -36,6 +37,7 @@ make_auto_flush_static_metric! {
         commit_merge,
         rollback_merge,
         compact,
+        transfer_leader
     }
 
     pub label_enum AdminCmdStatus {

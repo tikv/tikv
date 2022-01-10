@@ -28,8 +28,13 @@ fn assert_same_file_name(s1: String, s2: String) {
     }
 }
 
-fn assert_same_files(files1: Vec<kvproto::brpb::File>, files2: Vec<kvproto::brpb::File>) {
+fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvproto::brpb::File>) {
     assert_eq!(files1.len(), files2.len());
+    // Sort here by start key in case of unordered response (by pipelined write + scan)
+    // `sort_by_key` couldn't be used here -- rustc would complain that `file.start_key.as_slice()`
+    //       may not live long enough. (Is that a bug of rustc?)
+    files1.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
+    files2.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
 
     // After https://github.com/tikv/tikv/pull/8707 merged.
     // the backup file name will based on local timestamp.
@@ -168,10 +173,24 @@ fn test_backup_huge_range_and_import() {
     );
     let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
-    assert_eq!(resps1.len(), 1);
-    let files1 = resps1[0].files.clone();
+    // ... But the response may be split into two parts (when meeting huge region).
+    assert_eq!(resps1.len(), 2, "{:?}", resps1);
+    let mut files1 = resps1
+        .iter()
+        .flat_map(|x| x.files.iter())
+        .cloned()
+        .collect::<Vec<_>>();
     // Short value is piggybacked in write cf, so we get 1 sst at least.
     assert!(!resps1[0].get_files().is_empty());
+
+    // Sort the files for avoiding race conditions. (would this happen?)
+    if files1[0].start_key > files1[1].start_key {
+        files1.swap(0, 1);
+    }
+    assert_eq!(resps1[0].start_key, b"".to_vec());
+    assert_eq!(resps1[0].end_key, resps1[1].start_key);
+    assert_eq!(resps1[1].end_key, b"".to_vec());
+
     assert_eq!(files1.len(), 2);
     assert_ne!(files1[0].start_key, files1[0].end_key);
     assert_ne!(files1[1].start_key, files1[1].end_key);
@@ -233,7 +252,14 @@ fn test_backup_huge_range_and_import() {
         &make_unique_dir(tmp.path()),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
-    assert_same_files(files1.into_vec(), resps3[0].files.clone().into_vec());
+    assert_same_files(
+        files1,
+        resps3
+            .iter()
+            .flat_map(|x| x.files.iter())
+            .cloned()
+            .collect(),
+    );
 
     suite.stop();
 }
@@ -458,7 +484,7 @@ fn test_invalid_external_storage() {
         vec![],   // end
         0.into(), // begin_ts
         backup_ts,
-        &storage_path,
+        storage_path,
     );
 
     // Wait util the backup request is handled.

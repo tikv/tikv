@@ -229,7 +229,10 @@ fn new_write_cursor_on_key<S: EngineSnapshot>(snapshot: &S, key: &Key) -> Cursor
     CursorBuilder::new(snapshot, CF_WRITE)
         .fill_cache(false)
         .scan_mode(ScanMode::Mixed)
+        // Set the range explicitly to avoid region boundaries are used incorrectly.
         .range(Some(key.clone()), upper)
+        // Use bloom filter to speed up seeking on a given prefix.
+        .prefix_seek(true)
         .hint_max_ts(Some(ts))
         .build()
         .unwrap()
@@ -260,10 +263,12 @@ fn get_value_default<S: EngineSnapshot>(
 mod tests {
     use super::*;
     use engine_rocks::RocksEngine;
-    use engine_traits::KvEngine;
+    use engine_traits::{KvEngine, MiscExt};
     use std::sync::Arc;
+    use tikv::config::DbConfig;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv::storage::txn::tests::*;
+    use tikv_kv::PerfStatisticsInstant;
 
     fn must_get_eq(
         kv_engine: &RocksEngine,
@@ -543,5 +548,40 @@ mod tests {
                 assert_eq!(stats.data.get, 70);
             }
         }
+    }
+
+    #[test]
+    fn test_get_old_value_with_prefix_seek() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.pin_l0_filter_and_index_blocks = false;
+        let engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
+        let kv_engine = engine.get_rocksdb();
+
+        // Key must start with `z` to pass `TsFilter`'s check.
+        for i in 0..4 {
+            let key = format!("zkey-{:0>3}", i).into_bytes();
+            must_prewrite_put(&engine, &key, b"value", &key, 100);
+            must_commit(&engine, &key, 100, 101);
+            kv_engine.flush_cf(CF_WRITE, true).unwrap();
+        }
+
+        let key = format!("zkey-{:0>3}", 0).into_bytes();
+        let snapshot = Arc::new(kv_engine.snapshot());
+        let perf_instant = PerfStatisticsInstant::new();
+        let value = get_old_value(
+            &snapshot,
+            Key::from_raw(&key).append_ts(100.into()),
+            102.into(),
+            &mut OldValueCache::new(ReadableSize(0)),
+            &mut Statistics::default(),
+        )
+        .unwrap();
+        assert_eq!(value.unwrap(), b"value");
+
+        // block read count should be 1 instead of 4 because some of them
+        // are filtered by `prefix_seek`.
+        let perf_delta = perf_instant.delta();
+        assert_eq!(perf_delta.0.block_read_count, 1);
     }
 }

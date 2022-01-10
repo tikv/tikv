@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use bitflags::bitflags;
+use bytes::Bytes;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
 use engine_traits::{
@@ -17,8 +18,7 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
-use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -178,10 +178,6 @@ impl<S: Snapshot> ProposalQueue<S> {
         self.queue.push_back(p);
     }
 
-    fn back(&self) -> Option<&Proposal<S>> {
-        self.queue.back()
-    }
-
     fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
@@ -191,6 +187,10 @@ impl<S: Snapshot> ProposalQueue<S> {
         {
             self.queue.shrink_to_fit();
         }
+    }
+
+    fn back(&self) -> Option<&Proposal<S>> {
+        self.queue.back()
     }
 }
 
@@ -1629,6 +1629,8 @@ where
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(&ctx.pd_scheduler);
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -1643,6 +1645,7 @@ where
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }
@@ -2644,9 +2647,7 @@ where
         }
 
         if let Some(propose_time) = propose_time {
-            // `propose_time` is a placeholder, here cares about `Suspect` only,
-            // and if it is in `Suspect` phase, the actual timestamp is useless.
-            if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
+            if self.leader_lease.is_suspect() {
                 return;
             }
             self.maybe_renew_leader_lease(propose_time, ctx, None);
@@ -3169,7 +3170,7 @@ where
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().commit_index())))
     }
 
-    fn pre_read_index(&self) -> Result<()> {
+    pub fn pre_read_index(&self) -> Result<()> {
         fail_point!(
             "before_propose_readindex",
             |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
@@ -3226,6 +3227,10 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
+    }
+
+    pub fn push_pending_read(&mut self, read: ReadIndexRequest<EK::Snapshot>, is_leader: bool) {
+        self.pending_reads.push_back(read, is_leader);
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.
@@ -3330,29 +3335,24 @@ where
         }
 
         poll_ctx.raft_metrics.propose.read_index += 1;
-
         self.bcast_wake_up_time = None;
 
-        let id = Uuid::new_v4();
         let request = req
             .mut_requests()
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let dropped = self.propose_read_index(ReadIndexContext::fields_to_bytes(
-            id,
-            request.as_ref(),
-            None,
-        ));
+        let (id, dropped) = self.propose_read_index(request.as_ref(), None);
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
+            poll_ctx.raft_metrics.propose.dropped_read_index += 1;
             return false;
         }
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
-        self.pending_reads.push_back(read, self.is_leader());
+        self.push_pending_read(read, self.is_leader());
         self.should_wake_up = true;
 
         debug!(
@@ -3365,7 +3365,7 @@ where
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.inspect(Some(now)) == LeaseState::Suspect {
+        if self.leader_lease.is_suspect() {
             let req = RaftCmdRequest::default();
             if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
@@ -3383,87 +3383,27 @@ where
         true
     }
 
-    pub fn try_renew_leader_lease<T>(
+    // Propose a read index request to the raft group, return the request id and
+    // whether this request had dropped silently
+    pub fn propose_read_index(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T>,
-        ts: Timespec,
-    ) {
-        if !self.is_leader() {
-            return;
-        }
-        if let Err(e) = self.pre_read_index() {
-            debug!(
-                "prevents unsafe read index";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-            poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
-            return;
-        }
-
-        let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-        let future_ts = match self.leader_lease.need_renew(ts) {
-            Some(ts) => ts,
-            // Lease already updated
-            None => return,
-        };
-        // There are pending reads will renew lease
-        if self
-            .pending_reads
-            .back_mut()
-            .map(|r| r.propose_time + max_lease > future_ts)
-            .unwrap_or(false)
-        {
-            debug!(
-                "there are pending reads, skip renew leader lease in advance";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return;
-        }
-        // There are pending writes will renew lease
-        if self
-            .proposals
-            .back()
-            .map(|w| w.propose_time.map(|l| l + max_lease > future_ts))
-            .flatten()
-            .unwrap_or(false)
-        {
-            debug!(
-                "there are pending writes, skip renew leader lease in advance";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return;
-        }
-
-        poll_ctx.raft_metrics.propose.read_index += 1;
-
-        let id = Uuid::new_v4();
-        let dropped = self.propose_read_index(ReadIndexContext::fields_to_bytes(id, None, None));
-        if !dropped {
-            debug!(
-                "try renew leader lease in advance";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            let read_proposal = ReadIndexRequest::noop(id, monotonic_raw_now());
-            self.pending_reads.push_back(read_proposal, true);
-        }
-    }
-
-    // Propose a read index request, return whether the request was dropped silently
-    pub fn propose_read_index(&mut self, rctx: Vec<u8>) -> bool {
+        request: Option<&raft_cmdpb::ReadIndexRequest>,
+        locked: Option<&LockInfo>,
+    ) -> (Uuid, bool) {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
-        self.raft_group.read_index(rctx);
+        let id = Uuid::new_v4();
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
-
-        pending_read_count == last_pending_read_count && ready_read_count == last_ready_read_count
+        (
+            id,
+            pending_read_count == last_pending_read_count
+                && ready_read_count == last_ready_read_count,
+        )
     }
 
     /// Returns (minimal matched, minimal committed_index)
@@ -3721,12 +3661,13 @@ where
     pub fn execute_transfer_leader<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        msg: &eraftpb::Message,
+        from: u64,
         peer_disk_usage: DiskUsage,
+        reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
-            || msg.get_from() != self.leader_id()
+            || from != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
             // because it may be a read leader balance request.
@@ -3737,7 +3678,7 @@ where
                 "reject transferring leader";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
-                "from" => msg.get_from(),
+                "from" => from,
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
             );
@@ -3750,6 +3691,9 @@ where
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
+        if reply_cmd {
+            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
+        }
         self.raft_group.raft.msgs.push(msg);
     }
 
@@ -3780,7 +3724,11 @@ where
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let peer = transfer_leader.get_peer();
 
-        let transferred = self.pre_transfer_leader(peer);
+        let transferred = if peer.id == self.peer.id {
+            false
+        } else {
+            self.pre_transfer_leader(peer)
+        };
 
         // transfer leader command doesn't need to replicate log and apply, so we
         // return immediately. Note that this command may fail, we can view it just as an advice
@@ -3986,7 +3934,7 @@ where
         let peers_len = self.get_store().region().get_peers().len();
         let mut normal_peers = HashSet::default();
         let mut next_idxs = Vec::with_capacity(peers_len);
-        let mut min_peer_index = std::u64::MAX;
+        let mut min_peer_index = u64::MAX;
         for peer in self.get_store().region().get_peers() {
             let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
             let usage = ctx.store_disk_usages.get(&store_id);
@@ -4473,6 +4421,48 @@ where
             );
         }
     }
+
+    fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = true;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.map = Default::default();
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
+    pub fn need_renew_lease_at<T>(
+        &self,
+        ctx: &PollContext<EK, ER, T>,
+        renew_bound: Timespec,
+    ) -> bool {
+        if !matches!(
+            self.leader_lease.inspect(Some(renew_bound)),
+            LeaseState::Expired
+        ) {
+            return false;
+        }
+        let max_lease = ctx.cfg.raft_store_max_leader_lease();
+        let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
+            // If there is any read index whose lease can cover till next heartbeat
+            // then we don't need to propose a new one
+            read.propose_time + max_lease > renew_bound
+        });
+        let has_overlapped_writes = self.proposals.back().map_or(false, |proposal| {
+            // If there is any write whose lease can cover till next heartbeat
+            // then we don't need to propose a new one
+            proposal
+                .propose_time
+                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+        });
+        !has_overlapped_reads && !has_overlapped_writes
+    }
 }
 
 /// `RequestPolicy` decides how we handle a request.
@@ -4502,7 +4492,10 @@ pub trait RequestInspector {
             if apply::is_conf_change_cmd(req) {
                 return Ok(RequestPolicy::ProposeConfChange);
             }
-            if get_transfer_leader_cmd(req).is_some() {
+            if get_transfer_leader_cmd(req).is_some()
+                && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                    .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
+            {
                 return Ok(RequestPolicy::ProposeTransferLeader);
             }
             return Ok(RequestPolicy::ProposeNormal);
@@ -4665,13 +4658,16 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     resp
 }
 
+// The Raft message context for a MsgTransferLeader if it is a reply of a TransferLeader command.
+pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
+
 /// A poor version of `Peer` to avoid port generic variables everywhere.
 pub trait AbstractPeer {
     fn meta_peer(&self) -> &metapb::Peer;
     fn group_state(&self) -> GroupState;
     fn region(&self) -> &metapb::Region;
     fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status;
+    fn raft_status(&self) -> raft::Status<'_>;
     fn raft_commit_index(&self) -> u64;
     fn pending_merge_state(&self) -> Option<&MergeState>;
 }

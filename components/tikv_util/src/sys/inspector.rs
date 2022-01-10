@@ -8,12 +8,12 @@ pub struct IoStat {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DiskStat {
-    pub reads: usize,
-    pub time_reading: usize,
-    pub writes: usize,
-    pub time_writing: usize,
-    pub sectors_read: usize,
-    pub sectors_write: usize,
+    pub reads: u64,
+    pub time_reading: u64,
+    pub writes: u64,
+    pub time_writing: u64,
+    pub sectors_read: u64,
+    pub sectors_write: u64,
 }
 
 /// An inspector for a thread.
@@ -46,6 +46,7 @@ mod linux {
     use procfs::process::Process;
 
     use super::{DiskStat, IoStat, ThreadInspector};
+    use crate::sys::thread;
 
     pub struct Impl(Process);
 
@@ -100,8 +101,8 @@ mod linux {
     }
 
     pub fn self_thread_inspector() -> Result<Impl, String> {
-        let pid = std::process::id();
-        let tid = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+        let pid = thread::process_id();
+        let tid = thread::thread_id();
         let root = format!("/proc/{}/task/{}", pid, tid);
         let process = Process::new_with_root(root.into())
             .map_err(|e| format!("procfs::Process::new: {}", e))?;

@@ -258,7 +258,7 @@ impl ReadDelegate {
     }
 
     // If the remote lease will be expired in near future send message
-    // to `raftstroe` renew it
+    // to `raftstore` renew it
     fn maybe_renew_lease_advance<EK: KvEngine>(
         &self,
         router: &dyn CasualRouter<EK>,
@@ -275,7 +275,7 @@ impl ReadDelegate {
         }
         // TODO: add metric
         let region_id = self.region.get_id();
-        if let Err(e) = router.send(region_id, CasualMessage::RenewLease(ts)) {
+        if let Err(e) = router.send(region_id, CasualMessage::RenewLease) {
             debug!(
                 "failed to send renew lease message";
                 "region" => region_id,
