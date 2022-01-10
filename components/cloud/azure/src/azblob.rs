@@ -300,12 +300,12 @@ impl AzureUploader {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    let err_info = format!("{}", &err);
+                    let err_info = ToString::to_string(&err);
                     if err_info.contains("busy") {
                         // server is busy, retry later
                         Err(RequestError::TimeOut(format!(
                             "the resource is busy: {}, retry later",
-                            &err
+                            err_info
                         )))
                     } else {
                         Err(RequestError::InvalidInput(
