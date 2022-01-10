@@ -187,7 +187,13 @@ mod imp {
     use std::iter::FromIterator;
 
     pub type Pid = u32;
-    pub type FullStat = super::ThreadStat;
+
+    #[derive(Default)]
+    pub struct FullStat {
+        pub stime: i64,
+        pub utime: i64,
+        pub command: String,
+    }
 
     lazy_static::lazy_static! {
         static ref PROCESS_ID: Pid = std::process::id();
@@ -207,11 +213,11 @@ mod imp {
     /// Gets the ID of the current thread.
     #[inline]
     pub fn thread_id() -> Pid {
-        std::thread::current().id().as_u64() as Pid
+        u64::from(std::thread::current().id().as_u64()) as Pid
     }
 
-    pub fn thread_ids<C: FromIterator<Pid>>(pid: Pid) -> io::Result<C> {
-        Ok(Some(thread_id()))
+    pub fn thread_ids<C: FromIterator<Pid>>(_pid: Pid) -> io::Result<C> {
+        Ok(std::iter::once(thread_id()).collect())
     }
 
     pub fn full_thread_stat(_pid: Pid, _tid: Pid) -> io::Result<FullStat> {

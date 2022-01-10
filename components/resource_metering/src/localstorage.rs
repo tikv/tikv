@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{utils, SharedTagPtr};
+use crate::SharedTagPtr;
 
 use std::cell::Cell;
 use std::sync::Mutex;
 
 use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
+use tikv_util::sys::thread::{self, Pid};
 
 lazy_static! {
     /// `STORAGE_CHANS` is used to transfer the necessary thread registration events.
@@ -25,7 +26,7 @@ thread_local! {
             is_set: Cell::new(false),
             shared_ptr: SharedTagPtr::default(),
         };
-        let lsr = LocalStorageRef{id: utils::thread_id(), storage: storage.clone()};
+        let lsr = LocalStorageRef{id: thread::thread_id(), storage: storage.clone()};
         STORAGE_CHANS.lock().unwrap().iter().for_each(|sender| {
             sender.send(lsr.clone()).ok();
         });
@@ -48,7 +49,7 @@ pub struct LocalStorage {
 /// See [STORAGE] for more information.
 #[derive(Clone)]
 pub struct LocalStorageRef {
-    pub id: usize,
+    pub id: Pid,
     pub storage: LocalStorage,
 }
 
