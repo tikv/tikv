@@ -54,16 +54,11 @@ zeroize = { version = "1.1", features = ["alloc"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
-<<<<<<< HEAD
-procfs = "0.7"
+procfs = { version = "0.12", default-features = false }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
 branch = "tikv-4.0"
-=======
-page_size = "0.4"
-procfs = { version = "0.12", default-features = false }
->>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
 
 [dev-dependencies]
 futures-cpupool = "0.1"
