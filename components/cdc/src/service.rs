@@ -184,7 +184,7 @@ impl Service {
 impl ChangeData for Service {
     fn event_feed(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {

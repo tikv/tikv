@@ -44,6 +44,7 @@ command! {
             return_values: bool,
             min_commit_ts: TimeStamp,
             old_values: OldValues,
+            check_existence: bool,
         }
 }
 
@@ -81,13 +82,17 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache()),
+            SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
             &mut context.statistics,
         );
 
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
+        } else if self.check_existence {
+            // If return_value is set, the existence status is implicitly included in the result.
+            // So check_existence only need to be explicitly handled if `return_values` is not set.
+            Ok(PessimisticLockRes::Existence(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)
         };
@@ -102,14 +107,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.lock_ttl,
                 self.for_update_ts,
                 self.return_values,
+                self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
             ) {
                 Ok((val, old_value)) => {
-                    if self.return_values {
+                    if self.return_values || self.check_existence {
                         res.as_mut().unwrap().push(val);
                     }
-                    if old_value.valid() {
+                    if old_value.resolved() {
                         let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;
@@ -125,10 +131,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         }
 
         // Some values are read, update max_ts
-        if let Ok(PessimisticLockRes::Values(values)) = &res {
-            if !values.is_empty() {
+        match &res {
+            Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
                 txn.concurrency_manager.update_max_ts(self.for_update_ts);
             }
+            Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
+                txn.concurrency_manager.update_max_ts(self.for_update_ts);
+            }
+            _ => (),
         }
 
         // no conflict

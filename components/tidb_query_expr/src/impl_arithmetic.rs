@@ -524,9 +524,9 @@ mod tests {
             (Some(1), false, None, false, None),
             (Some(17), false, Some(25), false, Some(42)),
             (
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
-                Some((std::i64::MAX as u64 + 1) as i64),
+                Some((i64::MAX as u64 + 1) as i64),
                 true,
                 Some(0),
             ),
@@ -568,9 +568,9 @@ mod tests {
             ),
             (Real::new(1e308).ok(), Real::new(1e308).ok(), None, true),
             (
-                Real::new(std::f64::MAX - 1f64).ok(),
+                Real::new(f64::MAX - 1f64).ok(),
                 Real::new(2f64).ok(),
-                Real::new(std::f64::MAX).ok(),
+                Real::new(f64::MAX).ok(),
                 false,
             ),
         ];
@@ -611,27 +611,13 @@ mod tests {
             (
                 Some(0),
                 true,
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
-                Some((std::i64::MAX as u64 + 1) as i64),
+                Some((i64::MAX as u64 + 1) as i64),
                 false,
             ),
-            (
-                Some(std::i64::MIN),
-                false,
-                Some(std::i64::MAX),
-                false,
-                None,
-                true,
-            ),
-            (
-                Some(std::i64::MAX),
-                false,
-                Some(std::i64::MIN),
-                false,
-                None,
-                true,
-            ),
+            (Some(i64::MIN), false, Some(i64::MAX), false, None, true),
+            (Some(i64::MAX), false, Some(i64::MIN), false, None, true),
             (Some(-1), false, Some(2), true, None, true),
             (Some(1), true, Some(2), false, None, true),
         ];
@@ -675,8 +661,8 @@ mod tests {
                 false,
             ),
             (
-                Real::new(std::f64::MIN).ok(),
-                Real::new(std::f64::MAX).ok(),
+                Real::new(f64::MIN).ok(),
+                Real::new(f64::MAX).ok(),
                 None,
                 true,
             ),
@@ -729,12 +715,8 @@ mod tests {
             (None, Some(-11), None),
             (Some(11), Some(0), None),
             (Some(-11), Some(0), None),
-            (
-                Some(std::i64::MAX),
-                Some(std::i64::MIN),
-                Some(std::i64::MAX),
-            ),
-            (Some(std::i64::MIN), Some(std::i64::MAX), Some(-1)),
+            (Some(i64::MAX), Some(i64::MIN), Some(i64::MAX)),
+            (Some(i64::MIN), Some(i64::MAX), Some(-1)),
         ];
 
         for (lhs, rhs, expected) in tests {
@@ -751,18 +733,18 @@ mod tests {
     fn test_mod_int_unsigned() {
         let tests = vec![
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
-                Some(std::i64::MAX),
+                Some(i64::MAX),
             ),
             (
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some(std::i64::MIN),
+                Some(i64::MIN),
             ),
         ];
 
@@ -894,16 +876,10 @@ mod tests {
             (-11, false, 0, false, None),
             (-3, false, 5, true, Some(0)),
             (3, false, -5, false, Some(0)),
-            (std::i64::MIN + 1, false, -1, false, Some(std::i64::MAX)),
-            (std::i64::MIN, false, 1, false, Some(std::i64::MIN)),
-            (std::i64::MAX, false, 1, false, Some(std::i64::MAX)),
-            (
-                std::u64::MAX as i64,
-                true,
-                1,
-                false,
-                Some(std::u64::MAX as i64),
-            ),
+            (i64::MIN + 1, false, -1, false, Some(i64::MAX)),
+            (i64::MIN, false, 1, false, Some(i64::MIN)),
+            (i64::MAX, false, 1, false, Some(i64::MAX)),
+            (u64::MAX as i64, true, 1, false, Some(u64::MAX as i64)),
         ];
 
         for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected) in test_cases {
@@ -937,7 +913,7 @@ mod tests {
     #[test]
     fn test_int_divide_int_overflow() {
         let test_cases = vec![
-            (std::i64::MIN, false, -1, false),
+            (i64::MIN, false, -1, false),
             (-1, false, 1, true),
             (-2, false, 1, true),
             (1, true, -1, false),
@@ -997,9 +973,9 @@ mod tests {
     #[test]
     fn test_int_divide_decimal_overflow() {
         let test_cases = vec![
-            (Decimal::from(std::i64::MIN), Decimal::from(-1)),
+            (Decimal::from(i64::MIN), Decimal::from(-1)),
             (
-                Decimal::from(std::i64::MAX),
+                Decimal::from(i64::MAX),
                 Decimal::from_bytes(b"0.1").unwrap().unwrap(),
             ),
         ];
@@ -1029,10 +1005,7 @@ mod tests {
             );
         }
 
-        let should_fail = vec![
-            (std::f64::MAX, std::f64::MAX),
-            (std::f64::MAX, std::f64::MIN),
-        ];
+        let should_fail = vec![(f64::MAX, f64::MAX), (f64::MAX, f64::MIN)];
 
         for (lhs, rhs) in should_fail {
             assert!(
@@ -1053,7 +1026,7 @@ mod tests {
         let should_pass = vec![
             (11, 17, Some(187)),
             (-1, -3, Some(3)),
-            (1, std::i64::MIN, Some(std::i64::MIN)),
+            (1, i64::MIN, Some(i64::MIN)),
         ];
         for (lhs, rhs, expected) in should_pass {
             assert_eq!(
@@ -1066,7 +1039,7 @@ mod tests {
             );
         }
 
-        let should_fail = vec![(std::i64::MAX, 2), (std::i64::MIN, -1)];
+        let should_fail = vec![(i64::MAX, 2), (i64::MIN, -1)];
         for (lhs, rhs) in should_fail {
             assert!(
                 RpnFnScalarEvaluator::new()
@@ -1083,7 +1056,7 @@ mod tests {
 
     #[test]
     fn test_int_uint_multiply() {
-        let should_pass = vec![(std::i64::MAX, 1, Some(std::i64::MAX)), (3, 7, Some(21))];
+        let should_pass = vec![(i64::MAX, 1, Some(i64::MAX)), (3, 7, Some(21))];
 
         for (lhs, rhs, expected) in should_pass {
             assert_eq!(
@@ -1101,7 +1074,7 @@ mod tests {
             );
         }
 
-        let should_fail = vec![(-2, 1), (std::i64::MIN, 2)];
+        let should_fail = vec![(-2, 1), (i64::MIN, 2)];
         for (lhs, rhs) in should_fail {
             assert!(
                 RpnFnScalarEvaluator::new()
@@ -1126,7 +1099,7 @@ mod tests {
         let should_pass = vec![
             (7, 11, Some(77)),
             (1, 2, Some(2)),
-            (std::u64::MAX as i64, 1, Some(std::u64::MAX as i64)),
+            (u64::MAX as i64, 1, Some(u64::MAX as i64)),
         ];
 
         for (lhs, rhs, expected) in should_pass {
@@ -1150,7 +1123,7 @@ mod tests {
             );
         }
 
-        let should_fail = vec![(std::u64::MAX as i64, 2)];
+        let should_fail = vec![(u64::MAX as i64, 2)];
         for (lhs, rhs) in should_fail {
             assert!(
                 RpnFnScalarEvaluator::new()
@@ -1218,7 +1191,7 @@ mod tests {
             assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
 
-        let overflow = vec![(std::f64::MAX, 0.0001)];
+        let overflow = vec![(f64::MAX, 0.0001)];
         for (lhs, rhs) in overflow {
             assert!(
                 RpnFnScalarEvaluator::new()

@@ -24,6 +24,7 @@ make_auto_flush_static_metric! {
         transfer_leader,
         conf_change,
         batch,
+        dropped_read_index,
     }
 
     pub label_enum AdminCmdType {
@@ -36,6 +37,7 @@ make_auto_flush_static_metric! {
         commit_merge,
         rollback_merge,
         compact,
+        transfer_leader
     }
 
     pub label_enum AdminCmdStatus {
@@ -627,6 +629,21 @@ lazy_static! {
             "Load base split event.",
             &["type"]
         ).unwrap();
+
+    pub static ref LOAD_BASE_SPLIT_SAMPLE_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_load_base_split_sample",
+        "Histogram of query balance",
+        &["type"],
+        linear_buckets(0.0, 0.05, 20).unwrap()
+    ).unwrap();
+
+    pub static ref QUERY_REGION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_query_region",
+        "Histogram of query",
+        &["type"],
+        exponential_buckets(8.0, 2.0, 24).unwrap()
+    ).unwrap();
+
 
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",

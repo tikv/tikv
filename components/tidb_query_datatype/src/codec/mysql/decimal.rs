@@ -7,7 +7,7 @@ use std::intrinsics::copy_nonoverlapping;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
-use std::{cmp, i32, i64, mem, u32, u64};
+use std::{cmp, mem};
 
 use codec::prelude::*;
 use tikv_util::escape;
@@ -2399,7 +2399,6 @@ mod tests {
     use crate::expr::{EvalConfig, Flag};
     use std::cmp::Ordering;
     use std::collections::hash_map::DefaultHasher;
-    use std::f64::EPSILON;
 
     use std::sync::Arc;
 
@@ -2438,14 +2437,8 @@ mod tests {
     #[test]
     fn test_from_f64() {
         let cs = vec![
-            (
-                std::f64::INFINITY,
-                Err(Error::InvalidDataType(String::new())),
-            ),
-            (
-                -std::f64::INFINITY,
-                Err(Error::InvalidDataType(String::new())),
-            ),
+            (f64::INFINITY, Err(Error::InvalidDataType(String::new()))),
+            (-f64::INFINITY, Err(Error::InvalidDataType(String::new()))),
             (10.123, Ok(Decimal::from_str("10.123").unwrap())),
             (-10.123, Ok(Decimal::from_str("-10.123").unwrap())),
             (10.111, Ok(Decimal::from_str("10.111").unwrap())),
@@ -2582,7 +2575,12 @@ mod tests {
             assert_eq!(res, dec_str);
 
             let f: f64 = dec.convert(&mut ctx).unwrap();
-            assert!((exp - f).abs() < EPSILON, "expect: {}, got: {}", exp, f);
+            assert!(
+                (exp - f).abs() < f64::EPSILON,
+                "expect: {}, got: {}",
+                exp,
+                f
+            );
         }
     }
 
@@ -3690,13 +3688,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         let val: Decimal = big.as_bytes().convert(&mut ctx).unwrap();
         let max = max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
-        assert_eq!(
-            val,
-            max,
-            "expect: {}, got: {}",
-            val.to_string(),
-            max.to_string()
-        );
+        assert_eq!(val, max, "expect: {}, got: {}", val, max);
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
     }

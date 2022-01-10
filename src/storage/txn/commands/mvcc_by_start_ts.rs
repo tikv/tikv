@@ -35,11 +35,7 @@ impl CommandExt for MvccByStartTs {
 
 impl<S: Snapshot> ReadCommand<S> for MvccByStartTs {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            !self.ctx.get_not_fill_cache(),
-        );
+        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         match reader.seek_ts(self.start_ts)? {
             Some(key) => {
                 let result = find_mvcc_infos_by_key(&mut reader, &key, TimeStamp::max());

@@ -4,17 +4,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use libc::{getpid, pid_t};
-
 use crate::server::load_statistics::ThreadLoad;
-use tikv_util::metrics::{cpu_total, get_thread_ids};
-
-use procinfo::pid;
+use tikv_util::sys::thread::{self, Pid};
 
 /// A Linux-specific `ThreadLoadStatistics`. It collects threads load metrics.
 pub struct ThreadLoadStatistics {
-    pid: pid_t,
-    tids: Vec<pid_t>,
+    pid: Pid,
+    tids: Vec<Pid>,
     slots: usize,
     cur_pos: usize,
     cpu_usages: Vec<f64>,
@@ -28,15 +24,16 @@ impl ThreadLoadStatistics {
     ///
     /// Note: call this after the target threads are initialized, otherwise it can't catch them.
     pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
-        let pid: pid_t = unsafe { getpid() };
+        let pid = thread::process_id();
         let mut tids = vec![];
         let mut cpu_total_count = 0f64;
-        for tid in get_thread_ids(pid).unwrap() {
-            if let Ok(stat) = pid::stat_task(pid, tid) {
+        let all_tids: Vec<_> = thread::thread_ids(pid).unwrap();
+        for tid in all_tids {
+            if let Ok(stat) = thread::full_thread_stat(pid, tid) {
                 if !stat.command.starts_with(prefix) {
                     continue;
                 }
-                cpu_total_count += cpu_total(&stat);
+                cpu_total_count += thread::linux::cpu_total(&stat);
                 tids.push(tid);
             }
         }
@@ -62,8 +59,8 @@ impl ThreadLoadStatistics {
         self.cpu_usages[self.cur_pos] = 0f64;
         for tid in &self.tids {
             // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
-            if let Ok(stat) = pid::stat_task(self.pid, *tid) {
-                self.cpu_usages[self.cur_pos] += cpu_total(&stat);
+            if let Ok(stat) = thread::full_thread_stat(self.pid, *tid) {
+                self.cpu_usages[self.cur_pos] += thread::linux::cpu_total(&stat);
             }
         }
         let current_instant = self.instants[self.cur_pos];
