@@ -3731,9 +3731,10 @@ where
             .max_by_key(|c| prs.get(c.id).map_or(0, |pr| pr.matched));
 
         let transferred = match peer {
-            Some(peer) if peer.id != self.peer.id && *peer != metapb::Peer::default() => todo!(),
-            Some(peer) => self.pre_transfer_leader(peer),
-            None => false,
+            Some(peer) if peer.id != self.peer.id && *peer != metapb::Peer::default() => {
+                self.pre_transfer_leader(peer)
+            }
+            Some(_) | None => false,
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
