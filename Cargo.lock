@@ -1496,11 +1496,7 @@ dependencies = [
  "crc32fast",
  "libc 0.2.86",
  "libz-sys",
-<<<<<<< HEAD
  "miniz_oxide",
-=======
- "miniz_oxide 0.3.7",
->>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
 ]
 
 [[package]]
@@ -2204,24 +2200,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7282d924be3275cec7f6756ff4121987bc6481325397dde6ba3e7802b1a8b1c"
 
 [[package]]
-name = "libflate"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "784f4ec5908a9d7f4e53658906386667e8b02e9389a47cfebf45d324ba9e8d25"
-dependencies = [
- "adler32",
- "crc32fast",
- "libflate_lz77",
- "rle-decode-fast",
-]
-
-[[package]]
-name = "libflate_lz77"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3286f09f7d4926fc486334f28d8d2e6ebe4f7f9994494b6dab27ddfad2c9b11b"
-
-[[package]]
 name = "libfuzzer-sys"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2446,7 +2424,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
 
 [[package]]
-<<<<<<< HEAD
 name = "mime_guess"
 version = "2.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2460,12 +2437,6 @@ dependencies = [
 name = "minitrace"
 version = "0.1.0"
 source = "git+https://github.com/pingcap-incubator/minitrace-rust.git?branch=master#de69110975b42d898f4ba2d25fb4d334de80edd3"
-=======
-name = "miniz_oxide"
-version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "791daaae1ed6889560f8c4359194f56648355540573244a5448a83ba1ecc7435"
->>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
 dependencies = [
  "crossbeam 0.7.3",
  "futures 0.1.29",
@@ -3271,26 +3242,15 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-<<<<<<< HEAD
-version = "0.7.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c434e93ef69c216e68e4f417c927b4f31502c3560b72cfdb6827e2321c5c6b3e"
-dependencies = [
- "bitflags",
- "byteorder",
- "chrono",
-=======
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0941606b9934e2d98a3677759a971756eb821f75764d0e0d26946d08e74d9104"
 dependencies = [
  "bitflags",
  "byteorder",
->>>>>>> 92da1842b... tikv_util: update procfs to 0.12.0 (#11703)
  "hex 0.4.2",
  "lazy_static",
  "libc 0.2.86",
- "libflate",
 ]
 
 [[package]]
@@ -3879,12 +3839,6 @@ dependencies = [
  "web-sys",
  "winapi 0.3.8",
 ]
-
-[[package]]
-name = "rle-decode-fast"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 
 [[package]]
 name = "rocksdb"
