@@ -50,10 +50,9 @@ impl Service {
     /// Create a new backup service.
     pub fn new() -> io::Result<Service> {
         let runtime = Arc::new(
-            Builder::new()
-                .basic_scheduler()
+            Builder::new_current_thread()
                 .thread_name("external-storage-grpc-service")
-                .core_threads(1)
+                .worker_threads(1)
                 .enable_all()
                 .build()?,
         );
@@ -65,14 +64,14 @@ impl proto::ExternalStorage for Service {
     fn save(
         &mut self,
         _ctx: grpcio::RpcContext,
-        req: proto::ExternalStorageWriteRequest,
-        sink: grpcio::UnarySink<proto::ExternalStorageWriteResponse>,
+        req: proto::ExternalStorageSaveRequest,
+        sink: grpcio::UnarySink<proto::ExternalStorageSaveResponse>,
     ) {
         info!("write request {:?}", req.get_object_name());
         let result = write_receiver(&self.runtime, req);
         match result {
             Ok(_) => {
-                let rsp = proto::ExternalStorageWriteResponse::default();
+                let rsp = proto::ExternalStorageSaveResponse::default();
                 info!("success write");
                 sink.success(rsp);
             }
@@ -110,14 +109,14 @@ impl proto::ExternalStorage for Service {
 }
 
 pub fn make_rpc_error(err: io::Error) -> grpcio::RpcStatus {
-    grpcio::RpcStatus::new(
+    grpcio::RpcStatus::with_message(
         match err.kind() {
             ErrorKind::NotFound => grpcio::RpcStatusCode::NOT_FOUND,
             ErrorKind::InvalidInput => grpcio::RpcStatusCode::INVALID_ARGUMENT,
             ErrorKind::PermissionDenied => grpcio::RpcStatusCode::UNAUTHENTICATED,
             _ => grpcio::RpcStatusCode::UNKNOWN,
         },
-        Some(format!("{:?}", err)),
+        format!("{:?}", err)
     )
 }
 

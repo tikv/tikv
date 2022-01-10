@@ -1,7 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
+use crate::UnpinReader;
 use crate::request::{restore_receiver, write_receiver};
 use anyhow::Context;
+use engine_traits::{FileEncryptionInfo};
 use kvproto::brpb as proto;
 use lazy_static::lazy_static;
 use once_cell::sync::OnceCell;
@@ -27,10 +30,9 @@ pub extern "C" fn external_storage_init(error: &mut ffi_support::ExternError) {
             if RUNTIME.get().is_some() {
                 return Ok(());
             }
-            let runtime = Builder::new()
-                .basic_scheduler()
+            let runtime = Builder::new_current_thread()
                 .thread_name("external-storage-dylib")
-                .core_threads(1)
+                .worker_threads(1)
                 .enable_all()
                 .build()
                 .context("build runtime")?;
@@ -59,7 +61,7 @@ pub unsafe extern "C" fn external_storage_write(
                 .get()
                 .context("must first call external_storage_init")?;
             let buffer = get_buffer(data, len);
-            let req: proto::ExternalStorageWriteRequest = protobuf::parse_from_bytes(buffer)?;
+            let req: proto::ExternalStorageSaveRequest = protobuf::parse_from_bytes(buffer)?;
             info!("write request {:?}", req.get_object_name());
             write_receiver(&runtime, req)
         })()
@@ -132,10 +134,9 @@ pub mod staticlib {
         name: &'static str,
         url: url::Url,
     ) -> io::Result<Box<dyn ExternalStorage>> {
-        let runtime = Builder::new()
-            .basic_scheduler()
+        let runtime = Builder::new_current_thread()
             .thread_name("external-storage-dylib-client")
-            .core_threads(1)
+            .worker_threads(1)
             .enable_all()
             .build()?;
         external_storage_init_ffi()?;
@@ -147,6 +148,7 @@ pub mod staticlib {
         }) as _)
     }
 
+    #[async_trait]
     impl ExternalStorage for ExternalStorageClient {
         fn name(&self) -> &'static str {
             self.name
@@ -156,10 +158,10 @@ pub mod staticlib {
             Ok(self.url.clone())
         }
 
-        fn write(
+        async fn write(
             &self,
             name: &str,
-            reader: Box<dyn AsyncRead + Send + Unpin>,
+            reader: UnpinReader,
             content_length: u64,
         ) -> io::Result<()> {
             info!("external storage writing");
@@ -193,6 +195,7 @@ pub mod staticlib {
             restore_name: std::path::PathBuf,
             expected_length: u64,
             speed_limiter: &Limiter,
+            _file_cryptor: Option<FileEncryptionInfo>,
         ) -> io::Result<()> {
             info!("external storage restore");
             let req = restore_sender(

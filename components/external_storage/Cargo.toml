@@ -16,6 +16,7 @@ cloud-storage-grpc = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+anyhow = "1.0"
 bytes = "1.0"
 fail = "0.5"
 ffi-support = { optional = true, version = "0.4.2" }

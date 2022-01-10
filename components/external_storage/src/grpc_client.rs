@@ -3,9 +3,11 @@
 use crate::request::{
     anyhow_to_io_log_error, file_name_for_write, restore_sender, write_sender, DropPath,
 };
-use crate::ExternalStorage;
+use crate::{ExternalStorage, UnpinReader};
 
 use anyhow::Context;
+use async_trait::async_trait;
+use engine_traits::FileEncryptionInfo;
 use futures_io::AsyncRead;
 use grpcio::{self};
 use kvproto::brpb as proto;
@@ -28,10 +30,9 @@ pub fn new_client(
     name: &'static str,
     url: url::Url,
 ) -> io::Result<Box<dyn ExternalStorage>> {
-    let runtime = Builder::new()
-        .basic_scheduler()
+    let runtime = Builder::new_current_thread()
         .thread_name("external-storage-grpc-client")
-        .core_threads(1)
+        .worker_threads(1)
         .enable_all()
         .build()?;
     Ok(Box::new(ExternalStorageClient {
@@ -51,6 +52,7 @@ fn new_rpc_client() -> io::Result<proto::ExternalStorageClient> {
     Ok(proto::ExternalStorageClient::new(channel))
 }
 
+#[async_trait]
 impl ExternalStorage for ExternalStorageClient {
     fn name(&self) -> &'static str {
         self.name
@@ -60,10 +62,10 @@ impl ExternalStorage for ExternalStorageClient {
         Ok(self.url.clone())
     }
 
-    fn write(
+    async fn write(
         &self,
         name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
+        reader: UnpinReader,
         content_length: u64,
     ) -> io::Result<()> {
         info!("external storage writing");
@@ -100,6 +102,7 @@ impl ExternalStorage for ExternalStorageClient {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
+        _file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         info!("external storage restore");
         let req = restore_sender(
@@ -116,7 +119,7 @@ impl ExternalStorage for ExternalStorageClient {
 pub fn rpc_error_to_io(err: grpcio::Error) -> io::Error {
     let msg = format!("{}", err);
     match err {
-        grpcio::Error::RpcFailure(status) => match status.status {
+        grpcio::Error::RpcFailure(status) => match status.code() {
             grpcio::RpcStatusCode::NOT_FOUND => io::Error::new(ErrorKind::NotFound, msg),
             grpcio::RpcStatusCode::INVALID_ARGUMENT => io::Error::new(ErrorKind::InvalidInput, msg),
             grpcio::RpcStatusCode::UNAUTHENTICATED => {

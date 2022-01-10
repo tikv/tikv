@@ -3,8 +3,10 @@
 use crate::request::{
     anyhow_to_io_log_error, file_name_for_write, restore_sender, write_sender, DropPath,
 };
-use crate::ExternalStorage;
+use crate::{ExternalStorage, UnpinReader};
 
+use async_trait::async_trait;
+use engine_traits::{FileEncryptionInfo};
 use anyhow::Context;
 use futures_io::AsyncRead;
 use protobuf::{self, Message};
@@ -29,10 +31,8 @@ pub fn new_client(
     name: &'static str,
     url: url::Url,
 ) -> io::Result<Box<dyn ExternalStorage>> {
-    let runtime = Builder::new()
-        .basic_scheduler()
+    let runtime = Builder::new_current_thread()
         .thread_name("external-storage-dylib-client")
-        .core_threads(1)
         .enable_all()
         .build()?;
     let library = unsafe {
@@ -52,6 +52,7 @@ pub fn new_client(
     }) as _)
 }
 
+#[async_trait]
 impl ExternalStorage for ExternalStorageClient {
     fn name(&self) -> &'static str {
         self.name
@@ -61,10 +62,10 @@ impl ExternalStorage for ExternalStorageClient {
         Ok(self.url.clone())
     }
 
-    fn write(
+    async fn write(
         &self,
         name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
+        reader: UnpinReader,
         content_length: u64,
     ) -> io::Result<()> {
         info!("external storage writing");
@@ -98,6 +99,7 @@ impl ExternalStorage for ExternalStorageClient {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
+        _file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         info!("external storage restore");
         let req = restore_sender(
