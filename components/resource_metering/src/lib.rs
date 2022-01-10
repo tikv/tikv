@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
+use tikv_util::sys::thread;
 use tikv_util::warn;
 use tikv_util::worker::{Scheduler, Worker};
 
@@ -40,7 +41,6 @@ pub mod error;
 mod model;
 mod recorder;
 mod reporter;
-pub mod utils;
 
 pub(crate) mod metrics;
 
@@ -168,7 +168,7 @@ impl ResourceTagFactory {
 
     fn register_local_storage(&self, storage: &LocalStorage) -> bool {
         let lsr = LocalStorageRef {
-            id: utils::thread_id(),
+            id: thread::thread_id(),
             storage: storage.clone(),
         };
         match self.scheduler.schedule(recorder::Task::ThreadReg(lsr)) {
