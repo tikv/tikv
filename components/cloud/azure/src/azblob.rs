@@ -299,10 +299,21 @@ impl AzureUploader {
         {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => Err(RequestError::InvalidInput(
-                    err,
-                    "upload block failed".to_owned(),
-                )),
+                Err(err) => {
+                    let err_info = ToString::to_string(&err);
+                    if err_info.contains("busy") {
+                        // server is busy, retry later
+                        Err(RequestError::TimeOut(format!(
+                            "the resource is busy: {}, retry later",
+                            err_info
+                        )))
+                    } else {
+                        Err(RequestError::InvalidInput(
+                            err,
+                            "upload block failed".to_owned(),
+                        ))
+                    }
+                }
             },
             Err(_) => Err(RequestError::TimeOut(
                 "timeout after 15mins for complete in azure storage".to_owned(),
