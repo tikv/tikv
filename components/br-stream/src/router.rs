@@ -437,6 +437,7 @@ impl std::fmt::Debug for StreamTaskInfo {
             .field("temp_dir", &self.temp_dir)
             .field("min_resolved_ts", &self.min_resolved_ts)
             .field("total_size", &self.total_size)
+            .field("flushing", &self.flushing)
             .finish()
     }
 }
@@ -527,21 +528,16 @@ impl StreamTaskInfo {
         self.flushing.load(Ordering::SeqCst)
     }
 
-    pub async fn do_flush(&self, store_id: u64) -> Result<()> {
-        // do nothing if not flushing status.
-        if !self.is_flushing() {
-            return Ok(());
-        }
-
-        // move need-flushing files to flushing_files.
+    /// move need-flushing files to flushing_files.
+    pub async fn move_files_to_flushing_fils(&self) -> &Self {
         let mut w = self.files.write().await;
         for (k, v) in w.drain() {
             self.flushing_files.write().await.insert(k, v);
         }
+        self
+    }
 
-        // generage meta data and prepare to flush to storage
-        let metadata_info = self.generate_metadata(store_id).await?;
-
+    pub async fn flush_log(&self) -> Result<()> {
         // if failed to write storage, we should retry write flushing_files.
         for (_, v) in self.flushing_files.write().await.drain() {
             let data_file = v.lock().await;
@@ -570,6 +566,10 @@ impl StreamTaskInfo {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn flush_meta(&self, metadata_info: MetadataInfo) -> Result<()> {
         let meta_path = metadata_info.path_to_meta();
         let meta_buff = metadata_info.marshar_to()?;
         let buflen = meta_buff.len();
@@ -581,7 +581,27 @@ impl StreamTaskInfo {
                 buflen as _,
             )
             .await?;
+        Ok(())
+    }
 
+    pub async fn do_flush(&self, store_id: u64) -> Result<()> {
+        // do nothing if not flushing status.
+        if !self.is_flushing() {
+            return Ok(());
+        }
+
+        // generage meta data and prepare to flush to storage
+        let metadata_info = self
+            .move_files_to_flushing_fils()
+            .await
+            .generate_metadata(store_id)
+            .await?;
+
+        // flush log file to storage.
+        self.flush_log().await?;
+
+        // flush meta file to storage.
+        self.flush_meta(metadata_info).await?;
         Ok(())
     }
 }
@@ -770,6 +790,9 @@ struct TaskRange {
 #[cfg(test)]
 mod tests {
     use crate::utils;
+
+    use kvproto::brpb::{Local, StorageBackend, StreamBackupTaskInfo};
+
     use std::time::Duration;
     use tikv_util::{
         codec::number::NumberEncoder,
@@ -879,19 +902,40 @@ mod tests {
         result
     }
 
+    fn create_local_storage_backend(path: String) -> StorageBackend {
+        let mut local = Local::default();
+        local.set_path(path);
+
+        let mut sb = StorageBackend::default();
+        sb.set_local(local);
+        sb
+    }
+
     #[tokio::test]
     async fn test_basic_file() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        println!("tmp_path={:?}", tmp);
         tokio::fs::create_dir_all(&tmp).await?;
         let (tx, rx) = dummy_scheduler();
         let router = RouterInner::new(tmp.clone(), tx, 32);
-        router.register_ranges(
-            "dummy",
-            vec![(
-                utils::wrap_key(make_table_key(1, b"")),
-                utils::wrap_key(make_table_key(2, b"")),
-            )],
-        );
+        let mut stream_task = StreamBackupTaskInfo::default();
+        stream_task.set_name("dummy".to_string());
+        let storage_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&storage_path).await?;
+        println!("storage={:?}", storage_path);
+        stream_task.set_storage(create_local_storage_backend(
+            storage_path.to_str().unwrap().to_string(),
+        ));
+
+        router
+            .register_task(
+                StreamTask { info: stream_task },
+                vec![(
+                    utils::wrap_key(make_table_key(1, b"")),
+                    utils::wrap_key(make_table_key(2, b"")),
+                )],
+            )
+            .await?;
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
         let start_ts = TimeStamp::physical_now();
@@ -910,13 +954,18 @@ mod tests {
         }
         let end_ts = TimeStamp::physical_now();
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
-        let meta = files.generate_metadata().await?;
-        assert_eq!(meta.files.len(), 3);
+        println!("{:?}", files);
+        let meta = files
+            .move_files_to_flushing_fils()
+            .await
+            .generate_metadata(1)
+            .await?;
+        assert_eq!(meta.files.len(), 3, "test file len = {}", meta.files.len());
         assert!(
             meta.files.iter().all(|item| {
-                TimeStamp::new(item.meta.min_ts as _).physical() >= start_ts
-                    && TimeStamp::new(item.meta.max_ts as _).physical() <= end_ts
-                    && item.meta.min_ts <= item.meta.max_ts
+                TimeStamp::new(item.min_ts as _).physical() >= start_ts
+                    && TimeStamp::new(item.max_ts as _).physical() <= end_ts
+                    && item.min_ts <= item.max_ts
             }),
             "meta = {:#?}; start ts = {}, end ts = {}",
             meta.files,
@@ -924,25 +973,42 @@ mod tests {
             end_ts
         );
         println!("{:#?}", meta);
+        files.flush_log().await?;
+        files.flush_meta(meta).await?;
+
         drop(router);
         let cmds = collect_recv(rx);
-        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds.len(), 1, "test cmds len = {}", cmds.len());
         match &cmds[0] {
-            Task::Flush(task) => assert_eq!(task, "dummy"),
+            Task::Flush(task) => assert_eq!(task, "dummy", "task = {}", task),
             _ => panic!("the cmd isn't flush!"),
         }
 
-        for path in meta.files.iter().map(|meta| &meta.local_path) {
-            let f = tokio::fs::metadata(&path).await?;
-            assert!(f.is_file(), "log file {} is not a file", path.display());
-            // The file should contains some data.
+        let mut meta_count = 0;
+        let mut log_count = 0;
+        let mut a = tokio::fs::read_dir(storage_path).await?;
+        while let Some(entry) = a.next_entry().await? {
             assert!(
-                f.len() > 10,
-                "the log file {} is too small (size = {}B)",
-                path.display(),
-                f.len()
+                entry.path().is_file(),
+                "log file {:?} is not a file",
+                entry.path()
             );
+            let filename = entry.file_name();
+            if filename.to_str().unwrap().find("v1_backupmeta").is_some() {
+                meta_count += 1;
+            } else {
+                log_count += 1;
+                let f = entry.metadata().await?;
+                assert!(
+                    f.len() > 10,
+                    "the log file {:?} is too small (size = {}B)",
+                    filename,
+                    f.len()
+                );
+            }
         }
+        assert_eq!(meta_count, 1);
+        assert_eq!(log_count, 3);
         Ok(())
     }
 }
