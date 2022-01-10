@@ -80,7 +80,7 @@ impl ResourceMeteringTag {
             }
 
             assert!(!ls.is_set, "nested attachment is not allowed");
-            ls.attached_tag.store(Some(self.infos.clone()));
+            ls.attached_tag.swap(Some(self.infos.clone()));
             ls.is_set = true;
             ls.summary_cur_record.reset();
 
@@ -112,7 +112,7 @@ impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
             let mut ls = s.borrow_mut();
-            ls.attached_tag.store(None);
+            while ls.attached_tag.swap(None).is_none() {}
             ls.is_set = false;
             if !ls.summary_enable.load(SeqCst) {
                 return;
