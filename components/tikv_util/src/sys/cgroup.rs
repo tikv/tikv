@@ -86,14 +86,9 @@ impl CGroupSys {
             let path = if self.is_v2 {
                 format!("{}/memory.max", path.to_str().unwrap())
             } else {
-<<<<<<< HEAD
                 format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
             };
             return read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()));
-=======
-                warn!("cgroup memory controller found but not mounted.");
-            }
->>>>>>> 9f3d72c04... tikv_util: make cgroup parsing more robust (#11786)
         }
         -1
     }
@@ -101,22 +96,11 @@ impl CGroupSys {
     pub fn cpuset_cores(&self) -> HashSet<usize> {
         let component = if self.is_v2 { "" } else { "cpuset" };
         if let Some(group) = self.cgroups.get(component) {
-<<<<<<< HEAD
             let (root, mount_point) = self.mount_points.get(component).unwrap();
             let path = build_path(group, root, mount_point);
             let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
             return read_to_string(&path)
                 .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
-=======
-            if let Some((root, mount_point)) = self.mount_points.get(component) {
-                let path = build_path(group, root, mount_point);
-                let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
-                return read_to_string(&path)
-                    .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
-            } else {
-                warn!("cgroup cpuset controller found but not mounted.");
-            }
->>>>>>> 9f3d72c04... tikv_util: make cgroup parsing more robust (#11786)
         }
         Default::default()
     }
@@ -133,16 +117,12 @@ impl CGroupSys {
                     return parse_cpu_quota_v2(buffer.trim());
                 }
             } else {
-<<<<<<< HEAD
                 let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
                 let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
                 if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2))
                 {
                     return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
                 }
-=======
-                warn!("cgroup cpu controller found but not mounted.");
->>>>>>> 9f3d72c04... tikv_util: make cgroup parsing more robust (#11786)
             }
         }
         None
@@ -303,9 +283,6 @@ fn parse_memory_max(line: &str) -> i64 {
     if line == "max" {
         return -1;
     }
-<<<<<<< HEAD
-    line.parse().unwrap()
-=======
     match capping_parse_int::<i64>(line) {
         Ok(x) => x,
         Err(e) => {
@@ -313,7 +290,6 @@ fn parse_memory_max(line: &str) -> i64 {
             -1
         }
     }
->>>>>>> 9f3d72c04... tikv_util: make cgroup parsing more robust (#11786)
 }
 
 fn parse_cpu_cores(value: &str) -> HashSet<usize> {
@@ -505,11 +481,6 @@ mod tests {
 
     #[test]
     fn test_parse_memory_max() {
-<<<<<<< HEAD
-        let contents = vec!["max", "-1", "9223372036854771712", "21474836480"];
-        let expects = vec![-1, -1, 9223372036854771712, 21474836480];
-        for (content, expect) in contents.into_iter().zip(expects) {
-=======
         let cases = vec![
             ("max", -1),
             ("-1", -1),
@@ -521,7 +492,6 @@ mod tests {
             ("0.1", -1),
         ];
         for (content, expect) in cases.into_iter() {
->>>>>>> 9f3d72c04... tikv_util: make cgroup parsing more robust (#11786)
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
         }
