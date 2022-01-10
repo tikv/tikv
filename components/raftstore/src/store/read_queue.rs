@@ -77,6 +77,20 @@ where
         }
     }
 
+    pub fn noop(id: Uuid, propose_time: Timespec) -> Self {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        ReadIndexRequest {
+            id,
+            cmds: MustConsumeVec::new("noop"),
+            propose_time,
+            read_index: None,
+            in_contexts: false,
+            addition_request: None,
+            locked: None,
+            cmds_heap_size: 0,
+        }
+    }
+
     pub fn cmds(&self) -> &[(RaftCmdRequest, Callback<S>, Option<u64>)] {
         &*self.cmds
     }
@@ -203,6 +217,10 @@ where
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<S>> {
         self.reads.back_mut()
+    }
+
+    pub fn back(&self) -> Option<&ReadIndexRequest<S>> {
+        self.reads.back()
     }
 
     pub fn last_ready(&self) -> Option<&ReadIndexRequest<S>> {
