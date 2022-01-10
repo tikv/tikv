@@ -112,7 +112,11 @@ impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
             let mut ls = s.borrow_mut();
+
+            // If the shared tag is occupied by the recorder thread
+            // with `SharedTagInfos::load_full`, wait for releasing.
             while ls.attached_tag.swap(None).is_none() {}
+
             ls.is_set = false;
             if !ls.summary_enable.load(SeqCst) {
                 return;
