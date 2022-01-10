@@ -44,6 +44,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
+num-traits = "0.2"
 openssl = "0.10"
 prometheus = { version = "0.12", features = ["nightly"] }
 rand = "0.8"
