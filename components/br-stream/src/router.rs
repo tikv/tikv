@@ -9,10 +9,15 @@ use std::{
     time::Duration,
 };
 
-use crate::{endpoint::Task, errors::Error, metadata::store::EtcdStore, utils::SlotMap};
+use crate::{
+    endpoint::Task,
+    errors::Error,
+    metadata::store::EtcdStore,
+    utils::{self, SlotMap},
+};
 
 use super::errors::Result;
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
@@ -24,7 +29,7 @@ use tikv_util::{box_err, info, warn, worker::Scheduler};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, sync::RwLock};
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 impl ApplyEvent {
     /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error commands.
@@ -80,6 +85,21 @@ impl ApplyEvent {
             })
         }
         result
+    }
+
+    /// make a apply event from a committed KV pair.
+    pub fn from_committed(cf: CfName, key: Vec<u8>, value: Vec<u8>, region: u64) -> Result<Self> {
+        let key = Key::from_encoded(key);
+        // Once we can scan the write key, the txn must be committed.
+        let resolved_ts = utils::get_ts(&key)?;
+        Ok(Self {
+            key: key.into_encoded(),
+            value,
+            cf: cf.to_owned(),
+            region_id: region,
+            region_resolved_ts: resolved_ts.into_inner(),
+            cmd_type: CmdType::Put,
+        })
     }
 
     /// Check whether the key associate to the event is a meta key.
@@ -156,7 +176,7 @@ impl std::fmt::Debug for RouterInner {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ApplyEvent {
     key: Vec<u8>,
     value: Vec<u8>,

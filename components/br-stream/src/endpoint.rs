@@ -3,9 +3,12 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use raftstore::RegionInfoAccessor;
+use tikv::storage::Engine;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
+use txn_types::Key;
 
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
@@ -14,7 +17,7 @@ use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 
 use online_config::ConfigChange;
-use raftstore::coprocessor::CmdBatch;
+use raftstore::coprocessor::{CmdBatch, RegionInfoProvider};
 use tikv::config::BackupStreamConfig;
 
 use tikv_util::worker::{Runnable, Scheduler};
@@ -22,7 +25,7 @@ use tikv_util::{debug, error, info};
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
-pub struct Endpoint<S: MetaStore + 'static> {
+pub struct Endpoint<S: MetaStore + 'static, R, E> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     meta_client: Option<MetadataClient<S>>,
@@ -32,16 +35,20 @@ pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
+    regions: R,
+    engine: E,
 }
 
-impl Endpoint<EtcdStore> {
+impl<R, E> Endpoint<EtcdStore, R, E> {
     pub fn new<E: AsRef<str>>(
         store_id: u64,
         endpoints: &dyn AsRef<[E]>,
         config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
-    ) -> Endpoint<EtcdStore> {
+        accessor: R,
+        engine: E,
+    ) -> Endpoint<EtcdStore, RegionInfoAccessor> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
@@ -74,6 +81,8 @@ impl Endpoint<EtcdStore> {
                 scheduler,
                 observer,
                 pool,
+                regions: accessor,
+                engine,
             };
         }
 
@@ -93,14 +102,25 @@ impl Endpoint<EtcdStore> {
             scheduler,
             observer,
             pool,
+            regions: accessor,
+            engine,
         }
     }
 }
 
-impl<S> Endpoint<S>
+impl<S, R, E> Endpoint<S, R, E>
 where
     S: MetaStore + 'static,
+    R: RegionInfoProvider + 'static,
+    E: Engine,
 {
+    async fn initialize_range(&self, start_key: &Key, end_key: &Key) {
+        let regions = self.regions.get_regions_in_range(
+            start_key.as_encoded().as_slice(),
+            end_key.as_encoded().as_slice(),
+        );
+    }
+
     // TODO find a proper way to exit watch tasks
     async fn starts_watch_tasks(
         meta_client: MetadataClient<S>,

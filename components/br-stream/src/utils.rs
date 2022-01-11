@@ -4,15 +4,27 @@ use std::{
     time::Duration,
 };
 
-use tikv_util::time::Instant;
+use crate::errors::{Error, Result};
+use tikv_util::{box_err, time::Instant};
 use tokio::sync::{Mutex, RwLock};
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 /// wrap a user key with encoded data key.
 pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {
     // TODO: encode in place.
     let key = Key::from_raw(v.as_slice()).into_encoded();
     key
+}
+
+/// decode ts from a key, and transform the error to the crate error.
+pub fn get_ts(key: &Key) -> Result<TimeStamp> {
+    key.decode_ts().map_err(|err| {
+        Error::Other(box_err!(
+            "failed to get ts from key {}: {}",
+            log_wrappers::Value::key(key.as_encoded().as_slice()),
+            err
+        ))
+    })
 }
 
 /// StopWatch is a utility for record time cost in multi-stage tasks.

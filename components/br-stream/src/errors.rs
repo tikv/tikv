@@ -5,6 +5,7 @@ use std::error::Error as StdError;
 use std::io::Error as IoError;
 use std::result::Result as StdResult;
 use thiserror::Error as ThisError;
+use tikv::storage::txn::Error as TxnError;
 
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -18,6 +19,8 @@ pub enum Error {
     MalformedMetadata(String),
     #[error("I/O Error: {0}")]
     Io(#[from] IoError),
+    #[error("Txn error: {0}")]
+    Txn(#[from] TxnError),
     #[error("Other Error: {0}")]
     Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
 }
