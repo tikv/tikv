@@ -58,7 +58,7 @@ impl QuotaLimiter {
     }
 
     pub fn consume_write(&self, req_cnt: usize, kv_cnt: usize, bytes: usize) -> Duration {
-        let cost_micro_cpu: usize = req_cnt * 100 + kv_cnt * 50;
+        let cost_micro_cpu: usize = req_cnt * 200 + kv_cnt * 50;
         let cpu_dur = self.cputime_limiter.consume_duration(cost_micro_cpu);
         let bw_dur = self.bandwidth_limiter.consume_duration(bytes);
         cpu_dur + bw_dur
@@ -73,10 +73,10 @@ impl QuotaLimiter {
         let cpu_dur = match query_type {
             QType::KvGet => self
                 .cputime_limiter
-                .consume_duration(time_micro_secs as usize + 50),
+                .consume_duration(time_micro_secs as usize + 200),
             QType::CoprScan => self
                 .cputime_limiter
-                .consume_duration(time_micro_secs as usize + 30),
+                .consume_duration(time_micro_secs as usize + 50),
             _ => self
                 .cputime_limiter
                 .consume_duration(time_micro_secs as usize),

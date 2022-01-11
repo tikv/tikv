@@ -489,7 +489,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .as_ref()
             .get_quota_limiter(task.cmd.ctx().get_tenant_id())
         {
-            quota_limiter.consume_write(1, 1, task.cmd.write_bytes())
+            quota_limiter.consume_write(1, task.cmd.write_kvs(), task.cmd.write_bytes())
         } else {
             Duration::ZERO
         };
