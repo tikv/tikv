@@ -16,9 +16,9 @@ mod linux {
         time::Duration,
     };
 
-    use nix::unistd::{getpid, gettid, Pid};
     use strum::EnumCount;
     use thread_local::ThreadLocal;
+    use tikv_util::sys::thread::{self, Pid};
 
     use crate::{IOBytes, IOType};
 
@@ -74,8 +74,8 @@ mod linux {
     impl ThreadID {
         fn current() -> ThreadID {
             ThreadID {
-                pid: getpid(),
-                tid: gettid(),
+                pid: thread::process_id(),
+                tid: thread::thread_id(),
             }
         }
     }
