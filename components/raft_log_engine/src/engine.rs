@@ -351,8 +351,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn get_engine_size(&self) -> Result<u64> {
-        //TODO impl this when RaftLogEngine is ready to go online.
-        Ok(0)
+        Ok(self.0.get_used_size() as u64)
     }
 }
 

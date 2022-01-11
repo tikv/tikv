@@ -146,10 +146,6 @@ make_static_metric! {
     pub struct RequestBatchSizeHistogramVec: Histogram {
         "type" => BatchableRequestKind,
     }
-
-    pub struct RequestBatchRatioHistogramVec: Histogram {
-        "type" => BatchableRequestKind,
-    }
 }
 
 lazy_static! {

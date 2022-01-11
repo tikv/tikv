@@ -190,7 +190,6 @@ impl Drop for Monitor {
 
         if let Err(e) = h.unwrap().join() {
             error!("join time monitor worker failed"; "err" => ?e);
-            return;
         }
     }
 }
@@ -527,7 +526,6 @@ impl Default for ThreadReadId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f64;
     use std::ops::Sub;
     use std::thread;
     use std::time::{Duration, SystemTime};
