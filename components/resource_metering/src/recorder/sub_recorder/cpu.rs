@@ -3,7 +3,6 @@
 use crate::metrics::STAT_TASK_COUNT;
 use crate::recorder::localstorage::{LocalStorage, SharedTagInfos};
 use crate::recorder::SubRecorder;
-use crate::TagInfos;
 use crate::{RawRecord, RawRecords};
 
 use collections::HashMap;
