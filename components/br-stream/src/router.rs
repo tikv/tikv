@@ -559,16 +559,20 @@ impl DataFile {
     /// Add a new KV pair to the file, returning its size.
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
         let encoded = super::endpoint::Endpoint::<EtcdStore>::encode_event(&kv.key, &kv.value);
-        let size = encoded.len();
+        let mut size = 0;
+        for slice in encoded {
+            let slice = slice.as_ref();
+            self.inner.write_all(slice).await?;
+            self.sha256.update(slice).map_err(|err| {
+                Error::Other(box_err!("openssl hasher failed to update: {}", err))
+            })?;
+            size += slice.len();
+        }
         let key = Key::from_encoded(std::mem::take(&mut kv.key));
         let ts = key.decode_ts().expect("key without ts");
         self.min_ts = self.min_ts.min(ts);
         self.max_ts = self.max_ts.max(ts);
         self.resolved_ts = self.resolved_ts.max(kv.region_resolved_ts.into());
-        self.inner.write_all(encoded.as_slice()).await?;
-        self.sha256
-            .update(encoded.as_slice())
-            .map_err(|err| Error::Other(box_err!("openssl hasher failed to update: {}", err)))?;
         self.update_key_bound(key.into_encoded());
         Ok(size)
     }
