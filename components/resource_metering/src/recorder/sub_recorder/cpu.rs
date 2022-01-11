@@ -1,15 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::metrics::STAT_TASK_COUNT;
-use crate::recorder::localstorage::LocalStorage;
+use crate::recorder::localstorage::{LocalStorage, SharedTagInfos};
 use crate::recorder::SubRecorder;
+<<<<<<< HEAD
 use crate::utils::{self, Stat};
 use crate::TagInfos;
+=======
+>>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
 use crate::{RawRecord, RawRecords};
 
-use std::sync::Arc;
-
-use arc_swap::ArcSwapOption;
 use collections::HashMap;
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.
@@ -83,8 +83,13 @@ impl SubRecorder for CpuRecorder {
 }
 
 struct ThreadStat {
+<<<<<<< HEAD
     attached_tag: Arc<ArcSwapOption<TagInfos>>,
     stat: Stat,
+=======
+    attached_tag: SharedTagInfos,
+    stat: thread::ThreadStat,
+>>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
 }
 
 #[cfg(test)]
@@ -105,8 +110,12 @@ mod tests {
 #[cfg(target_os = "linux")]
 mod tests {
     use super::*;
+<<<<<<< HEAD
     use crate::{utils, RawRecords, TagInfos};
     use arc_swap::ArcSwapOption;
+=======
+    use crate::{RawRecords, TagInfos};
+>>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
     use std::sync::Arc;
 
     fn heavy_job() -> u64 {
@@ -129,7 +138,7 @@ mod tests {
             extra_attachment: b"abc".to_vec(),
         });
         let mut store = LocalStorage::default();
-        store.attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
+        store.attached_tag = SharedTagInfos::new(info);
         let mut recorder = CpuRecorder::default();
         recorder.thread_created(utils::thread_id(), &store);
         let thread_id = utils::thread_id();

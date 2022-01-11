@@ -146,8 +146,13 @@ impl Recorder {
             // Clean up the data of the destroyed threads.
             if let Some(ids) = utils::thread_ids() {
                 self.thread_stores.retain(|k, v| {
+<<<<<<< HEAD
                     let retain = ids.contains(k);
                     assert!(retain || v.attached_tag.load().is_none());
+=======
+                    let retain = ids.contains(&(*k as _));
+                    debug_assert!(retain || v.attached_tag.swap(None).is_none());
+>>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
                     retain
                 });
             }
