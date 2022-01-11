@@ -1,14 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::metrics::STAT_TASK_COUNT;
-use crate::recorder::localstorage::LocalStorage;
+use crate::recorder::localstorage::{LocalStorage, SharedTagInfos};
 use crate::recorder::SubRecorder;
-use crate::TagInfos;
 use crate::{RawRecord, RawRecords};
 
-use std::sync::Arc;
-
-use arc_swap::ArcSwapOption;
 use collections::HashMap;
 use tikv_util::sys::thread::{self, Pid};
 
@@ -83,7 +79,7 @@ impl SubRecorder for CpuRecorder {
 }
 
 struct ThreadStat {
-    attached_tag: Arc<ArcSwapOption<TagInfos>>,
+    attached_tag: SharedTagInfos,
     stat: thread::ThreadStat,
 }
 
@@ -106,7 +102,6 @@ mod tests {
 mod tests {
     use super::*;
     use crate::{RawRecords, TagInfos};
-    use arc_swap::ArcSwapOption;
     use std::sync::Arc;
 
     fn heavy_job() -> u64 {
@@ -129,7 +124,7 @@ mod tests {
             extra_attachment: b"abc".to_vec(),
         });
         let mut store = LocalStorage::default();
-        store.attached_tag = Arc::new(ArcSwapOption::new(Some(info)));
+        store.attached_tag = SharedTagInfos::new(info);
         let mut recorder = CpuRecorder::default();
         recorder.thread_created(thread::thread_id(), &store);
         let pid = thread::process_id();
