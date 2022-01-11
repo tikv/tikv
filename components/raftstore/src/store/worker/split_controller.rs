@@ -358,10 +358,10 @@ impl ReadStats {
             .entry(region_id)
             .or_insert_with(|| RegionInfo::new(sample_num));
         region_info.update_peer(peer);
+        region_info.add_query_num(kind, query_num);
         if is_read_query(kind) {
             region_info.add_key_ranges(key_ranges);
         }
-        region_info.add_query_num(kind, query_num);
     }
 
     pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
