@@ -24,7 +24,7 @@ use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tikv_util::tenant_quota_limiter::ReadQuotaLimiter;
+use tikv_util::tenant_quota_limiter::{QType, QuotaLimiter};
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -73,7 +73,7 @@ pub struct BatchExecutorsRunner<SS> {
     /// If it's a paging request, paging_size indicates to the required size for current page.
     paging_size: Option<u64>,
 
-    limiter: Option<Arc<ReadQuotaLimiter>>,
+    limiter: Option<Arc<QuotaLimiter>>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -352,7 +352,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         stream_row_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
-        limiter: Option<Arc<ReadQuotaLimiter>>,
+        limiter: Option<Arc<QuotaLimiter>>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -449,9 +449,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 };
                 start_was_reset = false;
 
-                let mutex = limiter.get_mutex();
-                let _guard = mutex.lock().await;
-                let wait = limiter.consume_read(time_cost.as_micros() as u32);
+                let wait = limiter.consume_read(time_cost.as_micros() as usize, 0, QType::CoprScan);
                 if !wait.is_zero() {
                     GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + wait)
@@ -544,7 +542,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             // Because we don't know what's the internal_handle_request cost, just wait after the call.
             if let Some(limiter) = &self.limiter {
-                let wait = limiter.consume_read(time_slice_len.as_micros() as u32);
+                let wait =
+                    limiter.consume_read(time_slice_len.as_micros() as usize, 0, QType::CoprScan);
                 if !wait.is_zero() {
                     // TODO: is there any way to sleep but without blocking current thread in non-sync fn?
                 }

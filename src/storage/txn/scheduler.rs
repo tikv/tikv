@@ -39,8 +39,8 @@ use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{
-    tenant_quota_limiter::ReadQuotaLimiter, tenant_quota_limiter::TenantQuotaLimiter,
-    time::Instant, timer::GLOBAL_TIMER_HANDLE,
+    tenant_quota_limiter::QuotaLimiter, tenant_quota_limiter::TenantQuotaLimiter, time::Instant,
+    timer::GLOBAL_TIMER_HANDLE,
 };
 use txn_types::TimeStamp;
 
@@ -381,13 +381,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.schedule_command(cmd, callback);
     }
 
-    pub(in crate::storage) fn get_read_quota_limiter(
+    pub(in crate::storage) fn get_quota_limiter(
         &self,
         tenant_id: u32,
-    ) -> Option<Arc<ReadQuotaLimiter>> {
-        self.inner
-            .tenant_quota_limiter
-            .get_read_quota_limiter(tenant_id)
+    ) -> Option<Arc<QuotaLimiter>> {
+        self.inner.tenant_quota_limiter.get_quota_limiter(tenant_id)
     }
 
     /// Releases all the latches held by a command.
@@ -485,18 +483,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let sched = self.clone();
 
         // limit the write flow by tenant
-        let tenant_delay = self.inner.tenant_quota_limiter.as_ref().consume_write_vcpu(
-            task.cmd.ctx().get_tenant_id(),
-            1_u64,
-            task.cmd.write_bytes() as u64,
-        );
+        let quota_delay = if let Some(quota_limiter) = self
+            .inner
+            .tenant_quota_limiter
+            .as_ref()
+            .get_quota_limiter(task.cmd.ctx().get_tenant_id())
+        {
+            quota_limiter.consume_write(1, 1, task.cmd.write_bytes())
+        } else {
+            Duration::ZERO
+        };
 
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
-                if !tenant_delay.is_zero() {
+                if !quota_delay.is_zero() {
                     GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + tenant_delay)
+                        .delay(std::time::Instant::now() + quota_delay)
                         .compat()
                         .await
                         .unwrap();

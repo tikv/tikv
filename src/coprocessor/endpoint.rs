@@ -168,7 +168,7 @@ impl<E: Engine> Endpoint<E> {
         let tenant_id = context.get_tenant_id();
         let mut limiter = None;
         if let Some(tenant_quota_limiters) = &self.tenant_quota_limiters {
-            limiter = tenant_quota_limiters.get_read_quota_limiter(tenant_id);
+            limiter = tenant_quota_limiters.get_quota_limiter(tenant_id);
         }
         let cache_match_version = if req.get_is_cache_enabled() {
             Some(req.get_cache_if_match_version())

@@ -15,7 +15,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
 use std::sync::Arc;
-use tikv_util::tenant_quota_limiter::ReadQuotaLimiter;
+use tikv_util::tenant_quota_limiter::QuotaLimiter;
 
 pub struct DagHandlerBuilder<S: Store + 'static> {
     req: DagRequest,
@@ -27,7 +27,7 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     is_streaming: bool,
     is_cache_enabled: bool,
     paging_size: Option<u64>,
-    limiter: Option<Arc<ReadQuotaLimiter>>,
+    limiter: Option<Arc<QuotaLimiter>>,
 }
 
 impl<S: Store + 'static> DagHandlerBuilder<S> {
@@ -40,7 +40,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         is_streaming: bool,
         is_cache_enabled: bool,
         paging_size: Option<u64>,
-        limiter: Option<Arc<ReadQuotaLimiter>>,
+        limiter: Option<Arc<QuotaLimiter>>,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -95,7 +95,7 @@ impl BatchDAGHandler {
         streaming_batch_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
-        limiter: Option<Arc<ReadQuotaLimiter>>,
+        limiter: Option<Arc<QuotaLimiter>>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(

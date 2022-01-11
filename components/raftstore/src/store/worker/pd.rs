@@ -46,7 +46,7 @@ use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::tenant_quota_limiter::TenantQuotaLimiter;
+use tikv_util::tenant_quota_limiter::{TenantQuota, TenantQuotaLimiter};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
@@ -1097,19 +1097,17 @@ where
                     }
 
                     // Refresh tenant quota
-                    let tenant_quota: Vec<(u32, (u64, u32))> = resp
+                    let tenant_quota: Vec<(u32, TenantQuota)> = resp
                         .get_tenant_quota()
                         .iter()
                         .map(|quota| {
                             (
                                 quota.tenant_id,
-                                (quota.write_bytes_per_sec, quota.read_milli_cpu),
+                                TenantQuota::new(quota.cpu_quota as usize, 0),
                             )
                         })
                         .collect();
-                    if !tenant_quota.is_empty() {
-                        tenant_quota_limiter.as_ref().refresh_quota(tenant_quota);
-                    }
+                    tenant_quota_limiter.as_ref().refresh_quota(tenant_quota);
 
                     if resp.get_require_detailed_report() {
                         info!("required to send detailed report in the next heartbeat");

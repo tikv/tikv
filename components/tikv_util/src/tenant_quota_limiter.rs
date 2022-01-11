@@ -3,64 +3,92 @@
 //! Provides util functions to manage share properties across threads.
 
 use super::time::Limiter;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-pub fn adjust_kv_req_cost(cost_time: Duration) -> Duration {
-    cost_time + Duration::from_micros(100)
+#[derive(Copy, Clone)]
+pub struct TenantQuota {
+    cputime_quota: usize,
+    bandwidth_quota: usize,
 }
 
-pub struct ReadQuotaLimiter {
-    limiter: Limiter,
-    control_mutex: Arc<tokio::sync::Mutex<bool>>,
-}
-pub struct WriteQuotaLimiter(Limiter);
-
-impl ReadQuotaLimiter {
-    // millicpu same as the k8s
-    pub fn new(milli_cpu: u32) -> Self {
+impl TenantQuota {
+    pub fn new(cputime_quota: usize, bandwidth_quota: usize) -> Self {
         Self {
-            limiter: Limiter::new(milli_cpu as f64 * 1000_f64),
-            control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
+            cputime_quota,
+            bandwidth_quota,
+        }
+    }
+}
+
+pub enum QType {
+    KvGet,
+    CoprScan,
+    Others,
+}
+
+pub struct QuotaLimiter {
+    tenant_id: u32,
+    cputime_limiter: Limiter,
+    bandwidth_limiter: Limiter,
+}
+
+impl QuotaLimiter {
+    // 1000 millicpu equals to 1vCPU, 0 means unlimited
+    pub fn new(tenant_id: u32, milli_cpu: usize, bandwidth: usize) -> Self {
+        let cputime_limiter = if milli_cpu == 0 {
+            Limiter::new(f64::INFINITY)
+        } else {
+            // transfer milli cpu to micro cpu
+            Limiter::new(milli_cpu as f64 * 1000_f64)
+        };
+        let bandwidth_limiter = if bandwidth == 0 {
+            Limiter::new(f64::INFINITY)
+        } else {
+            Limiter::new(bandwidth as f64)
+        };
+        Self {
+            tenant_id,
+            cputime_limiter,
+            bandwidth_limiter,
         }
     }
 
-    pub fn get_mutex(&self) -> Arc<tokio::sync::Mutex<bool>> {
-        self.control_mutex.clone()
+    pub fn consume_write(&self, req_cnt: usize, kv_cnt: usize, bytes: usize) -> Duration {
+        let cost_micro_cpu: usize = req_cnt * 100 + kv_cnt * 50;
+        let cpu_dur = self.cputime_limiter.consume_duration(cost_micro_cpu);
+        let bw_dur = self.bandwidth_limiter.consume_duration(bytes);
+        cpu_dur + bw_dur
     }
 
-    // Consume read cpu quota
-    // If the quota is not enough, the returned duration will > 0, or return Duration::ZERO
-    pub fn consume_read(&self, time_slice_micro_secs: u32) -> Duration {
-        self.limiter
-            .consume_duration(time_slice_micro_secs as usize)
-    }
-}
-
-impl WriteQuotaLimiter {
-    pub fn new(speed_limit: u64) -> Self {
-        Self(Limiter::new(speed_limit as f64))
-    }
-
-    // Consume write bytes quota
-    // If the quota is not enough, the returned duration will > 0, or return Duration::ZERO
-    pub fn consume_write(&self, write_bytes: u64) -> Duration {
-        self.0.consume_duration(write_bytes as usize)
-    }
-
-    pub fn consume_write_vcpu(&self, req_cnt: u64, write_bytes: u64) -> Duration {
-        let cost_micro_cpu = 200 * req_cnt + write_bytes / 3;
-        self.0.consume_duration(cost_micro_cpu as usize)
+    pub fn consume_read(
+        &self,
+        time_micro_secs: usize,
+        bytes: usize,
+        query_type: QType,
+    ) -> Duration {
+        let cpu_dur = match query_type {
+            QType::KvGet => self
+                .cputime_limiter
+                .consume_duration(time_micro_secs as usize + 50),
+            QType::CoprScan => self
+                .cputime_limiter
+                .consume_duration(time_micro_secs as usize + 30),
+            _ => self
+                .cputime_limiter
+                .consume_duration(time_micro_secs as usize),
+        };
+        let bw_dur = self.bandwidth_limiter.consume_duration(bytes);
+        cpu_dur + bw_dur
     }
 }
 
 pub struct TenantQuotaLimiter {
     // tenant_id -> limiter
-    tenant_write_limiters: RwLock<HashMap<u32, Arc<WriteQuotaLimiter>>>,
-    tenant_read_limiters: RwLock<HashMap<u32, Arc<ReadQuotaLimiter>>>,
+    tenant_quota_limiters: RwLock<HashMap<u32, Arc<QuotaLimiter>>>,
     quota_is_updating: AtomicBool,
 }
 
@@ -73,112 +101,92 @@ impl Default for TenantQuotaLimiter {
 impl TenantQuotaLimiter {
     pub fn new() -> Self {
         Self {
-            tenant_write_limiters: RwLock::new(Default::default()),
-            tenant_read_limiters: RwLock::new(Default::default()),
+            tenant_quota_limiters: RwLock::new(Default::default()),
             quota_is_updating: AtomicBool::new(false),
         }
     }
 
-    pub fn get_read_quota_limiter(&self, tenant_id: u32) -> Option<Arc<ReadQuotaLimiter>> {
-        if let Some(rlimiter) = self.tenant_read_limiters.read().unwrap().get(&tenant_id) {
-            return Some(Arc::clone(rlimiter));
+    pub fn get_quota_limiter(&self, tenant_id: u32) -> Option<Arc<QuotaLimiter>> {
+        if let Some(limiter) = self.tenant_quota_limiters.read().unwrap().get(&tenant_id) {
+            return Some(Arc::clone(limiter));
         }
         None
-    }
-
-    pub fn get_write_quota_limiter(&self, tenant_id: u32) -> Option<Arc<WriteQuotaLimiter>> {
-        if let Some(wlimiter) = self.tenant_write_limiters.read().unwrap().get(&tenant_id) {
-            return Some(Arc::clone(wlimiter));
-        }
-        None
-    }
-
-    // Consume write bytes quota
-    // if quota is not enough, the returned duration will > 0, or return Duration::ZERO
-    pub fn consume_write(&self, tenant_id: u32, write_bytes: u64) -> Duration {
-        if let Some(limiter) = self.tenant_write_limiters.read().unwrap().get(&tenant_id) {
-            return limiter.as_ref().consume_write(write_bytes);
-        }
-        Duration::ZERO
-    }
-
-    pub fn consume_write_vcpu(&self, tenant_id: u32, req_cnt: u64, write_bytes: u64) -> Duration {
-        if let Some(limiter) = self.tenant_write_limiters.read().unwrap().get(&tenant_id) {
-            return limiter.as_ref().consume_write_vcpu(req_cnt, write_bytes);
-        }
-        Duration::ZERO
-    }
-
-    // Consume read cpu quota
-    // if quota is not enough, the returned duration will > 0, or return Duration::ZERO
-    pub fn consume_read(&self, tenant_id: u32, time_slice_micro_secs: u32) -> Duration {
-        if let Some(limiter) = self.tenant_read_limiters.read().unwrap().get(&tenant_id) {
-            return limiter.as_ref().consume_read(time_slice_micro_secs);
-        }
-        Duration::ZERO
     }
 
     // Refresh quota if there are some changes
-    // tenant_quotas: tenant_id -> (write_bytes_per_sec, read_milli_cpu)
-    pub fn refresh_quota(&self, tenant_quotas: Vec<(u32, (u64, u32))>) {
+    // tenant_quotas: tenant_id -> (millicpu_quota, bandwidth_quota)
+    pub fn refresh_quota(&self, tenant_quotas: Vec<(u32, TenantQuota)>) {
         if self
             .quota_is_updating
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
             // Acuire read lock to check if there is any change
-            let mut idxs_write = vec![];
-            let mut idxs_read = vec![];
+            let mut tenants = HashSet::<u32>::default();
+            let mut idxs_update = vec![];
             {
-                let wlimiters = self.tenant_write_limiters.read().unwrap();
-                let rlimiters = self.tenant_read_limiters.read().unwrap();
+                let limiters = self.tenant_quota_limiters.read().unwrap();
                 for (idx, quota) in tenant_quotas.iter().enumerate() {
-                    if let Some(l) = wlimiters.get(&quota.0) {
-                        if l.0.speed_limit() as u64 != quota.1.0 {
-                            idxs_write.push(idx);
+                    match limiters.get(&quota.0) {
+                        Some(limiter) => {
+                            if limiter.cputime_limiter.speed_limit() as usize
+                                != quota.1.cputime_quota
+                                || limiter.bandwidth_limiter.speed_limit() as usize
+                                    != quota.1.bandwidth_quota
+                            {
+                                idxs_update.push(idx);
+                            }
                         }
-                    } else if quota.1.0 > 0 {
-                        idxs_write.push(idx);
-                    }
-
-                    if let Some(l) = rlimiters.get(&quota.0) {
-                        if l.limiter.speed_limit() as u64 != quota.1.1 as u64 * 1000 {
-                            idxs_read.push(idx)
+                        None => {
+                            if quota.1.cputime_quota > 0 || quota.1.bandwidth_quota > 0 {
+                                idxs_update.push(idx)
+                            }
                         }
-                    } else if quota.1.1 > 0 {
-                        idxs_read.push(idx);
                     }
+                    tenants.insert(quota.0);
                 }
             }
             // Acquire write lock to update changes
-            if !idxs_write.is_empty() {
-                let mut wlimiters = self.tenant_write_limiters.write().unwrap();
-                for idx in idxs_write {
+            if !idxs_update.is_empty() {
+                let mut limiters = self.tenant_quota_limiters.write().unwrap();
+                for idx in idxs_update {
                     let quota = tenant_quotas[idx];
-                    let limiter = wlimiters
-                        .entry(quota.0)
-                        .or_insert_with(|| Arc::new(WriteQuotaLimiter::new(quota.1.0)));
-                    if quota.1.0 == 0 {
-                        (*limiter).0.set_speed_limit(f64::INFINITY);
-                    } else {
-                        (*limiter).0.set_speed_limit(quota.1.0 as f64);
-                    }
-                }
-            }
-            if !idxs_read.is_empty() {
-                let mut rlimiters = self.tenant_read_limiters.write().unwrap();
-                for idx in idxs_read {
-                    let quota = tenant_quotas[idx];
-                    let limiter = rlimiters
-                        .entry(quota.0)
-                        .or_insert_with(|| Arc::new(ReadQuotaLimiter::new(quota.1.1)));
-                    if quota.1.1 == 0 {
-                        (*limiter).limiter.set_speed_limit(f64::INFINITY);
+                    let limiter = limiters.entry(quota.0).or_insert_with(|| {
+                        Arc::new(QuotaLimiter::new(
+                            quota.0,
+                            quota.1.cputime_quota,
+                            quota.1.bandwidth_quota,
+                        ))
+                    });
+                    // update cputime quota
+                    if quota.1.cputime_quota == 0 {
+                        (*limiter).cputime_limiter.set_speed_limit(f64::INFINITY);
                     } else {
                         (*limiter)
-                            .limiter
-                            .set_speed_limit(quota.1.1 as f64 * 1000_f64);
+                            .cputime_limiter
+                            .set_speed_limit(quota.1.cputime_quota as f64 * 1000_f64);
                     }
+                    // update bandwidth quota
+                    if quota.1.bandwidth_quota == 0 {
+                        (*limiter).bandwidth_limiter.set_speed_limit(f64::INFINITY);
+                    } else {
+                        (*limiter)
+                            .bandwidth_limiter
+                            .set_speed_limit(quota.1.bandwidth_quota as f64);
+                    }
+                }
+
+                // Remove deleted tenant quota
+                let mut removed_tenants = vec![];
+                if limiters.len() != tenants.len() {
+                    for key in limiters.keys() {
+                        if !tenants.contains(key) {
+                            removed_tenants.push(*key);
+                        }
+                    }
+                }
+                for tenant in removed_tenants {
+                    limiters.remove(&tenant);
                 }
             }
 
@@ -194,34 +202,36 @@ mod tests {
     #[test]
     fn test_refresh_quota() {
         let quota_limiter = TenantQuotaLimiter::new();
-        let quota = vec![(1, (100, 200)), (2, (300, 400))];
+        let quota = vec![
+            (1, TenantQuota::new(100, 200)),
+            (2, TenantQuota::new(300, 400)),
+        ];
         quota_limiter.refresh_quota(quota);
 
-        let wlimiter1 = quota_limiter.get_write_quota_limiter(1).unwrap();
-        assert!((wlimiter1.0.speed_limit() - 100_f64).abs() < f64::EPSILON);
-        let rlimiter1 = quota_limiter.get_read_quota_limiter(1).unwrap();
-        assert!((rlimiter1.limiter.speed_limit() - 200_f64 * 1000_f64).abs() < f64::EPSILON);
+        let limiter1 = quota_limiter.get_quota_limiter(1).unwrap();
+        assert!((limiter1.cputime_limiter.speed_limit() - 100_f64 * 1000_f64).abs() < f64::EPSILON);
+        assert!(
+            (limiter1.bandwidth_limiter.speed_limit() - 200_f64).abs() < f64::EPSILON
+        );
 
-        let wlimiter2 = quota_limiter.get_write_quota_limiter(2).unwrap();
-        assert!((wlimiter2.0.speed_limit() - 300_f64).abs() < f64::EPSILON);
-        let rlimiter2 = quota_limiter.get_read_quota_limiter(2).unwrap();
-        assert!((rlimiter2.limiter.speed_limit() - 400_f64 * 1000_f64).abs() < f64::EPSILON);
+        let limiter2 = quota_limiter.get_quota_limiter(2).unwrap();
+        assert!((limiter2.cputime_limiter.speed_limit() - 300_f64 * 1000_f64).abs() < f64::EPSILON);
+        assert!(
+            (limiter2.bandwidth_limiter.speed_limit() - 400_f64).abs() < f64::EPSILON
+        );
 
-        assert!(quota_limiter.get_write_quota_limiter(3).is_none());
-        assert!(quota_limiter.get_read_quota_limiter(3).is_none());
-    }
+        assert!(quota_limiter.get_quota_limiter(3).is_none());
 
-    #[test]
-    fn test_consume_read() {
-        let read_limiter = ReadQuotaLimiter::new(1);
-        read_limiter.consume_read(100);
-        std::thread::sleep_ms(2000);
-        let mut total = 0;
-        for _i in 1..12 {
-            let wait = read_limiter.consume_read(100);
-            //std::thread::sleep(wait);
-            total += wait.as_micros();
-        }
-        println!("total:{}", total);
+        // remove tenant2, update tenant1
+        let quota = vec![(1, TenantQuota::new(200, 400))];
+        quota_limiter.refresh_quota(quota);
+
+        assert!(quota_limiter.get_quota_limiter(2).is_none());
+
+        let limiter1 = quota_limiter.get_quota_limiter(1).unwrap();
+        assert!((limiter1.cputime_limiter.speed_limit() - 200_f64 * 1000_f64).abs() < f64::EPSILON);
+        assert!(
+            (limiter1.bandwidth_limiter.speed_limit() - 400_f64).abs() < f64::EPSILON
+        );
     }
 }

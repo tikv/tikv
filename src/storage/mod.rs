@@ -104,7 +104,7 @@ use std::{
     },
 };
 use tikv_kv::SnapshotExt;
-use tikv_util::tenant_quota_limiter::{adjust_kv_req_cost, TenantQuotaLimiter};
+use tikv_util::tenant_quota_limiter::{QType, TenantQuotaLimiter};
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
@@ -530,7 +530,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let tenant_id = ctx.get_tenant_id();
-        let tenant_read_quota_limiter = self.sched.get_read_quota_limiter(tenant_id);
+        let tenant_quota_limiter = self.sched.get_quota_limiter(tenant_id);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -622,13 +622,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
 
-                    if let Some(limiter) = tenant_read_quota_limiter {
-                        let mutex = limiter.get_mutex();
-                        let _guard = mutex.lock().await;
-
-                        // Because kv get is a short request, it has other overheads
-                        let real_cost_time = adjust_kv_req_cost(cost_time);
-                        let wait = limiter.consume_read(real_cost_time.as_micros() as u32);
+                    if let Some(limiter) = tenant_quota_limiter {
+                        let wait =
+                            limiter.consume_read(cost_time.as_micros() as usize, 1, QType::KvGet);
                         if !wait.is_zero() {
                             GLOBAL_TIMER_HANDLE
                                 .delay(std::time::Instant::now() + wait)
