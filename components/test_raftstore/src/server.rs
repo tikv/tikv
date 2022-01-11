@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use arc_swap::ArcSwap;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use kvproto::deadlock::create_deadlock;
@@ -51,6 +50,7 @@ use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
+use tikv::server::load_statistics::ThreadLoadPool;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
@@ -117,7 +117,7 @@ struct ServerMeta {
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
-    res_meter_worker: LazyWorker<resource_metering::Task>,
+    rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
@@ -160,6 +160,7 @@ impl ServerCluster {
             map.clone(),
             RaftStoreBlackHole,
             worker.scheduler(),
+            Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
         let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
@@ -208,19 +209,26 @@ impl ServerCluster {
     fn init_resource_metering(
         &self,
         cfg: &resource_metering::Config,
-    ) -> (ResourceTagFactory, LazyWorker<resource_metering::Task>) {
-        let (_, crh, rtf) =
-            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
-        let mut worker = WorkerBuilder::new("resource-metering-reporter")
-            .pending_capacity(30)
-            .create()
-            .lazy_build("resource-metering-reporter");
-        let address = Arc::new(ArcSwap::new(Arc::new(cfg.receiver_address.clone())));
-        let data_sink = resource_metering::SingleTargetDataSink::new(address, self.env.clone());
-        let reporter =
-            resource_metering::Reporter::new(data_sink, cfg.clone(), crh, worker.scheduler());
-        worker.start_with_timer(reporter);
-        (rtf, worker)
+    ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
+        let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
+        let (_, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+        let (_, single_target_worker) = resource_metering::init_single_target(
+            cfg.receiver_address.clone(),
+            Arc::new(Environment::new(2)),
+            data_sink_reg_handle,
+        );
+
+        (
+            resource_tag_factory,
+            collector_reg_handle,
+            Box::new(move || {
+                single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
+            }),
+        )
     }
 }
 
@@ -328,7 +336,7 @@ impl Simulator for ServerCluster {
         };
 
         // Start resource metering.
-        let (res_tag_factory, res_meter_worker) =
+        let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
@@ -498,7 +506,7 @@ impl Simulator for ServerCluster {
             split_check_scheduler,
             auto_split_controller,
             concurrency_manager.clone(),
-            CollectorRegHandle::new_for_test(),
+            collector_reg_handle,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -532,7 +540,7 @@ impl Simulator for ServerCluster {
                 sim_trans: simulate_trans,
                 gc_worker,
                 rts_worker,
-                res_meter_worker,
+                rsmeter_cleanup,
             },
         );
         self.addrs.insert(node_id, format!("{}", addr));
@@ -562,7 +570,7 @@ impl Simulator for ServerCluster {
             if let Some(worker) = meta.rts_worker {
                 worker.stop_worker();
             }
-            meta.res_meter_worker.stop_worker();
+            (meta.rsmeter_cleanup)();
         }
     }
 

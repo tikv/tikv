@@ -8,3 +8,6 @@ pub mod test_dynamic_config;
 
 #[cfg(target_os = "linux")]
 pub mod test_receiver;
+
+#[cfg(target_os = "linux")]
+pub mod test_pubsub;

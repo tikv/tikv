@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::localstorage::{LocalStorage, STORAGE};
+use crate::recorder::localstorage::{LocalStorage, STORAGE};
 use crate::recorder::SubRecorder;
 use crate::RawRecords;
 
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 
 use collections::HashMap;
+use tikv_util::sys::thread::Pid;
 
 /// Records how many keys have been read in the current context.
 pub fn record_read_keys(count: u32) {
@@ -36,21 +37,16 @@ pub fn record_write_keys(count: u32) {
 /// See [SubRecorder] for more relevant designs.
 ///
 /// [SubRecorder]: crate::recorder::SubRecorder
+#[derive(Default)]
 pub struct SummaryRecorder {
     enabled: bool,
-}
-
-impl SummaryRecorder {
-    pub fn new(enabled: bool) -> Self {
-        Self { enabled }
-    }
 }
 
 impl SubRecorder for SummaryRecorder {
     fn collect(
         &mut self,
         records: &mut RawRecords,
-        thread_stores: &mut HashMap<usize, LocalStorage>,
+        thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
         thread_stores.iter_mut().for_each(|(_, ls)| {
             let summary = { std::mem::take(&mut *ls.summary_records.lock().unwrap()) };
@@ -72,21 +68,17 @@ impl SubRecorder for SummaryRecorder {
         });
     }
 
-    fn pause(
-        &mut self,
-        _records: &mut RawRecords,
-        thread_stores: &mut HashMap<usize, LocalStorage>,
-    ) {
+    fn pause(&mut self, _records: &mut RawRecords, thread_stores: &mut HashMap<Pid, LocalStorage>) {
         thread_stores.iter().for_each(|(_, ls)| {
             ls.summary_enable.store(false, SeqCst);
         });
         self.enabled = false;
     }
 
-    fn reset(
+    fn resume(
         &mut self,
         _records: &mut RawRecords,
-        thread_stores: &mut HashMap<usize, LocalStorage>,
+        thread_stores: &mut HashMap<Pid, LocalStorage>,
     ) {
         thread_stores.iter().for_each(|(_, ls)| {
             ls.summary_enable.store(true, SeqCst);
@@ -94,7 +86,7 @@ impl SubRecorder for SummaryRecorder {
         self.enabled = true;
     }
 
-    fn thread_created(&mut self, _id: usize, store: &LocalStorage) {
+    fn thread_created(&mut self, _id: Pid, store: &LocalStorage) {
         store.summary_enable.store(self.enabled, SeqCst);
     }
 }

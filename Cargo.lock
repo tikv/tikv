@@ -4,6 +4,12 @@
 version = 3
 
 [[package]]
+name = "RustyXML"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b5ace29ee3216de37c0546865ad08edef58b0f9e76838ed8959a84a990e58c5"
+
+[[package]]
 name = "addr2line"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -109,12 +115,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
-name = "arc-swap"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5d78ce20460b82d3fa150275ed9d55e21064fc7951177baacf86a145c4a4b1f"
-
-[[package]]
 name = "arrayvec"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,6 +179,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-timer"
+version = "1.0.0-beta.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d962799a5863fdf06fbf594e04102130582d010379137e9a98a7e2e693a5885"
+dependencies = [
+ "error-code",
+ "libc 0.2.106",
+ "wasm-bindgen",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -229,6 +241,8 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
+ "prometheus",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -241,6 +255,99 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "azure"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_identity",
+ "azure_storage",
+ "base64",
+ "chrono",
+ "cloud",
+ "futures 0.3.15",
+ "futures-util",
+ "kvproto",
+ "oauth2",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "azure_core"
+version = "0.1.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes 1.0.1",
+ "chrono",
+ "dyn-clone",
+ "futures 0.3.15",
+ "getrandom 0.2.3",
+ "http",
+ "log",
+ "oauth2",
+ "rand 0.8.3",
+ "reqwest",
+ "rustc_version 0.4.0",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "azure_identity"
+version = "0.1.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
+dependencies = [
+ "async-timer",
+ "async-trait",
+ "azure_core",
+ "chrono",
+ "futures 0.3.15",
+ "log",
+ "oauth2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "azure_storage"
+version = "0.1.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
+dependencies = [
+ "RustyXML",
+ "async-trait",
+ "azure_core",
+ "base64",
+ "bytes 1.0.1",
+ "chrono",
+ "futures 0.3.15",
+ "http",
+ "log",
+ "md5",
+ "once_cell",
+ "ring",
+ "serde",
+ "serde-xml-rs",
+ "serde_derive",
+ "serde_json",
+ "thiserror",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -646,7 +753,9 @@ dependencies = [
  "fail",
  "futures-io",
  "kvproto",
+ "lazy_static",
  "openssl",
+ "prometheus",
  "protobuf",
  "rusoto_core",
  "thiserror",
@@ -1081,6 +1190,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee2626afccd7561a06cf1367e2950c4718ea04565e20fb5029b6c7d8ad09abcf"
+
+[[package]]
 name = "either"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1091,6 +1206,14 @@ name = "encoding_rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a74ea89a0a1b98f6332de42c95baff457ada66d1cb4030f9ff151b2041a1c746"
+dependencies = [
+ "cfg-if 1.0.0",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.29"
+source = "git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a72a37a78228d80cd98047326559cf43c"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -1258,6 +1381,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-code"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5115567ac25674e0043e472be13d14e537f37ea8aa4bdc4aef0c89add1db1ff"
+dependencies = [
+ "libc 0.2.106",
+ "str-buf",
+]
+
+[[package]]
 name = "error_code"
 version = "0.0.1"
 dependencies = [
@@ -1324,6 +1457,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "aws",
+ "azure",
  "cloud",
  "encryption",
  "engine_traits",
@@ -1773,8 +1907,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcd999463524c52659517fe2cea98493cfe485d10565e7b0fb07dbba7ad2753"
 dependencies = [
  "cfg-if 1.0.0",
+ "js-sys",
  "libc 0.2.106",
  "wasi 0.10.2+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2221,7 +2357,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#47a2e9ec6efa20d9572fb92eccad69f091e305fb"
+source = "git+https://github.com/pingcap/kvproto.git#7a8280c36daf05e44f72130f3fd4e585ea2c62d8"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2414,6 +2550,12 @@ dependencies = [
  "digest",
  "opaque-debug",
 ]
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"
@@ -2811,6 +2953,26 @@ checksum = "05499f3756671c15885fee9034446956fff3f243d6077b91e5767df161f766b3"
 dependencies = [
  "hermit-abi",
  "libc 0.2.106",
+]
+
+[[package]]
+name = "oauth2"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80e47cfc4c0a1a519d9a025ebfbac3a2439d1b5cdf397d72dcb79b11d9920dab"
+dependencies = [
+ "base64",
+ "chrono",
+ "getrandom 0.2.3",
+ "http",
+ "rand 0.8.3",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "thiserror",
+ "url",
 ]
 
 [[package]]
@@ -3476,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#90a50b7e7e8beb89039627c95483c8554145188d"
+source = "git+https://github.com/tikv/raft-engine?branch=master#7842aad23f36ffe836b47762f85fc752b5d7ad48"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3489,7 +3651,7 @@ dependencies = [
  "libc 0.2.106",
  "log",
  "lz4-sys",
- "nix 0.19.0",
+ "nix 0.23.0",
  "num-derive",
  "num-traits",
  "parking_lot",
@@ -3847,7 +4009,7 @@ checksum = "0460542b551950620a3648c6aa23318ac6b3cd779114bd873209e6e8b5eb1c34"
 dependencies = [
  "base64",
  "bytes 1.0.1",
- "encoding_rs",
+ "encoding_rs 0.8.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-core",
  "futures-util",
  "http",
@@ -3863,6 +4025,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde",
+ "serde_json",
  "serde_urlencoded",
  "tokio",
  "tokio-native-tls",
@@ -3914,10 +4077,8 @@ dependencies = [
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "collections",
  "crossbeam",
- "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -4051,6 +4212,8 @@ dependencies = [
  "bytes 1.0.1",
  "futures 0.3.15",
  "rusoto_core",
+ "serde",
+ "serde_derive",
  "xml-rs",
 ]
 
@@ -4133,6 +4296,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0dfe2087c51c460008730de8b57e6a320782fbfb312e1f4d520e6c6fae155ee"
 dependencies = [
  "semver 0.11.0",
+]
+
+[[package]]
+name = "rustc_version"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
+dependencies = [
+ "semver 1.0.4",
 ]
 
 [[package]]
@@ -4299,6 +4471,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-xml-rs"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0bf1ba0696ccf0872866277143ff1fd14d22eec235d2b23702f95e6660f7dfa"
+dependencies = [
+ "log",
+ "serde",
+ "thiserror",
+ "xml-rs",
+]
+
+[[package]]
 name = "serde_cbor"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4340,6 +4524,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0421d4f173fab82d72d6babf36d57fae38b994ca5c2d78e704260ba6d12118b"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4376,7 +4569,6 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backup",
  "cdc",
  "chrono",
@@ -4497,7 +4689,7 @@ name = "slog-global"
 version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
- "arc-swap 0.4.8",
+ "arc-swap",
  "lazy_static",
  "log",
  "slog",
@@ -4635,6 +4827,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "str-buf"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d44a3643b4ff9caf57abcee9c2c621d6c03d9135e0d8b589bd9afb5992cb176a"
 
 [[package]]
 name = "str_stack"
@@ -4913,7 +5111,6 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
- "arc-swap 1.5.0",
  "backtrace",
  "collections",
  "concurrency_manager",
@@ -5000,7 +5197,6 @@ name = "tests"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "arc-swap 1.5.0",
  "arrow",
  "batch-system",
  "byteorder",
@@ -5177,7 +5373,7 @@ dependencies = [
  "chrono-tz",
  "codec",
  "collections",
- "encoding_rs",
+ "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
  "error_code",
  "hex 0.4.2",
  "kvproto",
@@ -5299,6 +5495,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-executor",
+ "futures-timer",
  "futures-util",
  "grpcio",
  "grpcio-health",
@@ -5552,6 +5749,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "nix 0.19.0",
+ "num-traits",
  "num_cpus",
  "online_config",
  "openssl",
@@ -5880,6 +6078,7 @@ dependencies = [
  "idna",
  "matches",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]

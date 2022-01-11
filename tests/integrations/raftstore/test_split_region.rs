@@ -386,11 +386,14 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_secs(1));
     let snap_dir = cluster.get_snap_dir(3);
     // no snaps should be sent.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
-        .unwrap()
-        .map(|p| p.unwrap().path())
-        .collect();
-    assert!(snapfiles.is_empty());
+
+    assert!(
+        fs::read_dir(snap_dir)
+            .unwrap()
+            .map(|p| p.unwrap().path())
+            .next()
+            .is_none()
+    );
 
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");

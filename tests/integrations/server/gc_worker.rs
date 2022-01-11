@@ -138,13 +138,13 @@ fn test_applied_lock_collector() {
     // Lock observer should only collect values in lock CF.
     let key = b"key0";
     must_kv_prewrite(
-        &leader_client,
+        leader_client,
         ctx.clone(),
         vec![new_mutation(Op::Put, key, &b"v".repeat(1024))],
         key.to_vec(),
         1,
     );
-    must_kv_commit(&leader_client, ctx.clone(), vec![key.to_vec()], 1, 2, 2);
+    must_kv_commit(leader_client, ctx.clone(), vec![key.to_vec()], 1, 2, 2);
     wait_for_apply(&mut cluster, &region);
     clients.iter().for_each(|(_, c)| {
         let locks = must_check_lock_observer(c, safe_point, true);
@@ -154,7 +154,7 @@ fn test_applied_lock_collector() {
 
     // Lock observer shouldn't collect locks after the safe point.
     must_kv_prewrite(
-        &leader_client,
+        leader_client,
         ctx.clone(),
         vec![new_mutation(Op::Put, key, b"v")],
         key.to_vec(),
@@ -171,7 +171,7 @@ fn test_applied_lock_collector() {
     let mutations = (1..1000)
         .map(|i| new_mutation(Op::Put, format!("key{}", i).as_bytes(), b"v"))
         .collect();
-    must_kv_prewrite(&leader_client, ctx.clone(), mutations, b"key1".to_vec(), 10);
+    must_kv_prewrite(leader_client, ctx.clone(), mutations, b"key1".to_vec(), 10);
     wait_for_apply(&mut cluster, &region);
     clients.iter().for_each(|(_, c)| {
         let locks = must_check_lock_observer(c, safe_point, true);
@@ -199,7 +199,7 @@ fn test_applied_lock_collector() {
         .map(|i| new_mutation(Op::Put, format!("key{}", i).as_bytes(), b"v"))
         .collect();
     must_kv_prewrite(
-        &leader_client,
+        leader_client,
         ctx.clone(),
         mutations,
         b"key1000".to_vec(),
@@ -232,7 +232,7 @@ fn test_applied_lock_collector() {
         assert!(must_check_lock_observer(c, safe_point, true).is_empty());
         // Can't register observer with smaller max_ts.
         assert!(
-            !register_lock_observer(&c, safe_point - 1)
+            !register_lock_observer(c, safe_point - 1)
                 .get_error()
                 .is_empty()
         );
@@ -240,7 +240,7 @@ fn test_applied_lock_collector() {
     });
     let leader_client = clients.get(&leader_store_id).unwrap();
     must_kv_prewrite(
-        &leader_client,
+        leader_client,
         ctx,
         vec![new_mutation(Op::Put, b"key1100", b"v")],
         b"key1100".to_vec(),

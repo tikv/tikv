@@ -17,6 +17,7 @@ failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
@@ -70,7 +71,6 @@ toml = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "../resource_metering" }
-arc-swap = "1.5.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

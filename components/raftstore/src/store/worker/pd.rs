@@ -44,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
+use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -675,7 +675,7 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
 
-    _region_cpu_records_collector: CollectorHandle,
+    _region_cpu_records_collector: CollectorGuard,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -712,8 +712,10 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector = collector_reg_handle
-            .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = collector_reg_handle.register(
+            Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
+            true,
+        );
 
         Runner {
             store_id,
@@ -973,7 +975,14 @@ where
         stats.set_capacity(capacity);
 
         let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info.kv_engine.get_engine_used_size().expect("cf");
+            + store_info
+                .kv_engine
+                .get_engine_used_size()
+                .expect("kv engine used size")
+            + store_info
+                .raft_engine
+                .get_engine_size()
+                .expect("raft engine used size");
         stats.set_used_size(used_size);
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
@@ -1025,6 +1034,9 @@ where
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
             .set(available as i64);
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["used"])
+            .set(used_size as i64);
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
