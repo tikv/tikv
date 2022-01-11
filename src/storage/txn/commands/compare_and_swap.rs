@@ -42,6 +42,10 @@ impl CommandExt for RawCompareAndSwap {
     fn write_bytes(&self) -> usize {
         self.key.as_encoded().len() + self.value.len()
     }
+
+    fn write_kvs(&self) -> usize {
+        1_usize
+    }
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {

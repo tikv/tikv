@@ -34,6 +34,7 @@ impl CommandExt for PessimisticRollback {
     tag!(pessimistic_rollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
+    write_kvs!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 

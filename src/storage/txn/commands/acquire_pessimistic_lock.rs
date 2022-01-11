@@ -61,6 +61,10 @@ impl CommandExt for AcquirePessimisticLock {
             .sum()
     }
 
+    fn write_kvs(&self) -> usize {
+        self.keys.len()
+    }
+
     gen_lock!(keys: multiple(|x| &x.0));
 }
 

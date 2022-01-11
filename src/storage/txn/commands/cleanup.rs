@@ -35,6 +35,7 @@ impl CommandExt for Cleanup {
     tag!(cleanup);
     ts!(start_ts);
     write_bytes!(key);
+    write_kvs!(key);
     gen_lock!(key);
 }
 

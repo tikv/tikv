@@ -210,15 +210,11 @@ mod tests {
 
         let limiter1 = quota_limiter.get_quota_limiter(1).unwrap();
         assert!((limiter1.cputime_limiter.speed_limit() - 100_f64 * 1000_f64).abs() < f64::EPSILON);
-        assert!(
-            (limiter1.bandwidth_limiter.speed_limit() - 200_f64).abs() < f64::EPSILON
-        );
+        assert!((limiter1.bandwidth_limiter.speed_limit() - 200_f64).abs() < f64::EPSILON);
 
         let limiter2 = quota_limiter.get_quota_limiter(2).unwrap();
         assert!((limiter2.cputime_limiter.speed_limit() - 300_f64 * 1000_f64).abs() < f64::EPSILON);
-        assert!(
-            (limiter2.bandwidth_limiter.speed_limit() - 400_f64).abs() < f64::EPSILON
-        );
+        assert!((limiter2.bandwidth_limiter.speed_limit() - 400_f64).abs() < f64::EPSILON);
 
         assert!(quota_limiter.get_quota_limiter(3).is_none());
 
@@ -230,8 +226,6 @@ mod tests {
 
         let limiter1 = quota_limiter.get_quota_limiter(1).unwrap();
         assert!((limiter1.cputime_limiter.speed_limit() - 200_f64 * 1000_f64).abs() < f64::EPSILON);
-        assert!(
-            (limiter1.bandwidth_limiter.speed_limit() - 400_f64).abs() < f64::EPSILON
-        );
+        assert!((limiter1.bandwidth_limiter.speed_limit() - 400_f64).abs() < f64::EPSILON);
     }
 }
