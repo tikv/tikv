@@ -2338,7 +2338,7 @@ where
         pessimistic_locks.is_valid = false;
 
         // 2. Propose pessimistic locks
-        if pessimistic_locks.map.is_empty() {
+        if pessimistic_locks.is_empty() {
             return false;
         }
         // FIXME: Raft command has size limit. Either limit the total size of pessimistic locks
@@ -2348,7 +2348,7 @@ where
             // Downgrade to a read guard, do not block readers in the scheduler as far as possible.
             let pessimistic_locks = RwLockWriteGuard::downgrade(pessimistic_locks);
             fail_point!("invalidate_locks_before_transfer_leader");
-            for (key, (lock, deleted)) in &pessimistic_locks.map {
+            for (key, (lock, deleted)) in &*pessimistic_locks {
                 if *deleted {
                     continue;
                 }

@@ -57,7 +57,7 @@ pub use self::snap::{
     Snapshot, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::txn_ext::{PeerPessimisticLocks, TxnExt};
+pub use self::txn_ext::{PeerPessimisticLocks, PessimisticLockPair, TxnExt};
 pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::RefreshConfigTask;
 pub use self::worker::{
