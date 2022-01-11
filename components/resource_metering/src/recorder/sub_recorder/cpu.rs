@@ -3,11 +3,7 @@
 use crate::metrics::STAT_TASK_COUNT;
 use crate::recorder::localstorage::{LocalStorage, SharedTagInfos};
 use crate::recorder::SubRecorder;
-<<<<<<< HEAD
 use crate::utils::{self, Stat};
-use crate::TagInfos;
-=======
->>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
 use crate::{RawRecord, RawRecords};
 
 use collections::HashMap;
@@ -83,13 +79,8 @@ impl SubRecorder for CpuRecorder {
 }
 
 struct ThreadStat {
-<<<<<<< HEAD
-    attached_tag: Arc<ArcSwapOption<TagInfos>>,
-    stat: Stat,
-=======
     attached_tag: SharedTagInfos,
-    stat: thread::ThreadStat,
->>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
+    stat: Stat,
 }
 
 #[cfg(test)]
@@ -110,12 +101,7 @@ mod tests {
 #[cfg(target_os = "linux")]
 mod tests {
     use super::*;
-<<<<<<< HEAD
     use crate::{utils, RawRecords, TagInfos};
-    use arc_swap::ArcSwapOption;
-=======
-    use crate::{RawRecords, TagInfos};
->>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
     use std::sync::Arc;
 
     fn heavy_job() -> u64 {

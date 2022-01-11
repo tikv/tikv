@@ -8,11 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use collections::HashMap;
-<<<<<<< HEAD
-=======
 use crossbeam::atomic::AtomicCell;
-use tikv_util::sys::thread::Pid;
->>>>>>> 59c2c4c13... rsmeter: fix perf regression caused by arc swap  (#11833)
 
 thread_local! {
     /// `STORAGE` is a thread-localized instance of [LocalStorage].
