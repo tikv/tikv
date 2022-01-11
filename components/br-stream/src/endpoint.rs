@@ -4,13 +4,13 @@ use std::convert::AsRef;
 use std::fmt;
 use std::path::PathBuf;
 
-use raftstore::RegionInfoAccessor;
 use tikv::storage::Engine;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
-use txn_types::Key;
+use txn_types::TimeStamp;
 
+use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
 use crate::router::{ApplyEvent, Router};
@@ -40,16 +40,20 @@ pub struct Endpoint<S: MetaStore + 'static, R, E> {
     engine: E,
 }
 
-impl<R, E> Endpoint<EtcdStore, R, E> {
-    pub fn new<E: AsRef<str>>(
+impl<R, E> Endpoint<EtcdStore, R, E>
+where
+    R: RegionInfoProvider + 'static + Clone,
+    E: Engine,
+{
+    pub fn new<S: AsRef<str>>(
         store_id: u64,
-        endpoints: &dyn AsRef<[E]>,
+        endpoints: &dyn AsRef<[S]>,
         config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
         accessor: R,
         engine: E,
-    ) -> Endpoint<EtcdStore, RegionInfoAccessor> {
+    ) -> Endpoint<EtcdStore, R, E> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
@@ -92,7 +96,7 @@ impl<R, E> Endpoint<EtcdStore, R, E> {
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(Endpoint::starts_watch_tasks(
+        pool.spawn(Endpoint::<_, R, E>::starts_watch_tasks(
             meta_client_clone,
             scheduler_clone,
         ));
@@ -112,16 +116,9 @@ impl<R, E> Endpoint<EtcdStore, R, E> {
 impl<S, R, E> Endpoint<S, R, E>
 where
     S: MetaStore + 'static,
-    R: RegionInfoProvider + 'static,
+    R: RegionInfoProvider + Clone + 'static,
     E: Engine,
 {
-    async fn initialize_range(&self, start_key: &Key, end_key: &Key) {
-        let regions = self.regions.get_regions_in_range(
-            start_key.as_encoded().as_slice(),
-            end_key.as_encoded().as_slice(),
-        );
-    }
-
     // TODO find a proper way to exit watch tasks
     async fn starts_watch_tasks(
         meta_client: MetadataClient<S>,
@@ -198,10 +195,20 @@ where
         });
     }
 
+    pub fn make_initial_loader(&self, from_ts: TimeStamp) -> InitialDataLoader<E, R> {
+        InitialDataLoader::new(
+            self.engine.clone(),
+            self.regions.clone(),
+            from_ts,
+            self.range_router.clone(),
+        )
+    }
+
     // register task ranges
     pub fn on_register(&self, task: MetaTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
+            let init = self.make_initial_loader(TimeStamp::new(task.info.get_start_ts()));
             let range_router = self.range_router.clone();
 
             info!(
@@ -218,17 +225,23 @@ where
                             "task" => ?task,
                             "ranges-count" => ranges.inner.len(),
                         );
+                        let ranges = ranges
+                            .inner
+                            .into_iter()
+                            .map(|(start_key, end_key)| {
+                                (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                            })
+                            .collect::<Vec<_>>();
+                        for (start_key, end_key) in ranges.iter() {
+                            let init = init.clone();
+                            let start_key = start_key.to_owned();
+                            let end_key = end_key.to_owned();
+                            if let Err(e) = init.initialize_range(start_key, end_key).await {
+                                error!("failed to initial range"; "error" => ?e);
+                            }
+                        }
                         // TODO implement register ranges
-                        range_router.register_ranges(
-                            task_name,
-                            ranges
-                                .inner
-                                .into_iter()
-                                .map(|(start_key, end_key)| {
-                                    (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                                })
-                                .collect(),
-                        );
+                        range_router.register_ranges(task_name, ranges);
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);
@@ -313,9 +326,11 @@ impl fmt::Display for Task {
     }
 }
 
-impl<S> Runnable for Endpoint<S>
+impl<S, R, E> Runnable for Endpoint<S, R, E>
 where
-    S: MetaStore,
+    S: MetaStore + 'static,
+    R: RegionInfoProvider + Clone + 'static,
+    E: Engine,
 {
     type Task = Task;
 

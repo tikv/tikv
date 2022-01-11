@@ -21,15 +21,16 @@ use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
-use raftstore::coprocessor::CmdBatch;
+use raftstore::{coprocessor::CmdBatch, RegionInfoAccessor};
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
+use tikv::storage::kv::BTreeEngine;
 use tikv_util::{box_err, info, warn, worker::Scheduler};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, sync::RwLock};
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp};
 
 impl ApplyEvent {
     /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error commands.
@@ -558,7 +559,10 @@ impl DataFile {
 
     /// Add a new KV pair to the file, returning its size.
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
-        let encoded = super::endpoint::Endpoint::<EtcdStore>::encode_event(&kv.key, &kv.value);
+        let encoded =
+            super::endpoint::Endpoint::<EtcdStore, RegionInfoAccessor, BTreeEngine>::encode_event(
+                &kv.key, &kv.value,
+            );
         let mut size = 0;
         for slice in encoded {
             let slice = slice.as_ref();

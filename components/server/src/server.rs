@@ -822,6 +822,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 backup_stream_scheduler,
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
+                engines.engine.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);

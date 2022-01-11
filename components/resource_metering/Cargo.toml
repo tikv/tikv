@@ -30,6 +30,9 @@ arc-swap = "1.5.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+thread-id = "4"
+
 [dev-dependencies]
 rand = "0.8"
 

@@ -166,14 +166,14 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// forward the progress of some task.
-    pub async fn step_task(&self, task_name: &str, region_id: u64, ts: u64) -> Result<()> {
+    pub async fn step_task(&self, task_name: &str, ts: u64) -> Result<()> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
         }
         self.meta_store
             .set(KeyValue(
-                MetaKey::next_backup_ts_of(task_name, self.store_id, region_id),
+                MetaKey::next_backup_ts_of(task_name, self.store_id),
                 ts.to_be_bytes().to_vec(),
             ))
             .await?;
@@ -250,7 +250,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// access the next backup ts of some task and some region.
-    pub async fn progress_of_task(&self, task_name: &str, region: u64) -> Result<u64> {
+    pub async fn progress_of_task(&self, task_name: &str) -> Result<u64> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get"]).observe(now.saturating_elapsed().as_secs_f64())
@@ -261,7 +261,6 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .get(Keys::Key(MetaKey::next_backup_ts_of(
                 task_name,
                 self.store_id,
-                region,
             )))
             .await?;
         if items.is_empty() {
