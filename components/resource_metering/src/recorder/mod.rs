@@ -147,7 +147,7 @@ impl Recorder {
             if let Some(ids) = utils::thread_ids() {
                 self.thread_stores.retain(|k, v| {
                     let retain = ids.contains(k);
-                    assert!(retain || v.attached_tag.load().is_none());
+                    debug_assert!(retain || v.attached_tag.swap(None).is_none());
                     retain
                 });
             }
