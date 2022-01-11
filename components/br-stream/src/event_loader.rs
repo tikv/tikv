@@ -53,9 +53,15 @@ impl<S: Snapshot> EventLoader<S> {
         for entry in b.drain() {
             match entry {
                 TxnEntry::Prewrite {
-                    default: (key, _), ..
+                    default: (key, value),
+                    ..
                 } => {
-                    warn!("skipping txn entry because it is prewrite."; "key" => Redact::key(&key));
+                    result.push(ApplyEvent::from_committed(
+                        CF_DEFAULT,
+                        key,
+                        value,
+                        self.region_id,
+                    )?);
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     let write =
