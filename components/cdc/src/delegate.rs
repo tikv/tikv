@@ -127,9 +127,11 @@ impl Downstream {
     }
 
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
-        let mut change_data_event = Event::default();
-        change_data_event.event = Some(Event_oneof_event::Error(err_event));
-        change_data_event.region_id = region_id;
+        let mut change_data_event = Event {
+            event: Some(Event_oneof_event::Error(err_event)),
+            region_id: region_id,
+            ..Default::default()
+        };
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)

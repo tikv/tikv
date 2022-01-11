@@ -735,9 +735,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let min_resolved_ts = self.min_resolved_ts.into_inner();
         let send_cdc_event = |regions: &HashSet<u64>, min_resolved_ts: u64, conn: &Conn| {
             let downstream_regions = conn.get_downstreams();
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = min_resolved_ts;
-            resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
+            let mut resolved_ts = ResolvedTs {
+                ts: min_resolved_ts,
+                regions: Vec::with_capacity(downstream_regions.len()),
+                ..Default::default()
+            };
             // Only send region ids that are captured by the connection.
             for (region_id, (_, downstream_state)) in conn.get_downstreams() {
                 if regions.contains(region_id)
