@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use arc_swap::ArcSwapOption;
 use collections::HashMap;
+use crossbeam::atomic::AtomicCell;
 use tikv_util::sys::thread::Pid;
 
 thread_local! {
@@ -25,7 +25,7 @@ pub struct LocalStorage {
     pub registered: bool,
     pub register_failed_times: u32,
     pub is_set: bool,
-    pub attached_tag: Arc<ArcSwapOption<TagInfos>>,
+    pub attached_tag: SharedTagInfos,
     pub summary_enable: Arc<AtomicBool>,
     pub summary_cur_record: Arc<SummaryRecord>,
     pub summary_records: Arc<Mutex<HashMap<Arc<TagInfos>, SummaryRecord>>>,
@@ -38,4 +38,29 @@ pub struct LocalStorage {
 pub struct LocalStorageRef {
     pub id: Pid,
     pub storage: LocalStorage,
+}
+
+#[derive(Clone, Default)]
+pub struct SharedTagInfos {
+    tag: Arc<AtomicCell<Option<Arc<TagInfos>>>>,
+}
+
+impl SharedTagInfos {
+    pub fn new(tag: Arc<TagInfos>) -> Self {
+        Self {
+            tag: Arc::new(AtomicCell::new(Some(tag))),
+        }
+    }
+
+    pub fn swap(&self, tag: Option<Arc<TagInfos>>) -> Option<Arc<TagInfos>> {
+        self.tag.swap(tag)
+    }
+
+    pub fn load_full(&self) -> Option<Arc<TagInfos>> {
+        self.tag.swap(None).map(|t| {
+            let r = t.clone();
+            assert!(self.tag.swap(Some(t)).is_none());
+            r
+        })
+    }
 }
