@@ -97,9 +97,6 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
-    #[online_config(skip)]
-    pub raft_msg_flush_interval: ReadableDuration,
-
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     #[online_config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
@@ -212,7 +209,6 @@ impl Default for Config {
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 8192,
             raft_msg_max_batch_size: 128,
-            raft_msg_flush_interval: ReadableDuration::micros(200),
             grpc_compression_type: GrpcCompressionType::None,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
@@ -240,11 +236,10 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
-            // 300 means gRPC threads are under heavy load if their total CPU usage
-            // is greater than 300%.
-            heavy_load_threshold: 300,
-            // The resolution of timer in tokio is 1ms.
-            heavy_load_wait_duration: ReadableDuration::millis(1),
+            // 75 means a gRPC thread is under heavy load if its total CPU usage
+            // is greater than 75%.
+            heavy_load_threshold: 75,
+            heavy_load_wait_duration: ReadableDuration::micros(50),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             reject_messages_on_memory_ratio: 0.2,
@@ -356,6 +351,12 @@ impl Config {
             return Err(box_err!(
                 "server.reject_messages_on_memory_ratio must be greater than 0"
             ));
+        }
+
+        if self.heavy_load_threshold > 100 {
+            // The configuration has been changed to describe CPU usage of a single thread instead
+            // of all threads. So migrate from the old style.
+            self.heavy_load_threshold = 75;
         }
 
         Ok(())
