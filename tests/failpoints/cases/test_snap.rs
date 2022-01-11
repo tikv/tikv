@@ -287,10 +287,12 @@ fn test_destroy_peer_on_pending_snapshot_and_restart() {
     fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
 
     pd_client.must_remove_peer(r1, new_peer(3, 3));
-    pd_client.must_add_peer(r1, new_peer(3, 4)); // Without it, pd_client.must_remove_peer does not trigger destroy_peer!
+    // Without it, pd_client.must_remove_peer does not trigger destroy_peer!
+    pd_client.must_add_peer(r1, new_peer(3, 4));
 
     let before_handle_normal_3_fp = "before_handle_normal_3";
-    fail::cfg(before_handle_normal_3_fp, "pause").unwrap(); // to pause ApplyTaskRes::Destroy so that peer gc could finish
+    // to pause ApplyTaskRes::Destroy so that peer gc could finish
+    fail::cfg(before_handle_normal_3_fp, "pause").unwrap();
     // Wait for leader send msg to peer 3.
     // Then destroy peer 3
     sleep_ms(100);
