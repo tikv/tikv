@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{codec::Encoder, endpoint::Task, errors::Error};
+use crate::{codec::Encoder, endpoint::Task, errors::Error, utils::SlotMap};
 
 use super::errors::Result;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
