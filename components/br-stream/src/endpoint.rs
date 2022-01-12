@@ -19,7 +19,7 @@ use raftstore::coprocessor::CmdBatch;
 use tikv::config::BackupStreamConfig;
 
 use tikv_util::worker::{Runnable, Scheduler};
-use tikv_util::{debug, error, info, Either};
+use tikv_util::{debug, error, info};
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 

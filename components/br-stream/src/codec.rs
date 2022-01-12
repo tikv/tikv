@@ -2,6 +2,7 @@
 use bytes::{Buf, Bytes};
 use std::io::prelude::*;
 use std::io::Cursor;
+use tikv_util::Either;
 
 pub struct Encoder;
 
@@ -26,7 +27,7 @@ impl Encoder {
         buf.read_exact(key.as_mut_slice()).unwrap();
         let len = buf.get_u32_le() as usize;
         let mut val = vec![0; len];
-        buf.read_exact(buffer.as_mut_slice()).unwrap();
+        buf.read_exact(val.as_mut_slice()).unwrap();
         (key, val)
     }
 }
@@ -45,7 +46,7 @@ mod tests {
             let e = Encoder::encode_event(&key, &val);
             let mut event = vec![];
             for s in e {
-                event.push(s.into());
+                event.extend_from_slice(s.as_ref());
             }
             let (decoded_key, decoded_val) = Encoder::decode_event(&event);
             assert_eq!(key, decoded_key);
