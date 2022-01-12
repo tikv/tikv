@@ -2030,30 +2030,7 @@ where
                 self.on_leader_commit_idx_changed(pre_commit_index, hs.get_commit());
             }
 
-            let diff = match (
-                self.in_apply_lag,
-                hs.get_commit() - self.get_store().applied_index()
-                    > ctx.cfg.leader_transfer_max_log_lag,
-            ) {
-                (true, false) => {
-                    self.in_apply_lag = false;
-                    -1
-                }
-                (false, true) => {
-                    self.in_apply_lag = true;
-                    1
-                }
-                (..) => 0,
-            };
-            if diff != 0 {
-                let mut meta = ctx.store_meta.lock().unwrap();
-                if diff > 0 {
-                    meta.apply_lag_region += 1;
-                } else {
-                    meta.apply_lag_region -= 1;
-                }
-                APPLY_LAG_REGION_GAUGE.add(diff);
-            }
+            self.check_apply_lag(ctx, hs.get_commit(), self.get_store().applied_index());
         }
 
         if !ready.messages().is_empty() {
@@ -2682,25 +2659,15 @@ where
         }
     }
 
-    pub fn post_apply<T>(
+    fn check_apply_lag<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        apply_state: RaftApplyState,
-        applied_index_term: u64,
-        apply_metrics: &ApplyMetrics,
-    ) -> bool {
-        let mut has_ready = false;
-
-        if self.is_handling_snapshot() {
-            panic!("{} should not applying snapshot.", self.tag);
-        }
-
-        let applied_index = apply_state.get_applied_index();
-        self.raft_group.advance_apply_to(applied_index);
-
+        commit_index: u64,
+        apply_index: u64,
+    ) {
         let diff = match (
             self.in_apply_lag,
-            self.get_store().commit_index() - applied_index > ctx.cfg.leader_transfer_max_log_lag,
+            commit_index - apply_index > ctx.cfg.leader_transfer_max_log_lag,
         ) {
             (true, false) => {
                 self.in_apply_lag = false;
@@ -2721,6 +2688,25 @@ where
             }
             APPLY_LAG_REGION_GAUGE.add(diff);
         }
+    }
+
+    pub fn post_apply<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        apply_state: RaftApplyState,
+        applied_index_term: u64,
+        apply_metrics: &ApplyMetrics,
+    ) -> bool {
+        let mut has_ready = false;
+
+        if self.is_handling_snapshot() {
+            panic!("{} should not applying snapshot.", self.tag);
+        }
+
+        let applied_index = apply_state.get_applied_index();
+        self.raft_group.advance_apply_to(applied_index);
+
+        self.check_apply_lag(ctx, self.get_store().commit_index(), applied_index);
 
         self.cmd_epoch_checker.advance_apply(
             applied_index,
