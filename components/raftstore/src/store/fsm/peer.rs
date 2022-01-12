@@ -857,7 +857,10 @@ where
                     }
                 }
             } else if key.term <= compacted_term
-                && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
+                && (key.idx < compacted_idx
+                    || key.idx == compacted_idx
+                        && !is_applying_snap
+                        && !self.fsm.peer.pending_remove)
             {
                 info!(
                     "deleting applied snap file";
@@ -2072,6 +2075,35 @@ where
 
     fn destroy_peer(&mut self, merged_by_target: bool) {
         fail_point!("destroy_peer");
+<<<<<<< HEAD
+=======
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+        fail_point!("destroy_peer_after_pending_move", |_| { true });
+        if self.fsm.peer.has_unpersisted_ready() {
+            assert!(self.ctx.sync_write_worker.is_none());
+            // The destroy must be delayed if there are some unpersisted readies.
+            // Otherwise there is a race of writting kv db and raft db between here
+            // and write worker.
+            if let Some(mbt) = self.fsm.delayed_destroy {
+                panic!(
+                    "{} destroy peer twice with some unpersisted readies, original {}, now {}",
+                    self.fsm.peer.tag, mbt, merged_by_target
+                );
+            }
+            self.fsm.delayed_destroy = Some(merged_by_target);
+            // TODO: The destroy process can also be asynchronous as snapshot process,
+            // if so, all write db operations are removed in store thread.
+            info!(
+                "delays destroy";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+            );
+            return false;
+        }
+
+>>>>>>> 8c31f1a39... raftstore: skip deleting snapshot files in peer pending_remove is true (#11782)
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
