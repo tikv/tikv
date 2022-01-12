@@ -52,17 +52,17 @@ pub use self::linux::ThreadLoadStatistics;
 
 #[cfg(not(target_os = "linux"))]
 mod other_os {
-    use super::ThreadLoad;
+    use super::ThreadLoadPool;
     use std::sync::Arc;
     use std::time::Instant;
 
     /// A dummy `ThreadLoadStatistics` implementation for non-Linux platforms
-    pub struct ThreadLoadStatistics {}
+    pub struct ThreadLoadStatistics;
 
     impl ThreadLoadStatistics {
         /// Constructs a new `ThreadLoadStatistics`.
-        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
-            ThreadLoadStatistics {}
+        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoadPool>) -> Self {
+            ThreadLoadStatistics
         }
         /// Designate target thread count of this collector.
         pub fn set_thread_target(&mut self, _target: usize) {}
