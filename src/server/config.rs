@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::{cmp, i32, isize};
+use std::time::Duration;
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -139,7 +140,7 @@ pub struct Config {
     #[online_config(skip)]
     pub heavy_load_threshold: usize,
     #[online_config(skip)]
-    pub heavy_load_wait_duration: ReadableDuration,
+    pub heavy_load_wait_duration: Option<ReadableDuration>,
     #[online_config(skip)]
     pub enable_request_batch: bool,
     #[online_config(skip)]
@@ -239,7 +240,7 @@ impl Default for Config {
             // 75 means a gRPC thread is under heavy load if its total CPU usage
             // is greater than 75%.
             heavy_load_threshold: 75,
-            heavy_load_wait_duration: ReadableDuration::micros(50),
+            heavy_load_wait_duration: None,
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             reject_messages_on_memory_ratio: 0.2,
@@ -252,6 +253,11 @@ impl Default for Config {
 }
 
 impl Config {
+    #[inline]
+    pub fn heavy_load_wait_duration(&self) -> Duration {
+        self.heavy_load_wait_duration.unwrap_or(ReadableDuration::micros(50)).0
+    }
+
     /// Validates the configuration and returns an error if it is misconfigured.
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
