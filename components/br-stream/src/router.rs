@@ -89,7 +89,21 @@ impl ApplyEvent {
         result
     }
 
-    /// make a apply event from a committed KV pair.
+    /// make an apply event from a prewrite record kv pair.
+    pub fn from_prewrite(key: Vec<u8>, value: Vec<u8>, region: u64) -> Self {
+        Self {
+            key,
+            value,
+            // Uncommitted (prewrite) records can only exist at default CF.
+            cf: CF_DEFAULT.to_owned(),
+            region_id: region,
+            // The prewrite hasn't been committed -- we cannot get more information about it.
+            region_resolved_ts: 0,
+            cmd_type: CmdType::Put,
+        }
+    }
+
+    /// make an apply event from a committed KV pair.
     pub fn from_committed(cf: CfName, key: Vec<u8>, value: Vec<u8>, region: u64) -> Result<Self> {
         let key = Key::from_encoded(key);
         // Once we can scan the write key, the txn must be committed.
@@ -301,7 +315,8 @@ impl RouterInner {
                 .is_ok()
             {
                 // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
-                if self.scheduler.schedule(Task::Flush(task)).is_err() {
+                if let Err(err) = self.scheduler.schedule(Task::Flush(task)) {
+                    warn!("failed to send flush request."; "err" => ?err);
                     // oops... we failed, let's leave the chance to next challenger.
                     inner_router.flushed.store(false, Ordering::SeqCst);
                 }

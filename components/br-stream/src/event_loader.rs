@@ -4,10 +4,10 @@ use engine_traits::{CF_DEFAULT, CF_WRITE};
 
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv::storage::{
-    kv::SnapContext,
+    kv::{SnapContext, StatisticsSummary},
     mvcc::{DeltaScanner, ScannerBuilder},
     txn::{EntryBatch, TxnEntry, TxnEntryScanner},
-    Engine, Snapshot,
+    Engine, Snapshot, Statistics,
 };
 use tikv_util::box_err;
 use txn_types::TimeStamp;
@@ -55,22 +55,22 @@ impl<S: Snapshot> EventLoader<S> {
 
     /// scan a batch of events from the snapshot.
     /// note: maybe make something like [`EntryBatch`] for reducing allocation.
-    fn scan_batch(&mut self, batch_size: usize) -> Result<Vec<ApplyEvent>> {
+    fn scan_batch(
+        &mut self,
+        batch_size: usize,
+        result: &mut Vec<ApplyEvent>,
+    ) -> Result<Statistics> {
         let mut b = EntryBatch::with_capacity(batch_size);
         self.scanner.scan_entries(&mut b)?;
-        let mut result = Vec::with_capacity(b.len() * 2);
         for entry in b.drain() {
             match entry {
                 TxnEntry::Prewrite {
                     default: (key, value),
                     ..
                 } => {
-                    result.push(ApplyEvent::from_committed(
-                        CF_DEFAULT,
-                        key,
-                        value,
-                        self.region_id,
-                    )?);
+                    if !key.is_empty() {
+                        result.push(ApplyEvent::from_prewrite(key, value, self.region_id));
+                    }
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     let write =
@@ -88,7 +88,7 @@ impl<S: Snapshot> EventLoader<S> {
                 }
             }
         }
-        Ok(result)
+        Ok(self.scanner.take_statistics())
     }
 }
 
@@ -125,7 +125,7 @@ where
             .find(|peer| peer.get_store_id() == self.store_id)
     }
 
-    pub async fn initialize_region(&self, region: &Region) -> Result<()> {
+    pub async fn initialize_region(&self, region: &Region) -> Result<Statistics> {
         // There are 2 ways for getting the initial snapshot of a region:
         //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
@@ -141,8 +141,6 @@ where
                 })?
                 .clone(),
         );
-        // maybe also set peer here?
-        // region_ctx.set_peer(todo!());
         let ctx = SnapContext {
             pb_ctx: &region_ctx,
             ..Default::default()
@@ -156,24 +154,31 @@ where
         })?;
         let mut event_loader =
             EventLoader::load_from(snap, self.start_ts, TimeStamp::max(), region.id)?;
-        let events = event_loader.scan_batch(1024)?;
+        let mut events = Vec::with_capacity(2048);
+        let stat = event_loader.scan_batch(1024, &mut events)?;
         for event in events {
             self.sink.on_event(event).await?;
         }
-        Ok(())
+        Ok(stat)
     }
 
-    pub async fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+    pub async fn initialize_range(
+        &self,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Result<Statistics> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
+        let mut total_stat = StatisticsSummary::default();
         loop {
             let regions = pager.next_page(8).await?;
             if regions.len() == 0 {
                 break;
             }
             for r in regions {
-                self.initialize_region(&r.region).await?;
+                let stat = self.clone().initialize_region(&r.region).await?;
+                total_stat.add_statistics(&stat);
             }
         }
-        Ok(())
+        Ok(total_stat.stat)
     }
 }

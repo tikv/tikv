@@ -5,6 +5,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use tikv::storage::Engine;
+use tikv_util::time::Instant;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
@@ -241,10 +242,26 @@ where
                             let init = init.clone();
                             let start_key = start_key;
                             let end_key = end_key;
-                            if let Err(e) = init.initialize_range(start_key, end_key).await {
-                                error!("failed to initial range"; "error" => ?e);
+                            let start = Instant::now_coarse();
+                            match init
+                                .initialize_range(start_key.clone(), end_key.clone())
+                                .await
+                            {
+                                Ok(stat) => {
+                                    info!("success to do initial scanning"; "stat" => ?stat, 
+                                    "start_key" => utils::redact(&start_key),
+                                    "end_key" => utils::redact(&end_key),
+                                    "take" => ?start.saturating_elapsed(),)
+                                }
+                                Err(e) => {
+                                    error!("failed to initial range"; "error" => ?e);
+                                }
                             }
                         }
+                        info!(
+                            "finish register backup stream ranges";
+                            "task" => ?task,
+                        );
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);

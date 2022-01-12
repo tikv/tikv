@@ -24,7 +24,7 @@ pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {
 pub fn get_ts(key: &Key) -> Result<TimeStamp> {
     key.decode_ts().map_err(|err| {
         Error::Other(box_err!(
-            "failed to get ts from key {}: {}",
+            "failed to get ts from key '{}': {}",
             log_wrappers::Value::key(key.as_encoded().as_slice()),
             err
         ))
