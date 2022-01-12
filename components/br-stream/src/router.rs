@@ -132,6 +132,11 @@ impl ApplyEvent {
         let cmd_can_handle = self.cmd_type == CmdType::Delete || self.cmd_type == CmdType::Put;
         cf_can_handle && cmd_can_handle
     }
+
+    /// The size of the event.
+    pub fn size(&self) -> usize {
+        self.key.len() + self.value.len()
+    }
 }
 
 /// The shared version of router.
@@ -277,7 +282,7 @@ impl RouterInner {
         let inner_router = {
             let mut tasks = self.temp_files_of_task.lock().await;
             if !tasks.contains_key(&task) {
-                info!("creating temp dir for task."; "task" => %task, "maps" => ?tasks);
+                info!("creating temp dir for task."; "task" => %task, "maps" => ?tasks, "prefix" => %prefix.display());
                 let inserted = tasks.insert(
                     task.clone(),
                     Arc::new(

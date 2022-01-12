@@ -9,14 +9,17 @@ use tikv::storage::{
     txn::{EntryBatch, TxnEntry, TxnEntryScanner},
     Engine, Snapshot, Statistics,
 };
-use tikv_util::box_err;
-use txn_types::TimeStamp;
+use tikv_util::{box_err, warn};
+use txn_types::{Key, TimeStamp};
 
-use crate::router::{ApplyEvent, Router};
 use crate::{
     errors::{Error, Result},
     metadata::store::MetaStore,
     utils::RegionPager,
+};
+use crate::{
+    metrics,
+    router::{ApplyEvent, Router},
 };
 use kvproto::{
     kvrpcpb::{Context, ExtraOp},
@@ -33,12 +36,16 @@ impl<S: Snapshot> EventLoader<S> {
         snapshot: S,
         from_ts: TimeStamp,
         to_ts: TimeStamp,
-        region_id: u64,
+        region: &Region,
     ) -> Result<Self> {
+        let region_id = region.get_id();
         let scanner = ScannerBuilder::new(snapshot, to_ts)
+            .range(
+                Some(Key::from_encoded_slice(&region.start_key)),
+                Some(Key::from_encoded_slice(&region.end_key)),
+            )
             .hint_min_ts(Some(from_ts))
             .fill_cache(false)
-            .range(None, None)
             .build_delta_scanner(from_ts, ExtraOp::Noop)
             .map_err(|err| {
                 Error::Other(box_err!(
@@ -125,7 +132,7 @@ where
             .find(|peer| peer.get_store_id() == self.store_id)
     }
 
-    pub async fn initialize_region(&self, region: &Region) -> Result<Statistics> {
+    pub fn initialize_region(&self, region: &Region) -> Result<Statistics> {
         // There are 2 ways for getting the initial snapshot of a region:
         //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
@@ -153,29 +160,31 @@ where
             ))
         })?;
         let mut event_loader =
-            EventLoader::load_from(snap, self.start_ts, TimeStamp::max(), region.id)?;
+            EventLoader::load_from(snap, self.start_ts, TimeStamp::max(), region)?;
         let mut events = Vec::with_capacity(2048);
         let stat = event_loader.scan_batch(1024, &mut events)?;
-        for event in events {
-            self.sink.on_event(event).await?;
-        }
+        let sink = self.sink.clone();
+        tokio::spawn(async move {
+            for event in events {
+                metrics::INCREMENTAL_SCAN_SIZE.observe(event.size() as f64);
+                if let Err(err) = sink.on_event(event).await {
+                    warn!("failed to send event to sink"; "err" => %err);
+                }
+            }
+        });
         Ok(stat)
     }
 
-    pub async fn initialize_range(
-        &self,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    ) -> Result<Statistics> {
+    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<Statistics> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
         let mut total_stat = StatisticsSummary::default();
         loop {
-            let regions = pager.next_page(8).await?;
+            let regions = pager.next_page(8)?;
             if regions.len() == 0 {
                 break;
             }
             for r in regions {
-                let stat = self.clone().initialize_region(&r.region).await?;
+                let stat = self.initialize_region(&r.region)?;
                 total_stat.add_statistics(&stat);
             }
         }

@@ -243,20 +243,19 @@ where
                             let start_key = start_key;
                             let end_key = end_key;
                             let start = Instant::now_coarse();
-                            match init
-                                .initialize_range(start_key.clone(), end_key.clone())
-                                .await
-                            {
-                                Ok(stat) => {
-                                    info!("success to do initial scanning"; "stat" => ?stat, 
+                            tokio::task::spawn_blocking(move || {
+                                match init.initialize_range(start_key.clone(), end_key.clone()) {
+                                    Ok(stat) => {
+                                        info!("success to do initial scanning"; "stat" => ?stat, 
                                     "start_key" => utils::redact(&start_key),
                                     "end_key" => utils::redact(&end_key),
                                     "take" => ?start.saturating_elapsed(),)
+                                    }
+                                    Err(e) => {
+                                        error!("failed to initial range"; "error" => ?e);
+                                    }
                                 }
-                                Err(e) => {
-                                    error!("failed to initial range"; "error" => ?e);
-                                }
-                            }
+                            });
                         }
                         info!(
                             "finish register backup stream ranges";

@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::errors::{Error, Result};
-use futures::{channel::mpsc, StreamExt};
+use futures::{channel::mpsc, executor::block_on, StreamExt};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 
@@ -51,7 +51,7 @@ impl<P: RegionInfoProvider> RegionPager<P> {
         }
     }
 
-    pub async fn next_page(&mut self, size: usize) -> Result<Vec<RegionInfo>> {
+    pub fn next_page(&mut self, size: usize) -> Result<Vec<RegionInfo>> {
         if self.start_key >= self.end_key {
             return Ok(vec![]);
         }
@@ -79,7 +79,7 @@ impl<P: RegionInfoProvider> RegionPager<P> {
                     err
                 ))
             })?;
-        let collected_regions = rx.collect::<Vec<_>>().await;
+        let collected_regions = block_on(rx.collect::<Vec<_>>());
         self.start_key = collected_regions
             .last()
             .ok_or_else(|| {
