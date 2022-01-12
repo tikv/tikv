@@ -37,4 +37,4 @@ tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 bstr = "0.2.8"
 log_wrappers = { path = "../log_wrappers" }
-encoding_rs = "0.8.28"
+encoding_rs = { git = "https://github.com/xiongjiwei/encoding_rs.git", rev = "68e0bc5a72a37a78228d80cd98047326559cf43c"}

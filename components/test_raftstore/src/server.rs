@@ -50,6 +50,7 @@ use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
+use tikv::server::load_statistics::ThreadLoadPool;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
@@ -159,6 +160,7 @@ impl ServerCluster {
             map.clone(),
             RaftStoreBlackHole,
             worker.scheduler(),
+            Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
         let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
@@ -208,8 +210,8 @@ impl ServerCluster {
         &self,
         cfg: &resource_metering::Config,
     ) -> (ResourceTagFactory, CollectorRegHandle, Box<dyn FnOnce()>) {
-        let (_, collector_reg_handle, resource_tag_factory) =
-            resource_metering::init_recorder(cfg.enabled, cfg.precision.as_millis());
+        let (_, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
         let (_, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let (_, single_target_worker) = resource_metering::init_single_target(
@@ -222,8 +224,9 @@ impl ServerCluster {
             resource_tag_factory,
             collector_reg_handle,
             Box::new(move || {
-                reporter_worker.stop_worker();
                 single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
             }),
         )
     }

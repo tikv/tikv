@@ -484,7 +484,7 @@ fn test_invalid_external_storage() {
         vec![],   // end
         0.into(), // begin_ts
         backup_ts,
-        &storage_path,
+        storage_path,
     );
 
     // Wait util the backup request is handled.

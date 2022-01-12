@@ -134,7 +134,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = self.build_lock_cursor()?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         if self.0.desc {
             Ok(Scanner::Backward(BackwardKvScanner::new(
@@ -158,7 +158,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         after_ts: TimeStamp,
         output_delete: bool,
     ) -> Result<EntryScanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = self.build_lock_cursor()?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
@@ -177,7 +177,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         from_ts: TimeStamp,
         extra_op: ExtraOp,
     ) -> Result<DeltaScanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = self.build_lock_cursor()?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
@@ -191,6 +191,13 @@ impl<S: Snapshot> ScannerBuilder<S> {
             Some(default_cursor),
             DeltaEntryPolicy::new(from_ts, extra_op),
         ))
+    }
+
+    fn build_lock_cursor(&mut self) -> Result<Option<Cursor<S::Iter>>> {
+        Ok(match self.0.isolation_level {
+            IsolationLevel::Si => Some(self.0.create_cf_cursor(CF_LOCK)?),
+            IsolationLevel::Rc => None,
+        })
     }
 }
 
@@ -1004,5 +1011,47 @@ mod tests {
             let delta = perf_instant.delta().0;
             assert_eq!(delta.block_read_count, block_reads);
         }
+    }
+
+    #[test]
+    fn test_rc_scan_skip_lock() {
+        test_rc_scan_skip_lock_impl(false);
+        test_rc_scan_skip_lock_impl(true);
+    }
+
+    fn test_rc_scan_skip_lock_impl(desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (key1, val1, val12) = (b"foo1", b"bar1", b"bar12");
+        let (key2, val2) = (b"foo2", b"bar2");
+        let mut expected = vec![(key1, val1), (key2, val2)];
+        if desc {
+            expected.reverse();
+        }
+
+        must_prewrite_put(&engine, key1, val1, key1, 10);
+        must_commit(&engine, key1, 10, 20);
+
+        must_prewrite_put(&engine, key2, val2, key2, 30);
+        must_commit(&engine, key2, 30, 40);
+
+        must_prewrite_put(&engine, key1, val12, key1, 50);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 60.into())
+            .fill_cache(false)
+            .range(Some(Key::from_raw(key1)), None)
+            .desc(desc)
+            .isolation_level(IsolationLevel::Rc)
+            .build()
+            .unwrap();
+
+        for e in expected {
+            let (k, v) = scanner.next().unwrap().unwrap();
+            assert_eq!(k, Key::from_raw(e.0));
+            assert_eq!(v, e.1);
+        }
+
+        assert!(scanner.next().unwrap().is_none());
+        assert_eq!(scanner.take_statistics().lock.total_op_count(), 0);
     }
 }

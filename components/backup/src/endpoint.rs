@@ -586,23 +586,24 @@ impl SoftLimitKeeper {
             ..
         } = *self.config.0.read().unwrap();
         cpu_quota.set_remain(auto_tune_remain_threads);
-        if !enable_auto_tune {
-            return self.limit.resize(num_threads).await.map_err(|err| {
-                    warn!("failed to resize the soft limit to num-threads, backup may be restricted unexpectly.";
-                        "current_limit" => %self.limit.current_cap(),
-                        "error" => %err
-                    );
-                    Error::Other(box_err!("failed to resize softlimit: {}", err))
-                });
+
+        let mut quota_val = num_threads;
+        if enable_auto_tune {
+            quota_val = cpu_quota
+                .get_quota(|s| s.contains("bkwkr"))
+                .clamp(1, num_threads);
         }
 
-        let quota_val = cpu_quota
-            .get_quota(|s| s.contains("bkwkr"))
-            .clamp(1, num_threads);
         self.limit.resize(quota_val).await.map_err(|err| {
-            warn!("error during appling the soft limit for backup."; "err" => %err);
+            warn!(
+                "error during appling the soft limit for backup.";
+                "current_limit" => %self.limit.current_cap(),
+                "to_set_value" => %quota_val,
+                "err" => %err,
+            );
             Error::Other(box_err!("failed to resize softlimit: {}", err))
         })?;
+
         BACKUP_SOFTLIMIT_GAUGE.set(self.limit.current_cap() as _);
         Ok(())
     }
