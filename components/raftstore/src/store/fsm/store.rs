@@ -421,21 +421,21 @@ where
     }
 
     pub fn update_ticks_timeout(&mut self) {
-        self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::Raft as usize].wait_duration =
             self.cfg.raft_base_tick_interval.0;
-        self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::RaftLogGc as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0;
-        self.tick_batch[PeerTicks::ENTRY_CACHE_EVICT.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::EntryCacheEvict as usize].wait_duration =
             ENTRY_CACHE_EVICT_TICK_DURATION;
-        self.tick_batch[PeerTicks::PD_HEARTBEAT.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::PdHeartbeat as usize].wait_duration =
             self.cfg.pd_heartbeat_tick_interval.0;
-        self.tick_batch[PeerTicks::SPLIT_REGION_CHECK.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::SplitRegionCheck as usize].wait_duration =
             self.cfg.split_region_check_tick_interval.0;
-        self.tick_batch[PeerTicks::CHECK_PEER_STALE_STATE.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::CheckPeerStaleState as usize].wait_duration =
             self.cfg.peer_stale_state_check_interval.0;
-        self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::CheckMerge as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
-        self.tick_batch[PeerTicks::CHECK_LEADER_LEASE.bits() as usize].wait_duration =
+        self.tick_batch[PeerTicks::CheckLeaderLease as usize].wait_duration =
             self.cfg.check_leader_lease_interval.0;
     }
 }
@@ -663,7 +663,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
 
     fn flush_ticks(&mut self) {
         for t in PeerTicks::get_all_ticks() {
-            let idx = t.bits() as usize;
+            let idx = *t as usize;
             if self.poll_ctx.tick_batch[idx].ticks.is_empty() {
                 continue;
             }
@@ -1165,7 +1165,7 @@ where
                 .engines
                 .kv
                 .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
-            tick_batch: vec![PeerTickBatch::default(); 256],
+            tick_batch: vec![PeerTickBatch::default(); PeerTicks::get_all_ticks().len()],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
             self_disk_usage: DiskUsage::Normal,

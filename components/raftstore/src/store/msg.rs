@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -179,45 +178,44 @@ where
     }
 }
 
-bitflags! {
-    pub struct PeerTicks: u8 {
-        const RAFT                   = 0b00000001;
-        const RAFT_LOG_GC            = 0b00000010;
-        const SPLIT_REGION_CHECK     = 0b00000100;
-        const PD_HEARTBEAT           = 0b00001000;
-        const CHECK_MERGE            = 0b00010000;
-        const CHECK_PEER_STALE_STATE = 0b00100000;
-        const ENTRY_CACHE_EVICT      = 0b01000000;
-        const CHECK_LEADER_LEASE     = 0b10000000;
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum PeerTicks {
+    Raft = 0,
+    RaftLogGc = 1,
+    SplitRegionCheck = 2,
+    PdHeartbeat = 3,
+    CheckMerge = 4,
+    CheckPeerStaleState = 5,
+    EntryCacheEvict = 6,
+    CheckLeaderLease = 7,
 }
 
 impl PeerTicks {
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
-            PeerTicks::RAFT => "raft",
-            PeerTicks::RAFT_LOG_GC => "raft_log_gc",
-            PeerTicks::SPLIT_REGION_CHECK => "split_region_check",
-            PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
-            PeerTicks::CHECK_MERGE => "check_merge",
-            PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
-            PeerTicks::ENTRY_CACHE_EVICT => "entry_cache_evict",
-            PeerTicks::CHECK_LEADER_LEASE => "check_leader_lease",
-            _ => unreachable!(),
+            PeerTicks::Raft => "raft",
+            PeerTicks::RaftLogGc => "raft_log_gc",
+            PeerTicks::SplitRegionCheck => "split_region_check",
+            PeerTicks::PdHeartbeat => "pd_heartbeat",
+            PeerTicks::CheckMerge => "check_merge",
+            PeerTicks::CheckPeerStaleState => "check_peer_stale_state",
+            PeerTicks::EntryCacheEvict => "entry_cache_evict",
+            PeerTicks::CheckLeaderLease => "check_leader_lease",
         }
     }
 
-    pub fn get_all_ticks() -> &'static [PeerTicks] {
+    pub const fn get_all_ticks() -> &'static [PeerTicks] {
         const TICKS: &[PeerTicks] = &[
-            PeerTicks::RAFT,
-            PeerTicks::RAFT_LOG_GC,
-            PeerTicks::SPLIT_REGION_CHECK,
-            PeerTicks::PD_HEARTBEAT,
-            PeerTicks::CHECK_MERGE,
-            PeerTicks::CHECK_PEER_STALE_STATE,
-            PeerTicks::ENTRY_CACHE_EVICT,
-            PeerTicks::CHECK_LEADER_LEASE,
+            PeerTicks::Raft,
+            PeerTicks::RaftLogGc,
+            PeerTicks::SplitRegionCheck,
+            PeerTicks::PdHeartbeat,
+            PeerTicks::CheckMerge,
+            PeerTicks::CheckPeerStaleState,
+            PeerTicks::EntryCacheEvict,
+            PeerTicks::CheckLeaderLease,
         ];
         TICKS
     }

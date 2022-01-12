@@ -4,13 +4,13 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::iter::Iterator;
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_traits::{
     Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -97,7 +97,7 @@ where
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
-    tick_registry: PeerTicks,
+    tick_registry: HashSet<PeerTicks>,
     /// Ticks for speed up campaign in chaos state.
     ///
     /// Followers will keep ticking in Idle mode to measure how many ticks have been skipped.
@@ -221,7 +221,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
-                tick_registry: PeerTicks::empty(),
+                tick_registry: HashSet::default(),
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -264,7 +264,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
-                tick_registry: PeerTicks::empty(),
+                tick_registry: HashSet::default(),
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -688,7 +688,7 @@ where
     }
 
     fn on_update_region_for_unsafe_recover(&mut self, region: Region) {
-        let mut new_peer_list = HashSet::new();
+        let mut new_peer_list = HashSet::default();
         for peer in region.get_peers() {
             new_peer_list.insert(peer.get_id());
         }
@@ -927,17 +927,16 @@ where
             "peer_id" => self.fsm.peer_id(),
             "region_id" => self.region_id(),
         );
-        self.fsm.tick_registry.remove(tick);
+        self.fsm.tick_registry.remove(&tick);
         match tick {
-            PeerTicks::RAFT => self.on_raft_base_tick(),
-            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(false),
-            PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
-            PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
-            PeerTicks::CHECK_MERGE => self.on_check_merge(),
-            PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
-            PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
-            PeerTicks::CHECK_LEADER_LEASE => self.on_check_leader_lease_tick(),
-            _ => unreachable!(),
+            PeerTicks::Raft => self.on_raft_base_tick(),
+            PeerTicks::RaftLogGc => self.on_raft_gc_log_tick(false),
+            PeerTicks::PdHeartbeat => self.on_pd_heartbeat_tick(),
+            PeerTicks::SplitRegionCheck => self.on_split_region_check_tick(),
+            PeerTicks::CheckMerge => self.on_check_merge(),
+            PeerTicks::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
+            PeerTicks::EntryCacheEvict => self.on_entry_cache_evict_tick(),
+            PeerTicks::CheckLeaderLease => self.on_check_leader_lease_tick(),
         }
     }
 
@@ -1282,10 +1281,10 @@ where
 
     #[inline]
     fn schedule_tick(&mut self, tick: PeerTicks) {
-        if self.fsm.tick_registry.contains(tick) {
+        if self.fsm.tick_registry.contains(&tick) {
             return;
         }
-        let idx = tick.bits() as usize;
+        let idx = tick as usize;
         if is_zero_duration(&self.ctx.tick_batch[idx].wait_duration) {
             return;
         }
@@ -1302,7 +1301,7 @@ where
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
-                self.fsm.tick_registry.remove(tick);
+                self.fsm.tick_registry.remove(&tick);
                 error!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
@@ -1333,7 +1332,7 @@ where
     fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTicks::RAFT)
+        self.schedule_tick(PeerTicks::Raft)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -2944,7 +2943,7 @@ where
     }
 
     fn register_merge_check_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_MERGE)
+        self.schedule_tick(PeerTicks::CheckMerge)
     }
 
     /// Check if merge target region is staler than the local one in kv engine.
@@ -4017,7 +4016,7 @@ where
     }
 
     fn register_raft_gc_log_tick(&mut self) {
-        self.schedule_tick(PeerTicks::RAFT_LOG_GC)
+        self.schedule_tick(PeerTicks::RaftLogGc)
     }
 
     #[allow(clippy::if_same_then_else)]
@@ -4153,7 +4152,7 @@ where
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
-        self.schedule_tick(PeerTicks::ENTRY_CACHE_EVICT)
+        self.schedule_tick(PeerTicks::EntryCacheEvict)
     }
 
     fn on_entry_cache_evict_tick(&mut self) {
@@ -4170,7 +4169,7 @@ where
     }
 
     fn register_check_leader_lease_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_LEADER_LEASE)
+        self.schedule_tick(PeerTicks::CheckLeaderLease)
     }
 
     fn on_check_leader_lease_tick(&mut self) {
@@ -4183,7 +4182,7 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(PeerTicks::SPLIT_REGION_CHECK)
+        self.schedule_tick(PeerTicks::SplitRegionCheck)
     }
 
     #[inline]
@@ -4445,7 +4444,7 @@ where
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
-        self.schedule_tick(PeerTicks::PD_HEARTBEAT)
+        self.schedule_tick(PeerTicks::PdHeartbeat)
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
@@ -4544,7 +4543,7 @@ where
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_PEER_STALE_STATE)
+        self.schedule_tick(PeerTicks::CheckPeerStaleState)
     }
 }
 
