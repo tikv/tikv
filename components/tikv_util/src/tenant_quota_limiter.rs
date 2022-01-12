@@ -31,14 +31,13 @@ pub enum QType {
 }
 
 pub struct QuotaLimiter {
-    tenant_id: u32,
     cputime_limiter: Limiter,
     bandwidth_limiter: Limiter,
 }
 
 impl QuotaLimiter {
     // 1000 millicpu equals to 1vCPU, 0 means unlimited
-    pub fn new(tenant_id: u32, milli_cpu: usize, bandwidth: usize) -> Self {
+    pub fn new(milli_cpu: usize, bandwidth: usize) -> Self {
         let cputime_limiter = if milli_cpu == 0 {
             Limiter::new(f64::INFINITY)
         } else {
@@ -51,7 +50,6 @@ impl QuotaLimiter {
             Limiter::new(bandwidth as f64)
         };
         Self {
-            tenant_id,
             cputime_limiter,
             bandwidth_limiter,
         }
@@ -153,7 +151,6 @@ impl TenantQuotaLimiter {
                     let quota = tenant_quotas[idx];
                     let limiter = limiters.entry(quota.0).or_insert_with(|| {
                         Arc::new(QuotaLimiter::new(
-                            quota.0,
                             quota.1.cputime_quota,
                             quota.1.bandwidth_quota,
                         ))
