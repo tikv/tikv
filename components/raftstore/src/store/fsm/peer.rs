@@ -97,7 +97,7 @@ where
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
-    tick_registry: HashSet<PeerTicks>,
+    tick_registry: [bool; PeerTicks::get_all_ticks().len()],
     /// Ticks for speed up campaign in chaos state.
     ///
     /// Followers will keep ticking in Idle mode to measure how many ticks have been skipped.
@@ -221,7 +221,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
-                tick_registry: HashSet::default(),
+                tick_registry: [false; PeerTicks::get_all_ticks().len()],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -264,7 +264,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
-                tick_registry: HashSet::default(),
+                tick_registry: [false; PeerTicks::get_all_ticks().len()],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -927,7 +927,7 @@ where
             "peer_id" => self.fsm.peer_id(),
             "region_id" => self.region_id(),
         );
-        self.fsm.tick_registry.remove(&tick);
+        self.fsm.tick_registry[tick as usize] = false;
         match tick {
             PeerTicks::Raft => self.on_raft_base_tick(),
             PeerTicks::RaftLogGc => self.on_raft_gc_log_tick(false),
@@ -1281,10 +1281,10 @@ where
 
     #[inline]
     fn schedule_tick(&mut self, tick: PeerTicks) {
-        if self.fsm.tick_registry.contains(&tick) {
+        let idx = tick as usize;
+        if self.fsm.tick_registry[idx] {
             return;
         }
-        let idx = tick as usize;
         if is_zero_duration(&self.ctx.tick_batch[idx].wait_duration) {
             return;
         }
@@ -1295,13 +1295,13 @@ where
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
-        self.fsm.tick_registry.insert(tick);
+        self.fsm.tick_registry[idx] = true;
 
         let region_id = self.region_id();
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
-                self.fsm.tick_registry.remove(&tick);
+                self.fsm.tick_registry[idx] = false;
                 error!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
