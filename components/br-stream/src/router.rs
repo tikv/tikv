@@ -13,6 +13,7 @@ use crate::{
     endpoint::Task,
     errors::Error,
     metadata::store::EtcdStore,
+    metrics::{self, SKIP_KV_COUNTER},
     utils::{self, SlotMap},
 };
 
@@ -246,59 +247,63 @@ impl RouterInner {
 
     pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
         let prefix = &self.prefix;
-        if let Some(task) = self.get_task_by_key(&kv.key) {
-            debug!(
-                "backup stream kv";
-                "cmdtype" => ?kv.cmd_type,
-                "cf" => ?kv.cf,
-                "key" => &log_wrappers::Value::key(&kv.key),
-            );
-            let inner_router = {
-                let mut tasks = self.temp_files_of_task.lock().await;
-                if !tasks.contains_key(&task) {
-                    info!("creating temp dir for task."; "task" => %task, "maps" => ?tasks);
-                    let inserted = tasks.insert(
-                        task.clone(),
-                        Arc::new(
-                            TemporaryFiles::new(
-                                prefix
-                                    .join(&task)
-                                    .join(format!("{}", TimeStamp::physical_now())),
-                            )
-                            .await?,
-                        ),
-                    );
-                    assert!(inserted.is_none(), "double created map.")
-                }
-                tasks.get_mut(&task).unwrap().clone()
-            };
-            inner_router.on_event(kv).await?;
+        let task = self.get_task_by_key(&kv.key);
+        if task.is_none() {
+            metrics::SKIP_KV_COUNTER.inc();
+            return Ok(());
+        }
 
-            // When this event make the size of temporary files exceeds the size limit, make a flush.
-            // Note that we only flush if the size is less than the limit before the event,
-            // or we may send multiplied flush requests.
+        let task = task.unwrap();
+        debug!(
+            "backup stream kv";
+            "cmdtype" => ?kv.cmd_type,
+            "cf" => ?kv.cf,
+            "key" => &log_wrappers::Value::key(&kv.key),
+        );
+        let inner_router = {
+            let mut tasks = self.temp_files_of_task.lock().await;
+            if !tasks.contains_key(&task) {
+                info!("creating temp dir for task."; "task" => %task, "maps" => ?tasks);
+                let inserted = tasks.insert(
+                    task.clone(),
+                    Arc::new(
+                        TemporaryFiles::new(
+                            prefix
+                                .join(&task)
+                                .join(format!("{}", TimeStamp::physical_now())),
+                        )
+                        .await?,
+                    ),
+                );
+                assert!(inserted.is_none(), "double created map.")
+            }
+            tasks.get_mut(&task).unwrap().clone()
+        };
+        inner_router.on_event(kv).await?;
 
-            debug!(
-                "backup stream statics size";
-                "task" => ?task,
-                "next_size" => inner_router.total_size(),
-                "size_limit" => self.temp_file_size_limit,
-            );
+        // When this event make the size of temporary files exceeds the size limit, make a flush.
+        // Note that we only flush if the size is less than the limit before the event,
+        // or we may send multiplied flush requests.
 
-            let cur_size = inner_router.total_size();
-            if cur_size > self.temp_file_size_limit && !inner_router.flushed.load(Ordering::SeqCst)
+        debug!(
+            "backup stream statics size";
+            "task" => ?task,
+            "next_size" => inner_router.total_size(),
+            "size_limit" => self.temp_file_size_limit,
+        );
+
+        let cur_size = inner_router.total_size();
+        if cur_size > self.temp_file_size_limit && !inner_router.flushed.load(Ordering::SeqCst) {
+            info!("try flushing task"; "task" => %task, "size" => %cur_size);
+            if inner_router
+                .flushed
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
             {
-                info!("try flushing task"; "task" => %task, "size" => %cur_size);
-                if inner_router
-                    .flushed
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
-                    // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
-                    if self.scheduler.schedule(Task::Flush(task)).is_err() {
-                        // oops... we failed, let's leave the chance to next challenger.
-                        inner_router.flushed.store(false, Ordering::SeqCst);
-                    }
+                // delay the schedule when failure? (Why the scheduler doesn't support blocking send...)
+                if self.scheduler.schedule(Task::Flush(task)).is_err() {
+                    // oops... we failed, let's leave the chance to next challenger.
+                    inner_router.flushed.store(false, Ordering::SeqCst);
                 }
             }
         }

@@ -36,6 +36,7 @@ pub struct Endpoint<S: MetaStore + 'static, R, E> {
     #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
+    store_id: u64,
     regions: R,
     engine: E,
 }
@@ -86,6 +87,7 @@ where
                 scheduler,
                 observer,
                 pool,
+                store_id,
                 regions: accessor,
                 engine,
             };
@@ -107,6 +109,7 @@ where
             scheduler,
             observer,
             pool,
+            store_id,
             regions: accessor,
             engine,
         }
@@ -201,6 +204,7 @@ where
             self.regions.clone(),
             from_ts,
             self.range_router.clone(),
+            self.store_id,
         )
     }
 
@@ -232,16 +236,15 @@ where
                                 (utils::wrap_key(start_key), utils::wrap_key(end_key))
                             })
                             .collect::<Vec<_>>();
-                        for (start_key, end_key) in ranges.iter() {
+                        range_router.register_ranges(task_name, ranges.clone());
+                        for (start_key, end_key) in ranges {
                             let init = init.clone();
-                            let start_key = start_key.to_owned();
-                            let end_key = end_key.to_owned();
+                            let start_key = start_key;
+                            let end_key = end_key;
                             if let Err(e) = init.initialize_range(start_key, end_key).await {
                                 error!("failed to initial range"; "error" => ?e);
                             }
                         }
-                        // TODO implement register ranges
-                        range_router.register_ranges(task_name, ranges);
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);

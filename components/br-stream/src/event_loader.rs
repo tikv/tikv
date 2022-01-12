@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-
-
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 
 use raftstore::coprocessor::RegionInfoProvider;
@@ -12,19 +10,17 @@ use tikv::storage::{
     Engine, Snapshot,
 };
 use tikv_util::box_err;
-use txn_types::{TimeStamp};
+use txn_types::TimeStamp;
 
+use crate::router::{ApplyEvent, Router};
 use crate::{
     errors::{Error, Result},
     metadata::store::MetaStore,
     utils::RegionPager,
 };
-use crate::{
-    router::{ApplyEvent, Router},
-};
 use kvproto::{
     kvrpcpb::{Context, ExtraOp},
-    metapb::Region,
+    metapb::{Peer, Region},
 };
 
 pub struct EventLoader<S: Snapshot> {
@@ -104,6 +100,7 @@ pub struct InitialDataLoader<E, R> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     sink: Router,
+    store_id: u64,
 }
 
 impl<E, R> InitialDataLoader<E, R>
@@ -111,13 +108,21 @@ where
     E: Engine,
     R: RegionInfoProvider + Clone + 'static,
 {
-    pub fn new(engine: E, regions: R, start_ts: TimeStamp, sink: Router) -> Self {
+    pub fn new(engine: E, regions: R, start_ts: TimeStamp, sink: Router, store_id: u64) -> Self {
         Self {
             engine,
             regions,
             start_ts,
             sink,
+            store_id,
         }
+    }
+
+    fn find_peer<'a>(&self, region: &'a Region) -> Option<&'a Peer> {
+        region
+            .get_peers()
+            .iter()
+            .find(|peer| peer.get_store_id() == self.store_id)
     }
 
     pub async fn initialize_region(&self, region: &Region) -> Result<()> {
@@ -129,6 +134,13 @@ where
         let mut region_ctx = Context::new();
         region_ctx.set_region_id(region.get_id());
         region_ctx.set_region_epoch(region.get_region_epoch().clone());
+        region_ctx.set_peer(
+            self.find_peer(&region)
+                .ok_or_else(|| {
+                    Error::Other(box_err!("failed to find peer from region {:?}", region))
+                })?
+                .clone(),
+        );
         // maybe also set peer here?
         // region_ctx.set_peer(todo!());
         let ctx = SnapContext {
@@ -153,9 +165,14 @@ where
 
     pub async fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
-        let regions = pager.next_page(8).await?;
-        for r in regions {
-            self.initialize_region(&r.region).await?;
+        loop {
+            let regions = pager.next_page(8).await?;
+            if regions.len() == 0 {
+                break;
+            }
+            for r in regions {
+                self.initialize_region(&r.region).await?;
+            }
         }
         Ok(())
     }

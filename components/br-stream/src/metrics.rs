@@ -17,4 +17,9 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 16).unwrap()
     )
     .unwrap();
+    pub static ref SKIP_KV_COUNTER: Counter = register_counter!(
+        "tikv_stream_skip_kv_count",
+        "The total kv size skipped by the streaming",
+    )
+    .unwrap();
 }
