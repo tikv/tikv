@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::get_env;
 use engine_rocks::raw_util::{db_exist, new_engine_opt};
 use engine_rocks::RocksEngine;
 use engine_traits::{
@@ -64,8 +63,7 @@ pub fn new_debug_executor(
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
-    let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
-    cfg.configure_shared_rocks_env(&env);
+    let env = cfg.build_shared_rocks_env(key_manager.clone(), None /*io_rate_limiter*/);
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());

@@ -18,7 +18,9 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use encryption::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
+use engine_rocks::get_env;
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
@@ -36,7 +38,7 @@ use engine_rocks::{
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use file_system::IOPriority;
+use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -2954,12 +2956,22 @@ impl TiKvConfig {
         ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
     }
 
-    pub fn configure_shared_rocks_env(&self, env: &Env) {
+    pub fn build_shared_rocks_env(
+        &self,
+        key_manager: Option<Arc<DataKeyManager>>,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Result<Arc<Env>, String> {
+        let env = get_env(key_manager, limiter)?;
         if !self.raft_engine.enable {
+            // RocksDB makes sure there are at least `max_background_flushes`
+            // high-priority workers in env. That is not enough when multiple
+            // RocksDB instances share the same env. We manually configure the
+            // worker count in this case.
             env.set_high_priority_background_threads(
                 self.raftdb.max_background_flushes + self.rocksdb.max_background_flushes,
             );
         }
+        Ok(env)
     }
 }
 
