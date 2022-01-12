@@ -242,6 +242,10 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .fetch_entries_to::<MessageExtTyped>(raft_group_id, begin, end, max_size, to)
             .map_err(transfer_error)
     }
+
+    fn get_all_entries_to(&self, _region_id: u64, _buf: &mut Vec<Entry>) -> Result<()> {
+        todo!()
+    }
 }
 
 impl RaftEngine for RaftLogEngine {
@@ -272,6 +276,7 @@ impl RaftEngine for RaftLogEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        _: u64,
         _: &RaftLocalState,
         batch: &mut RaftLogBatch,
     ) -> Result<()> {

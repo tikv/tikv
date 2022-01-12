@@ -302,6 +302,7 @@ where
         callback: Callback<SK>,
     },
     LeaderCallback(Callback<SK>),
+    RaftLogGcFlushed,
 }
 
 /// Message that will be sent to a peer.
