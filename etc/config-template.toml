@@ -43,7 +43,8 @@
 # memory-usage-limit = "0B"
 
 [quota]
-## Quota is use to gain predictable stable performance in a specified enviroment.
+## Quota is use to add soem limitation for the read write flow and then
+## gain predictable stable performance.
 ## CPU quota for these front requests can use, default value is 0, it means unlimited.
 ## The unit is millicpu which 1000 means 1vCPU
 # cpu = 64000
