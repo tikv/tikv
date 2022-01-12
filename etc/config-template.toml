@@ -42,6 +42,16 @@
 ## to release memory.
 # memory-usage-limit = "0B"
 
+[quota]
+## Quota is use to gain predictable stable performance in a specified enviroment.
+## CPU quota for these front requests can use, default value is 0, it means unlimited.
+## The unit is millicpu which 1000 means 1vCPU
+# cpu = 64000
+## Write bandwidth limitation for this TiKV instance, default value is 0 which means unlimited
+# write_bandwidth = "200MB"
+## Read bandwidth limitation for this TiKV instance, default value is 0 which means unlimited
+# read_bandwidth = "2GB"
+
 [log]
 ## Log levels: debug, info, warn, error, fatal.
 ## Note that `debug` is only available in development builds.

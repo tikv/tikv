@@ -91,6 +91,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
     math::MovingAvgU32,
+    quota_limiter::QuotaLimiter,
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
@@ -189,6 +190,7 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
@@ -256,6 +258,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        let quota_limiter = Arc::new(QuotaLimiter::new(
+            config.quota.cpu,
+            config.quota.write_bandwidth,
+            config.quota.read_bandwidth,
+        ));
+
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -279,6 +287,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            quota_limiter,
         }
     }
 
@@ -675,6 +684,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_controller,
             pd_sender.clone(),
             resource_tag_factory.clone(),
+            Arc::clone(&self.quota_limiter),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

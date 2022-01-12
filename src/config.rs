@@ -2428,6 +2428,42 @@ impl LogConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct QuotaConfig {
+    pub cpu: usize,
+    pub write_bandwidth: ReadableSize,
+    pub read_bandwidth: ReadableSize,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            cpu: 0,
+            write_bandwidth: ReadableSize(0),
+            read_bandwidth: ReadableSize(0),
+        }
+    }
+}
+
+impl QuotaConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.cpu > 96000 {
+            return Err("Max cpu quota is limited to 96000, it means 96vCPU"
+                .to_string()
+                .into());
+        }
+        if self.write_bandwidth.0 > ReadableSize::mb(200).0 {
+            return Err("Max write bandwidth is limited to 200MB".to_string().into());
+        }
+        if self.read_bandwidth.0 > ReadableSize::gb(2).0 {
+            return Err("Max read bandwidth is limited to 2GB".to_string().into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2480,6 +2516,9 @@ pub struct TiKvConfig {
 
     #[online_config(skip)]
     pub log: LogConfig,
+
+    #[online_config(skip)]
+    pub quota: QuotaConfig,
 
     #[online_config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2560,6 +2599,7 @@ impl Default for TiKvConfig {
             memory_usage_limit: OptionReadableSize(None),
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2611,6 +2651,7 @@ impl TiKvConfig {
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.log.validate()?;
+        self.quota.validate()?;
         self.readpool.validate()?;
         self.storage.validate()?;
 

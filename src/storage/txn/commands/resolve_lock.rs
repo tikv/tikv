@@ -59,6 +59,10 @@ impl CommandExt for ResolveLock {
             .sum()
     }
 
+    fn write_kvs(&self) -> usize {
+        self.key_locks.len()
+    }
+
     gen_lock!(key_locks: multiple(|(key, _)| key));
 }
 

@@ -31,6 +31,7 @@ impl CommandExt for Rollback {
     tag!(rollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
+    write_kvs!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
