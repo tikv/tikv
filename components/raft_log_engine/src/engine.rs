@@ -243,8 +243,13 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_all_entries_to(&self, _region_id: u64, _buf: &mut Vec<Entry>) -> Result<()> {
-        todo!()
+    fn get_all_entries_to(&self, raft_group_id: u64, _buf: &mut Vec<Entry>) -> Result<()> {
+        if let Some(first) = self.0.first_index(raft_group_id) {
+            let last = self.0.last_index(raft_group_id).unwrap();
+            buf.reserve(last - first + 1);
+            self.fetch_entries_to(id, first, last + 1, None, &mut buf)?;
+        }
+        Ok(())
     }
 }
 
