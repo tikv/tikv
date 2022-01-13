@@ -122,7 +122,7 @@ fn test_transfer_leader_other_region_replicate_log_lag() {
         let bytes = format!("k{:03}", i).into_bytes();
         cluster.must_put(&bytes, &bytes);
     }
-    thread::sleep_ms(10);
+    thread::sleep(Duration::from_millis(10));
     cluster.transfer_leader(r2.get_id(), new_peer(3, 3));
     cluster.must_put(b"k6", b"v6");
     must_get_equal(&cluster.get_engine(1), b"k6", b"v6");
@@ -131,7 +131,7 @@ fn test_transfer_leader_other_region_replicate_log_lag() {
         new_peer(3, 3)
     );
     cluster.clear_send_filters();
-    thread::sleep_ms(10);
+    thread::sleep(Duration::from_millis(10));
     cluster.must_transfer_leader(r2.get_id(), new_peer(3, 3));
     cluster.must_put(b"k7", b"v7");
     must_get_equal(&cluster.get_engine(3), b"k7", b"v7");
