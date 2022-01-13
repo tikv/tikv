@@ -677,6 +677,8 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     let mut cluster = new_node_cluster(0, 4);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    // Speed up log gc.
+    cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);
     let pd_client = cluster.pd_client.clone();
 
     // Disable default max peer number check.
