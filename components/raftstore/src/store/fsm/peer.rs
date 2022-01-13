@@ -45,7 +45,7 @@ use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
-use txn_types::WriteBatchFlags;
+use txn_types::{Key, PessimisticLock, WriteBatchFlags};
 
 use self::memtrace::*;
 use crate::coprocessor::RegionChangeEvent;
@@ -2756,6 +2756,19 @@ where
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
         let region_id = derived.get_id();
+
+        // Group in-memory pessimistic locks in the original region into new regions. The locks of
+        // new regions will be put into the corresponding new regions later. And the locks belonging
+        // to the old region will stay in the original map.
+        let region_locks = {
+            let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+            // Update the version so the concurrent reader will fail due to EpochNotMatch
+            // instead of PessimisticLockNotFound.
+            pessimistic_locks.version = derived.get_region_epoch().get_version();
+            group_locks_by_regions(&mut pessimistic_locks.map, &regions, &derived)
+        };
+        fail_point!("on_split_invalidate_locks");
+
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
         let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
@@ -2799,7 +2812,7 @@ where
             panic!("{} original region should exist", self.fsm.peer.tag);
         }
         let last_region_id = regions.last().unwrap().get_id();
-        for new_region in regions {
+        for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
 
             if new_region_id == region_id {
@@ -2895,6 +2908,7 @@ where
             if is_leader {
                 new_peer.peer.approximate_size = estimated_size;
                 new_peer.peer.approximate_keys = estimated_keys;
+                new_peer.peer.txn_ext.pessimistic_locks.write().map = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
                 new_peer.peer.heartbeat_pd(self.ctx);
@@ -4806,6 +4820,47 @@ fn new_compact_log_request(
     request
 }
 
+/// Group pessimistic locks in the original region to the split regions.
+///
+/// The given regions MUST be sorted by key in the ascending order. The returned
+/// `HashMap`s are in the same order of the given regions.
+///
+/// The locks belonging to the derived region will be kept in the given `locks` map,
+/// and the corresponding position in the returned `Vec` will be an empty map.
+fn group_locks_by_regions(
+    locks: &mut HashMap<Key, (PessimisticLock, bool)>,
+    regions: &[metapb::Region],
+    derived: &metapb::Region,
+) -> Vec<HashMap<Key, (PessimisticLock, bool)>> {
+    // Assert regions are sorted by key in ascending order.
+    if cfg!(debug_assertions) {
+        for (r1, r2) in regions.iter().zip(regions.iter().skip(1)) {
+            assert!(r1.get_start_key() < r2.get_start_key());
+        }
+    }
+
+    let mut res: Vec<HashMap<Key, (PessimisticLock, bool)>> =
+        regions.iter().map(|_| HashMap::default()).collect();
+    // Locks that are marked deleted still need to be moved to the new regions,
+    // and the deleted mark should also be cleared.
+    // Refer to the comment in `PeerPessimisticLocks` for details.
+    let removed_locks = locks.drain_filter(|key, _| {
+        let key = &**key.as_encoded();
+        let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
+        key < start_key || (!end_key.is_empty() && key >= end_key)
+    });
+    for (key, (lock, _)) in removed_locks {
+        let idx = match regions
+            .binary_search_by_key(&&**key.as_encoded(), |region| region.get_start_key())
+        {
+            Ok(idx) => idx,
+            Err(idx) => idx - 1,
+        };
+        res[idx].insert(key, (lock, false));
+    }
+    res
+}
+
 impl<'a, EK, ER, T: Transport> PeerFsmDelegate<'a, EK, ER, T>
 where
     EK: KvEngine,
@@ -5050,5 +5105,63 @@ mod tests {
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
+    }
+
+    #[test]
+    fn test_group_locks_by_regions() {
+        fn lock(key: &[u8], deleted: bool) -> (Key, (PessimisticLock, bool)) {
+            (
+                Key::from_raw(key),
+                (
+                    PessimisticLock {
+                        primary: key.to_vec().into_boxed_slice(),
+                        start_ts: 10.into(),
+                        ttl: 1000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 20.into(),
+                    },
+                    deleted,
+                ),
+            )
+        }
+        fn region(start_key: &[u8], end_key: &[u8]) -> metapb::Region {
+            let mut region = metapb::Region::default();
+            region.set_start_key(start_key.to_vec());
+            region.set_end_key(end_key.to_vec());
+            region
+        }
+        let mut locks: HashMap<Key, (PessimisticLock, bool)> = vec![
+            lock(b"a", true),
+            lock(b"c", false),
+            lock(b"e", true),
+            lock(b"g", false),
+            lock(b"i", false),
+        ]
+        .into_iter()
+        .collect();
+        let regions = vec![
+            region(b"", b"b"),  // test leftmost region
+            region(b"b", b"c"), // no lock inside
+            region(b"c", b"d"), // test key equals to start_key
+            region(b"d", b"h"), // test multiple locks inside
+            region(b"h", b""),  // test rightmost region
+        ];
+        let output = group_locks_by_regions(&mut locks, &regions, &regions[4]);
+        let expected: Vec<HashMap<Key, (PessimisticLock, bool)>> = vec![
+            vec![lock(b"a", false)],
+            vec![],
+            vec![lock(b"c", false)],
+            vec![lock(b"e", false), lock(b"g", false)],
+            vec![], // the position of the derived region is empty
+        ]
+        .into_iter()
+        .map(|locks| locks.into_iter().collect())
+        .collect();
+        assert_eq!(output, expected);
+        // The lock that belongs to the derived region is kept in the original map.
+        assert_eq!(
+            locks.into_iter().collect::<Vec<_>>(),
+            vec![lock(b"i", false)]
+        );
     }
 }
