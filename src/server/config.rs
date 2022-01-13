@@ -256,7 +256,7 @@ impl Config {
     #[inline]
     pub fn heavy_load_wait_duration(&self) -> Duration {
         self.heavy_load_wait_duration
-            .unwrap_or(ReadableDuration::micros(50))
+            .unwrap_or_else(|| ReadableDuration::micros(50))
             .0
     }
 
