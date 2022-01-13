@@ -9,19 +9,25 @@ use std::{
     time::Duration,
 };
 
-use crate::{codec::Encoder, endpoint::Task, errors::Error, utils::SlotMap};
+use crate::{
+    codec::Encoder,
+    endpoint::Task,
+    errors::Error,
+    metrics::{SKIP_KV_COUNTER},
+    utils::{self, SlotMap},
+};
 
 use super::errors::Result;
-use engine_rocks::RocksEngine;
+
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
-use raftstore::{coprocessor::CmdBatch, store::RaftRouter, RegionInfoAccessor};
+use raftstore::{coprocessor::CmdBatch};
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
-use tikv::storage::kv::BTreeEngine;
+
 use tikv_util::{box_err, info, warn, worker::Scheduler};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -263,7 +269,7 @@ impl RouterInner {
         let prefix = &self.prefix;
         let task = self.get_task_by_key(&kv.key);
         if task.is_none() {
-            metrics::SKIP_KV_COUNTER.inc();
+            SKIP_KV_COUNTER.inc();
             return Ok(());
         }
 

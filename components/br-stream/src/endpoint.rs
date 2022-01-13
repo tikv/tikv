@@ -2,11 +2,13 @@
 
 use std::convert::AsRef;
 use std::fmt;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use engine_traits::KvEngine;
+use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
-use tikv::storage::Engine;
+
 use tikv_util::time::Instant;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
@@ -41,7 +43,7 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
     pool: Runtime,
     store_id: u64,
     regions: R,
-    engine: E,
+    engine: PhantomData<E>,
     router: RT,
 }
 
@@ -58,7 +60,6 @@ where
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
         accessor: R,
-        engine: E,
         router: RT,
     ) -> Endpoint<EtcdStore, R, E, RT> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
@@ -95,7 +96,7 @@ where
                 pool,
                 store_id,
                 regions: accessor,
-                engine,
+                engine: PhantomData,
                 router,
             };
         }
@@ -105,10 +106,14 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(Endpoint::<_, R, E, RT>::starts_watch_tasks(
-            meta_client_clone,
-            scheduler_clone,
-        ));
+        pool.spawn(async {
+            if let Err(err) =
+                Endpoint::<_, R, E, RT>::starts_watch_tasks(meta_client_clone, scheduler_clone)
+                    .await
+            {
+                err.report("failed to start watch tasks");
+            }
+        });
         Endpoint {
             config,
             meta_client: Some(meta_client),
@@ -118,7 +123,7 @@ where
             pool,
             store_id,
             regions: accessor,
-            engine,
+            engine: PhantomData,
             router,
         }
     }
@@ -140,10 +145,7 @@ where
         for task in tasks.inner {
             info!("backup stream watch task"; "task" => ?task);
             // move task to schedule
-            if let Err(e) = scheduler.schedule(Task::WatchTask(task)) {
-                // TODO build a error handle mechanism #error 3
-                error!("backup stream schedule task failed"; "error" => ?e);
-            }
+            scheduler.schedule(Task::WatchTask(task))?;
         }
 
         let mut watcher = meta_client.events_from(tasks.revision).await?;
@@ -153,9 +155,7 @@ where
                 match event {
                     MetadataEvent::AddTask { task } => {
                         let t = meta_client.get_task(&task).await?;
-                        if let Err(e) = scheduler.schedule(Task::WatchTask(t)) {
-                            error!("backup stream schedule task failed"; "error" => ?e);
-                        }
+                        scheduler.schedule(Task::WatchTask(t))?;
                     }
                     MetadataEvent::RemoveTask { task: _ } => {
                         // TODO implement remove task
@@ -184,7 +184,7 @@ where
                 // TODO build a error handle mechanism #error 6
                 if kv.should_record() {
                     if let Err(err) = router.on_event(kv).await {
-                        error!("backup stream failed in backup batch"; "error" => ?err);
+                        err.report(format!("failed to send event."));
                     }
                     kv_count += 1;
                 }
@@ -196,11 +196,10 @@ where
         });
     }
 
-    pub fn make_initial_loader(&self, from_ts: TimeStamp) -> InitialDataLoader<E, R, RT> {
+    pub fn make_initial_loader(&self) -> InitialDataLoader<E, R, RT> {
         InitialDataLoader::new(
             self.router.clone(),
             self.regions.clone(),
-            from_ts,
             self.range_router.clone(),
             self.store_id,
         )
@@ -210,7 +209,7 @@ where
     pub fn on_register(&self, task: MetaTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
-            let init = self.make_initial_loader(TimeStamp::new(task.info.get_start_ts()));
+            let init = self.make_initial_loader();
             let range_router = self.range_router.clone();
 
             info!(
@@ -240,8 +239,13 @@ where
                             let start_key = start_key;
                             let end_key = end_key;
                             let start = Instant::now_coarse();
+                            let start_ts = task.info.get_start_ts();
                             tokio::task::spawn_blocking(move || {
-                                match init.initialize_range(start_key.clone(), end_key.clone()) {
+                                match init.initialize_range(
+                                    start_key.clone(),
+                                    end_key.clone(),
+                                    TimeStamp::new(start_ts),
+                                ) {
                                     Ok(stat) => {
                                         info!("success to do initial scanning"; "stat" => ?stat, 
                                     "start_key" => utils::redact(&start_key),
@@ -249,7 +253,7 @@ where
                                     "take" => ?start.saturating_elapsed(),)
                                     }
                                     Err(e) => {
-                                        error!("failed to initial range"; "error" => ?e);
+                                        e.report("failed to initialize regions");
                                     }
                                 }
                             });
@@ -260,7 +264,10 @@ where
                         );
                     }
                     Err(e) => {
-                        error!("backup stream get tasks failed"; "error" => ?e);
+                        e.report(format!(
+                            "failed to register task {} to router: ranges not found",
+                            task.info.get_name()
+                        ));
                         // TODO build a error handle mechanism #error 5
                     }
                 }
@@ -282,6 +289,16 @@ where
             // TODO handle the error
             let _ = Self::do_flush(router, task).await;
         });
+    }
+
+    /// Start observe over some region.
+    /// This would register the region to the RaftStore.
+    /// Note: This won't trigger a incremental scanning.
+    ///       When the follower progress faster than leader and then be elected,
+    ///       there is a risk of losing data.
+    pub fn on_observe_region(&self, region: Region) {
+        let init = self.make_initial_loader();
+        tokio::task::spawn_blocking(move || init.observe_over(&region));
     }
 
     pub fn do_backup(&mut self, events: Vec<CmdBatch>) {
@@ -314,24 +331,23 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     /// Flush the task with name.
     Flush(String),
+    /// Start observe over the region.
+    ObserverRegion {
+        region: Region,
+    },
 }
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut de = f.debug_struct("BackupStreamTask");
         match self {
-            Task::WatchTask(t) => de
-                .field("name", &t.info.name)
-                .field("table_filter", &t.info.table_filter)
-                .field("start_ts", &t.info.start_ts)
-                .field("end_ts", &t.info.end_ts)
+            Self::WatchTask(arg0) => f.debug_tuple("WatchTask").field(arg0).finish(),
+            Self::BatchEvent(arg0) => f.debug_tuple("BatchEvent").field(arg0).finish(),
+            Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
+            Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
+            Self::ObserverRegion { region } => f
+                .debug_struct("ObserverRegion")
+                .field("region", region)
                 .finish(),
-            Task::BatchEvent(_) => de.field("name", &"batch_event").finish(),
-            Task::ChangeConfig(change) => de
-                .field("name", &"change_config")
-                .field("change", change)
-                .finish(),
-            Task::Flush(task) => de.field("name", &"flush").field("task", &task).finish(),
         }
     }
 }
@@ -342,11 +358,12 @@ impl fmt::Display for Task {
     }
 }
 
-impl<S, R, E> Runnable for Endpoint<S, R, E>
+impl<S, R, E, RT> Runnable for Endpoint<S, R, E, RT>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
-    E: Engine,
+    E: KvEngine,
+    RT: RaftStoreRouter<E> + 'static,
 {
     type Task = Task;
 
@@ -356,6 +373,7 @@ where
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
             Task::Flush(task) => self.on_flush(task),
+            Task::ObserverRegion { region } => self.on_observe_region(region),
             _ => (),
         }
     }

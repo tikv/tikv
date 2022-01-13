@@ -11,29 +11,27 @@ use raftstore::{
     store::{fsm::ChangeObserver, Callback, SignificantMsg},
 };
 use tikv::storage::{
-    kv::{SnapContext, StatisticsSummary},
+    kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
     txn::{EntryBatch, TxnEntry, TxnEntryScanner},
-    Engine, Snapshot, SnapshotStore, Statistics,
+    Snapshot, Statistics,
 };
 use tikv_util::{box_err, info, warn};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
+    annotate,
     errors::{Error, Result},
-    metadata::store::MetaStore,
     utils::RegionPager,
 };
 use crate::{
     metrics,
     router::{ApplyEvent, Router},
 };
-use kvproto::kvrpcpb::IsolationLevel;
-use kvproto::{
-    kvrpcpb::{Context, ExtraOp},
-    metapb::{Peer, Region},
-};
 
+use kvproto::{kvrpcpb::ExtraOp, metapb::Region};
+
+/// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
     region_id: u64,
@@ -56,13 +54,13 @@ impl<S: Snapshot> EventLoader<S> {
             .fill_cache(false)
             .build_delta_scanner(from_ts, ExtraOp::Noop)
             .map_err(|err| {
-                Error::Other(box_err!(
-                    "failed to create entry scanner from_ts = {}, to_ts = {}, region = {}: {}",
+                annotate!(
+                    err,
+                    "failed to create entry scanner from_ts = {}, to_ts = {}, region = {}",
                     from_ts,
                     to_ts,
-                    region_id,
-                    err
-                ))
+                    region_id
+                )
             })?;
 
         Ok(Self { scanner, region_id })
@@ -114,7 +112,6 @@ impl<S: Snapshot> EventLoader<S> {
 pub struct InitialDataLoader<E, R, RT> {
     router: RT,
     regions: R,
-    start_ts: TimeStamp,
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     sink: Router,
@@ -129,31 +126,27 @@ where
     R: RegionInfoProvider + Clone + 'static,
     RT: RaftStoreRouter<E>,
 {
-    pub fn new(router: RT, regions: R, start_ts: TimeStamp, sink: Router, store_id: u64) -> Self {
+    pub fn new(router: RT, regions: R, sink: Router, store_id: u64) -> Self {
         Self {
             router,
             regions,
-            start_ts,
             sink,
             store_id,
             _engine: PhantomData,
         }
     }
 
-    fn find_peer<'a>(&self, region: &'a Region) -> Option<&'a Peer> {
-        region
-            .get_peers()
-            .iter()
-            .find(|peer| peer.get_store_id() == self.store_id)
-    }
-
-    pub fn initialize_region(&self, region: &Region) -> Result<Statistics> {
+    /// Start observe over some region.
+    /// This will register the region to the raftstore as observing,
+    /// and return the current snapshot of that region.
+    pub fn observe_over(&self, region: &Region) -> Result<impl Snapshot> {
         // There are 2 ways for getting the initial snapshot of a region:
         //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
         //      register the region to CDC observer and get a snapshot at the same time.
         // Registering the observer to the raftstore is necessary because we should only listen events from leader.
         // In CDC, the change observer is per-delegate(i.e. per-region), we can create the command per-region here too.
+
         let cmd = ChangeObserver::from_cdc(region.get_id(), ObserveHandle::new());
         let (callback, fut) = tikv_util::future::paired_future_callback();
         self.router
@@ -166,33 +159,50 @@ where
                 },
             )
             .map_err(|err| {
-                Error::Other(box_err!(
+                annotate!(
+                    err,
                     "failed to register the observer to region {}",
                     region.get_id()
-                ))
+                )
             })?;
-
         let snap = block_on(fut)
             .expect("BUG: channel of paired_future_callback canceled.")
             .expect("BUG: raftstore didn't call the callback but return Ok(_).");
-        let mut event_loader =
-            EventLoader::load_from(snap, self.start_ts, TimeStamp::max(), region)?;
-        let mut events = Vec::with_capacity(2048);
-        let stat = event_loader.scan_batch(1024, &mut events)?;
-        info!("the only roll of scanning done"; "size" => %events.len());
-        let sink = self.sink.clone();
-        tokio::spawn(async move {
-            for event in events {
-                metrics::INCREMENTAL_SCAN_SIZE.observe(event.size() as f64);
-                if let Err(err) = sink.on_event(event).await {
-                    warn!("failed to send event to sink"; "err" => %err);
-                }
-            }
-        });
-        Ok(stat)
+        Ok(snap)
     }
 
-    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<Statistics> {
+    /// Initialize the region
+    pub fn initialize_region(&self, region: &Region, start_ts: TimeStamp) -> Result<Statistics> {
+        let snap = self.observe_over(region)?;
+        let mut event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
+        let mut stats = StatisticsSummary::default();
+        loop {
+            let mut events = Vec::with_capacity(2048);
+            let stat = event_loader.scan_batch(1024, &mut events)?;
+            if events.is_empty() {
+                break;
+            }
+            stats.add_statistics(&stat);
+            let sink = self.sink.clone();
+            // Note: maybe we'd better don't spawn it to another thread for preventing OOM?
+            tokio::spawn(async move {
+                for event in events {
+                    metrics::INCREMENTAL_SCAN_SIZE.observe(event.size() as f64);
+                    if let Err(err) = sink.on_event(event).await {
+                        warn!("failed to send event to sink"; "err" => %err);
+                    }
+                }
+            });
+        }
+        Ok(stats.stat)
+    }
+
+    pub fn initialize_range(
+        &self,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        start_ts: TimeStamp,
+    ) -> Result<Statistics> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
         let mut total_stat = StatisticsSummary::default();
         loop {
@@ -202,7 +212,7 @@ where
                 break;
             }
             for r in regions {
-                let stat = self.initialize_region(&r.region)?;
+                let stat = self.initialize_region(&r.region, start_ts)?;
                 total_stat.add_statistics(&stat);
             }
         }

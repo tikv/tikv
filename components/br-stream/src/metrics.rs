@@ -28,4 +28,10 @@ lazy_static! {
         "The total kv size skipped by the streaming",
     )
     .unwrap();
+    pub static ref STREAM_ERROR: CounterVec = register_counter_vec!(
+        "tikv_stream_errors",
+        "The errors during stream backup.",
+        &["type"]
+    )
+    .unwrap();
 }

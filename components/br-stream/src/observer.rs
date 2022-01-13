@@ -1,4 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+use crate::errors::Error;
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -72,4 +73,20 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
     }
 
     fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
+}
+
+impl RoleObserver for BackupStreamObserver {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, r: StateRole) {
+        let region = ctx.region();
+        if r == StateRole::Leader {
+            if let Err(err) = self.scheduler.schedule(Task::ObserverRegion {
+                region: region.clone(),
+            }) {
+                Error::from(err).report(format!(
+                    "failed to schedule role change for region {}",
+                    region.get_id()
+                ))
+            }
+        }
+    }
 }
