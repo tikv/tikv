@@ -2452,6 +2452,7 @@ where
                 start_index,
                 end_index,
             )
+            .flush()
             .when_done(move || {
                 if let Err(e) =
                     mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))

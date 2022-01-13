@@ -21,6 +21,7 @@ pub struct Task {
     region_id: u64,
     start_idx: u64,
     end_idx: u64,
+    flush: bool,
     cb: Option<Box<dyn FnOnce() + Send>>,
 }
 
@@ -30,8 +31,14 @@ impl Task {
             region_id,
             start_idx: start,
             end_idx: end,
+            flush: false,
             cb: None,
         }
+    }
+
+    pub fn flush(mut self) -> Self {
+        self.flush = true;
+        self
     }
 
     pub fn when_done(mut self, callback: impl FnOnce() + Send + 'static) -> Self {
@@ -158,8 +165,9 @@ where
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
-        let flush_now = task.start_idx == task.end_idx;
+        let flush_now = task.flush;
         self.tasks.push(task);
+        // TODO: maybe they should also be batched even `flush_now` is true.
         if flush_now || self.tasks.len() > MAX_GC_REGION_BATCH {
             self.flush();
         }
