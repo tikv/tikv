@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::{cmp, i32, isize};
 use std::time::Duration;
+use std::{cmp, i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -255,7 +255,9 @@ impl Default for Config {
 impl Config {
     #[inline]
     pub fn heavy_load_wait_duration(&self) -> Duration {
-        self.heavy_load_wait_duration.unwrap_or(ReadableDuration::micros(50)).0
+        self.heavy_load_wait_duration
+            .unwrap_or(ReadableDuration::micros(50))
+            .0
     }
 
     /// Validates the configuration and returns an error if it is misconfigured.
