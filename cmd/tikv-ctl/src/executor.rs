@@ -63,7 +63,9 @@ pub fn new_debug_executor(
 
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
-    let env = cfg.build_shared_rocks_env(key_manager.clone(), None /*io_rate_limiter*/);
+    let env = cfg
+        .build_shared_rocks_env(key_manager.clone(), None /*io_rate_limiter*/)
+        .unwrap();
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());

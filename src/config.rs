@@ -18,7 +18,7 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
