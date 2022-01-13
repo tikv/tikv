@@ -12,11 +12,12 @@ use std::{
 use crate::{codec::Encoder, endpoint::Task, errors::Error, utils::SlotMap};
 
 use super::errors::Result;
+use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
-use raftstore::{coprocessor::CmdBatch, RegionInfoAccessor};
+use raftstore::{coprocessor::CmdBatch, store::RaftRouter, RegionInfoAccessor};
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 

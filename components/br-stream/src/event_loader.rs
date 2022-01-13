@@ -1,8 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use std::marker::PhantomData;
 
-use raftstore::coprocessor::RegionInfoProvider;
+use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
+
+use futures::executor::block_on;
+use raftstore::{
+    coprocessor::{ObserveHandle, RegionInfoProvider},
+    router::RaftStoreRouter,
+    store::{fsm::ChangeObserver, Callback, SignificantMsg},
+};
 use tikv::storage::{
     kv::{SnapContext, StatisticsSummary},
     mvcc::{DeltaScanner, ScannerBuilder},
@@ -104,28 +111,32 @@ impl<S: Snapshot> EventLoader<S> {
 /// Like [`cdc::Initializer`], but supports initialize over range.
 /// Note: maybe we can merge those two structures?
 #[derive(Clone)]
-pub struct InitialDataLoader<E, R> {
-    engine: E,
+pub struct InitialDataLoader<E, R, RT> {
+    router: RT,
     regions: R,
     start_ts: TimeStamp,
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     sink: Router,
     store_id: u64,
+
+    _engine: PhantomData<E>,
 }
 
-impl<E, R> InitialDataLoader<E, R>
+impl<E, R, RT> InitialDataLoader<E, R, RT>
 where
-    E: Engine,
+    E: KvEngine,
     R: RegionInfoProvider + Clone + 'static,
+    RT: RaftStoreRouter<E>,
 {
-    pub fn new(engine: E, regions: R, start_ts: TimeStamp, sink: Router, store_id: u64) -> Self {
+    pub fn new(router: RT, regions: R, start_ts: TimeStamp, sink: Router, store_id: u64) -> Self {
         Self {
-            engine,
+            router,
             regions,
             start_ts,
             sink,
             store_id,
+            _engine: PhantomData,
         }
     }
 
@@ -141,29 +152,29 @@ where
         //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
         //      register the region to CDC observer and get a snapshot at the same time.
-        // We use the BR method here for fast dev.
-        // We need register the region as observed then.
-        let mut region_ctx = Context::new();
-        region_ctx.set_region_id(region.get_id());
-        region_ctx.set_region_epoch(region.get_region_epoch().clone());
-        region_ctx.set_peer(
-            self.find_peer(&region)
-                .ok_or_else(|| {
-                    Error::Other(box_err!("failed to find peer from region {:?}", region))
-                })?
-                .clone(),
-        );
-        let ctx = SnapContext {
-            pb_ctx: &region_ctx,
-            ..Default::default()
-        };
-        let snap = self.engine.snapshot(ctx).map_err(|err| {
-            Error::Other(box_err!(
-                "failed to get snapshot for incremental scan (region id = {}): {}",
-                region.get_id(),
-                err
-            ))
-        })?;
+        // Registering the observer to the raftstore is necessary because we should only listen events from leader.
+        // In CDC, the change observer is per-delegate(i.e. per-region), we can create the command per-region here too.
+        let cmd = ChangeObserver::from_cdc(region.get_id(), ObserveHandle::new());
+        let (callback, fut) = tikv_util::future::paired_future_callback();
+        self.router
+            .significant_send(
+                region.id,
+                SignificantMsg::CaptureChange {
+                    cmd,
+                    region_epoch: region.get_region_epoch().clone(),
+                    callback: Callback::Read(Box::new(|snapshot| callback(snapshot.snapshot))),
+                },
+            )
+            .map_err(|err| {
+                Error::Other(box_err!(
+                    "failed to register the observer to region {}",
+                    region.get_id()
+                ))
+            })?;
+
+        let snap = block_on(fut)
+            .expect("BUG: channel of paired_future_callback canceled.")
+            .expect("BUG: raftstore didn't call the callback but return Ok(_).");
         let mut event_loader =
             EventLoader::load_from(snap, self.start_ts, TimeStamp::max(), region)?;
         let mut events = Vec::with_capacity(2048);

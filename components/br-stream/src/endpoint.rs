@@ -4,6 +4,8 @@ use std::convert::AsRef;
 use std::fmt;
 use std::path::PathBuf;
 
+use engine_traits::KvEngine;
+use raftstore::router::RaftStoreRouter;
 use tikv::storage::Engine;
 use tikv_util::time::Instant;
 use tokio::io::Result as TokioResult;
@@ -27,7 +29,7 @@ use tikv_util::{debug, error, info};
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
-pub struct Endpoint<S: MetaStore + 'static, R, E> {
+pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     meta_client: Option<MetadataClient<S>>,
@@ -40,12 +42,14 @@ pub struct Endpoint<S: MetaStore + 'static, R, E> {
     store_id: u64,
     regions: R,
     engine: E,
+    router: RT,
 }
 
-impl<R, E> Endpoint<EtcdStore, R, E>
+impl<R, E, RT> Endpoint<EtcdStore, R, E, RT>
 where
     R: RegionInfoProvider + 'static + Clone,
-    E: Engine,
+    E: KvEngine,
+    RT: RaftStoreRouter<E> + 'static,
 {
     pub fn new<S: AsRef<str>>(
         store_id: u64,
@@ -55,7 +59,8 @@ where
         observer: BackupStreamObserver,
         accessor: R,
         engine: E,
-    ) -> Endpoint<EtcdStore, R, E> {
+        router: RT,
+    ) -> Endpoint<EtcdStore, R, E, RT> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
@@ -91,6 +96,7 @@ where
                 store_id,
                 regions: accessor,
                 engine,
+                router,
             };
         }
 
@@ -99,7 +105,7 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(Endpoint::<_, R, E>::starts_watch_tasks(
+        pool.spawn(Endpoint::<_, R, E, RT>::starts_watch_tasks(
             meta_client_clone,
             scheduler_clone,
         ));
@@ -113,15 +119,17 @@ where
             store_id,
             regions: accessor,
             engine,
+            router,
         }
     }
 }
 
-impl<S, R, E> Endpoint<S, R, E>
+impl<S, R, E, RT> Endpoint<S, R, E, RT>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
-    E: Engine,
+    E: KvEngine,
+    RT: RaftStoreRouter<E> + 'static,
 {
     // TODO find a proper way to exit watch tasks
     async fn starts_watch_tasks(
@@ -188,9 +196,9 @@ where
         });
     }
 
-    pub fn make_initial_loader(&self, from_ts: TimeStamp) -> InitialDataLoader<E, R> {
+    pub fn make_initial_loader(&self, from_ts: TimeStamp) -> InitialDataLoader<E, R, RT> {
         InitialDataLoader::new(
-            self.engine.clone(),
+            self.router.clone(),
             self.regions.clone(),
             from_ts,
             self.range_router.clone(),

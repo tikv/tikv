@@ -53,10 +53,9 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
             "level" => ?max_level,
         );
 
-        // br stream observe write_cf and default_cf
-        // if max_level == ObserveLevel::None {
-        //    return;
-        // }
+        if max_level != ObserveLevel::All {
+            return;
+        }
 
         // TODO may be we should filter cmd batch here, to reduce the cost of clone.
         let cmd_batches: Vec<_> = cmd_batches
