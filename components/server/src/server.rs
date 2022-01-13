@@ -1258,8 +1258,11 @@ impl TiKVServer<RocksEngine> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let env = self
+            .config
+            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .unwrap();
 
         // Create raft engine.
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
