@@ -72,7 +72,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(TimeStamp::zero(), snapshot, !ctx.get_not_fill_cache()),
+            SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx),
             &mut context.statistics,
         );
 

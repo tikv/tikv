@@ -236,11 +236,10 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
-            // 300 means gRPC threads are under heavy load if their total CPU usage
-            // is greater than 300%.
-            heavy_load_threshold: 300,
-            // The resolution of timer in tokio is 1ms.
-            heavy_load_wait_duration: ReadableDuration::millis(1),
+            // 75 means a gRPC thread is under heavy load if its total CPU usage
+            // is greater than 75%.
+            heavy_load_threshold: 75,
+            heavy_load_wait_duration: ReadableDuration::micros(50),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             reject_messages_on_memory_ratio: 0.2,
@@ -352,6 +351,12 @@ impl Config {
             return Err(box_err!(
                 "server.reject_messages_on_memory_ratio must be greater than 0"
             ));
+        }
+
+        if self.heavy_load_threshold > 100 {
+            // The configuration has been changed to describe CPU usage of a single thread instead
+            // of all threads. So migrate from the old style.
+            self.heavy_load_threshold = 75;
         }
 
         Ok(())

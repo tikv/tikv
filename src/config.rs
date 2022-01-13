@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::i32;
-use std::io::Error as IoError;
 use std::io::Write;
+use std::io::{Error as IoError, ErrorKind};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
@@ -1129,19 +1129,20 @@ impl DbConfig {
 
         // Since the following configuration supports online update, in order to
         // prevent mistakenly inputting too large values, the max limit is made
-        // according to the cpu quota.
-        let cpu_num = SysQuota::cpu_cores_quota() as i32;
-        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+        // according to the cpu quota * 10. Notice 10 is only an estimate, not an
+        // empirical value.
+        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
-                cpu_num,
+                limit,
             )
             .into());
         }
-        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+        if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
-                cpu_num,
+                limit,
             )
             .into());
         }
@@ -1498,10 +1499,6 @@ impl DBConfigManger {
     }
 
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
-        if max_background_jobs < opt.get_max_background_jobs() {
-            return Err("unable to shrink background jobs while the instance is running".into());
-        }
         self.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
         Ok(())
     }
@@ -1510,10 +1507,6 @@ impl DBConfigManger {
         &self,
         max_background_flushes: i32,
     ) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
-        if max_background_flushes < opt.get_max_background_flushes() {
-            return Err("unable to shrink background jobs while the instance is running".into());
-        }
         self.set_db_config(&[(
             "max_background_flushes",
             &max_background_flushes.to_string(),
@@ -2381,6 +2374,60 @@ impl Default for ResolvedTsConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct File {
+    pub filename: String,
+    // The unit is MB
+    pub max_size: u64,
+    // The unit is Day
+    pub max_days: u64,
+    pub max_backups: usize,
+}
+
+impl Default for File {
+    fn default() -> Self {
+        Self {
+            filename: "".to_owned(),
+            max_size: 300,
+            max_days: 0,
+            max_backups: 0,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct LogConfig {
+    #[serde(with = "log_level_serde")]
+    pub level: slog::Level,
+    pub format: LogFormat,
+    pub enable_timestamp: bool,
+    pub file: File,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: slog::Level::Info,
+            format: LogFormat::Text,
+            enable_timestamp: true,
+            file: File::default(),
+        }
+    }
+}
+
+impl LogConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.file.max_size > 4096 {
+            return Err("Max log file size upper limit to 4096MB".to_string().into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2390,27 +2437,29 @@ pub struct TiKvConfig {
     #[online_config(hidden)]
     pub cfg_path: String,
 
+    // Deprecated! These configuration has been moved to LogConfig.
+    // They are preserved for compatibility check.
+    #[doc(hidden)]
     #[online_config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
-
+    #[doc(hidden)]
     #[online_config(skip)]
     pub log_file: String,
-
+    #[doc(hidden)]
     #[online_config(skip)]
     pub log_format: LogFormat,
+    #[online_config(skip)]
+    pub log_rotation_timespan: ReadableDuration,
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub log_rotation_size: ReadableSize,
 
     #[online_config(skip)]
     pub slow_log_file: String,
 
     #[online_config(skip)]
     pub slow_log_threshold: ReadableDuration,
-
-    #[online_config(skip)]
-    pub log_rotation_timespan: ReadableDuration,
-
-    #[online_config(skip)]
-    pub log_rotation_size: ReadableSize,
 
     #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
@@ -2428,6 +2477,9 @@ pub struct TiKvConfig {
     #[doc(hidden)]
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
+
+    #[online_config(skip)]
+    pub log: LogConfig,
 
     #[online_config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2498,15 +2550,16 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_format: LogFormat::Text,
+            log_rotation_timespan: ReadableDuration::hours(0),
+            log_rotation_size: ReadableSize::mb(300),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
-            log_rotation_timespan: ReadableDuration::hours(24),
-            log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
             memory_usage_limit: OptionReadableSize(None),
             memory_usage_high_water: 0.9,
+            log: LogConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2557,6 +2610,7 @@ impl TiKvConfig {
 
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.log.validate()?;
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -2668,10 +2722,51 @@ impl TiKvConfig {
             self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
             self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
 
+            // disable kvdb write stall, and override related configs
             self.rocksdb.defaultcf.disable_write_stall = true;
+            self.rocksdb.defaultcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.writecf.disable_write_stall = true;
+            self.rocksdb.writecf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.lockcf.disable_write_stall = true;
+            self.rocksdb.lockcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.raftcf.disable_write_stall = true;
+            self.rocksdb.raftcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
         }
 
         if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
@@ -2724,6 +2819,59 @@ impl TiKvConfig {
         }
 
         Ok(())
+    }
+
+    // As the init of `logger` is very early, this adjust needs to be separated and called
+    // immediately after parsing the command line.
+    pub fn logger_compatible_adjust(&mut self) {
+        let default_tikv_cfg = TiKvConfig::default();
+        let default_log_cfg = LogConfig::default();
+        if self.log_level != default_tikv_cfg.log_level {
+            println!("deprecated configuration, log-level has been moved to log.level");
+            if self.log.level == default_log_cfg.level {
+                println!("override log.level with log-level, {:?}", self.log_level);
+                self.log.level = self.log_level;
+            }
+            self.log_level = default_tikv_cfg.log_level;
+        }
+        if self.log_file != default_tikv_cfg.log_file {
+            println!("deprecated configuration, log-file has been moved to log.file.filename");
+            if self.log.file.filename == default_log_cfg.file.filename {
+                println!(
+                    "override log.file.filename with log-file, {:?}",
+                    self.log_file
+                );
+                self.log.file.filename = self.log_file.clone();
+            }
+            self.log_file = default_tikv_cfg.log_file;
+        }
+        if self.log_format != default_tikv_cfg.log_format {
+            println!("deprecated configuration, log-format has been moved to log.format");
+            if self.log.format == default_log_cfg.format {
+                println!("override log.format with log-format, {:?}", self.log_format);
+                self.log.format = self.log_format;
+            }
+            self.log_format = default_tikv_cfg.log_format;
+        }
+        if self.log_rotation_timespan.as_secs() > 0 {
+            println!(
+                "deprecated configuration, log-rotation-timespan is no longer used and ignored."
+            );
+        }
+        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
+            println!(
+                "deprecated configuration, \
+                 log-ratation-size has been moved to log.file.max-size"
+            );
+            if self.log.file.max_size == default_log_cfg.file.max_size {
+                println!(
+                    "override log.file.max_size with log-rotation-size, {:?}",
+                    self.log_rotation_size
+                );
+                self.log.file.max_size = self.log_rotation_size.as_mb();
+            }
+            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
+        }
     }
 
     pub fn compatible_adjust(&mut self) {
@@ -2906,26 +3054,20 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file(path: &Path, unrecognized_keys: Option<&mut Vec<String>>) -> Self {
-        (|| -> Result<Self, Box<dyn Error>> {
-            let s = fs::read_to_string(path)?;
-            let mut deserializer = toml::Deserializer::new(&s);
-            let mut cfg = if let Some(keys) = unrecognized_keys {
-                serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
-            } else {
-                <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
-            }?;
-            deserializer.end()?;
-            cfg.cfg_path = path.display().to_string();
-            Ok(cfg)
-        })()
-        .unwrap_or_else(|e| {
-            panic!(
-                "invalid auto generated configuration file {}, err {}",
-                path.display(),
-                e
-            );
-        })
+    pub fn from_file(
+        path: &Path,
+        unrecognized_keys: Option<&mut Vec<String>>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let s = fs::read_to_string(path)?;
+        let mut deserializer = toml::Deserializer::new(&s);
+        let mut cfg = if let Some(keys) = unrecognized_keys {
+            serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
+        } else {
+            <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+        }?;
+        deserializer.end()?;
+        cfg.cfg_path = path.display().to_string();
+        Ok(cfg)
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
@@ -2995,7 +3137,15 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
-        return Some(TiKvConfig::from_file(&last_cfg_path, None));
+        return Some(
+            TiKvConfig::from_file(&last_cfg_path, None).unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    last_cfg_path.display(),
+                    e
+                );
+            }),
+        );
     }
     None
 }
@@ -3048,11 +3198,13 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
     let tmp_cfg_path = match path.as_ref().parent() {
         Some(p) => p.join(TMP_CONFIG_FILE),
         None => {
-            return Err(format!(
-                "failed to get parent path of config file: {}",
-                path.as_ref().display()
-            )
-            .into());
+            return Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                format!(
+                    "failed to get parent path of config file: {}",
+                    path.as_ref().display()
+                ),
+            )));
         }
     };
     {
@@ -3169,13 +3321,17 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
     fn helper(mut fields: Vec<String>, typed: &ConfigChange) -> CfgResult<bool> {
         if let Some(field) = fields.pop() {
             match typed.get(&field) {
-                None | Some(ConfigValue::Skip) => {
-                    Err(format!("failed to get field: {}", field).into())
-                }
+                None | Some(ConfigValue::Skip) => Err(Box::new(IoError::new(
+                    ErrorKind::Other,
+                    format!("failed to get field: {}", field),
+                ))),
                 Some(ConfigValue::Module(m)) => helper(fields, m),
                 Some(c) => {
                     if !fields.is_empty() {
-                        return Err(format!("unexpect fields: {:?}", fields).into());
+                        return Err(Box::new(IoError::new(
+                            ErrorKind::Other,
+                            format!("unexpect fields: {:?}", fields),
+                        )));
                     }
                     match c {
                         ConfigValue::Duration(_)
@@ -3189,7 +3345,10 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                 }
             }
         } else {
-            Err("failed to get field".to_owned().into())
+            Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                "failed to get field",
+            )))
         }
     }
     let mut dst = HashMap::new();
@@ -3288,6 +3447,25 @@ impl ConfigController {
 
     pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
         let diff = to_config_change(change.clone())?;
+        self.update_impl(diff, Some(change))
+    }
+
+    pub fn update_from_toml_file(&self) -> CfgResult<()> {
+        let current = self.get_current();
+        match TiKvConfig::from_file(Path::new(&current.cfg_path), None) {
+            Ok(incoming) => {
+                let diff = current.diff(&incoming);
+                self.update_impl(diff, None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn update_impl(
+        &self,
+        diff: HashMap<String, ConfigValue>,
+        change: Option<HashMap<String, String>>,
+    ) -> CfgResult<()> {
         {
             let mut incoming = self.get_current();
             incoming.update(diff.clone());
@@ -3316,18 +3494,20 @@ impl ConfigController {
         debug!("all config change had been dispatched"; "change" => ?to_update);
         inner.current.update(to_update);
         // Write change to the config file
-        let content = {
-            let change = to_toml_encode(change)?;
-            let src = if Path::new(&inner.current.cfg_path).exists() {
-                fs::read_to_string(&inner.current.cfg_path)?
-            } else {
-                String::new()
+        if let Some(change) = change {
+            let content = {
+                let change = to_toml_encode(change)?;
+                let src = if Path::new(&inner.current.cfg_path).exists() {
+                    fs::read_to_string(&inner.current.cfg_path)?
+                } else {
+                    String::new()
+                };
+                let mut t = TomlWriter::new();
+                t.write_change(src, change);
+                t.finish()
             };
-            let mut t = TomlWriter::new();
-            t.write_change(src, change);
-            t.finish()
-        };
-        write_config(&inner.current.cfg_path, &content)?;
+            write_config(&inner.current.cfg_path, &content)?;
+        }
         Ok(())
     }
 
@@ -3448,7 +3628,13 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None);
+        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                file.display(),
+                e
+            );
+        });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s1);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s2);
 
@@ -3456,7 +3642,13 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None);
+        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                file.display(),
+                e
+            );
+        });
         assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
         assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
@@ -3512,9 +3704,9 @@ mod tests {
         }
 
         let legal_cases = vec![
-            ("critical", Level::Critical),
+            ("fatal", Level::Critical),
             ("error", Level::Error),
-            ("warning", Level::Warning),
+            ("warn", Level::Warning),
             ("debug", Level::Debug),
             ("trace", Level::Trace),
             ("info", Level::Info),
@@ -3528,7 +3720,7 @@ mod tests {
             assert_eq!(res_value.v, deserialized);
         }
 
-        let compatibility_cases = vec![("warn", Level::Warning)];
+        let compatibility_cases = vec![("warning", Level::Warning), ("critical", Level::Critical)];
         for (serialized, deserialized) in compatibility_cases {
             let variant_string = format!("v = \"{}\"\n", serialized);
             let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
@@ -3696,10 +3888,24 @@ mod tests {
     }
 
     #[test]
-    fn test_change_flow_control() {
+    fn test_flow_control() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
         let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
+
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_slowdown_writes_trigger(),
+            50
+        );
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_stop_writes_trigger(),
+            50
+        );
 
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4514,7 +4720,7 @@ mod tests {
         });
         assert!(r.is_err());
 
-        // rate-limiter-mode defalut values is 2
+        // rate-limiter-mode default values is 2
         let config_str = r#"
             rate-limiter-mode = 1
         "#;

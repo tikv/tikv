@@ -190,7 +190,6 @@ impl Drop for Monitor {
 
         if let Err(e) = h.unwrap().join() {
             error!("join time monitor worker failed"; "err" => ?e);
-            return;
         }
     }
 }
