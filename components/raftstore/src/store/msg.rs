@@ -180,7 +180,7 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
-pub enum PeerTicks {
+pub enum PeerTick {
     Raft = 0,
     RaftLogGc = 1,
     SplitRegionCheck = 2,
@@ -191,31 +191,31 @@ pub enum PeerTicks {
     CheckLeaderLease = 7,
 }
 
-impl PeerTicks {
+impl PeerTick {
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
-            PeerTicks::Raft => "raft",
-            PeerTicks::RaftLogGc => "raft_log_gc",
-            PeerTicks::SplitRegionCheck => "split_region_check",
-            PeerTicks::PdHeartbeat => "pd_heartbeat",
-            PeerTicks::CheckMerge => "check_merge",
-            PeerTicks::CheckPeerStaleState => "check_peer_stale_state",
-            PeerTicks::EntryCacheEvict => "entry_cache_evict",
-            PeerTicks::CheckLeaderLease => "check_leader_lease",
+            PeerTick::Raft => "raft",
+            PeerTick::RaftLogGc => "raft_log_gc",
+            PeerTick::SplitRegionCheck => "split_region_check",
+            PeerTick::PdHeartbeat => "pd_heartbeat",
+            PeerTick::CheckMerge => "check_merge",
+            PeerTick::CheckPeerStaleState => "check_peer_stale_state",
+            PeerTick::EntryCacheEvict => "entry_cache_evict",
+            PeerTick::CheckLeaderLease => "check_leader_lease",
         }
     }
 
-    pub const fn get_all_ticks() -> &'static [PeerTicks] {
-        const TICKS: &[PeerTicks] = &[
-            PeerTicks::Raft,
-            PeerTicks::RaftLogGc,
-            PeerTicks::SplitRegionCheck,
-            PeerTicks::PdHeartbeat,
-            PeerTicks::CheckMerge,
-            PeerTicks::CheckPeerStaleState,
-            PeerTicks::EntryCacheEvict,
-            PeerTicks::CheckLeaderLease,
+    pub const fn get_all_ticks() -> &'static [PeerTick] {
+        const TICKS: &[PeerTick] = &[
+            PeerTick::Raft,
+            PeerTick::RaftLogGc,
+            PeerTick::SplitRegionCheck,
+            PeerTick::PdHeartbeat,
+            PeerTick::CheckMerge,
+            PeerTick::CheckPeerStaleState,
+            PeerTick::EntryCacheEvict,
+            PeerTick::CheckLeaderLease,
         ];
         TICKS
     }
@@ -490,7 +490,7 @@ pub enum PeerMsg<EK: KvEngine> {
     RaftCommand(RaftCommand<EK::Snapshot>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
-    Tick(PeerTicks),
+    Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {
         res: ApplyTaskRes<EK::Snapshot>,

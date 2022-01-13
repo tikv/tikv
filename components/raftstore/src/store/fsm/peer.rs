@@ -72,7 +72,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks,
+    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -97,7 +97,7 @@ where
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
-    tick_registry: [bool; PeerTicks::get_all_ticks().len()],
+    tick_registry: [bool; PeerTick::get_all_ticks().len()],
     /// Ticks for speed up campaign in chaos state.
     ///
     /// Followers will keep ticking in Idle mode to measure how many ticks have been skipped.
@@ -221,7 +221,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
-                tick_registry: [false; PeerTicks::get_all_ticks().len()],
+                tick_registry: [false; PeerTick::get_all_ticks().len()],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -264,7 +264,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
-                tick_registry: [false; PeerTicks::get_all_ticks().len()],
+                tick_registry: [false; PeerTick::get_all_ticks().len()],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -917,7 +917,7 @@ where
         }
     }
 
-    fn on_tick(&mut self, tick: PeerTicks) {
+    fn on_tick(&mut self, tick: PeerTick) {
         if self.fsm.stopped {
             return;
         }
@@ -929,14 +929,14 @@ where
         );
         self.fsm.tick_registry[tick as usize] = false;
         match tick {
-            PeerTicks::Raft => self.on_raft_base_tick(),
-            PeerTicks::RaftLogGc => self.on_raft_gc_log_tick(false),
-            PeerTicks::PdHeartbeat => self.on_pd_heartbeat_tick(),
-            PeerTicks::SplitRegionCheck => self.on_split_region_check_tick(),
-            PeerTicks::CheckMerge => self.on_check_merge(),
-            PeerTicks::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
-            PeerTicks::EntryCacheEvict => self.on_entry_cache_evict_tick(),
-            PeerTicks::CheckLeaderLease => self.on_check_leader_lease_tick(),
+            PeerTick::Raft => self.on_raft_base_tick(),
+            PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),
+            PeerTick::PdHeartbeat => self.on_pd_heartbeat_tick(),
+            PeerTick::SplitRegionCheck => self.on_split_region_check_tick(),
+            PeerTick::CheckMerge => self.on_check_merge(),
+            PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
+            PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
+            PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
         }
     }
 
@@ -1280,7 +1280,7 @@ where
     }
 
     #[inline]
-    fn schedule_tick(&mut self, tick: PeerTicks) {
+    fn schedule_tick(&mut self, tick: PeerTick) {
         let idx = tick as usize;
         if self.fsm.tick_registry[idx] {
             return;
@@ -1332,7 +1332,7 @@ where
     fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTicks::Raft)
+        self.schedule_tick(PeerTick::Raft)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -2943,7 +2943,7 @@ where
     }
 
     fn register_merge_check_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CheckMerge)
+        self.schedule_tick(PeerTick::CheckMerge)
     }
 
     /// Check if merge target region is staler than the local one in kv engine.
@@ -4016,7 +4016,7 @@ where
     }
 
     fn register_raft_gc_log_tick(&mut self) {
-        self.schedule_tick(PeerTicks::RaftLogGc)
+        self.schedule_tick(PeerTick::RaftLogGc)
     }
 
     #[allow(clippy::if_same_then_else)]
@@ -4152,7 +4152,7 @@ where
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
-        self.schedule_tick(PeerTicks::EntryCacheEvict)
+        self.schedule_tick(PeerTick::EntryCacheEvict)
     }
 
     fn on_entry_cache_evict_tick(&mut self) {
@@ -4169,7 +4169,7 @@ where
     }
 
     fn register_check_leader_lease_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CheckLeaderLease)
+        self.schedule_tick(PeerTick::CheckLeaderLease)
     }
 
     fn on_check_leader_lease_tick(&mut self) {
@@ -4182,7 +4182,7 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(PeerTicks::SplitRegionCheck)
+        self.schedule_tick(PeerTick::SplitRegionCheck)
     }
 
     #[inline]
@@ -4444,7 +4444,7 @@ where
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
-        self.schedule_tick(PeerTicks::PdHeartbeat)
+        self.schedule_tick(PeerTick::PdHeartbeat)
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
@@ -4543,7 +4543,7 @@ where
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CheckPeerStaleState)
+        self.schedule_tick(PeerTick::CheckPeerStaleState)
     }
 }
 
