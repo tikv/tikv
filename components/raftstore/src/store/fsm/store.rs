@@ -1164,7 +1164,7 @@ where
                 .engines
                 .kv
                 .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
-            tick_batch: vec![PeerTickBatch::default(); PeerTick::get_all_ticks().len()],
+            tick_batch: vec![PeerTickBatch::default(); PeerTick::NUM_TYPES],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
             self_disk_usage: DiskUsage::Normal,

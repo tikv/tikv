@@ -192,6 +192,8 @@ pub enum PeerTick {
 }
 
 impl PeerTick {
+    pub const NUM_TYPES: usize = Self::get_all_ticks().len();
+
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
