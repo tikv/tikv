@@ -674,10 +674,9 @@ where
                 PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                     self.on_update_region_for_unsafe_recover(region)
                 }
-                PeerMsg::UnsafeRecoveryWaitApply {
-                    commit_index,
-                    counter,
-                } => self.on_unsafe_recovery_wait_apply(commit_index, counter),
+                PeerMsg::UnsafeRecoveryWaitApply(counter) => {
+                    self.on_unsafe_recovery_wait_apply(counter)
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -874,11 +873,13 @@ where
         self.register_raft_base_tick();
     }
 
-    fn on_unsafe_recovery_wait_apply(&mut self, commit_index: u64, counter: Arc<AtomicUsize>) {
-	// Checks the applied index here first, in case the log at the target index has been
-	// applied right before this peer msg is handled. If the log has not been applied here,
-	// further checks will be performed in on_apply_res().
-        if self.fsm.peer.raft_group.store().applied_index() >= commit_index {
+    fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
+        // Checks the applied index here first, in case the log at the target index has been
+        // applied right before this peer msg is handled. If the log has not been applied here,
+        // further checks will be performed in on_apply_res().
+        if self.fsm.peer.raft_group.store().applied_index()
+            == self.fsm.peer.raft_group.store().commit_index()
+        {
             if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
                 let stats = StoreStats::default();
                 let store_info = StoreInfo {
@@ -896,9 +897,10 @@ where
                 }
             }
         } else {
-	    self.fsm.unsafe_recovery_target_commit_index = commit_index;
-	    self.fsm.unsafe_recovery_wait_apply_counter = counter.clone();
-	}
+            self.fsm.unsafe_recovery_target_commit_index =
+                self.fsm.peer.raft_group.store().commit_index();
+            self.fsm.unsafe_recovery_wait_apply_counter = counter.clone();
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1527,10 +1529,17 @@ where
 
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
-	// After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
-	if self.fsm.unsafe_recovery_target_commit_index != 0 {
-            if self.fsm.peer.raft_group.store().applied_index() >= self.fsm.unsafe_recovery_target_commit_index {
-                if self.fsm.unsafe_recovery_wait_apply_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+        // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
+        if self.fsm.unsafe_recovery_target_commit_index != 0 {
+            if self.fsm.peer.raft_group.store().applied_index()
+                >= self.fsm.unsafe_recovery_target_commit_index
+            {
+                if self
+                    .fsm
+                    .unsafe_recovery_wait_apply_counter
+                    .fetch_sub(1, Ordering::Relaxed)
+                    == 1
+                {
                     let stats = StoreStats::default();
                     let store_info = StoreInfo {
                         kv_engine: self.ctx.engines.kv.clone(),
@@ -1546,9 +1555,9 @@ where
                         panic!("fail to send detailed report to pd {:?}", e);
                     }
                 }
-		self.fsm.unsafe_recovery_target_commit_index = 0;
-	    }
-	}
+                self.fsm.unsafe_recovery_target_commit_index = 0;
+            }
+        }
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(

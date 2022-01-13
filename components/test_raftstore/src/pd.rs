@@ -751,6 +751,7 @@ pub struct TestPdClient {
     tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
     feature_gate: FeatureGate,
+    require_report: bool,
 }
 
 impl TestPdClient {
@@ -766,6 +767,7 @@ impl TestPdClient {
             tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
             feature_gate,
+	    require_report: false,
         }
     }
 
@@ -1255,6 +1257,10 @@ impl TestPdClient {
     pub fn reset_version(&self, version: &str) {
         unsafe { self.feature_gate.reset_version(version).unwrap() }
     }
+
+    fn must_set_require_report(&mut self, require_report: bool) {
+	self.require_report = require_report;
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1539,6 +1545,7 @@ impl PdClient for TestPdClient {
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());
         }
+	resp.set_require_detailed_report(self.require_report);
         Box::pin(ok(resp))
     }
 

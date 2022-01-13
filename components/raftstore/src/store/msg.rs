@@ -528,10 +528,7 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
     Destroy(u64),
     UpdateRegionForUnsafeRecover(metapb::Region),
-    UnsafeRecoveryWaitApply {
-        commit_index: u64,
-        counter: Arc<AtomicUsize>,
-    },
+    UnsafeRecoveryWaitApply(Arc<AtomicUsize>),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -563,16 +560,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                 write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
             }
-            PeerMsg::UnsafeRecoveryWaitApply {
-                commit_index,
-                counter,
-            } => {
-                write!(
-                    fmt,
-                    "Waitting for the apply index equals to {:?} , remaining tasks {:?}",
-                    commit_index, *counter
-                )
-            }
+            PeerMsg::UnsafeRecoveryWaitApply(counter) => write!(fmt, "WaitApply {:?}", *counter),
         }
     }
 }

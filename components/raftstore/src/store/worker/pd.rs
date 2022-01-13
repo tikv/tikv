@@ -16,7 +16,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::RegionReplicationStatus;
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
@@ -1116,64 +1116,14 @@ where
                     }
                     if resp.get_require_detailed_report() {
                         info!("required to send detailed report in the next heartbeat");
-                        let mut commit_indices = HashMap::default();
-                        store_info
-                            .kv_engine
-                            .scan_cf(
-                                CF_RAFT,
-                                keys::REGION_META_MIN_KEY,
-                                keys::REGION_META_MAX_KEY,
-                                false,
-                                |key, value| {
-                                    let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
-                                    if suffix != keys::REGION_STATE_SUFFIX {
-                                        return Ok(true);
-                                    }
-
-                                    let mut region_local_state = RegionLocalState::default();
-                                    region_local_state.merge_from_bytes(value)?;
-                                    if region_local_state.get_state() == PeerState::Tombstone {
-                                        return Ok(true);
-                                    }
-                                    let apply_state: RaftApplyState = match store_info
-                                        .kv_engine
-                                        .get_msg_cf(
-                                            CF_RAFT,
-                                            &keys::apply_state_key(
-                                                region_local_state.get_region().get_id(),
-                                            ),
-                                        )
-                                        .unwrap()
-                                    {
-                                        None => return Ok(true),
-                                        Some(value) => value,
-                                    };
-                                    if apply_state.get_applied_index()
-                                        != apply_state.get_last_commit_index()
-                                    {
-                                        commit_indices.insert(
-                                            region_local_state.get_region().get_id(),
-                                            apply_state.get_last_commit_index(),
-                                        );
-                                    }
-                                    Ok(true)
-                                },
-                            )
-                            .unwrap();
-                        if commit_indices.len() != 0 {
-                            let counter = Arc::new(AtomicUsize::new(commit_indices.len()));
-                            for (region_id, commit_index) in &commit_indices {
-                                if let Err(e) = router.force_send(
-                                    *region_id,
-                                    PeerMsg::UnsafeRecoveryWaitApply {
-                                        commit_index: *commit_index,
-                                        counter: counter.clone(),
-                                    },
-                                ) {
-                                    error!("fail to send wait apply message for unsafe recovery"; "err" => ?e);
-                                }
-                            }
-                        } else {
+                        // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
+                        let counter = Arc::new(AtomicUsize::new(1));
+                        let counter_clone = counter.clone();
+                        router.broadcast_normal(|| {
+                            let _ = counter_clone.fetch_add(1, Ordering::Relaxed);
+                            PeerMsg::UnsafeRecoveryWaitApply(counter_clone.clone())
+                        });
+                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
                             let task = Task::StoreHeartbeat {
                                 stats: stats_copy,
                                 store_info,
