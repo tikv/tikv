@@ -604,9 +604,11 @@ mod tests {
     fn test_seek_and_prev_with_prefix_seek() {
         let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
         let mut cf_opts = ColumnFamilyOptions::new();
-        let e = Box::new(FixedPrefixSliceTransform::new(3));
         cf_opts
-            .set_prefix_extractor("FixedPrefixSliceTransform", e)
+            .set_prefix_extractor(
+                "FixedPrefixSliceTransform",
+                FixedPrefixSliceTransform::new(3),
+            )
             .unwrap();
         let engine = new_engine(
             path.path().to_str().unwrap(),
