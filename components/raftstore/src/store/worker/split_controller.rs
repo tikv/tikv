@@ -49,7 +49,7 @@ impl Sample {
 }
 
 // It will return prefix sum of iter. `read` is a function to be used to read data from iter.
-fn prefix_sum<F, T>(iter: Iter<T>, read: F) -> Vec<usize>
+fn prefix_sum<F, T>(iter: Iter<'_, T>, read: F) -> Vec<usize>
 where
     F: Fn(&T) -> usize,
 {
@@ -131,13 +131,14 @@ impl RegionInfo {
     }
 
     fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
-        for key_range in key_ranges {
-            if self.key_ranges.len() < self.sample_num || self.get_read_qps() == 0 {
+        for (i, key_range) in key_ranges.into_iter().enumerate() {
+            let n = self.get_read_qps() + i;
+            if n == 0 || self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
-                let i = rand::thread_rng().gen_range(0..self.get_read_qps()) as usize;
-                if i < self.sample_num {
-                    self.key_ranges[i] = key_range;
+                let j = rand::thread_rng().gen_range(0..n) as usize;
+                if j < self.sample_num {
+                    self.key_ranges[j] = key_range;
                 }
             }
         }
@@ -257,17 +258,35 @@ impl Recorder {
             }
             let sampled = sample.contained + sample.left + sample.right;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_enough_key"])
+                    .inc();
                 continue;
             }
+
             let diff = (sample.left - sample.right) as f64;
             let balance_score = diff.abs() / (sample.left + sample.right) as f64;
+            LOAD_BASE_SPLIT_SAMPLE_VEC
+                .with_label_values(&["balance_score"])
+                .observe(balance_score);
             if balance_score >= split_balance_score {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_balance_key"])
+                    .inc();
                 continue;
             }
+
             let contained_score = sample.contained as f64 / sampled as f64;
+            LOAD_BASE_SPLIT_SAMPLE_VEC
+                .with_label_values(&["contained_score"])
+                .observe(contained_score);
             if contained_score >= split_contained_score {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_uncross_key"])
+                    .inc();
                 continue;
             }
+
             let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
@@ -339,10 +358,10 @@ impl ReadStats {
             .entry(region_id)
             .or_insert_with(|| RegionInfo::new(sample_num));
         region_info.update_peer(peer);
-        region_info.add_query_num(kind, query_num);
         if is_read_query(kind) {
             region_info.add_key_ranges(key_ranges);
         }
+        region_info.add_query_num(kind, query_num);
     }
 
     pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
@@ -415,6 +434,10 @@ impl AutoSplitController {
                 .iter()
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
             debug!("load base split params";"region_id"=>region_id,"qps"=>qps,"qps_threshold"=>self.cfg.qps_threshold,"byte"=>byte,"byte_threshold"=>self.cfg.byte_threshold);
+
+            QUERY_REGION_VEC
+                .with_label_values(&["read"])
+                .observe(qps as f64);
 
             if qps < self.cfg.qps_threshold && byte < self.cfg.byte_threshold {
                 self.recorders.remove_entry(&region_id);
@@ -779,6 +802,30 @@ mod tests {
             build_key_range(b"b", b"c", false),
         ];
         assert_eq!(r.convert(key_ranges).len(), 3);
+    }
+
+    fn build_key_ranges(start_key: &[u8], end_key: &[u8], num: usize) -> Vec<KeyRange> {
+        let mut key_ranges = vec![];
+        for _ in 0..num {
+            key_ranges.push(build_key_range(start_key, end_key, false));
+        }
+        key_ranges
+    }
+
+    #[test]
+    fn test_add_query() {
+        let region_id = 1;
+        let mut r = ReadStats::default();
+        let key_ranges = build_key_ranges(b"a", b"a", r.sample_num);
+        r.add_query_num_batch(region_id, &Peer::default(), key_ranges, QueryKind::Get);
+        let key_ranges = build_key_ranges(b"b", b"b", r.sample_num * 1000);
+        r.add_query_num_batch(region_id, &Peer::default(), key_ranges, QueryKind::Get);
+        let samples = &r.region_infos.get(&region_id).unwrap().key_ranges;
+        let num = samples
+            .iter()
+            .filter(|key_range| key_range.start_key == b"b")
+            .count();
+        assert!(num >= r.sample_num - 1);
     }
 
     const REGION_NUM: u64 = 1000;

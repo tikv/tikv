@@ -18,7 +18,8 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
+    Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -45,6 +46,7 @@ use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
+use smallvec::{smallvec, SmallVec};
 use sst_importer::SSTImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
@@ -82,6 +84,7 @@ use super::metrics::*;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
 pub struct PendingCmd<S>
 where
@@ -209,7 +212,7 @@ pub struct Range {
 }
 
 impl Debug for Range {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
@@ -271,6 +274,9 @@ pub enum ExecResult<S> {
     },
     IngestSst {
         ssts: Vec<SSTMetaInfo>,
+    },
+    TransferLeader {
+        term: u64,
     },
 }
 
@@ -932,7 +938,7 @@ where
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        mut committed_entries_drainer: Drain<Entry>,
+        mut committed_entries_drainer: Drain<'_, Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -1072,7 +1078,7 @@ where
         // 2. When a leader tries to read index during transferring leader,
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
             if let Some(cb) = cmd.cb.take() {
                 apply_ctx
                     .applied_batch
@@ -1267,7 +1273,8 @@ where
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSst { .. } => {}
+                | ExecResult::IngestSst { .. }
+                | ExecResult::TransferLeader { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1393,7 +1400,7 @@ where
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(request),
-            AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::TransferLeader => self.exec_transfer_leader(request, ctx.exec_log_term),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             // TODO: is it backward compatible to add new cmd_type?
@@ -2692,6 +2699,23 @@ where
         ))
     }
 
+    fn exec_transfer_leader(
+        &mut self,
+        req: &AdminRequest,
+        term: u64,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        PEER_ADMIN_CMD_COUNTER.transfer_leader.all.inc();
+        let resp = AdminResponse::default();
+
+        let peer = req.get_transfer_leader().get_peer();
+        // Only execute TransferLeader if the expected new leader is self.
+        if peer.get_id() == self.id {
+            Ok((resp, ApplyResult::Res(ExecResult::TransferLeader { term })))
+        } else {
+            Ok((resp, ApplyResult::None))
+        }
+    }
+
     fn exec_compute_hash<W: WriteBatch<EK>>(
         &self,
         ctx: &ApplyContext<EK, W>,
@@ -2830,7 +2854,10 @@ where
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
-    pub entries: CachedEntries,
+    pub commit_index: u64,
+    pub commit_term: u64,
+    pub entries: SmallVec<[CachedEntries; 1]>,
+    pub entries_size: usize,
     pub cbs: Vec<Proposal<S>>,
 }
 
@@ -2839,15 +2866,24 @@ impl<S: Snapshot> Apply<S> {
         peer_id: u64,
         region_id: u64,
         term: u64,
+        commit_index: u64,
+        commit_term: u64,
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        let entries = CachedEntries::new(entries);
+        let mut entries_size = 0;
+        for e in &entries {
+            entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+        }
+        let cached_entries = CachedEntries::new(entries);
         Apply {
             peer_id,
             region_id,
             term,
-            entries,
+            commit_index,
+            commit_term,
+            entries: smallvec![cached_entries],
+            entries_size,
             cbs,
         }
     }
@@ -2866,6 +2902,28 @@ impl<S: Snapshot> Apply<S> {
                     *t = now.unwrap();
                 }
             }
+        }
+    }
+
+    fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
+        assert_eq!(self.region_id, other.region_id);
+        assert_eq!(self.peer_id, other.peer_id);
+        if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
+            assert!(other.term >= self.term);
+            self.term = other.term;
+
+            assert!(other.commit_index >= self.commit_index);
+            self.commit_index = other.commit_index;
+            assert!(other.commit_term >= self.commit_term);
+            self.commit_term = other.commit_term;
+
+            self.entries.append(&mut other.entries);
+            self.entries_size += other.entries_size;
+
+            self.cbs.append(&mut other.cbs);
+            true
+        } else {
+            false
         }
     }
 }
@@ -3200,51 +3258,63 @@ where
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
 
-        if apply.entries.range.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
+        if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
 
-        let (mut entries, dangle_size) = apply.entries.take_entries();
+        let mut entries = Vec::new();
+
+        let mut dangle_size = 0;
+        for cached_entries in apply.entries {
+            let (e, sz) = cached_entries.take_entries();
+            dangle_size += sz;
+            if e.is_empty() {
+                let rid = self.delegate.region_id();
+                let StdRange { start, end } = cached_entries.range;
+                self.delegate
+                    .raft_engine
+                    .fetch_entries_to(rid, start, end, None, &mut entries)
+                    .unwrap();
+            } else if entries.is_empty() {
+                entries = e;
+            } else {
+                entries.extend(e);
+            }
+        }
         if dangle_size > 0 {
             MEMTRACE_ENTRY_CACHE.trace(TraceEvent::Sub(dangle_size));
             RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
         }
-        if entries.is_empty() {
-            let rid = self.delegate.region_id();
-            let StdRange { start, end } = apply.entries.range;
-            entries = Vec::with_capacity((end - start) as usize);
-            self.delegate
-                .raft_engine
-                .fetch_entries_to(rid, start, end, None, &mut entries)
-                .unwrap();
-        }
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        if let Some(entry) = entries.last() {
-            let prev_state = (
-                self.delegate.apply_state.get_commit_index(),
-                self.delegate.apply_state.get_commit_term(),
+
+        let prev_state = (
+            self.delegate.apply_state.get_commit_index(),
+            self.delegate.apply_state.get_commit_term(),
+        );
+        let cur_state = (apply.commit_index, apply.commit_term);
+        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+            panic!(
+                "{} commit state jump backward {:?} -> {:?}",
+                self.delegate.tag, prev_state, cur_state
             );
-            let cur_state = (entry.get_index(), entry.get_term());
-            if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
-                panic!(
-                    "{} commit state jump backward {:?} -> {:?}",
-                    self.delegate.tag, prev_state, cur_state
-                );
-            }
-            self.delegate.apply_state.set_commit_index(cur_state.0);
-            self.delegate.apply_state.set_commit_term(cur_state.1);
         }
+        self.delegate.apply_state.set_commit_index(cur_state.0);
+        self.delegate.apply_state.set_commit_term(cur_state.1);
 
         self.append_proposal(apply.cbs.drain(..));
+        // If there is any apply task, we change this fsm to normal-priority.
+        // When it meets a ingest-request or a delete-range request, it will change to
+        // low-priority.
+        self.delegate.priority = Priority::Normal;
         self.delegate
             .handle_raft_committed_entries(apply_ctx, entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
@@ -3350,7 +3420,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
     ) {
-        fail_point!("after_handle_catch_up_logs_for_merge");
+        fail_point!("after_handle_catch_up_logs_for_merge", |_| {});
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.delegate.id() == 1003,
@@ -3526,38 +3596,67 @@ where
         msgs: &mut Vec<Msg<EK>>,
     ) {
         let mut drainer = msgs.drain(..);
+        let mut batch_apply = None;
         loop {
-            match drainer.next() {
-                Some(Msg::Apply { start, apply }) => {
+            let msg = match drainer.next() {
+                Some(m) => m,
+                None => {
+                    if let Some(apply) = batch_apply {
+                        self.handle_apply(apply_ctx, apply);
+                    }
+                    break;
+                }
+            };
+
+            if batch_apply.is_some() {
+                match &msg {
+                    Msg::Apply { .. } => (),
+                    _ => {
+                        self.handle_apply(apply_ctx, batch_apply.take().unwrap());
+                        if let Some(ref mut state) = self.delegate.yield_state {
+                            state.pending_msgs.push(msg);
+                            state.pending_msgs.extend(drainer);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            match msg {
+                Msg::Apply { start, mut apply } => {
                     apply_ctx
                         .apply_wait
                         .observe(start.saturating_elapsed_secs());
-                    // If there is any apply task, we change this fsm to normal-priority.
-                    // When it meets a ingest-request or a delete-range request, it will change to
-                    // low-priority.
-                    self.delegate.priority = Priority::Normal;
-                    self.handle_apply(apply_ctx, apply);
-                    if let Some(ref mut state) = self.delegate.yield_state {
-                        state.pending_msgs = drainer.collect();
-                        break;
+
+                    if let Some(batch) = batch_apply.as_mut() {
+                        if batch.try_batch(&mut apply) {
+                            continue;
+                        } else {
+                            self.handle_apply(apply_ctx, batch_apply.take().unwrap());
+                            if let Some(ref mut state) = self.delegate.yield_state {
+                                state.pending_msgs.push(Msg::Apply { start, apply });
+                                state.pending_msgs.extend(drainer);
+                                break;
+                            }
+                        }
                     }
+                    batch_apply = Some(apply);
                 }
-                Some(Msg::Registration(reg)) => self.handle_registration(reg),
-                Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
-                Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
-                Some(Msg::Noop) => {}
-                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
-                Some(Msg::Change {
+                Msg::Registration(reg) => self.handle_registration(reg),
+                Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
+                Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul),
+                Msg::Noop => {}
+                Msg::Snapshot(snap_task) => self.handle_snapshot(apply_ctx, snap_task),
+                Msg::Change {
                     cmd,
                     region_epoch,
                     cb,
-                }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
+                } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
-                Some(Msg::Validate(_, f)) => {
+                Msg::Validate(_, f) => {
                     let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
                     f(delegate)
                 }
-                None => break,
             }
         }
     }
@@ -3660,7 +3759,7 @@ where
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -3703,48 +3802,48 @@ where
         }
     }
 
-    fn handle_normal(&mut self, normal: &mut ApplyFsm<EK>) -> Option<usize> {
-        let mut expected_msg_count = None;
+    fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = ApplyFsm<EK>>) -> HandleResult {
+        let mut handle_result = HandleResult::KeepProcessing;
         normal.delegate.handle_start = Some(Instant::now_coarse());
         if normal.delegate.yield_state.is_some() {
             if normal.delegate.wait_merge_state.is_some() {
                 // We need to query the length first, otherwise there is a race
                 // condition that new messages are queued after resuming and before
                 // query the length.
-                expected_msg_count = Some(normal.receiver.len());
+                handle_result = HandleResult::stop_at(normal.receiver.len(), false);
             }
             normal.resume_pending(&mut self.apply_ctx);
             if normal.delegate.wait_merge_state.is_some() {
                 // Yield due to applying CommitMerge, this fsm can be released if its
-                // channel msg count equals to expected_msg_count because it will receive
+                // channel msg count equals to last count because it will receive
                 // a new message if its source region has applied all needed logs.
-                return expected_msg_count;
+                return handle_result;
             } else if normal.delegate.yield_state.is_some() {
                 // Yield due to other reasons, this fsm must not be released because
                 // it's possible that no new message will be sent to itself.
                 // The remaining messages will be handled in next rounds.
-                return None;
+                return HandleResult::KeepProcessing;
             }
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
-            None
+            HandleResult::KeepProcessing
         });
         fail_point!(
             "before_handle_normal_1003",
             normal.delegate.id() == 1003,
-            |_| { None }
+            |_| { HandleResult::KeepProcessing }
         );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
                     normal.delegate.stopped = true;
-                    expected_msg_count = Some(0);
+                    handle_result = HandleResult::stop_at(0, false);
                     break;
                 }
             }
@@ -3754,17 +3853,17 @@ where
 
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
-            expected_msg_count = Some(0);
+            handle_result = HandleResult::stop_at(0, false);
         } else if normal.delegate.yield_state.is_some() {
             // Let it continue to run next time.
-            expected_msg_count = None;
+            handle_result = HandleResult::KeepProcessing;
         }
-        expected_msg_count
+        handle_result
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+    fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
         self.apply_ctx.flush();
-        for fsm in fsms {
+        for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
@@ -3818,7 +3917,7 @@ where
 impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
+    W: WriteBatch<EK> + 'static,
 {
     type Handler = ApplyPoller<EK, W>;
 
@@ -3842,6 +3941,28 @@ where
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
+        }
+    }
+}
+
+impl<EK, W> Clone for Builder<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn clone(&self) -> Self {
+        Builder {
+            tag: self.tag.clone(),
+            cfg: self.cfg.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            importer: self.importer.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            engine: self.engine.clone(),
+            sender: self.sender.clone_box(),
+            router: self.router.clone(),
+            _phantom: self._phantom,
+            store_id: self.store_id,
+            pending_create_peers: self.pending_create_peers.clone(),
         }
     }
 }
@@ -4111,6 +4232,7 @@ mod tests {
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
+    use kvproto::kvrpcpb::ApiVersion;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -4147,8 +4269,9 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer =
-            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None, false).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+        );
         (dir, importer)
     }
 
@@ -4368,7 +4491,19 @@ mod tests {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply::new(peer_id, region_id, term, entries, cbs)
+        let (commit_index, commit_term) = entries
+            .last()
+            .map(|e| (e.get_index(), e.get_term()))
+            .unwrap();
+        Apply::new(
+            peer_id,
+            region_id,
+            term,
+            commit_index,
+            commit_term,
+            entries,
+            cbs,
+        )
     }
 
     #[test]
@@ -5202,12 +5337,17 @@ mod tests {
             let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
-        fetch_apply_res(&rx);
         for _ in 0..2 {
             let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
-        fetch_apply_res(&rx);
+        let mut res = fetch_apply_res(&rx);
+        // There may be one or two ApplyRes which depends on whether these two apply msgs
+        // are batched together.
+        if res.apply_state.get_applied_index() == 3 {
+            res = fetch_apply_res(&rx);
+        }
+        assert_eq!(res.apply_state.get_applied_index(), 5);
 
         // Verify the engine keys.
         for i in 1..keys_count {

@@ -1,6 +1,6 @@
-log-level = "debug"
-log-file = "foo"
-log-format = "json"
+log-level = "info"
+log-file = ""
+log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -8,6 +8,16 @@ panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
+
+[log]
+level = "fatal"
+format = "json"
+
+[log.file]
+filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
 
 [readpool.unified]
 min-thread-count = 5
@@ -65,7 +75,7 @@ end-point-max-concurrency = 10
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
-heavy-load-threshold = 1000
+heavy-load-threshold = 25
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
@@ -79,7 +89,7 @@ a = "b"
 [storage]
 data-dir = "/var"
 gc-ratio-threshold = 1.2
-max-key-size = 8192
+max-key-size = 4096
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
@@ -201,7 +211,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-raft-msg-flush-interval-us = 2333
+check-leader-lease-interval = "123ms"
 
 [coprocessor]
 split-region-on-table = false
@@ -214,7 +224,7 @@ consistency-check-method = "raw"
 perf-level = 5
 
 [rocksdb]
-wal-recovery-mode = 1
+wal-recovery-mode = "absolute-consistency"
 wal-dir = "/var"
 wal-ttl-seconds = 1
 wal-size-limit = "1KB"
@@ -233,7 +243,7 @@ info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 rate-limiter-refill-period = "10ms"
-rate-limiter-mode = 3
+rate-limiter-mode = "all-io"
 rate-limiter-auto-tuned = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
@@ -284,7 +294,7 @@ level0-file-num-compaction-trigger = 123
 level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
-compaction-pri = 3
+compaction-pri = "min-overlapping-ratio"
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
@@ -346,11 +356,11 @@ level0-file-num-compaction-trigger = 123
 level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
-compaction-pri = 3
+compaction-pri = "min-overlapping-ratio"
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
-compaction-style = 1
+compaction-style = "universal"
 disable-auto-compactions = true
 disable-write-stall = true 
 soft-pending-compaction-bytes-limit = "12GB"
@@ -392,11 +402,11 @@ level0-file-num-compaction-trigger = 123
 level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
-compaction-pri = 3
+compaction-pri = "min-overlapping-ratio"
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
-compaction-style = 1
+compaction-style = "universal"
 disable-auto-compactions = true
 disable-write-stall = true
 soft-pending-compaction-bytes-limit = "12GB"
@@ -438,11 +448,11 @@ level0-file-num-compaction-trigger = 123
 level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
-compaction-pri = 3
+compaction-pri = "min-overlapping-ratio"
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
-compaction-style = 1
+compaction-style = "universal"
 disable-auto-compactions = true
 disable-write-stall = true
 soft-pending-compaction-bytes-limit = "12GB"
@@ -455,7 +465,7 @@ compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 
 [raftdb]
-wal-recovery-mode = 3
+wal-recovery-mode = "skip-any-corrupted-records"
 wal-dir = "/var"
 wal-ttl-seconds = 1
 wal-size-limit = "12KB"
@@ -517,11 +527,11 @@ level0-file-num-compaction-trigger = 123
 level0-slowdown-writes-trigger = 123
 level0-stop-writes-trigger = 123
 max-compaction-bytes = "1GB"
-compaction-pri = 3
+compaction-pri = "min-overlapping-ratio"
 dynamic-level-bytes = true
 num-levels = 4
 max-bytes-for-level-multiplier = 8
-compaction-style = 1
+compaction-style = "universal"
 disable-auto-compactions = true
 disable-write-stall = true
 soft-pending-compaction-bytes-limit = "12GB"
@@ -551,6 +561,13 @@ gc-merge-rewrite = true
 [raft-engine]
 enable = true
 dir = "test-dir"
+batch-compression-threshold = "1KB"
+bytes-per-sync = "64KB"
+target-file-size = "1MB"
+purge-threshold = "1GB"
+recovery-mode = "tolerate-tail-corruption"
+recovery-read-block-size = "1KB"
+recovery-threads = 2
 
 [security]
 ca-path = "invalid path"
@@ -577,6 +594,7 @@ type = "plaintext"
 [backup]
 num-threads = 456
 batch-size = 7
+s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
 [backup.hadoop]
@@ -600,6 +618,7 @@ enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
 pipelined = false
+in-memory = true
 
 [cdc]
 min-ts-interval = "4s"
@@ -608,6 +627,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-scan-ts-filter-ratio = 0.7
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
 

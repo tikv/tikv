@@ -282,11 +282,11 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Bytes)];
 
-        update_repeat!(state, &mut ctx, Some(&[1u8] as BytesRef), 2).unwrap();
+        update_repeat!(state, &mut ctx, Some(&[1u8] as BytesRef<'_>), 2).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_bytes_vec(), &[Some(vec![1])]);
 
-        update_repeat!(state, &mut ctx, Some(&[2u8] as BytesRef), 3).unwrap();
+        update_repeat!(state, &mut ctx, Some(&[2u8] as BytesRef<'_>), 3).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_bytes_vec(), &[Some(vec![1]), Some(vec![1])]);
     }

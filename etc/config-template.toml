@@ -5,17 +5,6 @@
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
 
-## Log levels: trace, debug, info, warning, error, critical.
-## Note that `debug` and `trace` are only available in development builds.
-# log-level = "info"
-
-## File to store logs.
-## If it is not set, logs will be appended to stderr.
-# log-file = ""
-
-## Log format, one of json, text. Default to text.
-# log-format = "text"
-
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -25,18 +14,8 @@
 ## The minimum operation cost to output relative logs.
 # slow-log-threshold = "1s"
 
-## Timespan between rotating the log files.
-## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
-## timestamp appended to its name and a new file will be created.
-# log-rotation-timespan = "24h"
-
-## Size of log file that triggers the log rotation.
-## Once the size of log file exceeds the threshold value, the log file will be rotated
-## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
-# log-rotation-size = "300MB"
-
 ## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
-## It won't take effect when compiling without BCC_IOSNOOP=1. 
+## It won't take effect when compiling without BCC_IOSNOOP=1.
 # enable-io-snoop = true
 
 ## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
@@ -62,6 +41,25 @@
 ## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
 ## to release memory.
 # memory-usage-limit = "0B"
+
+[log]
+## Log levels: debug, info, warn, error, fatal.
+## Note that `debug` is only available in development builds.
+# level = "info"
+## log format, one of json, text. Default to text.
+# format = "text"
+## Enable automatic timestamps in log output, if not set, it will be defaulted to true.
+# enable-timestamp = true
+
+[log.file]
+## Usually it is set through command line.
+# filename = ""
+## max log file size in MB (upper limit to 4096MB)
+# max-size = 300
+## max log file keep days
+# max-days = 0
+## maximum number of old log files to retain
+# max-backups = 0
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -324,7 +322,7 @@
 
 ## The path to RaftDB directory.
 ## If not set, it will be `{data-dir}/raft`.
-## If there are multiple disks on the machine, storing the data of Raft RocksDB on differen disks
+## If there are multiple disks on the machine, storing the data of Raft RocksDB on a different disk
 ## can improve TiKV performance.
 # raftdb-path = ""
 
@@ -419,10 +417,14 @@
 # store-pool-size = 2
 
 ## Use how many threads to handle raft io tasks
-# store-io-pool-size = 1
+## If it is 0, it means io tasks are handled in store threads.
+# store-io-pool-size = 0
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
+
+## threads to generate raft snapshots
+# snap-generator-pool-size = 2
 
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
@@ -491,11 +493,11 @@
 # create-if-missing = true
 
 ## RocksDB Write-Ahead Logs (WAL) recovery mode.
-## 0 : TolerateCorruptedTailRecords, tolerate incomplete record in trailing data on all logs;
-## 1 : AbsoluteConsistency, We don't expect to find any corruption in the WAL;
-## 2 : PointInTimeRecovery, Recover to point-in-time consistency;
-## 3 : SkipAnyCorruptedRecords, Recovery after a disaster;
-# wal-recovery-mode = 2
+## "tolerate-corrupted-tail-records", tolerate incomplete record in trailing data on all logs;
+## "absolute-consistency", We don't expect to find any corruption in the WAL;
+## "point-in-time", Recover to point-in-time consistency;
+## "skip-any-corrupted-records", Recovery after a disaster;
+# wal-recovery-mode = "point-in-time"
 
 ## KV RocksDB WAL directory.
 ## This config specifies the absolute directory path for WAL.
@@ -552,14 +554,14 @@
 ## 2. rate-limiter-refill-period controls how often IO tokens are refilled. Smaller value will flatten
 ##    IO bursts while introducing more CPU overhead.
 ## 3. rate-limiter-mode indicates which types of operations count against the limit.
-##    1 : ReadOnly
-##    2 : WriteOnly
-##    3 : AllIo
+##    "read-only"
+##    "write-only"
+##    "all-io"
 ## 4. rate-limiter-auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
-# rate-limiter-mode = 2
+# rate-limiter-mode = "write-only"
 # rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
@@ -711,11 +713,11 @@
 # max-compaction-bytes = "2GB"
 
 ## There are four different compaction priorities.
-## 0 : ByCompensatedSize
-## 1 : OldestLargestSeqFirst
-## 2 : OldestSmallestSeqFirst
-## 3 : MinOverlappingRatio
-# compaction-pri = 3
+## "by-compensated-size"
+## "oldest-largest-seq-first"
+## "oldest-smallest-seq-first"
+## "min-overlapping-ratio"
+# compaction-pri = "min-overlapping-ratio"
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
@@ -834,7 +836,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 3
+# compaction-pri = "min-overlapping-ratio"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -855,7 +857,7 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 0
+# compaction-pri = "by-compensated-size"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
@@ -912,22 +914,51 @@
 # level0-stop-writes-trigger = 36
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
-# compaction-pri = 0
+# compaction-pri = "by-compensated-size"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 # enable-compaction-guard = false
 
 [raft-engine]
-## Enable raft-engine will ignore all settings about `raftdb`.
+## When enabled, configurations of `raftdb` will be ignored.
 # enable = false
-## Recovery mode. Candidates are `tolerate-corrupted-tail-records` and `absolute-consistency`.
-# recovery_mode = "tolerate-corrupted-tail-records"
-# bytes-per-sync = "256KB"
+
+## Directory to store log files. Will be created on startup if not exists.
+## If not set, it will be `{data-dir}/raft-engine`.
+## If there are multiple disks on the machine, storing the data of Raft engine on a different disk
+## can improve TiKV performance.
+# dir = ""
+
+## Compress a log batch if its size exceeds this value.
+## It set to zero, compression is disabled.
+# batch-compression-threshold = "8KB"
+
+## Flush buffered writes to disk when their accumulative size exceed this threshold.
+## Setting it to zero disables incremental sync.
+# bytes-per-sync = "4MB"
+
+## Target file size for rotating log files.
 # target-file-size = "128MB"
+
+## Purge main log queue if its file size exceeds this value.
 # purge-threshold = "10GB"
-## Raft engine has builtin entry cache. `cache-limit` limits the memory usage of the cache.
-# cache-limit = "1GB"
+
+## How to deal with file corruption during recovery. Candidates:
+##   absolute-consistency
+##   tolerate-tail-corruption
+##   tolerate-any-corruption
+# recovery-mode = "tolerate-tail-corruption"
+
+## Minimum I/O size for reading log files during recovery.
+##
+## Default: "16KB". Minimum: "512B".
+# recovery-read-block-size = "16KB"
+
+## The number of threads used to scan and recovery log files.
+##
+## Default: 4. Minimum: 1.
+# recovery-threads = 4
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -1014,8 +1045,8 @@
 
 [backup]
 ## Number of threads to perform backup tasks.
-## The default value is set to min(CPU_NUM * 0.75, 32).
-# num-threads = 24
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
 
 ## Number of ranges to backup in one batch.
 # batch-size = 8
@@ -1027,7 +1058,7 @@
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = false 
+# enable-auto-tune = true 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

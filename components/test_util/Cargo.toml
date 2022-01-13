@@ -5,14 +5,15 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["cloud-aws", "cloud-gcp"]
+default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = [ "encryption_export/cloud-aws" ]
 cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-azure = [ "encryption_export/cloud-azure" ]
 
 [dependencies]
 backtrace = "0.3"
 encryption_export = { path = "../encryption/export", default-features = false }
-fail = "0.4"
+fail = "0.5"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 rand = "0.8"

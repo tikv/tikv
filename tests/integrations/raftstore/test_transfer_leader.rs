@@ -1,16 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::storage::kv::SnapContext;
+use tikv::storage::kv::{SnapContext, SnapshotExt};
+use tikv::storage::{Engine, Snapshot};
 use tikv_util::config::*;
+use txn_types::{Key, PessimisticLock};
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -167,8 +169,6 @@ fn test_server_transfer_leader_during_snapshot() {
 
 #[test]
 fn test_sync_max_ts_after_leader_transfer() {
-    use tikv::storage::{Engine, Snapshot};
-
     let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -195,14 +195,14 @@ fn test_sync_max_ts_after_leader_transfer() {
             ..Default::default()
         };
         let snapshot = storage.snapshot(snap_ctx).unwrap();
-        let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
+        let txn_ext = snapshot.txn_ext.clone().unwrap();
         for retry in 0..10 {
-            if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
+            if txn_ext.is_max_ts_synced() {
                 break;
             }
             thread::sleep(Duration::from_millis(1 << retry));
         }
-        assert!(snapshot.is_max_ts_synced());
+        assert!(snapshot.ext().is_max_ts_synced());
     };
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -217,4 +217,41 @@ fn test_sync_max_ts_after_leader_transfer() {
     wait_for_synced(&mut cluster);
     let new_max_ts = cm.max_ts();
     assert!(new_max_ts > max_ts);
+}
+
+#[test]
+fn test_propose_in_memory_pessimistic_locks() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    cluster.run();
+
+    let region_id = 1;
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let snapshot = cluster.must_get_snapshot_of_region(region_id);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    let lock = PessimisticLock {
+        primary: b"key".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    // Write a pessimistic lock to the in-memory pessimistic lock table.
+    {
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+        assert!(pessimistic_locks.is_valid);
+        pessimistic_locks.insert(Key::from_raw(b"key"), lock.clone());
+    }
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    // After the leader is transferred to store 2, we should be able to get the lock
+    // in the lock CF.
+    let snapshot = cluster.must_get_snapshot_of_region(region_id);
+    let value = snapshot
+        .get_cf(CF_LOCK, &Key::from_raw(b"key"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(value, lock.into_lock().to_bytes());
 }

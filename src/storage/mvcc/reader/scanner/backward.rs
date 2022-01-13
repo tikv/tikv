@@ -28,7 +28,7 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 /// Use `ScannerBuilder` to build `BackwardKvScanner`.
 pub struct BackwardKvScanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
-    lock_cursor: Cursor<S::Iter>,
+    lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
@@ -41,7 +41,7 @@ pub struct BackwardKvScanner<S: Snapshot> {
 impl<S: Snapshot> BackwardKvScanner<S> {
     pub fn new(
         cfg: ScannerConfig<S>,
-        lock_cursor: Cursor<S::Iter>,
+        lock_cursor: Option<Cursor<S::Iter>>,
         write_cursor: Cursor<S::Iter>,
     ) -> BackwardKvScanner<S> {
         BackwardKvScanner {
@@ -84,13 +84,17 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                self.lock_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.reverse_seek(
+                        self.cfg.upper_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
+                }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);
-                self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.seek_to_last(&mut self.statistics.lock);
+                }
             }
             self.is_started = true;
         }
@@ -99,14 +103,18 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
 
         loop {
-            let (current_user_key, has_write, has_lock) = {
+            let (current_user_key, mut has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                let l_key = if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    if lock_cursor.valid()? {
+                        Some(lock_cursor.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -147,14 +155,18 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 match self.cfg.isolation_level {
                     IsolationLevel::Si => {
                         let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
+                            let lock_value = self
+                                .lock_cursor
+                                .as_mut()
+                                .unwrap()
+                                .value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
                         if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                             self.met_newer_ts_data = NewerTsCheckState::Met;
                         }
                         result = Lock::check_ts_conflict(
-                            Cow::Owned(lock),
+                            Cow::Borrowed(&lock),
                             &current_user_key,
                             ts,
                             &self.cfg.bypass_locks,
@@ -163,11 +175,28 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         .map_err(Into::into);
                         if result.is_err() {
                             self.statistics.lock.processed_keys += 1;
+                            if self.cfg.access_locks.contains(lock.ts) {
+                                self.ensure_default_cursor()?;
+                                result = super::load_data_by_lock(
+                                    &current_user_key,
+                                    &self.cfg,
+                                    self.default_cursor.as_mut().unwrap(),
+                                    lock,
+                                    &mut self.statistics,
+                                );
+                                if has_write {
+                                    // Skip current_user_key because this key is either blocked or handled.
+                                    has_write = false;
+                                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
+                                }
+                            }
                         }
                     }
                     IsolationLevel::Rc => {}
                 }
-                self.lock_cursor.prev(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.prev(&mut self.statistics.lock);
+                }
             }
             if has_write {
                 if result.is_ok() {
@@ -182,6 +211,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             if let Some(v) = result? {
                 self.statistics.write.processed_keys += 1;
                 self.statistics.processed_size += current_user_key.len() + v.len();
+                resource_metering::record_read_keys(1);
                 return Ok(Some((current_user_key, v)));
             }
         }

@@ -17,6 +17,7 @@ use kvproto::tikvpb::BatchRaftMessage;
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
 use raftstore::router::{RaftStoreBlackHole, RaftStoreRouter};
+use tikv::server::load_statistics::ThreadLoadPool;
 use tikv::server::resolve::Callback;
 use tikv::server::{
     self, resolve, Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
@@ -51,8 +52,16 @@ where
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
-    let builder =
-        ConnectionBuilder::new(env, cfg, security_mgr, resolver, router, worker.scheduler());
+    let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
+    let builder = ConnectionBuilder::new(
+        env,
+        cfg,
+        security_mgr,
+        resolver,
+        router,
+        worker.scheduler(),
+        loads,
+    );
     RaftClient::new(builder)
 }
 
@@ -215,6 +224,45 @@ fn test_batch_size_limit() {
     drop(raft_client);
     drop(mock_server);
     assert_eq!(msg_count.load(Ordering::SeqCst), 10);
+}
+
+/// In edge case that the estimated size may be inaccurate, we need to ensure connection
+/// will not be broken in this case.
+#[test]
+fn test_batch_size_edge_limit() {
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
+
+    let mut raft_client = get_raft_client_by_port(port);
+
+    // Put them in buffer so sibling messages will be likely be batched during sending.
+    let mut msgs = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let mut raft_m = RaftMessage::default();
+        // Magic number, this can make estimated size about 4940000, hence two messages will be
+        // batched together, but the total size will be way largher than 10MiB as there are many
+        // indexes and terms.
+        for _ in 0..38000 {
+            let mut e = Entry::default();
+            e.set_term(1);
+            e.set_index(256);
+            e.set_data(vec![b'a'; 130].into());
+            raft_m.mut_message().mut_entries().push(e);
+        }
+        msgs.push(raft_m);
+    }
+    for m in msgs {
+        raft_client.send(m).unwrap();
+    }
+    raft_client.flush();
+
+    check_msg_count(10000, &msg_count, 5);
+    // The final received message count should be 5 exactly.
+    drop(raft_client);
+    drop(mock_server);
+    assert_eq!(msg_count.load(Ordering::SeqCst), 5);
 }
 
 // Try to create a mock server with `service`. The server will be binded wiht a random

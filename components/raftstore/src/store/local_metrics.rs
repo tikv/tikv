@@ -221,6 +221,7 @@ pub struct RaftProposeMetrics {
     pub local_read: u64,
     pub read_index: u64,
     pub unsafe_read_index: u64,
+    pub dropped_read_index: u64,
     pub normal: u64,
     pub batch: usize,
     pub transfer_leader: u64,
@@ -239,6 +240,7 @@ impl Default for RaftProposeMetrics {
             transfer_leader: 0,
             conf_change: 0,
             batch: 0,
+            dropped_read_index: 0,
             request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
         }
     }
@@ -265,6 +267,12 @@ impl RaftProposeMetrics {
                 .unsafe_read_index
                 .inc_by(self.unsafe_read_index);
             self.unsafe_read_index = 0;
+        }
+        if self.dropped_read_index > 0 {
+            PEER_PROPOSAL_COUNTER
+                .dropped_read_index
+                .inc_by(self.dropped_read_index);
+            self.dropped_read_index = 0;
         }
         if self.normal > 0 {
             PEER_PROPOSAL_COUNTER.normal.inc_by(self.normal);
@@ -376,6 +384,45 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+
+#[derive(Clone)]
+pub struct RaftLogGcSkippedMetrics {
+    pub reserve_log: u64,
+    pub threshold_limit: u64,
+    pub compact_idx_too_small: u64,
+}
+
+impl Default for RaftLogGcSkippedMetrics {
+    fn default() -> RaftLogGcSkippedMetrics {
+        RaftLogGcSkippedMetrics {
+            reserve_log: 0,
+            threshold_limit: 0,
+            compact_idx_too_small: 0,
+        }
+    }
+}
+
+impl RaftLogGcSkippedMetrics {
+    fn flush(&mut self) {
+        if self.reserve_log > 0 {
+            RAFT_LOG_GC_SKIPPED.reserve_log.inc_by(self.reserve_log);
+            self.reserve_log = 0;
+        }
+        if self.threshold_limit > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .threshold_limit
+                .inc_by(self.threshold_limit);
+            self.threshold_limit = 0;
+        }
+        if self.compact_idx_too_small > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .compact_idx_too_small
+                .inc_by(self.compact_idx_too_small);
+            self.compact_idx_too_small = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -386,7 +433,6 @@ pub struct RaftMetrics {
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
     pub commit_log: LocalHistogram,
-    pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub write_block_wait: LocalHistogram,
@@ -396,6 +442,7 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+    pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
 impl RaftMetrics {
@@ -410,7 +457,6 @@ impl RaftMetrics {
                 .with_label_values(&["ready"])
                 .local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
-            check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
@@ -420,6 +466,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
 
@@ -431,10 +478,10 @@ impl RaftMetrics {
         self.propose.flush();
         self.process_ready.flush();
         self.commit_log.flush();
-        self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.write_block_wait.flush();
+        self.raft_log_gc_skipped.flush();
         if self.waterfall_metrics {
             self.wf_batch_wait.flush();
             self.wf_send_to_queue.flush();

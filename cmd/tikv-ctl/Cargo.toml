@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -22,6 +22,10 @@ cloud-aws = [
 cloud-gcp = [
   "encryption_export/cloud-gcp",
   "backup/cloud-gcp",
+]
+cloud-azure = [
+  "encryption_export/cloud-azure",
+  "backup/cloud-azure",
 ]
 cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
 cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
@@ -48,11 +52,10 @@ engine_rocks = { path = "../../components/engine_rocks", default-features = fals
 engine_traits = { path = "../../components/engine_traits", default-features = false }
 error_code = { path = "../../components/error_code", default-features = false }
 file_system = { path = "../../components/file_system", default-features = false }
-fs2 = "0.4"
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
-gag = "0.1"
+gag = "1.0"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
 keys = { path = "../../components/keys", default-features = false }
@@ -61,7 +64,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../../components/log_wrappers" }
 nix = "0.19"
 pd_client = { path = "../../components/pd_client", default-features = false }
-prometheus = { version = "0.12", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }

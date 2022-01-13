@@ -94,6 +94,7 @@ endif
 ifneq ($(NO_CLOUD),1)
 ENABLE_FEATURES += cloud-aws
 ENABLE_FEATURES += cloud-gcp
+ENABLE_FEATURES += cloud-azure
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op, PrewriteRequest,
-    RawPutRequest,
+    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
+    PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
 
@@ -17,10 +17,11 @@ use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::*;
 use tikv::storage::lock_manager::DummyLockManager;
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
 use tikv::storage::{
-    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext},
+    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 use tikv_util::future::paired_future_callback;
@@ -40,6 +41,7 @@ fn test_scheduler_leader_change_twice() {
     let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine0,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -53,7 +55,7 @@ fn test_scheduler_leader_change_twice() {
     storage0
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec())],
                 b"k".to_vec(),
                 10.into(),
                 0,
@@ -63,6 +65,7 @@ fn test_scheduler_leader_change_twice() {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 ctx0,
             ),
             Box::new(move |res: storage::Result<_>| {
@@ -80,6 +83,9 @@ fn test_scheduler_leader_change_twice() {
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
             box KvErrorInner::Request(ref e),
+        ))))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         ))))))
         | Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))) => {
             assert!(e.has_stale_command(), "{:?}", e);
@@ -223,8 +229,8 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
-            .set_pipelined_pessimistic_lock(false)
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+            .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -238,6 +244,7 @@ fn test_pipelined_pessimistic_lock() {
                     10,
                     10,
                     true,
+                    false,
                 ),
                 Box::new(move |res| {
                     res.unwrap_err();
@@ -249,8 +256,8 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, false)
-        .set_pipelined_pessimistic_lock(true)
+    let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
 
@@ -263,7 +270,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![None]),
@@ -276,7 +283,7 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             commands::PrewritePessimistic::new(
-                vec![(Mutation::Put((key.clone(), val.clone())), true)],
+                vec![(Mutation::make_put(key.clone(), val.clone()), true)],
                 key.to_raw().unwrap(),
                 10.into(),
                 3000,
@@ -286,6 +293,7 @@ fn test_pipelined_pessimistic_lock() {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),
@@ -304,7 +312,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(rockskv_async_write_fp, "return()").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 30, 30, true, false),
             expect_fail_callback(tx.clone(), 0, |_| ()),
         )
         .unwrap();
@@ -316,7 +324,13 @@ fn test_pipelined_pessimistic_lock() {
     for blocked in &[false, true] {
         storage
             .sched_txn_command(
-                new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 40, 40, true),
+                new_acquire_pessimistic_lock_command(
+                    vec![(key.clone(), false)],
+                    40,
+                    40,
+                    true,
+                    false,
+                ),
                 expect_pessimistic_lock_res_callback(
                     tx.clone(),
                     PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -339,7 +353,7 @@ fn test_pipelined_pessimistic_lock() {
     fail::cfg(scheduler_async_write_finish_fp, "pause").unwrap();
     storage
         .sched_txn_command(
-            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true),
+            new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 50, 50, true, false),
             expect_pessimistic_lock_res_callback(
                 tx.clone(),
                 PessimisticLockRes::Values(vec![Some(val.clone())]),
@@ -360,6 +374,7 @@ fn test_pipelined_pessimistic_lock() {
                 60,
                 60,
                 true,
+                false,
             ),
             expect_pessimistic_lock_res_callback(
                 tx,
@@ -388,6 +403,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine.clone(),
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -408,7 +424,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec())],
                     b"k1".to_vec(),
                     10.into(),
                     100,
@@ -418,6 +434,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -439,7 +456,10 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true)],
+                    vec![(
+                        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                        true,
+                    )],
                     b"k1".to_vec(),
                     10.into(),
                     100,
@@ -449,6 +469,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -478,14 +499,14 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         ..Default::default()
     };
     let snapshot = engine.snapshot(snap_ctx).unwrap();
-    let max_ts_sync_status = snapshot.max_ts_sync_status.clone().unwrap();
+    let txn_ext = snapshot.txn_ext.clone().unwrap();
     for retry in 0..10 {
-        if max_ts_sync_status.load(Ordering::SeqCst) & 1 == 1 {
+        if txn_ext.is_max_ts_synced() {
             break;
         }
         thread::sleep(Duration::from_millis(1 << retry));
     }
-    assert!(snapshot.is_max_ts_synced());
+    assert!(snapshot.ext().is_max_ts_synced());
 
     // should NOT get max timestamp not synced error
     check_max_timestamp_not_synced(false);
@@ -511,7 +532,6 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
-    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     // Acquire the pessimistic lock if needed
@@ -530,6 +550,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -549,7 +570,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -559,6 +580,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     secondaries,
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -569,7 +591,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::Put((Key::from_raw(key), value.to_vec())),
+                        Mutation::make_put(Key::from_raw(key), value.to_vec()),
                         need_lock,
                     )],
                     key.to_vec(),
@@ -581,6 +603,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     secondaries,
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -604,10 +627,9 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 
         // The memory lock is not released so reading will encounter the lock.
         thread::sleep(Duration::from_millis(300));
-        let err =
-            block_on(storage.get(ctx.clone(), raw_key.clone(), min_commit_ts.next())).unwrap_err();
+        let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
+            .unwrap_err();
         expect_locked(err, key, start_ts);
-
         // Commit command will be blocked.
         let (tx, rx) = channel();
         storage
@@ -630,7 +652,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         fail::remove(on_handle_apply);
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, raw_key, min_commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -656,7 +678,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, raw_key, commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -679,8 +701,9 @@ fn test_async_apply_prewrite() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
-    .set_async_apply_prewrite(true)
+    .async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -780,8 +803,9 @@ fn test_async_apply_prewrite_fallback() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
-    .set_async_apply_prewrite(true)
+    .async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -801,7 +825,7 @@ fn test_async_apply_prewrite_fallback() {
     storage
         .sched_txn_command(
             commands::Prewrite::new(
-                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                 key.to_vec(),
                 10.into(),
                 0,
@@ -811,6 +835,7 @@ fn test_async_apply_prewrite_fallback() {
                 0.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 ctx.clone(),
             ),
             Box::new(move |r| tx.send(r).unwrap()),
@@ -850,7 +875,6 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
-    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     if is_pessimistic {
@@ -868,6 +892,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -886,7 +911,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -896,6 +921,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     0.into(),
                     None,
                     true,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -905,7 +931,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)],
+                    vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -915,6 +941,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     0.into(),
                     None,
                     true,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -927,13 +954,13 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
     assert!(res.one_pc_commit_ts > start_ts);
     let commit_ts = res.one_pc_commit_ts;
 
-    let err = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next())).unwrap_err();
+    let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next())).unwrap_err();
     expect_locked(err, key, start_ts);
 
     fail::remove(on_handle_apply);
     // The key may need some time to be applied.
     for retry in 0.. {
-        let res = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next()));
+        let res = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next()));
         match res {
             Ok(v) => {
                 assert_eq!(v.0.unwrap().as_slice(), value);
@@ -965,8 +992,9 @@ fn test_async_apply_prewrite_1pc() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
-    .set_async_apply_prewrite(true)
+    .async_apply_prewrite(true)
     .build()
     .unwrap();
 
@@ -995,6 +1023,7 @@ fn test_atomic_cas_lock_by_latch() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1084,6 +1113,7 @@ fn test_before_async_write_deadline() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1119,6 +1149,7 @@ fn test_before_propose_deadline() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1140,7 +1171,9 @@ fn test_before_propose_deadline() {
         .unwrap();
     assert!(matches!(
         rx.recv().unwrap(),
-        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        Err(StorageError(box StorageErrorInner::Kv(KvError(
+            box KvErrorInner::Request(_),
+        ))))
     ));
 }
 
@@ -1153,6 +1186,7 @@ fn test_resolve_lock_deadline() {
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
+        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1166,7 +1200,7 @@ fn test_resolve_lock_deadline() {
     let mutations = (1i32..300)
         .map(|i| {
             let data = i.to_le_bytes();
-            Mutation::Put((Key::from_raw(&data), data.to_vec()))
+            Mutation::make_put(Key::from_raw(&data), data.to_vec())
         })
         .collect();
     let cmd = commands::Prewrite::new(
@@ -1180,6 +1214,7 @@ fn test_resolve_lock_deadline() {
         20.into(),
         None,
         false,
+        AssertionLevel::Off,
         ctx.clone(),
     );
     let (tx, rx) = channel();

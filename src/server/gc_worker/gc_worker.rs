@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::iter::Peekable;
 use std::mem;
@@ -54,6 +53,7 @@ const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
+const GC_MAX_PENDING_TASKS: usize = 4096;
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
@@ -205,7 +205,7 @@ where
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
             cfg.max_write_bytes_per_sec.0 as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         Self {
             engine,
@@ -245,7 +245,8 @@ where
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
-        self.stats.add(&reader.statistics);
+        let stats = mem::take(&mut reader.statistics);
+        self.stats.add(&stats);
         Ok(())
     }
 
@@ -349,11 +350,18 @@ where
             Ok(Box::new(keys.into_iter()))
         }
 
+        let count = keys.len();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
         let mut txn = Self::new_txn();
-        let mut reader = MvccReader::new(snapshot, None /*scan_mode*/, false);
+        let mut reader = if count <= 1 {
+            MvccReader::new(snapshot, None, false)
+        } else {
+            // keys are closing to each other in one batch of gc keys, so do not use
+            // prefix seek here to avoid too many seeks
+            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+        };
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
@@ -397,6 +405,8 @@ where
             "unsafe destroy range started";
             "start_key" => %start_key, "end_key" => %end_key
         );
+
+        fail_point!("unsafe_destroy_range");
 
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange)
@@ -522,8 +532,11 @@ where
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             let limit = incoming.max_write_bytes_per_sec.0;
-            self.limiter
-                .set_speed_limit(if limit > 0 { limit as f64 } else { INFINITY });
+            self.limiter.set_speed_limit(if limit > 0 {
+                limit as f64
+            } else {
+                f64::INFINITY
+            });
             self.cfg = incoming.clone();
         }
     }
@@ -782,7 +795,7 @@ where
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
-        let worker_builder = WorkerBuilder::new("gc-worker");
+        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
@@ -1010,7 +1023,7 @@ mod tests {
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::Op;
+    use kvproto::kvrpcpb::{ApiVersion, Op};
     use kvproto::metapb::Peer;
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
@@ -1067,6 +1080,10 @@ mod tests {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
+                    Modify::PessimisticLock(ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
                     Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
                         let bytes = keys::data_key(key1.as_encoded());
                         *key1 = Key::from_encoded(bytes);
@@ -1091,6 +1108,9 @@ mod tests {
                 Modify::Put(_, ref mut key, _) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
                 Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
                     *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
@@ -1106,16 +1126,13 @@ mod tests {
         ) -> EngineResult<()> {
             self.0.async_snapshot(
                 ctx,
-                Box::new(move |(cb_ctx, r)| {
-                    callback((
-                        cb_ctx,
-                        r.map(|snap| {
-                            let mut region = Region::default();
-                            // Add a peer to pass initialized check.
-                            region.mut_peers().push(Peer::default());
-                            RegionSnapshot::from_snapshot(snap, Arc::new(region))
-                        }),
-                    ))
+                Box::new(move |r| {
+                    callback(r.map(|snap| {
+                        let mut region = Region::default();
+                        // Add a peer to pass initialized check.
+                        region.mut_peers().push(Peer::default());
+                        RegionSnapshot::from_snapshot(snap, Arc::new(region))
+                    }))
                 }),
             )
         }
@@ -1129,7 +1146,7 @@ mod tests {
     ) {
         let scan_res = block_on(storage.scan(
             Context::default(),
-            Key::from_encoded_slice(b""),
+            Key::from_raw(b""),
             None,
             expected_data.len() + 1,
             0,
@@ -1157,10 +1174,13 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage =
-            TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .build()
+        .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
         let (tx, _rx) = mpsc::channel();
@@ -1183,7 +1203,7 @@ mod tests {
             .map(|key| {
                 let mut value = b"value-".to_vec();
                 value.extend_from_slice(key);
-                Mutation::Put((Key::from_raw(key), value))
+                Mutation::make_put(Key::from_raw(key), value)
             })
             .collect();
         let primary = init_keys[0].clone();
@@ -1322,6 +1342,7 @@ mod tests {
         let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
             DummyLockManager {},
+            ApiVersion::V1,
         )
         .build()
         .unwrap();
@@ -1351,7 +1372,7 @@ mod tests {
             k.encode_u64(i).unwrap();
             let v = k.clone();
 
-            let mutation = Mutation::Put((Key::from_raw(&k), v));
+            let mutation = Mutation::make_put(Key::from_raw(&k), v);
 
             let lock_ts = 10 + i % 3;
 
@@ -1491,5 +1512,56 @@ mod tests {
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
         }
+    }
+
+    #[test]
+    fn test_gc_keys_statistics() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = RegionInfoAccessor::new(&mut host);
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        let mut keys = vec![];
+        for i in 0..100 {
+            let k = format!("k{:02}", i).into_bytes();
+            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
+            must_commit(&prefixed_engine, &k, 151, 152);
+            keys.push(Key::from_raw(&k));
+        }
+        db.flush_cf(cf, true).unwrap();
+
+        assert_eq!(runner.stats.write.seek, 0);
+        assert_eq!(runner.stats.write.next, 0);
+        runner
+            .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
+            .unwrap();
+        assert_eq!(runner.stats.write.seek, 1);
+        assert_eq!(runner.stats.write.next, 100 * 2);
     }
 }
