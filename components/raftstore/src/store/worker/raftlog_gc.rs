@@ -15,7 +15,7 @@ use tikv_util::{box_try, debug, error, warn};
 use crate::store::worker::metrics::*;
 
 const MAX_GC_REGION_BATCH: usize = 512;
-const MAX_REGION_NORMAL_GC_LOG_NUBER: u64 = 10240;
+const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
 
 pub struct Task {
     region_id: u64,
@@ -115,7 +115,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             }
             if t.start_idx == 0 {
                 RAFT_LOG_GC_SEEK_OPERATIONS.inc();
-            } else if t.end_idx > t.start_idx + MAX_REGION_NORMAL_GC_LOG_NUBER {
+            } else if t.end_idx > t.start_idx + MAX_REGION_NORMAL_GC_LOG_NUMBER {
                 warn!(
                     "gc raft log with a large range";
                     "region_id" => t.region_id,
@@ -158,8 +158,9 @@ where
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
+        let flush_now = task.start_index == task.end_index;
         self.tasks.push(task);
-        if self.tasks.len() > MAX_GC_REGION_BATCH {
+        if flush_now || self.tasks.len() > MAX_GC_REGION_BATCH {
             self.flush();
         }
     }
