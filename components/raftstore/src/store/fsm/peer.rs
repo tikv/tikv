@@ -97,7 +97,7 @@ where
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
-    tick_registry: [bool; PeerTick::NUM_TYPES],
+    tick_registry: [bool; PeerTick::VARIANT_COUNT],
     /// Ticks for speed up campaign in chaos state.
     ///
     /// Followers will keep ticking in Idle mode to measure how many ticks have been skipped.
@@ -221,7 +221,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
-                tick_registry: [false; PeerTick::NUM_TYPES],
+                tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -264,7 +264,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
-                tick_registry: [false; PeerTick::NUM_TYPES],
+                tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
