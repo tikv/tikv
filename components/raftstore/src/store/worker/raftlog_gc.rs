@@ -158,7 +158,7 @@ where
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
-        let flush_now = task.start_index == task.end_index;
+        let flush_now = task.start_idx == task.end_idx;
         self.tasks.push(task);
         if flush_now || self.tasks.len() > MAX_GC_REGION_BATCH {
             self.flush();
