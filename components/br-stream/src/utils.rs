@@ -40,6 +40,7 @@ pub struct RegionPager<P> {
     regions: P,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
+    reach_last_region: bool,
 }
 
 impl<P: RegionInfoProvider> RegionPager<P> {
@@ -48,11 +49,12 @@ impl<P: RegionInfoProvider> RegionPager<P> {
             regions,
             start_key,
             end_key,
+            reach_last_region: false,
         }
     }
 
     pub fn next_page(&mut self, size: usize) -> Result<Vec<RegionInfo>> {
-        if self.start_key >= self.end_key {
+        if self.start_key >= self.end_key || self.reach_last_region {
             return Ok(vec![]);
         }
 
@@ -82,16 +84,12 @@ impl<P: RegionInfoProvider> RegionPager<P> {
         let collected_regions = block_on(rx.collect::<Vec<_>>());
         self.start_key = collected_regions
             .last()
-            .ok_or_else(|| {
-                Error::Other(box_err!(
-                    "there is no region between key range ({},{}]",
-                    redact(&self.start_key),
-                    redact(&self.end_key)
-                ))
-            })?
-            .region
-            .end_key
-            .to_owned();
+            .map(|region| region.region.end_key.to_owned())
+            // no leader region found.
+            .unwrap_or(vec![]);
+        if self.start_key.is_empty() {
+            self.reach_last_region = true;
+        }
         Ok(collected_regions)
     }
 }

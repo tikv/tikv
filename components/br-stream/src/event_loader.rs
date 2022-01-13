@@ -7,9 +7,9 @@ use tikv::storage::{
     kv::{SnapContext, StatisticsSummary},
     mvcc::{DeltaScanner, ScannerBuilder},
     txn::{EntryBatch, TxnEntry, TxnEntryScanner},
-    Engine, Snapshot, Statistics,
+    Engine, Snapshot, SnapshotStore, Statistics,
 };
-use tikv_util::{box_err, warn};
+use tikv_util::{box_err, info, warn};
 use txn_types::{Key, TimeStamp};
 
 use crate::{
@@ -21,6 +21,7 @@ use crate::{
     metrics,
     router::{ApplyEvent, Router},
 };
+use kvproto::kvrpcpb::IsolationLevel;
 use kvproto::{
     kvrpcpb::{Context, ExtraOp},
     metapb::{Peer, Region},
@@ -99,6 +100,9 @@ impl<S: Snapshot> EventLoader<S> {
     }
 }
 
+/// The context for loading incremental data between range.
+/// Like [`cdc::Initializer`], but supports initialize over range.
+/// Note: maybe we can merge those two structures?
 #[derive(Clone)]
 pub struct InitialDataLoader<E, R> {
     engine: E,
@@ -138,6 +142,7 @@ where
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
         //      register the region to CDC observer and get a snapshot at the same time.
         // We use the BR method here for fast dev.
+        // We need register the region as observed then.
         let mut region_ctx = Context::new();
         region_ctx.set_region_id(region.get_id());
         region_ctx.set_region_epoch(region.get_region_epoch().clone());
@@ -163,6 +168,7 @@ where
             EventLoader::load_from(snap, self.start_ts, TimeStamp::max(), region)?;
         let mut events = Vec::with_capacity(2048);
         let stat = event_loader.scan_batch(1024, &mut events)?;
+        info!("the only roll of scanning done"; "size" => %events.len());
         let sink = self.sink.clone();
         tokio::spawn(async move {
             for event in events {
@@ -180,6 +186,7 @@ where
         let mut total_stat = StatisticsSummary::default();
         loop {
             let regions = pager.next_page(8)?;
+            info!("scanning for entries in region."; "regions" => ?regions);
             if regions.len() == 0 {
                 break;
             }
