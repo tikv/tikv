@@ -91,7 +91,6 @@ fn test_serde_custom_tikv_config() {
         grpc_memory_pool_quota: ReadableSize(123_456),
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
-        raft_msg_flush_interval: ReadableDuration::micros(2333),
         grpc_keepalive_time: ReadableDuration::secs(3),
         grpc_keepalive_timeout: ReadableDuration::secs(60),
         end_point_concurrency: None,
@@ -107,7 +106,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
-        heavy_load_threshold: 1000,
+        heavy_load_threshold: 25,
         heavy_load_wait_duration: ReadableDuration::millis(2),
         enable_request_batch: false,
         background_thread_count: 999,
@@ -230,6 +229,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
         raft_msg_flush_interval: ReadableDuration::micros(250),
+        check_leader_lease_interval: ReadableDuration::millis(123),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

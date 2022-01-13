@@ -144,6 +144,10 @@ pub struct Config {
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
+    // Interval of scheduling a tick to check the leader lease.
+    // It will be set to by raft_store_max_leader_lease/4 default.
+    pub check_leader_lease_interval: ReadableDuration,
+
     // Right region derive origin region id when split.
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
@@ -339,6 +343,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
+            check_leader_lease_interval: ReadableDuration::secs(0),
         }
     }
 }
@@ -352,8 +357,16 @@ impl Config {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
 
+    pub fn raft_base_tick_interval(&self) -> TimeDuration {
+        TimeDuration::from_std(self.raft_base_tick_interval.0).unwrap()
+    }
+
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
+    }
+
+    pub fn check_leader_lease_interval(&self) -> TimeDuration {
+        TimeDuration::from_std(self.check_leader_lease_interval.0).unwrap()
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -556,6 +569,10 @@ impl Config {
             return Err(box_err!(
                 "snap-generator-pool-size should be greater than 0."
             ));
+        }
+
+        if self.check_leader_lease_interval.as_millis() == 0 {
+            self.check_leader_lease_interval = self.raft_store_max_leader_lease / 4;
         }
 
         Ok(())

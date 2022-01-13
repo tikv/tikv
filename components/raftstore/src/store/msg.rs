@@ -188,6 +188,7 @@ bitflags! {
         const CHECK_MERGE            = 0b00010000;
         const CHECK_PEER_STALE_STATE = 0b00100000;
         const ENTRY_CACHE_EVICT      = 0b01000000;
+        const CHECK_LEADER_LEASE     = 0b10000000;
     }
 }
 
@@ -202,9 +203,11 @@ impl PeerTicks {
             PeerTicks::CHECK_MERGE => "check_merge",
             PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
             PeerTicks::ENTRY_CACHE_EVICT => "entry_cache_evict",
+            PeerTicks::CHECK_LEADER_LEASE => "check_leader_lease",
             _ => unreachable!(),
         }
     }
+
     pub fn get_all_ticks() -> &'static [PeerTicks] {
         const TICKS: &[PeerTicks] = &[
             PeerTicks::RAFT,
@@ -214,6 +217,7 @@ impl PeerTicks {
             PeerTicks::CHECK_MERGE,
             PeerTicks::CHECK_PEER_STALE_STATE,
             PeerTicks::ENTRY_CACHE_EVICT,
+            PeerTicks::CHECK_LEADER_LEASE,
         ];
         TICKS
     }

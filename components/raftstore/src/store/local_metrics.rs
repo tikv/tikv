@@ -221,6 +221,7 @@ pub struct RaftProposeMetrics {
     pub local_read: u64,
     pub read_index: u64,
     pub unsafe_read_index: u64,
+    pub dropped_read_index: u64,
     pub normal: u64,
     pub batch: usize,
     pub transfer_leader: u64,
@@ -239,6 +240,7 @@ impl Default for RaftProposeMetrics {
             transfer_leader: 0,
             conf_change: 0,
             batch: 0,
+            dropped_read_index: 0,
             request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
         }
     }
@@ -265,6 +267,12 @@ impl RaftProposeMetrics {
                 .unsafe_read_index
                 .inc_by(self.unsafe_read_index);
             self.unsafe_read_index = 0;
+        }
+        if self.dropped_read_index > 0 {
+            PEER_PROPOSAL_COUNTER
+                .dropped_read_index
+                .inc_by(self.dropped_read_index);
+            self.dropped_read_index = 0;
         }
         if self.normal > 0 {
             PEER_PROPOSAL_COUNTER.normal.inc_by(self.normal);
@@ -425,7 +433,6 @@ pub struct RaftMetrics {
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
     pub commit_log: LocalHistogram,
-    pub check_leader: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub write_block_wait: LocalHistogram,
@@ -450,7 +457,6 @@ impl RaftMetrics {
                 .with_label_values(&["ready"])
                 .local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
-            check_leader: CHECK_LEADER_DURATION_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
@@ -472,7 +478,6 @@ impl RaftMetrics {
         self.propose.flush();
         self.process_ready.flush();
         self.commit_log.flush();
-        self.check_leader.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.write_block_wait.flush();

@@ -41,7 +41,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -64,6 +64,7 @@ use crate::store::peer::{
     ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
+use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -81,6 +82,7 @@ use crate::{Error, Result};
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+const RENEW_LEADER_LEASE_DURATION_MILLIS: i64 = 100;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -164,7 +166,7 @@ where
             callback.invoke_with_response(resp);
         }
         (match self.hibernate_state.group_state() {
-            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
+            GroupState::Idle | GroupState::PreChaos => &HIBERNATED_PEER_STATE_GAUGE.hibernated,
             _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
         })
         .dec();
@@ -934,6 +936,7 @@ where
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
+            PeerTicks::CHECK_LEADER_LEASE => self.on_check_leader_lease_tick(),
             _ => unreachable!(),
         }
     }
@@ -1012,7 +1015,10 @@ where
                     }
                 }
             } else if key.term <= compacted_term
-                && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
+                && (key.idx < compacted_idx
+                    || key.idx == compacted_idx
+                        && !is_applying_snap
+                        && !self.fsm.peer.pending_remove)
             {
                 info!(
                     "deleting applied snap file";
@@ -1222,6 +1228,7 @@ where
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
+                self.register_check_leader_lease_tick();
             }
         }
     }
@@ -1467,6 +1474,38 @@ where
                     *is_ready = true;
                 }
             }
+        }
+    }
+
+    // If lease expired, we will send a noop read index to renew lease.
+    fn try_renew_leader_lease(&mut self) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        if let Err(e) = self.fsm.peer.pre_read_index() {
+            debug!(
+                "prevent unsafe read index to renew leader lease";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => ?e,
+            );
+            self.ctx.raft_metrics.propose.unsafe_read_index += 1;
+            return;
+        }
+
+        let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
+        let renew_bound = current_time
+            + self.ctx.cfg.check_leader_lease_interval()
+            + time::Duration::milliseconds(RENEW_LEADER_LEASE_DURATION_MILLIS);
+        if self.fsm.peer.need_renew_lease_at(self.ctx, renew_bound) {
+            let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
+            if dropped {
+                self.ctx.raft_metrics.propose.dropped_read_index += 1;
+                return;
+            }
+            self.ctx.raft_metrics.propose.read_index += 1;
+            let read_proposal = ReadIndexRequest::noop(id, current_time);
+            self.fsm.peer.push_pending_read(read_proposal, true);
         }
     }
 
@@ -1746,6 +1785,9 @@ where
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
         self.register_raft_base_tick();
+        if self.fsm.peer.is_leader() {
+            self.register_check_leader_lease_tick();
+        }
     }
 
     // return false means the message is invalid, and can be ignored.
@@ -2356,7 +2398,7 @@ where
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
-
+        fail_point!("destroy_peer_after_pending_move", |_| { true });
         if self.fsm.peer.has_unpersisted_ready() {
             assert!(self.ctx.sync_write_worker.is_none());
             // The destroy must be delayed if there are some unpersisted readies.
@@ -4139,6 +4181,19 @@ where
         {
             self.register_entry_cache_evict_tick();
         }
+    }
+
+    fn register_check_leader_lease_tick(&mut self) {
+        self.schedule_tick(PeerTicks::CHECK_LEADER_LEASE)
+    }
+
+    fn on_check_leader_lease_tick(&mut self) {
+        if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+        self.try_renew_leader_lease();
+        self.register_check_leader_lease_tick();
     }
 
     fn register_split_region_check_tick(&mut self) {
