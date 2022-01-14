@@ -1,13 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{hash_map::RandomState, HashMap},
+    borrow::Borrow,
+    collections::{hash_map::RandomState, BTreeMap, HashMap},
+    ops::{Bound, RangeBounds},
     time::Duration,
 };
 
 use crate::errors::{Error, Result};
+
 use futures::{channel::mpsc, executor::block_on, StreamExt};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
+
 
 use tikv_util::{box_err, time::Instant, warn};
 use tokio::sync::{Mutex, RwLock};
@@ -118,3 +122,83 @@ pub type Slot<T> = Mutex<T>;
 /// SlotMap is a trivial concurrent map which sharding over each key.
 /// NOTE: Maybe we can use dashmap for replacing the RwLock.
 pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
+
+/// Like `..=val`, but allows `val` being a reference to DSTs.
+struct ToEndRef<'a, T: ?Sized>(&'a T);
+
+impl<'a, T: ?Sized> RangeBounds<T> for ToEndRef<'a, T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Included(self.0)
+    }
+}
+
+/// A container for holding ranges without overlapping.
+/// supports fast(`O(log(n))`) query of overlapping and points in segments.
+///
+/// Maybe replace it with extended binary search tree or the real segment tree?
+/// So it can contains overlapping segments.
+#[derive(Default)]
+pub struct SegmentTree<T: Ord>(BTreeMap<T, T>);
+
+impl<T: Ord + std::fmt::Debug> SegmentTree<T> {
+    /// Try to add a element into the segment tree.
+    ///
+    /// - If no overlapping, insert the range into the tree and returns `true`.
+    /// - If overlapping detected, do nothing and return `false`.
+    pub fn add(&mut self, (start, end): (T, T)) -> bool {
+        if self.is_overlapping((&start, &end)) {
+            return false;
+        }
+        self.0.insert(start, end);
+        true
+    }
+
+    pub fn get_interval_by_point<R>(&self, point: &R) -> Option<(&T, &T)>
+    where
+        T: Borrow<R>,
+        R: Ord + ?Sized,
+    {
+        self.0
+            .range(ToEndRef(point))
+            .next_back()
+            .filter(|(_, end)| <T as Borrow<R>>::borrow(end) > &&point)
+    }
+
+    pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
+    where
+        T: Borrow<R>,
+        R: Ord + ?Sized,
+    {
+        self.get_interval_by_point(&range.0).is_some()
+            || self
+                .get_interval_by_point(range.1)
+                .map(|rng| <T as Borrow<R>>::borrow(rng.0) != range.1)
+                .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::SegmentTree;
+
+    #[test]
+    fn test_segment_tree() {
+        let mut tree = SegmentTree::default();
+        assert!(tree.add((1, 4)));
+        assert!(tree.add((4, 8)));
+        assert!(tree.add((42, 46)));
+        assert!(!tree.add((3, 8)));
+        assert_eq!(tree.get_interval_by_point(&3), Some((&1, &4)));
+        assert_eq!(tree.get_interval_by_point(&7), Some((&4, &8)));
+        assert_eq!(tree.get_interval_by_point(&90), None);
+        assert!(tree.is_overlapping((&1, &3)));
+        assert!(tree.is_overlapping((&7, &9)));
+        assert!(!tree.is_overlapping((&8, &42)));
+        assert!(!tree.is_overlapping((&9, &10)));
+        assert!(tree.is_overlapping((&2, &10)));
+    }
+}

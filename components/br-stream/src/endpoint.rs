@@ -6,9 +6,11 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 
 use engine_traits::KvEngine;
+
 use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
 
+use raftstore::store::fsm::ChangeObserver;
 use tikv_util::time::Instant;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
@@ -23,11 +25,12 @@ use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 
 use online_config::ConfigChange;
-use raftstore::coprocessor::{CmdBatch, RegionInfoProvider};
+use raftstore::coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider};
 use tikv::config::BackupStreamConfig;
 
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{debug, error, info};
+use tikv_util::{warn, HandyRwLock};
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
@@ -160,9 +163,7 @@ where
                     MetadataEvent::RemoveTask { task: _ } => {
                         // TODO implement remove task
                     }
-                    MetadataEvent::Error { .. } => {
-                        // TODO implement error
-                    }
+                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
                 }
             }
         }
@@ -196,6 +197,7 @@ where
         });
     }
 
+    /// Make an initial data loader using the resource of the endpoint.
     pub fn make_initial_loader(&self) -> InitialDataLoader<E, R, RT> {
         InitialDataLoader::new(
             self.router.clone(),
@@ -240,17 +242,33 @@ where
                             let end_key = end_key;
                             let start = Instant::now_coarse();
                             let start_ts = task.info.get_start_ts();
+                            let ob = self.observer.clone();
+                            let success = self
+                                .observer
+                                .ranges
+                                .wl()
+                                .add((start_key.clone(), end_key.clone()));
+                            if !success {
+                                warn!("task ranges overlapped, which hasn't been supported for now";
+                                    "task" => ?task,
+                                    "start_key" => utils::redact(&start_key),
+                                    "end_key" => utils::redact(&end_key),
+                                );
+                                continue;
+                            }
                             tokio::task::spawn_blocking(move || {
-                                match init.initialize_range(
+                                let range_init_result = init.initialize_range(
                                     start_key.clone(),
                                     end_key.clone(),
                                     TimeStamp::new(start_ts),
-                                ) {
+                                    |region_id, handle| ob.subs.register_region(region_id, handle),
+                                );
+                                match range_init_result {
                                     Ok(stat) => {
                                         info!("success to do initial scanning"; "stat" => ?stat, 
-                                    "start_key" => utils::redact(&start_key),
-                                    "end_key" => utils::redact(&end_key),
-                                    "take" => ?start.saturating_elapsed(),)
+                                            "start_key" => utils::redact(&start_key),
+                                            "end_key" => utils::redact(&end_key),
+                                            "take" => ?start.saturating_elapsed(),)
                                     }
                                     Err(e) => {
                                         e.report("failed to initialize regions");
@@ -293,12 +311,19 @@ where
 
     /// Start observe over some region.
     /// This would register the region to the RaftStore.
-    /// Note: This won't trigger a incremental scanning.
-    ///       When the follower progress faster than leader and then be elected,
-    ///       there is a risk of losing data.
+    ///
+    /// > Note: This won't trigger a incremental scanning.
+    /// >      When the follower progress faster than leader and then be elected,
+    /// >      there is a risk of losing data.
     pub fn on_observe_region(&self, region: Region) {
         let init = self.make_initial_loader();
-        tokio::task::spawn_blocking(move || init.observe_over(&region));
+        let handle = ObserveHandle::new();
+        let region_id = region.get_id();
+        let ob = ChangeObserver::from_cdc(region_id, handle.clone());
+        if let Err(e) = init.observe_over(&region, ob) {
+            e.report(format!("register region {} to raftstore", region.get_id()));
+        }
+        self.observer.subs.register_region(region_id, handle);
     }
 
     pub fn do_backup(&mut self, events: Vec<CmdBatch>) {
@@ -313,6 +338,10 @@ where
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
+        // Maybe make it more configurable?
+        // currently, blocking threads would be used for incremental scanning.
+        .max_blocking_threads(thread_count)
+        .worker_threads(thread_count)
         .enable_io()
         .enable_time()
         .on_thread_start(|| {
@@ -321,7 +350,6 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .on_thread_stop(|| {
             tikv_alloc::remove_thread_memory_accessor();
         })
-        .worker_threads(thread_count)
         .build()
 }
 
@@ -334,6 +362,8 @@ pub enum Task {
     /// Start observe over the region.
     ObserverRegion {
         region: Region,
+        // Note: Maybe add the request for initial scanning too.
+        // needs_initial_scanning: bool
     },
 }
 

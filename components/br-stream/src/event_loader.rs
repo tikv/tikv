@@ -139,7 +139,7 @@ where
     /// Start observe over some region.
     /// This will register the region to the raftstore as observing,
     /// and return the current snapshot of that region.
-    pub fn observe_over(&self, region: &Region) -> Result<impl Snapshot> {
+    pub fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
         // There are 2 ways for getting the initial snapshot of a region:
         //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
@@ -147,7 +147,6 @@ where
         // Registering the observer to the raftstore is necessary because we should only listen events from leader.
         // In CDC, the change observer is per-delegate(i.e. per-region), we can create the command per-region here too.
 
-        let cmd = ChangeObserver::from_cdc(region.get_id(), ObserveHandle::new());
         let (callback, fut) = tikv_util::future::paired_future_callback();
         self.router
             .significant_send(
@@ -168,12 +167,18 @@ where
         let snap = block_on(fut)
             .expect("BUG: channel of paired_future_callback canceled.")
             .expect("BUG: raftstore didn't call the callback but return Ok(_).");
+        // Note: maybe warp the snapshot via `RegionSnapshot`?
         Ok(snap)
     }
 
-    /// Initialize the region
-    pub fn initialize_region(&self, region: &Region, start_ts: TimeStamp) -> Result<Statistics> {
-        let snap = self.observe_over(region)?;
+    /// Initialize the region: register it to the raftstore and the observer.
+    pub fn initialize_region(
+        &self,
+        region: &Region,
+        start_ts: TimeStamp,
+        cmd: ChangeObserver,
+    ) -> Result<Statistics> {
+        let snap = self.observe_over(region, cmd)?;
         let mut event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let mut stats = StatisticsSummary::default();
         loop {
@@ -202,6 +207,7 @@ where
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         start_ts: TimeStamp,
+        mut on_register_range: impl FnMut(u64, ObserveHandle),
     ) -> Result<Statistics> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
         let mut total_stat = StatisticsSummary::default();
@@ -212,7 +218,10 @@ where
                 break;
             }
             for r in regions {
-                let stat = self.initialize_region(&r.region, start_ts)?;
+                let handle = ObserveHandle::new();
+                let ob = ChangeObserver::from_cdc(r.region.get_id(), handle.clone());
+                let stat = self.initialize_region(&r.region, start_ts, ob)?;
+                on_register_range(r.region.get_id(), handle);
                 total_stat.add_statistics(&stat);
             }
         }
