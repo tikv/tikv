@@ -237,11 +237,6 @@ mod tests {
 
     #[test]
     fn test_basic() {
-        enum Expect {
-            Keep,
-            Remove,
-        }
-
         let tmp = Builder::new().prefix("test_basic").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let fake_engine = Arc::new(
@@ -260,45 +255,42 @@ mod tests {
 
         let write = vec![
             // key, start_ts, commit_ts
-            (b"k", 104, 105, Expect::Remove),
-            (b"k", 102, 103, Expect::Remove),
-            (b"k", 100, 101, Expect::Keep),
-            (b"k", 98, 99, Expect::Keep),
+            (b"k", 104, 105),
+            (b"k", 102, 103),
+            (b"k", 100, 101),
+            (b"k", 98, 99),
         ];
         let default = vec![
             // key, start_ts
-            (b"k", 104, Expect::Remove),
-            (b"k", 102, Expect::Remove),
-            (b"k", 100, Expect::Keep),
-            (b"k", 98, Expect::Keep),
+            (b"k", 104),
+            (b"k", 102),
+            (b"k", 100),
+            (b"k", 98),
         ];
         let lock = vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
-            (b"k", 100, 0, LockType::Put, false, Expect::Remove),
-            (b"k", 100, 0, LockType::Delete, false, Expect::Keep),
-            (b"k", 100, 0, LockType::Put, true, Expect::Keep),
-            (b"k", 100, 0, LockType::Put, false, Expect::Keep),
-            (b"k", 100, 0, LockType::Put, false, Expect::Remove),
+            (b"k", 100, 0, LockType::Put, false),
+            (b"k", 100, 0, LockType::Delete, false),
+            (b"k", 100, 0, LockType::Put, true),
+            (b"k", 100, 0, LockType::Delete, true),
         ];
         let mut kv = vec![];
-        for (key, start_ts, commit_ts, expect) in write {
+        for (key, start_ts, commit_ts) in write {
             let write = Write::new(WriteType::Put, start_ts.into(), None);
             kv.push((
                 CF_WRITE,
                 Key::from_raw(key).append_ts(commit_ts.into()),
                 write.as_ref().to_bytes(),
-                expect,
             ));
         }
-        for (key, ts, expect) in default {
+        for (key, ts) in default {
             kv.push((
                 CF_DEFAULT,
                 Key::from_raw(key).append_ts(ts.into()),
                 b"v".to_vec(),
-                expect,
             ));
         }
-        for (key, ts, for_update_ts, tp, short_value, expect) in lock {
+        for (key, ts, for_update_ts, tp, short_value) in lock {
             let v = if short_value {
                 Some(b"v".to_vec())
             } else {
@@ -314,10 +306,10 @@ mod tests {
                 0,
                 TimeStamp::zero(),
             );
-            kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
+            kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }
         let mut wb = fake_engine.c().write_batch();
-        for &(cf, ref k, ref v, _) in &kv {
+        for &(cf, ref k, ref v) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
         wb.write().unwrap();
