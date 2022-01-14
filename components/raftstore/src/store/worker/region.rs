@@ -34,6 +34,9 @@ use file_system::{IOType, WithIOType};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
+use affinity::*;
+
+static BACK_GROUND_TASK_CORES:[usize;2]= [1, 2];
 
 // used to periodically check whether we should delete a stale peer's range in region runner
 
@@ -685,6 +688,7 @@ where
                 let ctx = self.ctx.clone();
 
                 self.pool.spawn(async move {
+                    set_thread_affinity(&BACK_GROUND_TASK_CORES).unwrap();
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,

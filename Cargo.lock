@@ -31,6 +31,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
+name = "affinity"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "763e484feceb7dd021b21c5c6f81aee06b1594a743455ec7efbf72e6355e447b"
+dependencies = [
+ "cfg-if 1.0.0",
+ "errno",
+ "libc 0.2.106",
+ "num_cpus",
+]
+
+[[package]]
 name = "afl"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1368,6 +1380,27 @@ dependencies = [
  "panic_hook",
  "tempfile",
  "tikv_alloc",
+]
+
+[[package]]
+name = "errno"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f639046355ee4f37944e44f60642c6f3a7efa3cf6b78c78a0d989a8ce6c396a1"
+dependencies = [
+ "errno-dragonfly",
+ "libc 0.2.106",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "errno-dragonfly"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
+dependencies = [
+ "cc",
+ "libc 0.2.106",
 ]
 
 [[package]]
@@ -3699,6 +3732,7 @@ dependencies = [
 name = "raftstore"
 version = "0.0.1"
 dependencies = [
+ "affinity",
  "batch-system",
  "bitflags",
  "byteorder",
@@ -5467,6 +5501,7 @@ dependencies = [
 name = "tikv"
 version = "5.4.0-alpha"
 dependencies = [
+ "affinity",
  "anyhow",
  "api_version",
  "async-stream",
@@ -5726,6 +5761,7 @@ dependencies = [
 name = "tikv_util"
 version = "0.1.0"
 dependencies = [
+ "affinity",
  "async-speed-limit",
  "backtrace",
  "byteorder",

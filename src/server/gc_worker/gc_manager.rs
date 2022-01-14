@@ -19,6 +19,9 @@ use super::compaction_filter::is_compaction_filter_allowed;
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
 use super::Result;
+use affinity::*;
+
+static BACK_GROUND_TASK_CORES:[usize;2]= [1, 2];
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -278,6 +281,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         let res: Result<_> = ThreadBuilder::new()
             .name(thd_name!("gc-manager"))
             .spawn(move || {
+                set_thread_affinity(&BACK_GROUND_TASK_CORES).unwrap();
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 self.run();
