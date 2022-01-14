@@ -65,6 +65,10 @@ where
         self.raft_client.need_flush()
     }
 
+    fn check_heavy_connection(&self) {
+        self.raft_client.check_heavy_connection();
+    }
+
     fn flush(&mut self) {
         self.raft_client.flush();
     }

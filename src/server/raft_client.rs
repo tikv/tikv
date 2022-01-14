@@ -999,6 +999,26 @@ where
         }
     }
 
+    /// check the number of message in queue.
+    pub fn check_heavy_connection(&self) {
+        let mut counter = 0;
+        for id in &self.need_flush {
+            if let Some(s) = self.cache.get_readonly(id) {
+                if s.dirty {
+                    counter += s.queue.len();
+                }
+                continue;
+            }
+            let l = self.pool.lock().unwrap();
+            if let Some(q) = l.connections.get(id) {
+                counter += q.len();
+            }
+        }
+        if counter > 500 {
+            warn!("There are too many messages in raft_client queue"; "message-count" => counter);
+        }
+    }
+
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
         self.flush_full_metrics();
