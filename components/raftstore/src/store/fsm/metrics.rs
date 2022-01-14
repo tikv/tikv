@@ -147,6 +147,10 @@ impl MessageStats {
         }
     }
 
+    pub fn message_size_too_large(&self) -> bool {
+        self.total_size > WARN_MESSAGE_SIZE
+    }
+
     pub fn clear(&mut self) {
         self.total_count = 0;
         self.total_size = 0;

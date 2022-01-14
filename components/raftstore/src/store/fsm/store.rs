@@ -796,6 +796,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 *skip_end = true;
             }
         }
+        if self.poll_ctx.msg_stats.message_size_too_large() {
+            info!("This poll has processed {} peer", self.poll_ctx.ready_count);
+        }
         self.poll_ctx.trans.check_heavy_connection();
 
         handle_result
