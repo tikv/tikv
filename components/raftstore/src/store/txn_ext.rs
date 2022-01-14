@@ -6,6 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
+use kvproto::metapb;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use prometheus::{register_int_gauge, IntGauge};
@@ -61,6 +62,7 @@ const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
 const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
+#[derive(PartialEq)]
 pub struct PeerPessimisticLocks {
     /// The table that stores pessimistic locks.
     ///
@@ -193,6 +195,62 @@ impl PeerPessimisticLocks {
 
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut (PessimisticLock, bool)> {
         self.map.get_mut(key)
+    }
+
+    /// Group pessimistic locks in the original region to the split regions.
+    ///
+    /// The given regions MUST be sorted by key in the ascending order. The returned
+    /// `HashMap`s are in the same order of the given regions.
+    ///
+    /// The locks belonging to the derived region will be kept in the given `locks` map,
+    /// and the corresponding position in the returned `Vec` will be an empty map.
+    pub fn group_by_regions(
+        &mut self,
+        regions: &[metapb::Region],
+        derived: &metapb::Region,
+    ) -> Vec<PeerPessimisticLocks> {
+        // Assert regions are sorted by key in ascending order.
+        if cfg!(debug_assertions) {
+            for (r1, r2) in regions.iter().zip(regions.iter().skip(1)) {
+                assert!(r1.get_start_key() < r2.get_start_key());
+            }
+        }
+
+        let mut res: Vec<PeerPessimisticLocks> = regions
+            .iter()
+            .map(|_| PeerPessimisticLocks::default())
+            .collect();
+        // Locks that are marked deleted still need to be moved to the new regions,
+        // and the deleted mark should also be cleared.
+        // Refer to the comment in `PeerPessimisticLocks` for details.
+        let removed_locks = self.map.drain_filter(|key, _| {
+            let key = &**key.as_encoded();
+            let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
+            key < start_key || (!end_key.is_empty() && key >= end_key)
+        });
+        for (key, (lock, _)) in removed_locks {
+            let idx = match regions
+                .binary_search_by_key(&&**key.as_encoded(), |region| region.get_start_key())
+            {
+                Ok(idx) => idx,
+                Err(idx) => idx - 1,
+            };
+            let size = key.len() + lock.memory_size();
+            self.memory_size -= size;
+            res[idx].map.insert(key, (lock, false));
+            res[idx].memory_size += size;
+        }
+        res
+    }
+
+    #[cfg(test)]
+    fn from_locks(locks: impl IntoIterator<Item = (Key, (PessimisticLock, bool))>) -> Self {
+        let mut res = PeerPessimisticLocks::default();
+        for (key, (locks, is_deleted)) in locks {
+            res.memory_size += key.len() + locks.memory_size();
+            res.map.insert(key, (locks, is_deleted));
+        }
+        res
     }
 }
 
@@ -328,5 +386,63 @@ mod tests {
         let success = locks.insert(vec![(Key::from_raw(b"k2"), lock(b"abc"))]);
         assert!(!success);
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
+    }
+
+    #[test]
+    fn test_group_locks_by_regions() {
+        fn lock(key: &[u8], deleted: bool) -> (Key, (PessimisticLock, bool)) {
+            (
+                Key::from_raw(key),
+                (
+                    PessimisticLock {
+                        primary: key.to_vec().into_boxed_slice(),
+                        start_ts: 10.into(),
+                        ttl: 1000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 20.into(),
+                    },
+                    deleted,
+                ),
+            )
+        }
+        fn region(start_key: &[u8], end_key: &[u8]) -> metapb::Region {
+            let mut region = metapb::Region::default();
+            region.set_start_key(start_key.to_vec());
+            region.set_end_key(end_key.to_vec());
+            region
+        }
+        let _guard = TEST_MUTEX.lock().unwrap();
+
+        let mut original = PeerPessimisticLocks::from_locks(vec![
+            lock(b"a", true),
+            lock(b"c", false),
+            lock(b"e", true),
+            lock(b"g", false),
+            lock(b"i", false),
+        ]);
+        let regions = vec![
+            region(b"", b"b"),  // test leftmost region
+            region(b"b", b"c"), // no lock inside
+            region(b"c", b"d"), // test key equals to start_key
+            region(b"d", b"h"), // test multiple locks inside
+            region(b"h", b""),  // test rightmost region
+        ];
+        let output = original.group_by_regions(&regions, &regions[4]);
+        let expected: Vec<_> = vec![
+            vec![lock(b"a", false)],
+            vec![],
+            vec![lock(b"c", false)],
+            vec![lock(b"e", false), lock(b"g", false)],
+            vec![], // the position of the derived region is empty
+        ]
+        .into_iter()
+        .map(PeerPessimisticLocks::from_locks)
+        .collect();
+        assert_eq!(output, expected);
+        // The lock that belongs to the derived region is kept in the original map.
+        assert_eq!(
+            original,
+            PeerPessimisticLocks::from_locks(vec![lock(b"i", false)])
+        );
     }
 }

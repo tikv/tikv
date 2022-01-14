@@ -1122,6 +1122,12 @@ where
         self.read_progress
             .update_leader_info(self.leader_id(), self.term(), self.region());
 
+        {
+            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+            pessimistic_locks.term = self.term();
+            pessimistic_locks.version = self.region().get_region_epoch().get_version();
+        }
+
         if !self.pending_remove {
             host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
         }
