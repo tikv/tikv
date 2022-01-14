@@ -18,6 +18,7 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
+use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::errors::DiscardReason;
 use raftstore::router::RaftStoreRouter;
@@ -27,7 +28,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
@@ -47,15 +48,17 @@ struct Queue {
     /// A flag indicates whether the queue can still accept messages.
     connected: AtomicBool,
     waker: Mutex<Option<Waker>>,
+    msg_size: Arc<AtomicI64>,
 }
 
 impl Queue {
     /// Creates a Queue that can store at lease `cap` messages.
-    fn with_capacity(cap: usize) -> Queue {
+    fn with_capacity(cap: usize, msg_size: Arc<AtomicI64>) -> Queue {
         Queue {
             buf: ArrayQueue::new(cap),
             connected: AtomicBool::new(true),
             waker: Mutex::new(None),
+            msg_size,
         }
     }
 
@@ -105,7 +108,12 @@ impl Queue {
 
     /// Gets message from the head of the queue.
     fn try_pop(&self) -> Option<RaftMessage> {
-        self.buf.pop()
+        let msg = self.buf.pop();
+        if let Some(m) = &msg {
+            self.msg_size
+                .fetch_sub(m.compute_size() as i64, Ordering::Relaxed);
+        }
+        msg
     }
 
     /// Same as `try_pop` but register interest on readiness when `None` is returned.
@@ -114,13 +122,18 @@ impl Queue {
     /// it will register current polling task for notifications.
     #[inline]
     fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
-        self.buf.pop().or_else(|| {
+        let msg = self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
                 *waker = Some(ctx.waker().clone());
             }
             self.buf.pop()
-        })
+        });
+        if let Some(m) = &msg {
+            self.msg_size
+                .fetch_sub(m.compute_size() as i64, Ordering::Relaxed);
+        }
+        msg
     }
 }
 
@@ -833,6 +846,7 @@ pub struct RaftClient<S, R, E> {
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     engine: PhantomData<E>,
+    msg_size: Arc<AtomicI64>,
     last_hash: (u64, u64),
 }
 
@@ -856,6 +870,7 @@ where
             future_pool,
             builder,
             engine: PhantomData::<E>,
+            msg_size: Arc::new(AtomicI64::new(0)),
             last_hash: (0, 0),
         }
     }
@@ -879,6 +894,7 @@ where
                 .or_insert_with(|| {
                     let queue = Arc::new(Queue::with_capacity(
                         self.builder.cfg.raft_client_queue_size,
+                        self.msg_size.clone(),
                     ));
                     let back_end = StreamBackEnd {
                         store_id,
@@ -1001,21 +1017,9 @@ where
 
     /// check the number of message in queue.
     pub fn check_heavy_connection(&self) {
-        let mut counter = 0;
-        for id in &self.need_flush {
-            if let Some(s) = self.cache.get_readonly(id) {
-                if s.dirty {
-                    counter += s.queue.len();
-                }
-                continue;
-            }
-            let l = self.pool.lock().unwrap();
-            if let Some(q) = l.connections.get(id) {
-                counter += q.len();
-            }
-        }
-        if counter > 500 {
-            warn!("There are too many messages in raft_client queue"; "message-count" => counter);
+        let msg_size = self.msg_size.load(Ordering::Relaxed);
+        if msg_size > 400 * 1000 * 1000 {
+            warn!("There are too many messages in raft_client queue"; "message-total-size" => msg_size);
         }
     }
 
@@ -1063,6 +1067,7 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
+            msg_size: self.msg_size.clone(),
             last_hash: (0, 0),
         }
     }
