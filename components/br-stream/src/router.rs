@@ -29,7 +29,7 @@ use kvproto::{
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
-use protobuf::{Message, RepeatedField};
+use protobuf::Message;
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
@@ -491,7 +491,7 @@ impl StreamTaskInfo {
         self.total_size.load(Ordering::SeqCst) as _
     }
 
-    /// Flush all files and generate corresponding metadata.
+    /// Flush all template files and generate corresponding metadata.
     pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let w = self.flushing_files.read().await;
         // Let's flush all files first...
@@ -536,9 +536,21 @@ impl StreamTaskInfo {
         self
     }
 
+    pub async fn clear_flushing_files(&self) {
+        for (_, v) in self.flushing_files.write().await.drain() {
+            let data_file = v.lock().await;
+            self.total_size
+                .fetch_sub(data_file.file_size, Ordering::SeqCst);
+            if let Err(e) = data_file.remove_temp_file().await {
+                // if remove template failed, just skip it.
+                info!("remove template file"; "err" => ?e);
+            }
+        }
+    }
+
     pub async fn flush_log(&self) -> Result<()> {
         // if failed to write storage, we should retry write flushing_files.
-        for (_, v) in self.flushing_files.write().await.drain() {
+        for (_, v) in self.flushing_files.write().await.iter() {
             let data_file = v.lock().await;
             // to do: limiter to storage
             let limiter = Limiter::builder(std::f64::INFINITY).build();
@@ -554,14 +566,14 @@ impl StreamTaskInfo {
                         "tmp file" => ?data_file.local_path,
                         "storage file" => ?filepath,
                     );
-                    self.total_size
-                        .fetch_sub(data_file.file_size, Ordering::SeqCst);
-                    let _ = data_file.remove_temp_file().await;
                 }
-                Err(e) => warn!("backup stream flush failed";
-                    "file" => ?data_file.local_path,
-                    "err" => ?e,
-                ),
+                Err(e) => {
+                    warn!("backup stream flush failed";
+                        "file" => ?data_file.local_path,
+                        "err" => ?e,
+                    );
+                    return Err(Error::Io(e));
+                }
             }
         }
 
@@ -570,7 +582,7 @@ impl StreamTaskInfo {
 
     pub async fn flush_meta(&self, metadata_info: MetadataInfo) -> Result<()> {
         let meta_path = metadata_info.path_to_meta();
-        let meta_buff = metadata_info.marshar_to()?;
+        let meta_buff = metadata_info.marshal_to()?;
         let buflen = meta_buff.len();
 
         self.storage
@@ -601,6 +613,9 @@ impl StreamTaskInfo {
 
         // flush meta file to storage.
         self.flush_meta(metadata_info).await?;
+
+        // clear flushing files
+        self.clear_flushing_files().await;
         Ok(())
     }
 }
@@ -646,15 +661,15 @@ impl MetadataInfo {
         self.files.push(file);
     }
 
-    fn marshar_to(self) -> Result<Vec<u8>> {
+    fn marshal_to(self) -> Result<Vec<u8>> {
         let mut metadata = Metadata::new();
-        metadata.set_file(RepeatedField::<DataFileInfo>::from_vec(self.files));
+        metadata.set_file(self.files.into());
         metadata.set_store_id(self.store_id as _);
         metadata.set_resloved_ts(self.min_resolved_ts as _);
 
         metadata
             .write_to_bytes()
-            .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))
+            .map_err(|err| Error::Other(box_err!("failed to marshal proto: {}", err)))
     }
 
     fn path_to_meta(&self) -> String {
@@ -733,22 +748,20 @@ impl DataFile {
     }
 
     /// generage path for log file before flushing to Storage
-    fn generage_storage_path(&mut self, path: String) {
+    fn set_storage_path(&mut self, path: String) {
         self.storage_path = path;
     }
 
     /// generate the metadata in protocol buffer of the file.
     fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
-        self.generage_storage_path(file_key.file_name(self.min_ts));
+        self.set_storage_path(file_key.file_name(self.min_ts));
 
         let mut meta = DataFileInfo::new();
         meta.set_sha_256(
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
-                .map_err(|err| {
-                    Error::Other(box_err!("openssl hasher failed to finish: {}", err))
-                })?,
+                .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
         );
         meta.set_path(self.storage_path.clone());
         meta.set_number_of_entries(self.number_of_entries as _);
@@ -955,7 +968,7 @@ mod tests {
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         println!("{:?}", files);
         let meta = files
-            .move_files_to_flushing_fils()
+            .move_to_flushing_files()
             .await
             .generate_metadata(1)
             .await?;
