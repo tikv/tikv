@@ -435,6 +435,8 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
+        self.tick_batch[PeerTicks::CHECK_LEADER_LEASE.bits() as usize].wait_duration =
+            self.cfg.check_leader_lease_interval.0;
     }
 }
 
@@ -1542,6 +1544,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
         workers.background_worker.stop();
+        workers.purge_worker.stop();
+        workers.refresh_config_worker.stop();
     }
 }
 
