@@ -412,6 +412,7 @@ mod tests {
             region
         }
         let _guard = TEST_MUTEX.lock().unwrap();
+        defer!(GLOBAL_MEM_SIZE.set(0));
 
         let mut original = PeerPessimisticLocks::from_locks(vec![
             lock(b"a", true),
