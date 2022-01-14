@@ -166,7 +166,12 @@ where
             })?;
         let snap = block_on(fut)
             .expect("BUG: channel of paired_future_callback canceled.")
-            .expect("BUG: raftstore didn't call the callback but return Ok(_).");
+            .ok_or_else(|| {
+                Error::Other(box_err!(
+                    "failed to get initial snapshot: the channel is dropped (region_id = {})",
+                    region.get_id()
+                ))
+            })?;
         // Note: maybe warp the snapshot via `RegionSnapshot`?
         Ok(snap)
     }
