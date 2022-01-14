@@ -71,6 +71,7 @@ impl Queue {
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
         // Another way is pop the old messages, but it makes things
         // complicated.
+        let msg_size = msg.compute_size() as i64;
         if self.connected.load(Ordering::Relaxed) {
             match self.buf.push(msg) {
                 Ok(()) => (),
@@ -79,6 +80,7 @@ impl Queue {
         } else {
             return Err(DiscardReason::Disconnected);
         }
+        self.msg_size.fetch_add(msg_size, Ordering::Relaxed);
         if self.connected.load(Ordering::SeqCst) {
             Ok(())
         } else {
