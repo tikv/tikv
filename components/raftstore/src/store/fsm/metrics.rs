@@ -122,6 +122,7 @@ impl LocalStoreStat {
 
 const WARN_MESSAGE_SIZE: u64 = 100 * 1024 * 1204; // 100MB
 
+#[derive(Clone, Default)]
 pub struct MessageStats {
     current_size: u64,
     total_size: u64,
