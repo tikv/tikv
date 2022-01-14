@@ -35,9 +35,9 @@ pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::hibernate_state::{GroupState, HibernateState};
 pub use self::memory::*;
 pub use self::msg::{
-    Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg,
-    PeerTicks, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg,
-    StoreTick, WriteCallback, WriteResponse,
+    Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg, PeerTick,
+    RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick,
+    WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
