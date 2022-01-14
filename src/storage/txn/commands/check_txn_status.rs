@@ -76,7 +76,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache()),
+            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx),
             &mut context.statistics,
         );
 

@@ -21,9 +21,6 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use crossbeam::utils::CachePadded;
-use engine_traits::CF_LOCK;
-use parking_lot::{Mutex, MutexGuard};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -32,9 +29,12 @@ use std::{mem, u64};
 
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use crossbeam::utils::CachePadded;
+use engine_traits::CF_LOCK;
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
+use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
@@ -813,38 +813,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let mut is_async_apply_prewrite = false;
         let write_size = to_be_write.size();
-
-        // Mutations on the lock CF should overwrite the memory locks.
-        // These mutations happen on a working leader, so memory pessimistic locks
-        // are only written through the scheduler. Protected by the latches, there will
-        // be no concurrent write on the same keys in the lock table. So, it is safe
-        // for us to only delete keys that are already in the lock table.
-        // This will help us reduce the cost of cloning the keys for the commit command
-        // or when the feature is disabled.
-        let locks_to_be_removed = {
-            match txn_ext
-                .as_ref()
-                .map(|txn_ext| txn_ext.pessimistic_locks.read())
-            {
-                Some(locks) if !locks.map.is_empty() => to_be_write
-                    .modifies
-                    .iter()
-                    .filter_map(|write| match write {
-                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key)
-                            if *cf == CF_LOCK && locks.map.contains_key(key) =>
-                        {
-                            Some(key.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-                _ => vec![],
-            }
-        };
-
         if ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
             to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
         }
+        to_be_write.deadline = Some(deadline);
+
+        let sched = scheduler.clone();
+        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+
         let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
             match response_policy {
                 ResponsePolicy::OnApplied => (None, None),
@@ -903,50 +879,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
             };
 
-        let sched = scheduler.clone();
-        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
-        // The callback to receive async results of write prepare from the storage engine.
-        let engine_cb = Box::new(move |result: EngineResult<()>| {
-            sched_pool
-                .spawn(async move {
-                    fail_point!("scheduler_async_write_finish");
-
-                    let ok = result.is_ok();
-                    if ok && !locks_to_be_removed.is_empty() {
-                        // Lock CF mutations should overwrite memory pessimistic locks
-                        if let Some(mut pessimistic_locks) = txn_ext
-                            .as_ref()
-                            .map(|txn_ext| txn_ext.pessimistic_locks.write())
-                        {
-                            for key in &locks_to_be_removed {
-                                pessimistic_locks.map.remove(key);
-                            }
-                        }
-                    }
-                    sched.on_write_finished(
-                        cid,
-                        pr,
-                        result,
-                        lock_guards,
-                        pipelined,
-                        is_async_apply_prewrite,
-                        tag,
-                    );
-                    KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                        .get(tag)
-                        .observe(rows as f64);
-
-                    if !ok {
-                        // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
-                        // the quota and other write requests would be in long delay.
-                        if sched.inner.flow_controller.enabled() {
-                            sched.inner.flow_controller.unconsume(write_size);
-                        }
-                    }
-                })
-                .unwrap()
-        });
-
         if self.inner.flow_controller.enabled() {
             if self.inner.flow_controller.is_unlimited() {
                 // no need to delay if unthrottled, just call consume to record write flow
@@ -982,7 +914,94 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
         }
 
-        to_be_write.deadline = Some(deadline);
+        let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
+        // Mutations on the lock CF should overwrite the memory locks.
+        // We only set a deleted flag here, and the lock will be finally removed when it finishes
+        // applying. See the comments in `PeerPessimisticLocks` for how this flag is used.
+        let txn_ext2 = txn_ext.clone();
+        let mut pessimistic_locks_guard = txn_ext2
+            .as_ref()
+            .map(|txn_ext| txn_ext.pessimistic_locks.write());
+        let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
+            Some(locks)
+                // If there is a leader or region change, removing the locks is unnecessary.
+                if locks.term == term && locks.version == version && !locks.map.is_empty() =>
+            {
+                to_be_write
+                    .modifies
+                    .iter()
+                    .filter_map(|write| match write {
+                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
+                            locks.map.get_mut(key).map(|(_, deleted)| {
+                                *deleted = true;
+                                key.to_owned()
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            }
+            _ => vec![],
+        };
+        // Keep the read lock guard of the pessimistic lock table until the request is sent to the raftstore.
+        //
+        // If some in-memory pessimistic locks need to be proposed, we will propose another TransferLeader
+        // command. Then, we can guarentee even if the proposed locks don't include the locks deleted here,
+        // the response message of the transfer leader command must be later than this write command because
+        // this write command has been sent to the raftstore. Then, we don't need to worry this request will
+        // fail due to the voluntary leader transfer.
+        let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
+            (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
+        });
+
+        // The callback to receive async results of write prepare from the storage engine.
+        let engine_cb = Box::new(move |result: EngineResult<()>| {
+            let ok = result.is_ok();
+            if ok && !removed_pessimistic_locks.is_empty() {
+                // Removing pessimistic locks when it succeeds to apply. This should be done in the apply
+                // thread, to make sure it happens before other admin commands are executed.
+                if let Some(mut pessimistic_locks) = txn_ext
+                    .as_ref()
+                    .map(|txn_ext| txn_ext.pessimistic_locks.write())
+                {
+                    // If epoch version or term does not match, region or leader change has happened,
+                    // so we needn't remove the key.
+                    if pessimistic_locks.term == term && pessimistic_locks.version == version {
+                        for key in removed_pessimistic_locks {
+                            pessimistic_locks.map.remove(&key);
+                        }
+                    }
+                }
+            }
+
+            sched_pool
+                .spawn(async move {
+                    fail_point!("scheduler_async_write_finish");
+
+                    sched.on_write_finished(
+                        cid,
+                        pr,
+                        result,
+                        lock_guards,
+                        pipelined,
+                        is_async_apply_prewrite,
+                        tag,
+                    );
+                    KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                        .get(tag)
+                        .observe(rows as f64);
+
+                    if !ok {
+                        // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
+                        // the quota and other write requests would be in long delay.
+                        if sched.inner.flow_controller.enabled() {
+                            sched.inner.flow_controller.unconsume(write_size);
+                        }
+                    }
+                })
+                .unwrap()
+        });
+
         // Safety: `self.sched_pool` ensures a TLS engine exists.
         unsafe {
             with_tls_engine(|engine: &E| {
@@ -1024,7 +1043,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         for modify in mem::take(&mut to_be_write.modifies) {
             match modify {
                 Modify::PessimisticLock(key, lock) => {
-                    pessimistic_locks.map.insert(key, lock);
+                    pessimistic_locks.insert(key, lock);
                 }
                 _ => panic!("all modifies should be PessimisticLock"),
             }

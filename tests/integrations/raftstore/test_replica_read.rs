@@ -190,6 +190,7 @@ fn test_read_hibernated_region() {
     // Initialize the cluster.
     configure_for_lease_read(&mut cluster, Some(100), Some(8));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(Duration::from_millis(1));
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     let p2 = new_peer(2, 2);

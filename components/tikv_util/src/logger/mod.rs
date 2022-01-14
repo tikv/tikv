@@ -125,21 +125,31 @@ pub fn set_global_logger(
     Ok(())
 }
 
+// Terminates the current process gracefully by dropping async guard and forcing
+// a flush of logs to ensure messages aren't lost. For more information please
+// refer to:
+//   https://docs.rs/slog-async/2.7.0/slog_async/#beware-of-stdprocessexit
+pub fn exit_process_gracefully(code: i32) -> ! {
+    // force async logger to flush by dropping its guard.
+    *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
+    std::process::exit(code);
+}
+
 /// Constructs a new file writer which outputs log to a file at the specified
 /// path. The file writer rotates for the specified timespan.
 pub fn file_writer<N>(
     path: impl AsRef<Path>,
-    rotation_size: ReadableSize,
+    rotation_size: u64,
     max_backups: usize,
-    max_age: ReadableDuration,
+    max_age: u64,
     rename: N,
 ) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path, rename, max_backups, max_age)
-            .add_rotator(RotateBySize::new(rotation_size))
+        RotatingFileLoggerBuilder::new(path, rename, max_backups, ReadableDuration::days(max_age))
+            .add_rotator(RotateBySize::new(ReadableSize::mb(rotation_size)))
             .build()?,
     );
     Ok(logger)
@@ -213,7 +223,8 @@ where
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "critical" => Some(Level::Critical),
+        // We support `critical` due to legacy.
+        "fatal" | "critical" => Some(Level::Critical),
         "error" => Some(Level::Error),
         // We support `warn` due to legacy.
         "warning" | "warn" => Some(Level::Warning),
@@ -228,9 +239,9 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
 // the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
-        Level::Critical => "critical",
+        Level::Critical => "fatal",
         Level::Error => "error",
-        Level::Warning => "warning",
+        Level::Warning => "warn",
         Level::Debug => "debug",
         Level::Trace => "trace",
         Level::Info => "info",

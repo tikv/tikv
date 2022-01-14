@@ -21,7 +21,7 @@ mod rate_limiter;
 mod thread_io;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
+pub use iosnoop::{get_io_type, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,

@@ -43,8 +43,8 @@
 # memory-usage-limit = "0B"
 
 [log]
-## Log levels: trace, debug, info, warning, error, critical.
-## Note that `debug` and `trace` are only available in development builds.
+## Log levels: debug, info, warn, error, fatal.
+## Note that `debug` is only available in development builds.
 # level = "info"
 ## log format, one of json, text. Default to text.
 # format = "text"
@@ -55,9 +55,9 @@
 ## Usually it is set through command line.
 # filename = ""
 ## max log file size in MB (upper limit to 4096MB)
-# max-size = "300MB"
+# max-size = 300
 ## max log file keep days
-# max-days = "0d"
+# max-days = 0
 ## maximum number of old log files to retain
 # max-backups = 0
 
