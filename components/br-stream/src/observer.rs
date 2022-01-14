@@ -150,15 +150,17 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         }
     }
 
-    fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
+    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+        if role == StateRole::Leader && self.should_register_region(&region) {
+            self.register_region(region);
+        }
+    }
 }
 
 impl RoleObserver for BackupStreamObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, r: StateRole) {
-        let region = ctx.region();
-        if r == StateRole::Leader && self.should_register_region(&region) {
-            self.register_region(region);
-        } else {
+        if r != StateRole::Leader {
+            let region = ctx.region();
             self.subs.deregister_region(region.get_id());
         }
     }
@@ -169,15 +171,16 @@ impl RegionChangeObserver for BackupStreamObserver {
         &self,
         ctx: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
-        role: StateRole,
+        _role: StateRole,
     ) {
         match event {
-            RegionChangeEvent::Create => {
-                if role == StateRole::Leader && self.should_register_region(ctx.region()) {
-                    self.register_region(ctx.region());
+            RegionChangeEvent::Destroy => {
+                if self.subs.should_observe(ctx.region().get_id()) {
+                    self.subs.deregister_region(ctx.region().get_id())
                 }
             }
-            RegionChangeEvent::Destroy => self.subs.deregister_region(ctx.region().get_id()),
+            // No need for handling `Create` -- once it becomes leader, it would start by
+            // `on_applied_current_term`.
             _ => {}
         }
     }
