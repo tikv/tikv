@@ -31,6 +31,7 @@ impl CommandExt for Pause {
     ctx!();
     tag!(pause);
     write_bytes!(keys: multiple);
+    write_kvs!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 

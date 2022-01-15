@@ -2428,6 +2428,49 @@ impl LogConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct QuotaConfig {
+    pub cpu: usize,
+    pub write_kvs: usize,
+    pub write_bandwidth: ReadableSize,
+    pub read_bandwidth: ReadableSize,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            cpu: 0,
+            write_kvs: 0,
+            write_bandwidth: ReadableSize(0),
+            read_bandwidth: ReadableSize(0),
+        }
+    }
+}
+
+impl QuotaConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.cpu > 96_000 {
+            return Err("Max cpu quota is limited to 96000, it means 96vCPU"
+                .to_string()
+                .into());
+        }
+        if self.write_kvs > 10_000_000 {
+            return Err("Max write kv ops is limited to 10 Millions"
+                .to_string()
+                .into());
+        }
+        if self.write_bandwidth.0 > ReadableSize::mb(200).0 {
+            return Err("Max write bandwidth is limited to 200MB".to_string().into());
+        }
+        if self.read_bandwidth.0 > ReadableSize::gb(2).0 {
+            return Err("Max read bandwidth is limited to 2GB".to_string().into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2480,6 +2523,9 @@ pub struct TiKvConfig {
 
     #[online_config(skip)]
     pub log: LogConfig,
+
+    #[online_config(skip)]
+    pub quota: QuotaConfig,
 
     #[online_config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2560,6 +2606,7 @@ impl Default for TiKvConfig {
             memory_usage_limit: OptionReadableSize(None),
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2611,6 +2658,7 @@ impl TiKvConfig {
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.log.validate()?;
+        self.quota.validate()?;
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -2722,10 +2770,51 @@ impl TiKvConfig {
             self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
             self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
 
+            // disable kvdb write stall, and override related configs
             self.rocksdb.defaultcf.disable_write_stall = true;
+            self.rocksdb.defaultcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.writecf.disable_write_stall = true;
+            self.rocksdb.writecf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.lockcf.disable_write_stall = true;
+            self.rocksdb.lockcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.raftcf.disable_write_stall = true;
+            self.rocksdb.raftcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
         }
 
         if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
@@ -3829,10 +3918,24 @@ mod tests {
     }
 
     #[test]
-    fn test_change_flow_control() {
+    fn test_flow_control() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
         let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
+
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_slowdown_writes_trigger(),
+            50
+        );
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_stop_writes_trigger(),
+            50
+        );
 
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)

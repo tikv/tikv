@@ -41,6 +41,7 @@ impl CommandExt for CheckSecondaryLocks {
     tag!(check_secondary_locks);
     ts!(start_ts);
     write_bytes!(keys: multiple);
+    write_kvs!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 

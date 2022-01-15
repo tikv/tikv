@@ -38,7 +38,7 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
@@ -202,6 +202,8 @@ struct SchedulerInner<L: LockManager> {
     enable_async_apply_prewrite: bool,
 
     resource_tag_factory: ResourceTagFactory,
+
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 #[inline]
@@ -313,6 +315,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -346,6 +349,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
             resource_tag_factory,
+            quota_limiter,
         });
 
         slow_log!(
@@ -467,9 +471,25 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
         let sched = self.clone();
+
+        let quota_delay = self.inner.quota_limiter.as_ref().consume_write(
+            1,
+            task.cmd.write_kvs(),
+            task.cmd.write_bytes(),
+        );
+
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
+                // Delay if hit quota limit
+                if !quota_delay.is_zero() {
+                    GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + quota_delay)
+                        .compat()
+                        .await
+                        .unwrap();
+                }
+
                 if sched.check_task_deadline_exceeded(&task) {
                     return;
                 }
@@ -1260,6 +1280,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1316,6 +1337,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1372,6 +1394,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1436,6 +1459,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1491,6 +1515,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

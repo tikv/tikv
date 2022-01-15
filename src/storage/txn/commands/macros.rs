@@ -117,6 +117,19 @@ macro_rules! write_bytes {
     };
 }
 
+macro_rules! write_kvs {
+    ($field: ident) => {
+        fn write_kvs(&self) -> usize {
+            1_usize
+        }
+    };
+    ($field: ident: multiple) => {
+        fn write_kvs(&self) -> usize {
+            self.$field.len()
+        }
+    };
+}
+
 macro_rules! gen_lock {
     (empty) => {
         fn gen_lock(&self) -> crate::storage::txn::latch::Lock {

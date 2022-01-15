@@ -83,6 +83,7 @@ use crate::storage::{
 use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -103,7 +104,9 @@ use std::{
     },
 };
 use tikv_kv::SnapshotExt;
-use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
+use tikv_util::quota_limiter::QuotaLimiter;
+use tikv_util::time::{duration_to_ms, duration_to_sec, Instant, ThreadReadId};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -152,6 +155,8 @@ pub struct Storage<E: Engine, L: LockManager> {
     resource_tag_factory: ResourceTagFactory,
 
     api_version: ApiVersion,
+
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
@@ -172,6 +177,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
             resource_tag_factory: self.resource_tag_factory.clone(),
+            quota_limiter: Arc::clone(&self.quota_limiter),
         }
     }
 }
@@ -220,6 +226,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -230,6 +237,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             flow_controller,
             reporter,
             resource_tag_factory.clone(),
+            Arc::clone(&quota_limiter),
         );
 
         info!("Storage started.");
@@ -243,6 +251,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
             resource_tag_factory,
+            quota_limiter,
         })
     }
 
@@ -525,6 +534,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
+        let quota_limiter = Arc::clone(&self.quota_limiter);
+
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now_coarse();
@@ -565,35 +576,56 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
-                    let result = snap_store
-                        .get(&key, &mut statistics)
-                        // map storage::txn::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|r| {
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                            r
-                        });
+                    let (result, delta) = {
+                        let perf_statistics = PerfStatisticsInstant::new();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                            bypass_locks,
+                            access_locks,
+                            false,
+                        );
+                        let result = snap_store
+                            .get(&key, &mut statistics)
+                            // map storage::txn::Error -> storage::Error
+                            .map_err(Error::from)
+                            .map(|r| {
+                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                                r
+                            });
 
-                    let delta = perf_statistics.delta();
+                        let delta = perf_statistics.delta();
+                        (result, delta)
+                    };
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_perf_stats(CMD, &delta);
+                    let cost_time = begin_instant.saturating_elapsed();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
+                        .observe(duration_to_sec(cost_time));
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
+
+                    let read_bytes = key.len()
+                        + result
+                            .as_ref()
+                            .unwrap_or(&None)
+                            .as_ref()
+                            .map_or(0, |v| v.len());
+                    let wait =
+                        quota_limiter.consume_read(cost_time.as_micros() as usize, 1, read_bytes);
+
+                    if !wait.is_zero() {
+                        GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + wait)
+                            .compat()
+                            .await
+                            .unwrap();
+                    }
 
                     let stage_finished_ts = Instant::now_coarse();
                     let schedule_wait_time =
@@ -2598,6 +2630,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             self.resource_tag_factory,
+            Arc::new(QuotaLimiter::default()),
         )
     }
 
@@ -2624,6 +2657,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         )
     }
 }

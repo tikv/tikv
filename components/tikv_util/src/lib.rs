@@ -38,6 +38,7 @@ pub mod math;
 pub mod memory;
 pub mod metrics;
 pub mod mpsc;
+pub mod quota_limiter;
 pub mod stream;
 pub mod sys;
 pub mod thread_group;
