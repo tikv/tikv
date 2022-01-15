@@ -4,12 +4,6 @@ use super::config::ReadableSize;
 use super::time::Limiter;
 use std::time::Duration;
 
-pub enum QType {
-    KvGet,
-    CoprScan,
-    Others,
-}
-
 pub struct QuotaLimiter {
     cputime_limiter: Limiter,
     write_kvs_limiter: Limiter,
@@ -70,7 +64,7 @@ impl QuotaLimiter {
     }
 
     pub fn consume_write(&self, req_cnt: usize, kv_cnt: usize, bytes: usize) -> Duration {
-        let cost_micro_cpu: usize = req_cnt * 200 + kv_cnt * 50;
+        let cost_micro_cpu: usize = req_cnt * 200/*write request overhead*/ + kv_cnt * 50;
         let cpu_dur = self.cputime_limiter.consume_duration(cost_micro_cpu);
 
         let kv_dur = if kv_cnt > 0 {
@@ -91,22 +85,14 @@ impl QuotaLimiter {
     pub fn consume_read(
         &self,
         time_micro_secs: usize,
-        bytes: usize,
-        query_type: QType,
+        req_cnt: usize,
+        read_bytes: usize,
     ) -> Duration {
-        let cpu_dur = match query_type {
-            QType::KvGet => self.cputime_limiter.consume_duration(
-                time_micro_secs as usize + 100, /*kv get request overhead*/
-            ),
-            QType::CoprScan => self
-                .cputime_limiter
-                .consume_duration(time_micro_secs as usize + 50),
-            _ => self
-                .cputime_limiter
-                .consume_duration(time_micro_secs as usize),
-        };
-        let bw_dur = if bytes > 0 {
-            self.read_bandwidth_limiter.consume_duration(bytes)
+        let cpu_dur = self.cputime_limiter.consume_duration(
+            time_micro_secs as usize + req_cnt * 100, /*read request overhead*/
+        );
+        let bw_dur = if read_bytes > 0 {
+            self.read_bandwidth_limiter.consume_duration(read_bytes)
         } else {
             Duration::ZERO
         };
@@ -147,7 +133,7 @@ mod tests {
             ReadableSize::kb(1),
             ReadableSize::kb(1),
         );
-        let delay = quota_limiter.consume_read(1_000_000, 0, QType::Others);
+        let delay = quota_limiter.consume_read(1_000_000, 0, 0);
         assert_eq!(delay, Duration::from_secs(1));
 
         let quota_limiter = QuotaLimiter::new(
@@ -156,7 +142,7 @@ mod tests {
             ReadableSize::kb(1),
             ReadableSize::kb(1),
         );
-        let delay = quota_limiter.consume_read(0, 1024, QType::Others);
+        let delay = quota_limiter.consume_read(0, 1024, 0);
         assert_eq!(delay, Duration::from_secs(1));
     }
 }
