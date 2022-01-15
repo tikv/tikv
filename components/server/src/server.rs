@@ -260,6 +260,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let quota_limiter = Arc::new(QuotaLimiter::new(
             config.quota.cpu,
+            config.quota.write_kvs,
             config.quota.write_bandwidth,
             config.quota.read_bandwidth,
         ));
