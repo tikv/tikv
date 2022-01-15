@@ -4382,7 +4382,6 @@ where
 
     fn on_refresh_region_buckets(&mut self, region_buckets: metapb::Buckets) {
         self.fsm.peer.region_buckets = region_buckets;
-        self.register_pd_heartbeat_tick();
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

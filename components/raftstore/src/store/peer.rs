@@ -4226,16 +4226,9 @@ where
     }
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        let mut region = self.region().clone();
-        if !self.region_buckets.get_keys().is_empty() {
-            debug!("notifying pd with region_bucket";
-                "region_bucket size" => self.region_buckets.get_keys().len(),
-            );
-            region.set_buckets(self.region_buckets.clone());
-        }
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
-            region,
+            region: self.region().clone(),
             down_peers: self.collect_down_peers(ctx),
             peer: self.peer.clone(),
             pending_peers: self.collect_pending_peers(ctx),

@@ -197,11 +197,11 @@ where
             "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER.all.inc();
-
+        let bucket_check_policy = policy.clone();
         let mut host =
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
-        if host.policy() == CheckPolicy::Approximate && host.enable_region_bucket() {
+        if bucket_check_policy == CheckPolicy::Approximate && host.enable_region_bucket() {
             let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
                 Ok(keys) => keys
                     .into_iter()
@@ -364,6 +364,7 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
+        println!("runrunrun!!!");
         let _io_type_guard = WithIOType::new(IOType::LoadBalance);
         match task {
             Task::SplitCheckTask {

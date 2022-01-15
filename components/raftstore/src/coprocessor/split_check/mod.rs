@@ -95,10 +95,13 @@ impl<'a, E> Host<'a, E> {
         } else {
             self.cfg.region_max_size.0
         };
-        if region_size >= self.cfg.region_bucket_size.0 * 2 {
+
+        const MIN_BUCKET_COUNT_PER_REGION = 2;
+        const SAMPLE_COUNT_PER_BUCKET = 10;
+        if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
             let mut bucket_checker = size::Checker::new(
-                self.cfg.region_bucket_size.0 * 2,
-                self.cfg.region_bucket_size.0,
+                self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION / SAMPLE_COUNT_PER_BUCKET,
+                self.cfg.region_bucket_size.0 / SAMPLE_COUNT_PER_BUCKET,
                 region_size / self.cfg.region_bucket_size.0,
                 CheckPolicy::Approximate,
             );

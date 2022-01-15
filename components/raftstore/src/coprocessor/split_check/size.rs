@@ -152,6 +152,7 @@ where
             }
         };
 
+        println!("region size {} {}", region_size, host.cfg.region_max_size.0);
         // send it to raftstore to update region approximate size
         let res = CasualMessage::RegionApproximateSize { size: region_size };
         if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
@@ -217,6 +218,7 @@ fn get_approximate_split_keys(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
+    println!("batch_split_limit: {}", batch_split_limit);
     Ok(box_try!(db.get_range_approximate_split_keys(
         range,
         batch_split_limit as usize
@@ -451,26 +453,19 @@ pub mod tests {
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
-            region_max_size: ReadableSize(500),
-            region_split_size: ReadableSize(500),
+            region_max_size: ReadableSize(50000),
+            region_split_size: ReadableSize(50000),
             batch_split_limit: 5,
             enable_region_bucket: true,
-            region_bucket_size: ReadableSize(300),
+            region_bucket_size: ReadableSize(3000),
             ..Default::default()
         };
 
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-        let exp_bucket_keys = vec!["0040".as_bytes().to_vec(), "0062".as_bytes().to_vec()];
-        for i in 0..41 {
-            let s = keys::data_key(format!("{:04}", 2 * i + 1).as_bytes()); // size is 4 + 1 = 5
-            engine.put_cf(data_cf, &s, &s).unwrap();
-            if i % 10 == 0 && i > 0 {
-                engine.flush_cf(data_cf, true).unwrap();
-            }
-        }
-        for i in 0..41 {
-            let s = keys::data_key(format!("{:04}", 2 * i).as_bytes()); // size is 4 + 1 = 5
+        for i in 0..2000 {
+            // kv size is (4+1)*2 = 10, given bucket size is 3000, expect each bucket has about 300 keys
+            let s = keys::data_key(format!("{:04}", i).as_bytes()); 
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 && i > 0 {
                 engine.flush_cf(data_cf, true).unwrap();
@@ -487,11 +482,12 @@ pub mod tests {
             if let Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) = rx.try_recv() {
                 let mut i = 0;
                 let keys = region_buckets.get_keys();
-                assert_eq!(keys.len(), exp_bucket_keys.len());
-                while i < keys.len() {
-                    assert_eq!(keys[i], exp_bucket_keys[i]);
-                    i += 1
+                for i in 0..keys.len() - 1 {
+                    let start: i32 = std::str::from_utf8(&keys[i]).unwrap().parse().unwrap();
+                    let end: i32 = std::str::from_utf8(&keys[i+1]).unwrap().parse().unwrap();
+                    assert!(end - start >= 150 && end - start < 450);
                 }
+               
                 break;
             }
         }
