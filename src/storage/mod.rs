@@ -103,8 +103,8 @@ use std::{
     },
 };
 use tikv_kv::SnapshotExt;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
+use tikv_util::quota_limiter::{QType, QuotaLimiter};
+use tikv_util::time::{duration_to_ms, duration_to_sec, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -153,6 +153,8 @@ pub struct Storage<E: Engine, L: LockManager> {
     resource_tag_factory: ResourceTagFactory,
 
     api_version: ApiVersion,
+
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
@@ -173,6 +175,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
             resource_tag_factory: self.resource_tag_factory.clone(),
+            quota_limiter: Arc::clone(&self.quota_limiter),
         }
     }
 }
@@ -232,7 +235,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             flow_controller,
             reporter,
             resource_tag_factory.clone(),
-            quota_limiter,
+            Arc::clone(&quota_limiter),
         );
 
         info!("Storage started.");
@@ -246,6 +249,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
             resource_tag_factory,
+            quota_limiter,
         })
     }
 
@@ -528,6 +532,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
+        let quota_limiter = Arc::clone(&self.quota_limiter);
+
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now_coarse();
@@ -591,12 +597,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_perf_stats(CMD, &delta);
+                    let cost_time = begin_instant.saturating_elapsed();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
+                        .observe(duration_to_sec(cost_time));
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
+
+                    let read_bytes = key.len()
+                        + result
+                            .as_ref()
+                            .unwrap_or(&None)
+                            .as_ref()
+                            .map_or(0, |v| v.len());
+                    quota_limiter.consume_read(
+                        cost_time.as_micros() as usize,
+                        read_bytes,
+                        QType::KvGet,
+                    );
 
                     let stage_finished_ts = Instant::now_coarse();
                     let schedule_wait_time =

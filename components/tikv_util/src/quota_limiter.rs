@@ -95,9 +95,9 @@ impl QuotaLimiter {
         query_type: QType,
     ) -> Duration {
         let cpu_dur = match query_type {
-            QType::KvGet => self
-                .cputime_limiter
-                .consume_duration(time_micro_secs as usize + 100 /*request overhead*/),
+            QType::KvGet => self.cputime_limiter.consume_duration(
+                time_micro_secs as usize + 100, /*kv get request overhead*/
+            ),
             QType::CoprScan => self
                 .cputime_limiter
                 .consume_duration(time_micro_secs as usize + 50),
