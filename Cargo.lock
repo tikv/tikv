@@ -846,6 +846,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
 
 [[package]]
+name = "cpu-freq"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39ceca04fadb699a10e243450cd3e74149cf79cd5c4f5dca4698f9381cf039c6"
+dependencies = [
+ "num_cpus",
+]
+
+[[package]]
 name = "cpuid-bool"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5733,6 +5742,7 @@ dependencies = [
  "chrono",
  "codec",
  "collections",
+ "cpu-freq",
  "crc32fast",
  "crossbeam",
  "derive_more",

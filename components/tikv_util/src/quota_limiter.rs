@@ -34,7 +34,7 @@ impl QuotaLimiter {
             Limiter::new(f64::INFINITY)
         } else {
             // transfer milli cpu to micro cpu
-            Limiter::new(cpu_quota as f64 * 1000_f64)
+            Limiter::new(cpu_quota as f64 * cpu_freq_factor() * 1000_f64)
         };
 
         let write_kvs_limiter = if write_kvs == 0 {
@@ -98,6 +98,23 @@ impl QuotaLimiter {
         };
         cpu_dur + bw_dur
     }
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_freq_factor() -> f64 {
+    let freq = cpu_freq::get();
+    if !freq.is_empty() {
+        // Cost time of per write/read request is tested on CPU with 2.6 GHz frequency,
+        // so need to adjust the abs cost if the target CPU frequency is different.
+        freq[0].max.map_or(1.0, |v| (v / 2.6) as f64)
+    } else {
+        1.0
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cpu_freq_factor() -> f64 {
+    1.0
 }
 
 #[cfg(test)]
