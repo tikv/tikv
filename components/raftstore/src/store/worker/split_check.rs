@@ -197,7 +197,7 @@ where
             "end_key" => log_wrappers::Value::key(&end_key),
         );
         CHECK_SPILT_COUNTER.all.inc();
-        let bucket_check_policy = policy.clone();
+        let bucket_check_policy = policy;
         let mut host =
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
@@ -364,7 +364,6 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
-        println!("runrunrun!!!");
         let _io_type_guard = WithIOType::new(IOType::LoadBalance);
         match task {
             Task::SplitCheckTask {
