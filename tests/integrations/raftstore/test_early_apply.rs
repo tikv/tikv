@@ -39,8 +39,7 @@ where
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
     action(cluster);
     cluster.wait_last_index(1, 1, last_index + 1, Duration::from_secs(3));
-    let mut snaps = vec![];
-    snaps.push((1, RocksSnapshot::new(cluster.get_raft_engine(1))));
+    let mut snaps = vec![(1, RocksSnapshot::new(cluster.get_raft_engine(1)))];
     if mode == DataLost::AllLost {
         cluster.wait_last_index(1, 2, last_index + 1, Duration::from_secs(3));
         snaps.push((2, RocksSnapshot::new(cluster.get_raft_engine(2))));
@@ -163,7 +162,7 @@ fn test_update_internal_apply_index() {
     // Simulate data lost in raft cf.
     for (id, snap) in &snaps {
         cluster.stop_node(*id);
-        cluster.restore_raft(1, *id, &snap);
+        cluster.restore_raft(1, *id, snap);
         cluster.run_node(*id).unwrap();
     }
 

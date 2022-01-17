@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -179,44 +178,49 @@ where
     }
 }
 
-bitflags! {
-    pub struct PeerTicks: u16 {
-        const RAFT                   = 0b0000000000000001;
-        const RAFT_LOG_GC            = 0b0000000000000010;
-        const SPLIT_REGION_CHECK     = 0b0000000000000100;
-        const PD_HEARTBEAT           = 0b0000000000001000;
-        const CHECK_MERGE            = 0b0000000000010000;
-        const CHECK_PEER_STALE_STATE = 0b0000000000100000;
-        const ENTRY_CACHE_EVICT      = 0b0000000001000000;
-        const REPORT_REGION_FLOW     = 0b0000000101000000;
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum PeerTick {
+    Raft = 0,
+    RaftLogGc = 1,
+    SplitRegionCheck = 2,
+    PdHeartbeat = 3,
+    CheckMerge = 4,
+    CheckPeerStaleState = 5,
+    EntryCacheEvict = 6,
+    CheckLeaderLease = 7,
+    ReportRegionFlow = 8,
 }
 
-impl PeerTicks {
+impl PeerTick {
+    pub const VARIANT_COUNT: usize = Self::get_all_ticks().len();
+
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
-            PeerTicks::RAFT => "raft",
-            PeerTicks::RAFT_LOG_GC => "raft_log_gc",
-            PeerTicks::SPLIT_REGION_CHECK => "split_region_check",
-            PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
-            PeerTicks::CHECK_MERGE => "check_merge",
-            PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
-            PeerTicks::ENTRY_CACHE_EVICT => "entry_cache_evict",
-            PeerTicks::REPORT_REGION_FLOW => "report_region_flow",
-            _ => unreachable!(),
+            PeerTick::Raft => "raft",
+            PeerTick::RaftLogGc => "raft_log_gc",
+            PeerTick::SplitRegionCheck => "split_region_check",
+            PeerTick::PdHeartbeat => "pd_heartbeat",
+            PeerTick::CheckMerge => "check_merge",
+            PeerTick::CheckPeerStaleState => "check_peer_stale_state",
+            PeerTick::EntryCacheEvict => "entry_cache_evict",
+            PeerTick::CheckLeaderLease => "check_leader_lease",
+            PeerTick::ReportRegionFlow => "report_region_flow",
         }
     }
-    pub fn get_all_ticks() -> &'static [PeerTicks] {
-        const TICKS: &[PeerTicks] = &[
-            PeerTicks::RAFT,
-            PeerTicks::RAFT_LOG_GC,
-            PeerTicks::SPLIT_REGION_CHECK,
-            PeerTicks::PD_HEARTBEAT,
-            PeerTicks::CHECK_MERGE,
-            PeerTicks::CHECK_PEER_STALE_STATE,
-            PeerTicks::ENTRY_CACHE_EVICT,
-            PeerTicks::REPORT_REGION_FLOW,
+
+    pub const fn get_all_ticks() -> &'static [PeerTick] {
+        const TICKS: &[PeerTick] = &[
+            PeerTick::Raft,
+            PeerTick::RaftLogGc,
+            PeerTick::SplitRegionCheck,
+            PeerTick::PdHeartbeat,
+            PeerTick::CheckMerge,
+            PeerTick::CheckPeerStaleState,
+            PeerTick::EntryCacheEvict,
+            PeerTick::CheckLeaderLease,
+            PeerTick::ReportRegionFlow,
         ];
         TICKS
     }
@@ -491,7 +495,7 @@ pub enum PeerMsg<EK: KvEngine> {
     RaftCommand(RaftCommand<EK::Snapshot>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
-    Tick(PeerTicks),
+    Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {
         res: ApplyTaskRes<EK::Snapshot>,

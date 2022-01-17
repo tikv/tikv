@@ -4936,7 +4936,7 @@ mod tests {
                         overflow_as_warning,
                         truncate_as_warning,
                         warning_err_code,
-                        expect.to_string(),
+                        expect,
                         pd_res_log,
                         cast_func_res_log
                     );

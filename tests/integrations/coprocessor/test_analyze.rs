@@ -83,9 +83,9 @@ fn new_analyze_sampling_req(
     let mut col_groups: Vec<AnalyzeColumnGroup> = Vec::new();
     let mut col_group = AnalyzeColumnGroup::default();
     let offsets = vec![idx];
-    let lengths = vec![-1 as i64];
-    col_group.set_column_offsets(offsets.into());
-    col_group.set_prefix_lengths(lengths.into());
+    let lengths = vec![-1_i64];
+    col_group.set_column_offsets(offsets);
+    col_group.set_prefix_lengths(lengths);
     col_groups.push(col_group);
     col_req.set_column_groups(col_groups.into());
     col_req.set_columns_info(table.columns_info().into());

@@ -3,9 +3,6 @@ name = "resource_metering"
 version = "0.0.1"
 edition = "2018"
 
-[features]
-failpoints = ["fail/failpoints"]
-
 [dependencies]
 lazy_static = "1.3"
 collections = { path = "../collections" }
@@ -24,8 +21,6 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 futures = "0.3"
 pdqselect = "0.1"
-fail = "0.5"
-arc-swap = "1.5.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
@@ -39,4 +34,3 @@ rand = "0.8"
 [[test]]
 name = "test-recorder"
 path = "tests/recorder_test.rs"
-required-features = ["failpoints"]

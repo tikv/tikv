@@ -3688,13 +3688,7 @@ mod tests {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         let val: Decimal = big.as_bytes().convert(&mut ctx).unwrap();
         let max = max_decimal(WORD_BUF_LEN * DIGITS_PER_WORD, 0);
-        assert_eq!(
-            val,
-            max,
-            "expect: {}, got: {}",
-            val.to_string(),
-            max.to_string()
-        );
+        assert_eq!(val, max, "expect: {}, got: {}", val, max);
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
     }

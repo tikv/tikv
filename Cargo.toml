@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -34,15 +34,16 @@ cloud-gcp = [
   "encryption_export/cloud-gcp",
   "sst_importer/cloud-gcp",
 ]
+cloud-azure = [
+  "encryption_export/cloud-azure",
+  "sst_importer/cloud-azure",
+]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]
 test-engines-panic = [
   "engine_test/test-engines-panic",
-]
-bcc-iosnoop = [
-  "file_system/bcc-iosnoop",
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
@@ -78,9 +79,9 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
-fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
+futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.9", default-features = false, features = ["protobuf-codec"] }
@@ -185,6 +186,9 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
+# remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
+fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
+
 [patch.'https://github.com/pingcap/kvproto']
 kvproto = { git = "https://github.com/5kbpers/kvproto.git", branch = "flow-report" }
 
@@ -237,6 +241,7 @@ members = [
   "components/case_macros",
   "components/cloud",
   "components/cloud/aws",
+  "components/cloud/azure",
   "components/cloud/gcp",
   "components/backup",
   "components/keys",
