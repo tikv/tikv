@@ -4,13 +4,13 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::iter::Iterator;
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
 use batch_system::{BasicMailbox, Fsm};
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_traits::{
     Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -72,7 +72,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTicks,
+    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -97,7 +97,7 @@ where
 {
     pub peer: Peer<EK, ER>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
-    tick_registry: PeerTicks,
+    tick_registry: [bool; PeerTick::VARIANT_COUNT],
     /// Ticks for speed up campaign in chaos state.
     ///
     /// Followers will keep ticking in Idle mode to measure how many ticks have been skipped.
@@ -221,7 +221,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
-                tick_registry: PeerTicks::empty(),
+                tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -264,7 +264,7 @@ where
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
-                tick_registry: PeerTicks::empty(),
+                tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -688,7 +688,7 @@ where
     }
 
     fn on_update_region_for_unsafe_recover(&mut self, region: Region) {
-        let mut new_peer_list = HashSet::new();
+        let mut new_peer_list = HashSet::default();
         for peer in region.get_peers() {
             new_peer_list.insert(peer.get_id());
         }
@@ -920,7 +920,7 @@ where
         }
     }
 
-    fn on_tick(&mut self, tick: PeerTicks) {
+    fn on_tick(&mut self, tick: PeerTick) {
         if self.fsm.stopped {
             return;
         }
@@ -930,17 +930,16 @@ where
             "peer_id" => self.fsm.peer_id(),
             "region_id" => self.region_id(),
         );
-        self.fsm.tick_registry.remove(tick);
+        self.fsm.tick_registry[tick as usize] = false;
         match tick {
-            PeerTicks::RAFT => self.on_raft_base_tick(),
-            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(false),
-            PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
-            PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
-            PeerTicks::CHECK_MERGE => self.on_check_merge(),
-            PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
-            PeerTicks::ENTRY_CACHE_EVICT => self.on_entry_cache_evict_tick(),
-            PeerTicks::CHECK_LEADER_LEASE => self.on_check_leader_lease_tick(),
-            _ => unreachable!(),
+            PeerTick::Raft => self.on_raft_base_tick(),
+            PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),
+            PeerTick::PdHeartbeat => self.on_pd_heartbeat_tick(),
+            PeerTick::SplitRegionCheck => self.on_split_region_check_tick(),
+            PeerTick::CheckMerge => self.on_check_merge(),
+            PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
+            PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
+            PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
         }
     }
 
@@ -1284,11 +1283,11 @@ where
     }
 
     #[inline]
-    fn schedule_tick(&mut self, tick: PeerTicks) {
-        if self.fsm.tick_registry.contains(tick) {
+    fn schedule_tick(&mut self, tick: PeerTick) {
+        let idx = tick as usize;
+        if self.fsm.tick_registry[idx] {
             return;
         }
-        let idx = tick.bits() as usize;
         if is_zero_duration(&self.ctx.tick_batch[idx].wait_duration) {
             return;
         }
@@ -1299,13 +1298,13 @@ where
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
-        self.fsm.tick_registry.insert(tick);
+        self.fsm.tick_registry[idx] = true;
 
         let region_id = self.region_id();
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
-                self.fsm.tick_registry.remove(tick);
+                self.fsm.tick_registry[idx] = false;
                 error!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
@@ -1336,7 +1335,7 @@ where
     fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTicks::RAFT)
+        self.schedule_tick(PeerTick::Raft)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -2344,7 +2343,7 @@ where
         pessimistic_locks.is_valid = false;
 
         // 2. Propose pessimistic locks
-        if pessimistic_locks.map.is_empty() {
+        if pessimistic_locks.is_empty() {
             return false;
         }
         // FIXME: Raft command has size limit. Either limit the total size of pessimistic locks
@@ -2354,7 +2353,7 @@ where
             // Downgrade to a read guard, do not block readers in the scheduler as far as possible.
             let pessimistic_locks = RwLockWriteGuard::downgrade(pessimistic_locks);
             fail_point!("invalidate_locks_before_transfer_leader");
-            for (key, (lock, deleted)) in &pessimistic_locks.map {
+            for (key, (lock, deleted)) in &*pessimistic_locks {
                 if *deleted {
                     continue;
                 }
@@ -2760,6 +2759,19 @@ where
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
         let region_id = derived.get_id();
+
+        // Group in-memory pessimistic locks in the original region into new regions. The locks of
+        // new regions will be put into the corresponding new regions later. And the locks belonging
+        // to the old region will stay in the original map.
+        let region_locks = {
+            let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+            // Update the version so the concurrent reader will fail due to EpochNotMatch
+            // instead of PessimisticLockNotFound.
+            pessimistic_locks.version = derived.get_region_epoch().get_version();
+            pessimistic_locks.group_by_regions(&regions, &derived)
+        };
+        fail_point!("on_split_invalidate_locks");
+
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
         let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
@@ -2803,7 +2815,7 @@ where
             panic!("{} original region should exist", self.fsm.peer.tag);
         }
         let last_region_id = regions.last().unwrap().get_id();
-        for new_region in regions {
+        for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
 
             if new_region_id == region_id {
@@ -2899,6 +2911,7 @@ where
             if is_leader {
                 new_peer.peer.approximate_size = estimated_size;
                 new_peer.peer.approximate_keys = estimated_keys;
+                *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
                 new_peer.peer.heartbeat_pd(self.ctx);
@@ -2947,7 +2960,7 @@ where
     }
 
     fn register_merge_check_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_MERGE)
+        self.schedule_tick(PeerTick::CheckMerge)
     }
 
     /// Check if merge target region is staler than the local one in kv engine.
@@ -4020,7 +4033,7 @@ where
     }
 
     fn register_raft_gc_log_tick(&mut self) {
-        self.schedule_tick(PeerTicks::RAFT_LOG_GC)
+        self.schedule_tick(PeerTick::RaftLogGc)
     }
 
     #[allow(clippy::if_same_then_else)]
@@ -4156,7 +4169,7 @@ where
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
-        self.schedule_tick(PeerTicks::ENTRY_CACHE_EVICT)
+        self.schedule_tick(PeerTick::EntryCacheEvict)
     }
 
     fn on_entry_cache_evict_tick(&mut self) {
@@ -4173,7 +4186,7 @@ where
     }
 
     fn register_check_leader_lease_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_LEADER_LEASE)
+        self.schedule_tick(PeerTick::CheckLeaderLease)
     }
 
     fn on_check_leader_lease_tick(&mut self) {
@@ -4186,7 +4199,7 @@ where
     }
 
     fn register_split_region_check_tick(&mut self) {
-        self.schedule_tick(PeerTicks::SPLIT_REGION_CHECK)
+        self.schedule_tick(PeerTick::SplitRegionCheck)
     }
 
     #[inline]
@@ -4452,7 +4465,7 @@ where
     }
 
     fn register_pd_heartbeat_tick(&mut self) {
-        self.schedule_tick(PeerTicks::PD_HEARTBEAT)
+        self.schedule_tick(PeerTick::PdHeartbeat)
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
@@ -4551,7 +4564,7 @@ where
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_PEER_STALE_STATE)
+        self.schedule_tick(PeerTick::CheckPeerStaleState)
     }
 }
 

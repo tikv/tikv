@@ -107,7 +107,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 25,
-        heavy_load_wait_duration: ReadableDuration::millis(2),
+        heavy_load_wait_duration: Some(ReadableDuration::millis(2)),
         enable_request_batch: false,
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
@@ -719,7 +719,6 @@ fn test_serde_custom_tikv_config() {
         import_mode_timeout: ReadableDuration::secs(1453),
     };
     value.panic_when_unexpected_key_or_data = true;
-    value.enable_io_snoop = false;
     value.gc = GcConfig {
         ratio_threshold: 1.2,
         batch_keys: 256,
