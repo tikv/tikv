@@ -149,8 +149,8 @@ impl PeerPessimisticLocks {
         // Pre-check the memory limit of pessimistic locks.
         for pair in &pairs {
             let (key, lock) = pair.as_pair();
-            // If the key already exists in the map, it's a overwrite.
-            // The primary lock does not change during a overwrite, so we don't need to update
+            // If the key already exists in the map, it's an overwrite.
+            // The primary lock does not change during an overwrite, so we don't need to update
             // the memory size.
             if !self.map.contains_key(key) {
                 incr += key.len() + lock.memory_size();
