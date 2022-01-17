@@ -18,12 +18,14 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
+use engine_rocks::get_env;
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
-    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
-    LRUCacheOptions, TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
+    TitanDBOptions,
 };
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
@@ -36,7 +38,7 @@ use engine_rocks::{
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use file_system::IOPriority;
+use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -177,8 +179,8 @@ struct BackgroundJobLimits {
 }
 
 const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
-    max_background_jobs: 10,
-    max_background_flushes: 4,
+    max_background_jobs: 9,
+    max_background_flushes: 3,
     max_sub_compactions: 3,
     max_titan_background_gc: 4,
 };
@@ -190,19 +192,18 @@ const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobL
     max_titan_background_gc: 4,
 };
 
+// `defaults` serves as an upper bound for returning limits.
 fn get_background_job_limits_impl(
     cpu_num: u32,
     defaults: &BackgroundJobLimits,
 ) -> BackgroundJobLimits {
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
-    // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
-    // the rest shared by flush and compaction.
-    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num));
+    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
-        (max_background_jobs + 2) / 3,
+        (max_background_jobs + 3) / 4,
         defaults.max_background_flushes,
     );
     // Cap max_sub_compactions to allow at least two compactions.
@@ -605,8 +606,7 @@ impl DefaultCfConfig {
                         cf_opts
                             .set_compaction_filter_factory(
                                 "ttl_compaction_filter_factory",
-                                Box::new(TTLCompactionFilterFactory::<API>::default())
-                                    as Box<dyn CompactionFilterFactory>,
+                                TTLCompactionFilterFactory::<API>::default(),
                             )
                             .unwrap();
                     }
@@ -692,9 +692,11 @@ impl WriteCfConfig {
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
-        let e = Box::new(FixedSuffixSliceTransform::new(8));
         cf_opts
-            .set_prefix_extractor("FixedSuffixSliceTransform", e)
+            .set_prefix_extractor(
+                "FixedSuffixSliceTransform",
+                FixedSuffixSliceTransform::new(8),
+            )
             .unwrap();
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
@@ -711,7 +713,7 @@ impl WriteCfConfig {
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
-                Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                WriteCompactionFilterFactory,
             )
             .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -781,9 +783,8 @@ impl LockCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
-        let f = Box::new(NoopSliceTransform);
         cf_opts
-            .set_prefix_extractor("NoopSliceTransform", f)
+            .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
@@ -855,9 +856,8 @@ impl RaftCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_RAFT, cache, no_region_info_accessor);
-        let f = Box::new(NoopSliceTransform);
         cf_opts
-            .set_prefix_extractor("NoopSliceTransform", f)
+            .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -1129,19 +1129,20 @@ impl DbConfig {
 
         // Since the following configuration supports online update, in order to
         // prevent mistakenly inputting too large values, the max limit is made
-        // according to the cpu quota.
-        let cpu_num = SysQuota::cpu_cores_quota() as i32;
-        if self.max_background_jobs <= 0 || self.max_background_jobs > cpu_num {
+        // according to the cpu quota * 10. Notice 10 is only an estimate, not an
+        // empirical value.
+        let limit = SysQuota::cpu_cores_quota() as i32 * 10;
+        if self.max_background_jobs <= 0 || self.max_background_jobs > limit {
             return Err(format!(
                 "max_background_jobs should be greater than 0 and less than or equal to {:?}",
-                cpu_num,
+                limit,
             )
             .into());
         }
-        if self.max_background_flushes <= 0 || self.max_background_flushes > cpu_num {
+        if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
-                cpu_num,
+                limit,
             )
             .into());
         }
@@ -1220,7 +1221,7 @@ impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
-        let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
+        let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
@@ -1498,10 +1499,6 @@ impl DBConfigManger {
     }
 
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
-        if max_background_jobs < opt.get_max_background_jobs() {
-            return Err("unable to shrink background jobs while the instance is running".into());
-        }
         self.set_db_config(&[("max_background_jobs", &max_background_jobs.to_string())])?;
         Ok(())
     }
@@ -1510,10 +1507,6 @@ impl DBConfigManger {
         &self,
         max_background_flushes: i32,
     ) -> Result<(), Box<dyn Error>> {
-        let opt = self.db.as_inner().get_db_options();
-        if max_background_flushes < opt.get_max_background_flushes() {
-            return Err("unable to shrink background jobs while the instance is running".into());
-        }
         self.set_db_config(&[(
             "max_background_flushes",
             &max_background_flushes.to_string(),
@@ -2471,6 +2464,8 @@ pub struct TiKvConfig {
     #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     pub enable_io_snoop: bool,
 
@@ -2557,7 +2552,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_format: LogFormat::Text,
-            log_rotation_timespan: ReadableDuration::hours(24),
+            log_rotation_timespan: ReadableDuration::hours(0),
             log_rotation_size: ReadableSize::mb(300),
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
@@ -2729,10 +2724,51 @@ impl TiKvConfig {
             self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
             self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
 
+            // disable kvdb write stall, and override related configs
             self.rocksdb.defaultcf.disable_write_stall = true;
+            self.rocksdb.defaultcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.writecf.disable_write_stall = true;
+            self.rocksdb.writecf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.lockcf.disable_write_stall = true;
+            self.rocksdb.lockcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.raftcf.disable_write_stall = true;
+            self.rocksdb.raftcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
         }
 
         if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
@@ -2785,6 +2821,59 @@ impl TiKvConfig {
         }
 
         Ok(())
+    }
+
+    // As the init of `logger` is very early, this adjust needs to be separated and called
+    // immediately after parsing the command line.
+    pub fn logger_compatible_adjust(&mut self) {
+        let default_tikv_cfg = TiKvConfig::default();
+        let default_log_cfg = LogConfig::default();
+        if self.log_level != default_tikv_cfg.log_level {
+            println!("deprecated configuration, log-level has been moved to log.level");
+            if self.log.level == default_log_cfg.level {
+                println!("override log.level with log-level, {:?}", self.log_level);
+                self.log.level = self.log_level;
+            }
+            self.log_level = default_tikv_cfg.log_level;
+        }
+        if self.log_file != default_tikv_cfg.log_file {
+            println!("deprecated configuration, log-file has been moved to log.file.filename");
+            if self.log.file.filename == default_log_cfg.file.filename {
+                println!(
+                    "override log.file.filename with log-file, {:?}",
+                    self.log_file
+                );
+                self.log.file.filename = self.log_file.clone();
+            }
+            self.log_file = default_tikv_cfg.log_file;
+        }
+        if self.log_format != default_tikv_cfg.log_format {
+            println!("deprecated configuration, log-format has been moved to log.format");
+            if self.log.format == default_log_cfg.format {
+                println!("override log.format with log-format, {:?}", self.log_format);
+                self.log.format = self.log_format;
+            }
+            self.log_format = default_tikv_cfg.log_format;
+        }
+        if self.log_rotation_timespan.as_secs() > 0 {
+            println!(
+                "deprecated configuration, log-rotation-timespan is no longer used and ignored."
+            );
+        }
+        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
+            println!(
+                "deprecated configuration, \
+                 log-ratation-size has been moved to log.file.max-size"
+            );
+            if self.log.file.max_size == default_log_cfg.file.max_size {
+                println!(
+                    "override log.file.max_size with log-rotation-size, {:?}",
+                    self.log_rotation_size
+                );
+                self.log.file.max_size = self.log_rotation_size.as_mb();
+            }
+            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
+        }
     }
 
     pub fn compatible_adjust(&mut self) {
@@ -2897,56 +2986,6 @@ impl TiKvConfig {
         }
 
         self.readpool.adjust_use_unified_pool();
-
-        let default_tikv_cfg = TiKvConfig::default();
-        let default_log_cfg = LogConfig::default();
-        if self.log_level != default_tikv_cfg.log_level {
-            warn!("deprecated configuration, log-level has been moved to log.level");
-            if self.log.level == default_log_cfg.level {
-                warn!("override log.level with log-level, {:?}", self.log_level);
-                self.log.level = self.log_level;
-            }
-            self.log_level = default_tikv_cfg.log_level;
-        }
-        if self.log_file != default_tikv_cfg.log_file {
-            warn!("deprecated configuration, log-file has been moved to log.file.filename");
-            if self.log.file.filename == default_log_cfg.file.filename {
-                warn!(
-                    "override log.file.filename with log-file, {:?}",
-                    self.log_file
-                );
-                self.log.file.filename = self.log_file.clone();
-            }
-            self.log_file = default_tikv_cfg.log_file;
-        }
-        if self.log_format != default_tikv_cfg.log_format {
-            warn!("deprecated configuration, log-format has been moved to log.format");
-            if self.log.format == default_log_cfg.format {
-                warn!("override log.format with log-format, {:?}", self.log_format);
-                self.log.format = self.log_format;
-            }
-            self.log_format = default_tikv_cfg.log_format;
-        }
-        if self.log_rotation_timespan.as_secs() > 0 {
-            warn!(
-                "deprecated configuration, {} is no longer used and ignored.",
-                "log-rotation-timespan",
-            );
-        }
-        if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
-            warn!(
-                "deprecated configuration, \
-                 log-ratation-size has been moved to log.file.max-size"
-            );
-            if self.log.file.max_size == default_log_cfg.file.max_size {
-                warn!(
-                    "override log.file.max_size with log-rotation-size, {:?}",
-                    self.log_rotation_size
-                );
-                self.log.file.max_size = self.log_rotation_size.as_mb();
-            }
-            self.log_rotation_size = default_tikv_cfg.log_rotation_size;
-        }
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
@@ -3059,6 +3098,24 @@ impl TiKvConfig {
         let total = SysQuota::memory_limit_in_bytes();
         // Reserve some space for page cache. The
         ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
+    }
+
+    pub fn build_shared_rocks_env(
+        &self,
+        key_manager: Option<Arc<DataKeyManager>>,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Result<Arc<Env>, String> {
+        let env = get_env(key_manager, limiter)?;
+        if !self.raft_engine.enable {
+            // RocksDB makes sure there are at least `max_background_flushes`
+            // high-priority workers in env. That is not enough when multiple
+            // RocksDB instances share the same env. We manually configure the
+            // worker count in this case.
+            env.set_high_priority_background_threads(
+                self.raftdb.max_background_flushes + self.rocksdb.max_background_flushes,
+            );
+        }
+        Ok(env)
     }
 }
 
@@ -3649,9 +3706,9 @@ mod tests {
         }
 
         let legal_cases = vec![
-            ("critical", Level::Critical),
+            ("fatal", Level::Critical),
             ("error", Level::Error),
-            ("warning", Level::Warning),
+            ("warn", Level::Warning),
             ("debug", Level::Debug),
             ("trace", Level::Trace),
             ("info", Level::Info),
@@ -3665,7 +3722,7 @@ mod tests {
             assert_eq!(res_value.v, deserialized);
         }
 
-        let compatibility_cases = vec![("warn", Level::Warning)];
+        let compatibility_cases = vec![("warning", Level::Warning), ("critical", Level::Critical)];
         for (serialized, deserialized) in compatibility_cases {
             let variant_string = format!("v = \"{}\"\n", serialized);
             let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
@@ -3833,10 +3890,24 @@ mod tests {
     }
 
     #[test]
-    fn test_change_flow_control() {
+    fn test_flow_control() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
         let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
+
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_slowdown_writes_trigger(),
+            50
+        );
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_stop_writes_trigger(),
+            50
+        );
 
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4335,6 +4406,7 @@ mod tests {
 
     #[test]
     fn test_background_job_limits() {
+        // cpu num = 1
         assert_eq!(
             get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
@@ -4345,6 +4417,19 @@ mod tests {
             }
         );
         assert_eq!(
+            get_background_job_limits_impl(
+                1, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 1,
+            }
+        );
+        // cpu num = 2
+        assert_eq!(
             get_background_job_limits_impl(2 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
                 max_background_jobs: 2,
@@ -4354,34 +4439,70 @@ mod tests {
             }
         );
         assert_eq!(
+            get_background_job_limits_impl(
+                2, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 2,
+            }
+        );
+        // cpu num = 4
+        assert_eq!(
             get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
-                max_background_jobs: 4,
-                max_background_flushes: 2,
+                max_background_jobs: 3,
+                max_background_flushes: 1,
                 max_sub_compactions: 1,
                 max_titan_background_gc: 4,
             }
         );
         assert_eq!(
+            get_background_job_limits_impl(
+                4, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 3,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        // cpu num = 8
+        assert_eq!(
             get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
-                max_background_jobs: 8,
-                max_background_flushes: 3,
+                max_background_jobs: 7,
+                max_background_flushes: 2,
                 max_sub_compactions: 3,
                 max_titan_background_gc: 4,
             }
         );
         assert_eq!(
             get_background_job_limits_impl(
+                8, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
+        );
+        // cpu num = 16
+        assert_eq!(
+            get_background_job_limits_impl(
                 16, /*cpu_num*/
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
-            BackgroundJobLimits {
-                max_background_jobs: 10,
-                max_background_flushes: 4,
-                max_sub_compactions: 3,
-                max_titan_background_gc: 4,
-            }
+            KVDB_DEFAULT_BACKGROUND_JOB_LIMITS,
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                16, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
         );
     }
 

@@ -8171,16 +8171,19 @@ mod tests {
 
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            let lock = pessimistic_locks.map.get(&k1).unwrap();
+            let lock = pessimistic_locks.get(&k1).unwrap();
             assert_eq!(
                 lock,
-                &PessimisticLock {
-                    primary: Box::new(*b"k1"),
-                    start_ts: 10.into(),
-                    ttl: 3000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 11.into(),
-                }
+                &(
+                    PessimisticLock {
+                        primary: Box::new(*b"k1"),
+                        start_ts: 10.into(),
+                        ttl: 3000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 11.into(),
+                    },
+                    false
+                )
             );
         }
 
@@ -8229,7 +8232,7 @@ mod tests {
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            assert!(!pessimistic_locks.map.contains_key(&k1));
+            assert!(pessimistic_locks.get(&k1).is_none());
         }
     }
 
@@ -8258,7 +8261,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // When disabling in-memory pessimistic lock, the lock map should remain unchanged.
-        assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+        assert!(txn_ext.pessimistic_locks.read().is_empty());
 
         let (tx, rx) = channel();
         storage

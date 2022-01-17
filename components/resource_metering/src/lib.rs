@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use recorder::{LocalStorage, LocalStorageRef, STORAGE};
+use tikv_util::sys::thread;
 use tikv_util::warn;
 use tikv_util::worker::{Scheduler, Worker};
 
@@ -40,7 +41,6 @@ pub mod error;
 mod model;
 mod recorder;
 mod reporter;
-pub mod utils;
 
 pub(crate) mod metrics;
 
@@ -79,14 +79,18 @@ impl ResourceMeteringTag {
                 }
             }
 
-            assert!(!ls.is_set, "nested attachment is not allowed");
-            ls.attached_tag.store(Some(self.infos.clone()));
+            // unexpected nested attachment
+            if ls.is_set {
+                debug_assert!(false, "nested attachment is not allowed");
+                return Guard;
+            }
+
+            let prev_tag = ls.attached_tag.swap(Some(self.infos.clone()));
+            debug_assert!(prev_tag.is_none());
             ls.is_set = true;
             ls.summary_cur_record.reset();
 
-            Guard {
-                tag: self.infos.clone(),
-            }
+            Guard
         })
     }
 }
@@ -99,9 +103,7 @@ impl ResourceMeteringTag {
 ///
 /// [ResourceMeteringTag]: crate::ResourceMeteringTag
 /// [ResourceMeteringTag::attach]: crate::ResourceMeteringTag::attach
-pub struct Guard {
-    tag: Arc<TagInfos>,
-}
+pub struct Guard;
 
 // Unlike attached_tag in STORAGE, summary_records will continue to grow as the
 // request arrives. If the recorder thread is not working properly, these maps
@@ -112,12 +114,25 @@ impl Drop for Guard {
     fn drop(&mut self) {
         STORAGE.with(|s| {
             let mut ls = s.borrow_mut();
-            ls.attached_tag.store(None);
+
+            if !ls.is_set {
+                return;
+            }
             ls.is_set = false;
+
+            // If the shared tag is occupied by the recorder thread
+            // with `SharedTagInfos::load_full`, spin wait for releasing.
+            let tag = loop {
+                let tag = ls.attached_tag.swap(None);
+                if let Some(t) = tag {
+                    break t;
+                }
+            };
+
             if !ls.summary_enable.load(SeqCst) {
                 return;
             }
-            if self.tag.extra_attachment.is_empty() {
+            if tag.extra_attachment.is_empty() {
                 return;
             }
             let cur_record = ls.summary_cur_record.take_and_reset();
@@ -125,14 +140,14 @@ impl Drop for Guard {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
-            match records.get(&self.tag) {
+            match records.get(&tag) {
                 Some(record) => {
                     record.merge(&cur_record);
                 }
                 None => {
                     // See MAX_SUMMARY_RECORDS_LEN.
                     if records.len() < MAX_SUMMARY_RECORDS_LEN {
-                        records.insert(self.tag.clone(), cur_record);
+                        records.insert(tag, cur_record);
                     }
                 }
             }
@@ -168,7 +183,7 @@ impl ResourceTagFactory {
 
     fn register_local_storage(&self, storage: &LocalStorage) -> bool {
         let lsr = LocalStorageRef {
-            id: utils::thread_id(),
+            id: thread::thread_id(),
             storage: storage.clone(),
         };
         match self.scheduler.schedule(recorder::Task::ThreadReg(lsr)) {
@@ -291,15 +306,13 @@ mod tests {
                 resource_tag_factory,
             };
             {
-                let guard = tag.attach();
-                assert_eq!(guard.tag, tag.infos);
+                let _guard = tag.attach();
                 STORAGE.with(|s| {
                     let ls = s.borrow_mut();
                     let local_tag = ls.attached_tag.swap(None);
                     assert!(local_tag.is_some());
                     let tag_infos = local_tag.unwrap();
                     assert_eq!(tag_infos, tag.infos);
-                    assert_eq!(tag_infos, guard.tag);
                     assert!(ls.attached_tag.swap(Some(tag_infos)).is_none());
                 });
                 // drop here.
