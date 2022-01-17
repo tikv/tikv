@@ -13,22 +13,22 @@ use crate::{
     codec::Encoder,
     endpoint::Task,
     errors::Error,
-    metrics::{SKIP_KV_COUNTER},
+    metrics::SKIP_KV_COUNTER,
     utils::{self, SlotMap},
 };
 
 use super::errors::Result;
 
+
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 
 use kvproto::{brpb::DataFileInfo, raft_cmdpb::CmdType};
 use openssl::hash::{Hasher, MessageDigest};
-use raftstore::{coprocessor::CmdBatch};
+use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
-
-use tikv_util::{box_err, info, warn, worker::Scheduler};
+use tikv_util::{box_err, info, warn, worker::Scheduler, Either};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::File, sync::RwLock};
@@ -42,7 +42,7 @@ impl ApplyEvent {
     pub fn from_cmd_batch(cmd: CmdBatch, resolved_ts: u64) -> Vec<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
-        for mut req in cmd
+        for req in cmd
             .cmds
             .into_iter()
             .filter(|cmd| {
@@ -61,31 +61,25 @@ impl ApplyEvent {
             })
             .flat_map(|mut cmd| cmd.request.take_requests().into_iter())
         {
-            let (key, value, cf) = match req.get_cmd_type() {
-                CmdType::Put => {
-                    let mut put = req.take_put();
-                    (put.take_key(), put.take_value(), put.cf)
-                }
-                CmdType::Delete => {
-                    let mut del = req.take_delete();
-                    (del.take_key(), Vec::new(), del.cf)
-                }
-                _ => {
-                    debug!(
-                        "backup stream skip other command";
-                        "command" => ?req,
-                    );
+            let cmd_type = req.get_cmd_type();
+            let (key, value, cf) = match utils::request_to_triple(req) {
+                Either::Left(t) => t,
+                Either::Right(req) => {
+                    debug!("ignoring unexpected request"; "type" => ?req.get_cmd_type());
                     continue;
                 }
             };
-            result.push(Self {
+            let item = Self {
                 key,
                 value,
                 cf,
                 region_id,
                 region_resolved_ts: resolved_ts,
-                cmd_type: req.get_cmd_type(),
-            })
+                cmd_type,
+            };
+            if item.should_record() {
+                result.push(item);
+            }
         }
         result
     }
@@ -585,6 +579,7 @@ impl DataFile {
 
     /// Add a new KV pair to the file, returning its size.
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
+        let _entry_size = kv.size();
         let encoded = Encoder::encode_event(&kv.key, &kv.value);
         let mut size = 0;
         for slice in encoded {

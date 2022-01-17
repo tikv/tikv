@@ -8,12 +8,13 @@ use std::{
 
 use crate::errors::{Error, Result};
 
+use engine_traits::{CF_DEFAULT};
 use futures::{channel::mpsc, executor::block_on, StreamExt};
+use kvproto::raft_cmdpb::{CmdType, Request};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 
-
-use tikv_util::{box_err, time::Instant, warn};
+use tikv_util::{box_err, time::Instant, warn, Either};
 use tokio::sync::{Mutex, RwLock};
 use txn_types::{Key, TimeStamp};
 
@@ -179,6 +180,27 @@ impl<T: Ord + std::fmt::Debug> SegmentTree<T> {
                 .map(|rng| <T as Borrow<R>>::borrow(rng.0) != range.1)
                 .unwrap_or(false)
     }
+}
+
+/// transform a [`RaftCmdRequest`] to `(key, value, cf)` triple.
+/// once it contains a write request, extract it, and return `Left((key, value, cf))`,
+/// otherwise return the request itself via `Right`.
+pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, String), Request> {
+    let (key, value, mut cf) = match req.get_cmd_type() {
+        CmdType::Put => {
+            let mut put = req.take_put();
+            (put.take_key(), put.take_value(), put.cf)
+        }
+        CmdType::Delete => {
+            let mut del = req.take_delete();
+            (del.take_key(), Vec::new(), del.cf)
+        }
+        _ => return Either::Right(req),
+    };
+    if cf.is_empty() {
+        cf = CF_DEFAULT.to_owned();
+    }
+    Either::Left((key, value, cf))
 }
 
 #[cfg(test)]

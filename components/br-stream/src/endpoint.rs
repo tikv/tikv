@@ -5,6 +5,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
+
 use engine_traits::KvEngine;
 
 use kvproto::metapb::Region;
@@ -20,6 +21,7 @@ use txn_types::TimeStamp;
 use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
+use crate::metrics;
 use crate::router::{ApplyEvent, Router};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
@@ -171,6 +173,7 @@ where
 
     fn backup_batch(&self, batch: CmdBatch) {
         let mut sw = StopWatch::new();
+        let region_id = batch.region_id;
         let kvs = ApplyEvent::from_cmd_batch(batch, /* TODO */ 0);
         HANDLE_EVENT_DURATION_HISTOGRAM
             .with_label_values(&["to_stream_event"])
@@ -181,19 +184,31 @@ where
                 .with_label_values(&["get_router_lock"])
                 .observe(sw.lap().as_secs_f64());
             let mut kv_count = 0;
+            let total_size = kvs.as_slice().iter().fold(0usize, |init, kv| init + kv.size());
+            metrics::HEAP_MEMORY
+                .with_label_values(&["alloc"])
+                .inc_by(total_size as f64);
             for kv in kvs {
+                let size = kv.size();
                 // TODO build a error handle mechanism #error 6
                 if kv.should_record() {
                     if let Err(err) = router.on_event(kv).await {
                         err.report(format!("failed to send event."));
                     }
+                    metrics::HEAP_MEMORY
+                        .with_label_values(&["free"])
+                        .inc_by(size as f64);
                     kv_count += 1;
                 }
             }
             HANDLE_KV_HISTOGRAM.observe(kv_count as _);
+            let time_cost = sw.lap().as_secs_f64();
+            if time_cost > 120.0 {
+                warn!("write to temp file too slow."; "time_cost" => ?time_cost, "region_id" => %region_id, "len" => %kv_count);
+            }
             HANDLE_EVENT_DURATION_HISTOGRAM
                 .with_label_values(&["save_to_temp_file"])
-                .observe(sw.lap().as_secs_f64())
+                .observe(time_cost)
         });
     }
 
