@@ -425,8 +425,6 @@ pub struct ApplySnapshotContext {
     /// The message should be sent after snapshot is applied.
     pub msgs: Vec<eraftpb::Message>,
     pub persist_res: Option<PersistSnapshotResult>,
-    /// The first index before applying this snapshot.
-    pub last_first_index: u64,
 }
 
 #[derive(PartialEq, Debug)]
@@ -1899,15 +1897,6 @@ where
                     let msgs = self.build_raft_messages(ctx, snap_ctx.msgs);
                     self.send_raft_messages(ctx, msgs);
 
-                    if self.last_compacted_idx == 0
-                        && snap_ctx.last_first_index >= RAFT_INIT_LOG_INDEX
-                    {
-                        // There may be stale logs in raft engine, so schedule a task to clean it
-                        // up. This is a best effort, if TiKV is shutdown before the task is
-                        // handled, there can still be stale logs not being deleted until next
-                        // log gc command is executed. This will delete range [0, last_first_index).
-                        self.schedule_raftlog_gc(ctx, snap_ctx.last_first_index);
-                    }
                     // Snapshot has been applied.
                     self.last_applying_idx = self.get_store().truncated_index();
                     self.last_compacted_idx = self.last_applying_idx + 1;
@@ -2237,8 +2226,15 @@ where
                     region: snap_region,
                     destroy_regions,
                 }),
-                last_first_index,
             });
+            if self.last_compacted_idx == 0 && last_first_index >= RAFT_INIT_LOG_INDEX {
+                // There may be stale logs in raft engine, so schedule a task to clean it
+                // up. This is a best effort, if TiKV is shutdown before the task is
+                // handled, there can still be stale logs not being deleted until next
+                // log gc command is executed. This will delete range [0, last_first_index).
+                self.schedule_raftlog_gc(ctx, last_first_index);
+                self.last_compacted_idx = last_first_index;
+            }
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
         }
