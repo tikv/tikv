@@ -5,4 +5,4 @@ mod metrics;
 pub mod store;
 mod test;
 
-pub use client::{MetadataClient, MetadataEvent, Task};
+pub use client::{MetadataClient, MetadataEvent, StreamTask};

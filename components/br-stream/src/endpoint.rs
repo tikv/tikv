@@ -9,7 +9,7 @@ use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
 use crate::metadata::store::{EtcdStore, MetaStore};
-use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
+use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::router::{ApplyEvent, Router};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
@@ -33,6 +33,7 @@ pub struct Endpoint<S: MetaStore + 'static> {
     #[allow(dead_code)]
     observer: BackupStreamObserver,
     pool: Runtime,
+    store_id: u64,
 }
 
 impl Endpoint<EtcdStore> {
@@ -47,7 +48,7 @@ impl Endpoint<EtcdStore> {
             .expect("failed to create tokio runtime for backup stream worker.");
 
         // TODO consider TLS?
-        let cli = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
+        let meta_client = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
             Ok(c) => {
                 let meta_store = EtcdStore::from(c);
                 Some(MetadataClient::new(meta_store, store_id))
@@ -64,36 +65,27 @@ impl Endpoint<EtcdStore> {
             config.temp_file_size_limit_per_task.0,
         );
 
-        if cli.is_none() {
-            // unable to connect to etcd
-            // may we should retry connect later
-            // TODO build a error handle mechanism #error 1
-            return Endpoint {
-                config,
-                meta_client: None,
-                range_router,
-                scheduler,
-                observer,
-                pool,
-            };
+        if let Some(meta_client_clone) = meta_client.clone() {
+            // spawn a worker to watch task changes from etcd periodically.
+            let scheduler_clone = scheduler.clone();
+            // TODO build a error handle mechanism #error 2
+            pool.spawn(Endpoint::starts_watch_tasks(
+                meta_client_clone,
+                scheduler_clone,
+            ));
         }
 
-        let meta_client = cli.unwrap();
-        // spawn a worker to watch task changes from etcd periodically.
-        let meta_client_clone = meta_client.clone();
-        let scheduler_clone = scheduler.clone();
-        // TODO build a error handle mechanism #error 2
-        pool.spawn(Endpoint::starts_watch_tasks(
-            meta_client_clone,
-            scheduler_clone,
-        ));
+        // if meta_client is None, unable to connect to etcd
+        // may we should retry connect later
+        // TODO build a error handle mechanism #error 1
         Endpoint {
             config,
-            meta_client: Some(meta_client),
+            meta_client,
             range_router,
             scheduler,
             observer,
             pool,
+            store_id,
         }
     }
 }
@@ -168,7 +160,7 @@ where
     }
 
     // register task ranges
-    pub fn on_register(&self, task: MetaTask) {
+    pub fn on_register(&self, task: StreamTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
             let range_router = self.range_router.clone();
@@ -188,16 +180,18 @@ where
                             "ranges-count" => ranges.inner.len(),
                         );
                         // TODO implement register ranges
-                        range_router.register_ranges(
-                            task_name,
-                            ranges
-                                .inner
-                                .into_iter()
-                                .map(|(start_key, end_key)| {
-                                    (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                                })
-                                .collect(),
-                        );
+                        let _ = range_router
+                            .register_task(
+                                task,
+                                ranges
+                                    .inner
+                                    .into_iter()
+                                    .map(|(start_key, end_key)| {
+                                        (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                                    })
+                                    .collect(),
+                            )
+                            .await;
                     }
                     Err(e) => {
                         error!("backup stream get tasks failed"; "error" => ?e);
@@ -208,19 +202,10 @@ where
         };
     }
 
-    pub async fn do_flush(router: Router, task: String) -> Result<()> {
-        let temp_files = router.take_temporary_files(&task).await?;
-        let meta = temp_files.generate_metadata().await?;
-        // TODO flush the files to external storage
-        info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
-        Ok(())
-    }
-
-    pub fn on_flush(&self, task: String) {
+    pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
         self.pool.spawn(async move {
-            // TODO handle the error
-            let _ = Self::do_flush(router, task).await;
+            router.do_flush(&task, store_id).await;
         });
     }
 
@@ -249,7 +234,7 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
 }
 
 pub enum Task {
-    WatchTask(MetaTask),
+    WatchTask(StreamTask),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(ConfigChange),
     /// Flush the task with name.
@@ -293,7 +278,7 @@ where
         match task {
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
-            Task::Flush(task) => self.on_flush(task),
+            Task::Flush(task) => self.on_flush(task, self.store_id),
             _ => (),
         }
     }

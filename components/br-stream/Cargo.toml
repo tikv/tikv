@@ -27,6 +27,8 @@ regex = "1"
 tikv_util = {path = "../tikv_util"}
 txn_types = { path = "../txn_types", default-features = false }
 tikv_alloc = {path = "../tikv_alloc"}
+external_storage_export = { path = "../external_storage/export", default-features = false }
+external_storage = { path = "../external_storage", default-features = false }
 log_wrappers = { path = "../log_wrappers" }
 lazy_static = "1.4"
 futures = "0.3"

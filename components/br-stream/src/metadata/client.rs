@@ -26,11 +26,11 @@ pub struct MetadataClient<Store> {
 /// the initial design of this task would bind with a `MetaStore`,
 /// which allows fluent API like `task.step(region_id, next_backup_ts)`.
 #[derive(Default)]
-pub struct Task {
+pub struct StreamTask {
     pub info: StreamBackupTaskInfo,
 }
 
-impl Debug for Task {
+impl Debug for StreamTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Task")
             .field("name", &self.info.name)
@@ -87,7 +87,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// query the named task from the meta store.
-    pub async fn get_task(&self, name: &str) -> Result<Task> {
+    pub async fn get_task(&self, name: &str) -> Result<StreamTask> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_get"]).observe(now.saturating_elapsed().as_secs_f64())
@@ -104,11 +104,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
             });
         }
         let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(&items[0].1)?;
-        Ok(Task { info })
+        Ok(StreamTask { info })
     }
 
     /// fetch all tasks from the meta store.
-    pub async fn get_tasks(&self) -> Result<WithRevision<Vec<Task>>> {
+    pub async fn get_tasks(&self) -> Result<WithRevision<Vec<StreamTask>>> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_fetch"]).observe(now.saturating_elapsed().as_secs_f64())
@@ -117,7 +117,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
         let mut tasks = Vec::with_capacity(kvs.len());
         for kv in kvs {
-            tasks.push(Task {
+            tasks.push(StreamTask {
                 info: protobuf::parse_from_bytes(&kv.1)?,
             });
         }
@@ -287,7 +287,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     #[cfg(test)]
     pub(crate) async fn insert_task_with_range(
         &self,
-        task: &Task,
+        task: &StreamTask,
         ranges: &[(&[u8], &[u8])],
     ) -> Result<()> {
         let bin = protobuf::Message::write_to_bytes(&task.info)?;
