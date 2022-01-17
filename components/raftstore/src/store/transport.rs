@@ -35,7 +35,7 @@ pub trait SignificantRouter<EK>: Send
 where
     EK: KvEngine,
 {
-    fn send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()>;
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()>;
 }
 
 /// Routes proposal to target region.
@@ -77,7 +77,7 @@ where
     ER: RaftEngine,
 {
     #[inline]
-    fn send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
         if let Err(SendError(msg)) = self
             .router
             .force_send(region_id, PeerMsg::SignificantMsg(msg))

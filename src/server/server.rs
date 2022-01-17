@@ -372,7 +372,11 @@ pub mod test_router {
     }
 
     impl SignificantRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: u64, msg: SignificantMsg<RocksSnapshot>) -> RaftStoreResult<()> {
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<RocksSnapshot>,
+        ) -> RaftStoreResult<()> {
             let _ = self.significant_msg_sender.send(msg);
             Ok(())
         }

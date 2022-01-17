@@ -231,8 +231,8 @@ impl<C: RaftStoreRouter<RocksEngine>> CasualRouter<RocksEngine> for SimulateTran
 }
 
 impl<C: RaftStoreRouter<RocksEngine>> SignificantRouter<RocksEngine> for SimulateTransport<C> {
-    fn send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
-        SignificantRouter::<RocksEngine>::send(&self.ch, region_id, msg)
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
+        self.ch.significant_send(region_id, msg)
     }
 }
 
