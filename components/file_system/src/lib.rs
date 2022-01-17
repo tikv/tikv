@@ -24,7 +24,7 @@ pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
     IORateLimiterStatistics,
 };
-pub use tracing::{get_io_type, set_io_type};
+pub use tracing::{get_io_type, init as init_tracing, set_io_type};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,

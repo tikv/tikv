@@ -1066,10 +1066,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        let io_tracing = file_system::tracing::init().map_err(|e| {
-            warn!(%e; "failed to init I/O tracer");
-            false
-        });
+        let io_tracing = file_system::init_tracing()
+            .map_err(|e| warn!("failed to init I/O tracer: {}", e))
+            .is_ok();
 
         let limiter = Arc::new(
             self.config

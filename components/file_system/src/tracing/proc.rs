@@ -138,6 +138,10 @@ fn flush_thread_io(sentinel: &mut LocalIOStats, new_io_type: Option<IOType>) {
     }
 }
 
+pub fn init() -> Result<(), String> {
+    Ok(())
+}
+
 pub fn set_io_type(new_io_type: IOType) {
     IO_TYPE.with(|io_type| {
         if io_type.get() != new_io_type {
