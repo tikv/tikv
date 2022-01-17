@@ -25,7 +25,7 @@ pub struct MetadataClient<Store> {
 /// a stream backup task.
 /// the initial design of this task would bind with a `MetaStore`,
 /// which allows fluent API like `task.step(region_id, next_backup_ts)`.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct StreamTask {
     pub info: StreamBackupTaskInfo,
 }

@@ -8,7 +8,7 @@ use std::{
 
 use crate::errors::{Error, Result};
 
-use engine_traits::{CF_DEFAULT};
+use engine_traits::CF_DEFAULT;
 use futures::{channel::mpsc, executor::block_on, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raft::StateRole;
@@ -124,10 +124,10 @@ pub type Slot<T> = Mutex<T>;
 /// NOTE: Maybe we can use dashmap for replacing the RwLock.
 pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 
-/// Like `..=val`, but allows `val` being a reference to DSTs.
-struct ToEndRef<'a, T: ?Sized>(&'a T);
+/// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference to DSTs.
+struct RangeToInclusiveRef<'a, T: ?Sized>(&'a T);
 
-impl<'a, T: ?Sized> RangeBounds<T> for ToEndRef<'a, T> {
+impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
     fn start_bound(&self) -> Bound<&T> {
         Bound::Unbounded
     }
@@ -164,7 +164,7 @@ impl<T: Ord + std::fmt::Debug> SegmentTree<T> {
         R: Ord + ?Sized,
     {
         self.0
-            .range(ToEndRef(point))
+            .range(RangeToInclusiveRef(point))
             .next_back()
             .filter(|(_, end)| <T as Borrow<R>>::borrow(end) > &&point)
     }
@@ -197,6 +197,7 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, String),
         }
         _ => return Either::Right(req),
     };
+    // Sometimes `cf` of some request would be empty, which means write them to `default` CF.
     if cf.is_empty() {
         cf = CF_DEFAULT.to_owned();
     }

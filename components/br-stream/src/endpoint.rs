@@ -233,7 +233,12 @@ where
                                 (utils::wrap_key(start_key), utils::wrap_key(end_key))
                             })
                             .collect::<Vec<_>>();
-                        range_router.register_ranges(task_name, ranges.clone());
+                        if let Err(err) = range_router
+                            .register_task(task.clone(), ranges.clone())
+                            .await
+                        {
+                            err.report(format!("failed to register task {}", task.info.name))
+                        }
                         for (start_key, end_key) in ranges {
                             let init = init.clone();
                             let start_key = start_key;

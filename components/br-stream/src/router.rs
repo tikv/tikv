@@ -233,7 +233,7 @@ impl RouterInner {
     /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
     /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
     /// We keep ranges in memory to filter kv events not in these ranges.  
-    pub(crate) fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
+    fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
