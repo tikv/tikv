@@ -37,7 +37,13 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
-use tikv_util::{box_err, info, time::Limiter, warn, worker::Scheduler, Either};
+use tikv_util::{
+    box_err, defer, info,
+    time::{Instant, Limiter},
+    warn,
+    worker::Scheduler,
+    Either,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::remove_file, fs::File};
@@ -495,6 +501,8 @@ impl StreamTaskInfo {
     /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
     pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
+        let now = Instant::now_coarse();
+        defer! { crate::metrics::ON_EVENT_COST_HISTOGRAM.with_label_values(&["write_to_tempfile"]).observe(now.saturating_elapsed_secs()) }
         let key = TempFileKey::of(&kv);
 
         if let Some(f) = self.files.read().await.get(&key) {
@@ -742,6 +750,7 @@ impl DataFile {
 
     /// Add a new KV pair to the file, returning its size.
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
+        let now = Instant::now_coarse();
         let _entry_size = kv.size();
         let encoded = Encoder::encode_event(&kv.key, &kv.value);
         let mut size = 0;
@@ -761,6 +770,9 @@ impl DataFile {
         self.number_of_entries += 1;
         self.file_size += size;
         self.update_key_bound(key.into_encoded());
+        crate::metrics::ON_EVENT_COST_HISTOGRAM
+            .with_label_values(&["syscall_write"])
+            .observe(now.saturating_elapsed_secs());
         Ok(size)
     }
 
