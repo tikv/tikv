@@ -19,6 +19,7 @@ use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
+use txn_types::{Key, PessimisticLock};
 
 /// Test if merge is rollback as expected.
 #[test]
@@ -1301,4 +1302,178 @@ fn test_merge_election_and_restart() {
     cluster.must_put(b"k14", b"v14");
     // If logs from different term are process correctly, store 2 should have latest updates.
     must_get_equal(&cluster.get_engine(2), b"k14", b"v14");
+}
+
+#[test]
+fn test_merge_with_concurrent_pessimistic_locking() {
+    let mut cluster = new_server_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    // Transfer the leader of the right region to store 2. The leaders of source and target
+    // regions don't need to be on the same store.
+    cluster.must_transfer_leader(right.id, new_peer(2, 2));
+
+    let snapshot = cluster.must_get_snapshot_of_region(left.id);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(
+                Key::from_raw(b"k0"),
+                PessimisticLock {
+                    primary: b"k0".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                },
+            )])
+            .is_ok()
+    );
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    fail::cfg("before_propose_locks_on_region_merge", "pause").unwrap();
+
+    // 1. Locking before proposing pessimistic locks in the source region can succeed.
+    let client2 = client.clone();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"k1".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(cluster.get_ctx(b"k1"));
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"k1".to_vec());
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    let res = thread::spawn(move || client2.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(150));
+    cluster.merge_region(left.id, right.id, Callback::None);
+    thread::sleep(Duration::from_millis(150));
+    fail::remove("txn_before_process_write");
+    let resp = res.join().unwrap();
+    assert!(!resp.has_region_error());
+    fail::remove("before_propose_locks_on_region_merge");
+
+    // 2. After locks are proposed, later pessimistic lock request should fail.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"k11".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(cluster.get_ctx(b"k11"));
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"k11".to_vec());
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(200));
+    fail::remove("txn_before_process_write");
+    let resp = res.join().unwrap();
+    assert!(resp.has_region_error());
+}
+
+#[test]
+fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
+    let mut cluster = new_server_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    cluster.must_transfer_leader(right.id, new_peer(2, 2));
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let snapshot = cluster.must_get_snapshot_of_region(left.id);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    let lock = PessimisticLock {
+        primary: b"k0".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![
+                (Key::from_raw(b"k0"), lock.clone()),
+                (Key::from_raw(b"k1"), lock),
+            ])
+            .is_ok()
+    );
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k0".to_vec());
+    mutation.set_value(b"v".to_vec());
+    let mut req = PrewriteRequest::default();
+    req.set_context(cluster.get_ctx(b"k0"));
+    req.set_mutations(vec![mutation].into());
+    req.set_is_pessimistic_lock(vec![true]);
+    req.set_start_version(10);
+    req.set_for_update_ts(40);
+    req.set_primary_lock(b"k0".to_vec());
+
+    // First, pause apply and prewrite.
+    fail::cfg("on_handle_apply", "pause").unwrap();
+    let req2 = req.clone();
+    let client2 = client.clone();
+    let resp = thread::spawn(move || client2.kv_prewrite(&req2).unwrap());
+    thread::sleep(Duration::from_millis(150));
+
+    // Then, start merging. PrepareMerge should wait until prewrite is done.
+    cluster.merge_region(left.id, right.id, Callback::None);
+    thread::sleep(Duration::from_millis(150));
+    assert!(txn_ext.pessimistic_locks.read().is_valid);
+
+    // But a later prewrite request should fail because we have already banned all later proposals.
+    req.mut_mutations()[0].set_key(b"k1".to_vec());
+    let resp2 = thread::spawn(move || client.kv_prewrite(&req).unwrap());
+
+    fail::remove("on_handle_apply");
+    let resp = resp.join().unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp);
+
+    let resp2 = resp2.join().unwrap();
+    assert!(resp2.has_region_error());
 }
