@@ -10,7 +10,7 @@ use crate::storage::mvcc::{
     Result,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::errorpb::{self, StaleCommand};
+use kvproto::errorpb::{self, EpochNotMatch, StaleCommand};
 use kvproto::kvrpcpb::Context;
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -234,16 +234,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     err.set_stale_command(StaleCommand::default());
                     return Some(Err(KvError::from(err).into()));
                 }
-                /*
-                FIXME: Uncomment out this part when the version in the memory table is well maintained.
-
                 if self.version != 0 && locks.version != self.version {
                     let mut err = errorpb::Error::default();
                     // We don't know the current regions. Just return an empty EpochNotMatch error.
                     err.set_epoch_not_match(EpochNotMatch::default());
                     return Some(Err(KvError::from(err).into()));
                 }
-                */
+
                 locks.map.get(key).map(|(lock, _)| {
                     // For write commands that are executed in serial, it should be impossible
                     // to read a deleted lock.
