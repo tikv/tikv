@@ -1066,18 +1066,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        // Always set to false because BPF needs root permission which is not feasible in a real deployment.
-        // Maybe enable it when the newer stable kernel has better permission control for BPF.
-        let io_snooper_on = false;
+        let io_tracing = file_system::tracing::init().map_err(|e| {
+            warn!(%e; "failed to init I/O tracer");
+            false
+        });
 
         let limiter = Arc::new(
             self.config
                 .storage
                 .io_rate_limit
-                .build(!io_snooper_on /*enable_statistics*/),
+                .build(!io_tracing /*enable_statistics*/),
         );
-        let fetcher = if io_snooper_on {
-            BytesFetcher::FromIOSnooper()
+        let fetcher = if io_tracing {
+            BytesFetcher::FromIOTracer()
         } else {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };

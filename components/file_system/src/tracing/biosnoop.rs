@@ -146,7 +146,7 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
+pub(crate) fn fetch_io_bytes(mut io_type: IOType, _allow_cache: bool) -> IOBytes {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
@@ -161,7 +161,7 @@ pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
     IOBytes::default()
 }
 
-pub fn init_io_snooper() -> Result<(), String> {
+pub fn init() -> Result<(), String> {
     unsafe {
         if BPF_CONTEXT.is_some() {
             return Ok(());
@@ -244,7 +244,8 @@ macro_rules! flush_io_latency {
     };
 }
 
-pub(crate) fn flush_io_latency_metrics() {
+#[allow(dead_code)]
+pub(crate) fn flush_private_metrics() {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             flush_io_latency!(ctx.bpf, other);
@@ -263,10 +264,12 @@ pub(crate) fn flush_io_latency_metrics() {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_io_bytes, flush_io_latency_metrics};
-    use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
+    use super::{
+        fetch_io_bytes, flush_private_metrics, get_io_type, init, set_io_type, BPF_CONTEXT,
+        MAX_THREAD_IDX,
+    };
     use crate::metrics::*;
-    use crate::{get_io_type, init_io_snooper, set_io_type, IOType};
+    use crate::IOType;
     use rand::Rng;
     use std::sync::{Arc, Condvar, Mutex};
     use std::{
@@ -281,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_biosnoop() {
-        init_io_snooper().unwrap();
+        init().unwrap();
         // Test cases are running in parallel, while they depend on the same global variables.
         // To make them not affect each other, run them in sequence.
         test_thread_idx_allocation();
@@ -335,7 +338,7 @@ mod tests {
         assert_eq!((other_bytes - other_bytes_before).write, 0);
         assert_ne!((other_bytes - other_bytes_before).read, 0);
 
-        flush_io_latency_metrics();
+        flush_private_metrics();
         assert_ne!(IO_LATENCY_MICROS_VEC.compaction.write.get_sample_count(), 0);
         assert_ne!(IO_LATENCY_MICROS_VEC.other.read.get_sample_count(), 0);
     }
@@ -401,7 +404,7 @@ mod tests {
     #[bench]
     #[ignore]
     fn bench_write_enable_io_snoop(b: &mut Bencher) {
-        init_io_snooper().unwrap();
+        init().unwrap();
         bench_write(b);
     }
 
@@ -415,7 +418,7 @@ mod tests {
     #[bench]
     #[ignore]
     fn bench_read_enable_io_snoop(b: &mut Bencher) {
-        init_io_snooper().unwrap();
+        init().unwrap();
         bench_read(b);
     }
 
@@ -428,12 +431,12 @@ mod tests {
 
     #[bench]
     #[ignore]
-    fn bench_flush_io_latency_metrics(b: &mut Bencher) {
-        init_io_snooper().unwrap();
+    fn bench_flush_private_metrics(b: &mut Bencher) {
+        init().unwrap();
         set_io_type(IOType::ForegroundWrite);
 
         let tmp = TempDir::new().unwrap();
-        let file_path = tmp.path().join("bench_flush_io_latency_metrics");
+        let file_path = tmp.path().join("bench_flush_private_metrics");
         let mut f = OpenOptions::new()
             .write(true)
             .create(true)
@@ -449,7 +452,7 @@ mod tests {
         f.sync_all().unwrap();
 
         b.iter(|| {
-            flush_io_latency_metrics();
+            flush_private_metrics();
         });
     }
 

@@ -13,20 +13,18 @@ extern crate test;
 extern crate tikv_alloc;
 
 mod file;
-mod iosnoop;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
-#[allow(unused)]
-mod thread_io;
+mod tracing;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{get_io_type, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
     IORateLimiterStatistics,
 };
+pub use tracing::{get_io_type, set_io_type};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -108,16 +106,10 @@ impl Drop for WithIOType {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct IOBytes {
     read: u64,
     write: u64,
-}
-
-impl Default for IOBytes {
-    fn default() -> Self {
-        IOBytes { read: 0, write: 0 }
-    }
 }
 
 impl std::ops::Sub for IOBytes {
