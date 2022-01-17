@@ -2474,7 +2474,10 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
     type Iter = S::Iter;
-    type Ext<'a> = TxnTestSnapshotExt<'a>;
+    type Ext<'a>
+    where
+        S: 'a,
+    = TxnTestSnapshotExt<'a>;
 
     fn get(&self, key: &Key) -> tikv_kv::Result<Option<Value>> {
         self.snapshot.get(key)
@@ -5323,6 +5326,7 @@ mod tests {
             (b"r\0f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
+        let before_written = ttl_current_ts();
         // Write key-value pairs one by one
         for &(ref key, ref value, ttl) in &test_data {
             storage
@@ -5340,15 +5344,19 @@ mod tests {
 
         for &(ref key, _, ttl) in &test_data {
             let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))
+                .unwrap()
                 .unwrap();
             if ttl != 0 {
-                if ttl > u64::MAX - ttl_current_ts() {
-                    assert_eq!(res, Some(u64::MAX - ttl_current_ts()));
-                } else {
-                    assert_eq!(res, Some(ttl));
-                }
+                let lower_bound = before_written.saturating_add(ttl) - ttl_current_ts();
+                assert!(
+                    res >= lower_bound && res <= ttl,
+                    "{} < {} < {}",
+                    lower_bound,
+                    res,
+                    ttl
+                );
             } else {
-                assert_eq!(res, Some(0));
+                assert_eq!(res, 0);
             }
         }
     }
@@ -8163,16 +8171,19 @@ mod tests {
 
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            let lock = pessimistic_locks.map.get(&k1).unwrap();
+            let lock = pessimistic_locks.get(&k1).unwrap();
             assert_eq!(
                 lock,
-                &PessimisticLock {
-                    primary: Box::new(*b"k1"),
-                    start_ts: 10.into(),
-                    ttl: 3000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 11.into(),
-                }
+                &(
+                    PessimisticLock {
+                        primary: Box::new(*b"k1"),
+                        start_ts: 10.into(),
+                        ttl: 3000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 11.into(),
+                    },
+                    false
+                )
             );
         }
 
@@ -8221,7 +8232,7 @@ mod tests {
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            assert!(!pessimistic_locks.map.contains_key(&k1));
+            assert!(pessimistic_locks.get(&k1).is_none());
         }
     }
 
@@ -8250,7 +8261,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // When disabling in-memory pessimistic lock, the lock map should remain unchanged.
-        assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+        assert!(txn_ext.pessimistic_locks.read().is_empty());
 
         let (tx, rx) = channel();
         storage

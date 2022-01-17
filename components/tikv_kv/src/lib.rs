@@ -39,7 +39,7 @@ use engine_traits::{
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
-use raftstore::store::TxnExt;
+use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
@@ -88,6 +88,22 @@ impl Modify {
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
             Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+}
+
+impl PessimisticLockPair for Modify {
+    fn as_pair(&self) -> (&Key, &PessimisticLock) {
+        match self {
+            Modify::PessimisticLock(k, lock) => (k, lock),
+            _ => panic!("not a pessimistic lock"),
+        }
+    }
+
+    fn into_pair(self) -> (Key, PessimisticLock) {
+        match self {
+            Modify::PessimisticLock(k, lock) => (k, lock),
+            _ => panic!("not a pessimistic lock"),
         }
     }
 }
@@ -234,7 +250,9 @@ pub trait Engine: Send + Clone + 'static {
 /// at a specific timestamp. This snapshot is lower-level, a view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
-    type Ext<'a>: SnapshotExt;
+    type Ext<'a>: SnapshotExt
+    where
+        Self: 'a;
 
     /// Get the value associated with `key` in default column family
     fn get(&self, key: &Key) -> Result<Option<Value>>;

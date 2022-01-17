@@ -43,6 +43,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -203,6 +204,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
+    rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
 type LocalServer<EK, ER> =
@@ -624,12 +626,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start resource metering.
-        let (recorder_handle, collector_reg_handle, resource_tag_factory) =
-            resource_metering::init_recorder(
-                self.config.resource_metering.enabled,
-                self.config.resource_metering.precision.as_millis(),
-            );
-        let (config_notifier, data_sink_reg_handle, reporter_worker) =
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(self.config.resource_metering.precision.as_millis());
+        self.to_stop.push(recorder_worker);
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.config.resource_metering.clone(),
                 collector_reg_handle.clone(),
@@ -638,14 +638,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.config.resource_metering.receiver_address.clone(),
             self.env.clone(),
-            data_sink_reg_handle,
+            data_sink_reg_handle.clone(),
         );
         self.to_stop.push(single_target_worker);
+        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
-            recorder_handle,
-            config_notifier,
+            recorder_notifier,
+            reporter_notifier,
             address_change_notifier,
         );
         cfg_controller.register(
@@ -941,6 +942,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             importer,
             cdc_scheduler,
             cdc_memory_quota,
+            rsmeter_pubsub_service,
         });
 
         server_config
@@ -983,7 +985,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
             servers.server.get_debug_thread_pool().clone(),
-            self.config.log_file.clone(),
+            self.config.log.file.filename.clone(),
             self.config.slow_log_file.clone(),
         );
         if servers
@@ -1052,13 +1054,22 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         {
             fatal!("failed to register cdc service");
         }
+        if servers
+            .server
+            .register_service(create_resource_metering_pub_sub(
+                servers.rsmeter_pubsub_service.clone(),
+            ))
+            .is_some()
+        {
+            warn!("failed to register resource metering pubsub service");
+        }
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        let io_snooper_on = self.config.enable_io_snoop
-            && file_system::init_io_snooper()
-                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
-                .is_ok();
+        // Always set to false because BPF needs root permission which is not feasible in a real deployment.
+        // Maybe enable it when the newer stable kernel has better permission control for BPF.
+        let io_snooper_on = false;
+
         let limiter = Arc::new(
             self.config
                 .storage
@@ -1247,8 +1258,11 @@ impl TiKVServer<RocksEngine> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let env = self
+            .config
+            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .unwrap();
 
         // Create raft engine.
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);

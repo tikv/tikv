@@ -88,7 +88,7 @@ fn test_proposal_prevent_sleep() {
         RegionPacketFilter::new(1, 1).direction(Direction::Send),
     ));
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
-    let mut admin_req = new_admin_request(1, &region.get_region_epoch(), conf_change);
+    let mut admin_req = new_admin_request(1, region.get_region_epoch(), conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
     let (cb, _rx) = make_cb(&admin_req);
     cluster

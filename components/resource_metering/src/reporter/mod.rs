@@ -1,10 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod collector_impl;
 pub mod data_sink;
 pub mod data_sink_reg;
+pub mod pubsub;
 pub mod single_target;
 
-use crate::collector::{CollectorGuard, CollectorImpl, CollectorRegHandle};
+use crate::recorder::{CollectorGuard, CollectorRegHandle};
+use crate::reporter::collector_impl::CollectorImpl;
 use crate::reporter::data_sink_reg::{DataSinkId, DataSinkReg, DataSinkRegHandle};
 use crate::{Config, DataSink, RawRecords, Records};
 
@@ -84,8 +87,17 @@ impl Reporter {
     }
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
-        self.records.append(records);
-        self.records.keep_top_k(self.config.max_resource_groups);
+        let ts = records.begin_unix_time_secs;
+        if self.config.max_resource_groups >= records.records.len() {
+            self.records.append(ts, records.records.iter());
+            return;
+        }
+        let (top, evicted) = records.top_k(self.config.max_resource_groups);
+        self.records.append(ts, top);
+        let others = self.records.others.entry(ts).or_default();
+        evicted.for_each(|(_, v)| {
+            others.merge(v);
+        });
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -103,7 +115,7 @@ impl Reporter {
 
                 if self.collector.is_none() {
                     let collector = Box::new(CollectorImpl::new(self.scheduler.clone()));
-                    self.collector = Some(self.collector_reg_handle.register(collector));
+                    self.collector = Some(self.collector_reg_handle.register(collector, false));
                 }
             }
             DataSinkReg::Deregister { id } => {
@@ -173,7 +185,7 @@ impl ConfigChangeNotifier {
 
     pub fn notify(&self, config: Config) {
         if let Err(err) = self.scheduler.schedule(Task::ConfigChange(config)) {
-            warn!("failed to schedule Task::ConfigChange"; "err" => ?err);
+            warn!("failed to schedule reporter::Task::ConfigChange"; "err" => ?err);
         }
     }
 }
@@ -242,7 +254,6 @@ mod tests {
             data_sink: Box::new(client.clone()),
         }));
         r.run(Task::ConfigChange(Config {
-            enabled: false,
             receiver_address: "abc".to_string(),
             report_receiver_interval: ReadableDuration::minutes(2),
             max_resource_groups: 3000,

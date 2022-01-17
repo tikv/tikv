@@ -496,6 +496,10 @@ impl Lease {
         self.bound = Some(Either::Left(bound));
     }
 
+    pub fn is_suspect(&self) -> bool {
+        matches!(self.bound, Some(Either::Left(_)))
+    }
+
     /// Inspect the lease state for the ts or now.
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {
@@ -1023,7 +1027,7 @@ impl RegionReadProgress {
     }
 
     // Dump the `LeaderInfo` and the peer list
-    fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
+    pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
         let mut leader_info = LeaderInfo::default();
         let core = self.core.lock().unwrap();
         let read_state = {

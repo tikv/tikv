@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::recorder::RecorderHandle;
-use crate::reporter::ConfigChangeNotifier;
+use crate::recorder::ConfigChangeNotifier as RecorderConfigChangeNotifier;
+use crate::reporter::ConfigChangeNotifier as ReporterConfigChangeNotifier;
 use crate::AddressChangeNotifier;
 
 use std::error::Error;
@@ -20,11 +20,6 @@ const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    /// Turn on resource metering.
-    ///
-    /// This configuration will affect all resource modules such as cpu/summary.
-    pub enabled: bool,
-
     /// Data reporting destination address.
     pub receiver_address: String,
 
@@ -43,10 +38,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            enabled: false,
             receiver_address: "".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
-            max_resource_groups: 2000,
+            max_resource_groups: 100,
             precision: ReadableDuration::secs(1),
         }
     }
@@ -90,22 +84,23 @@ impl Config {
 /// to control the dynamic update of the configuration.
 pub struct ConfigManager {
     current_config: Config,
-    recorder: RecorderHandle,
-    config_notifier: ConfigChangeNotifier,
+
+    recorder_notifier: RecorderConfigChangeNotifier,
+    reporter_notifier: ReporterConfigChangeNotifier,
     address_notifier: AddressChangeNotifier,
 }
 
 impl ConfigManager {
     pub fn new(
         current_config: Config,
-        recorder: RecorderHandle,
-        config_notifier: ConfigChangeNotifier,
+        recorder_notifier: RecorderConfigChangeNotifier,
+        reporter_notifier: ReporterConfigChangeNotifier,
         address_notifier: AddressChangeNotifier,
     ) -> Self {
         ConfigManager {
             current_config,
-            recorder,
-            config_notifier,
+            recorder_notifier,
+            reporter_notifier,
             address_notifier,
         }
     }
@@ -116,23 +111,13 @@ impl online_config::ConfigManager for ConfigManager {
         let mut new_config = self.current_config.clone();
         new_config.update(change);
         new_config.validate()?;
-        // Pause or resume the recorder thread.
-        if self.current_config.enabled != new_config.enabled {
-            if new_config.enabled {
-                self.recorder.resume();
-            } else {
-                self.recorder.pause();
-            }
-        }
-        if self.current_config.precision != new_config.precision {
-            self.recorder.precision(new_config.precision.0);
-        }
         if self.current_config.receiver_address != new_config.receiver_address {
             self.address_notifier
                 .notify(new_config.receiver_address.clone());
         }
         // Notify reporter that the configuration has changed.
-        self.config_notifier.notify(new_config.clone());
+        self.recorder_notifier.notify(new_config.clone());
+        self.reporter_notifier.notify(new_config.clone());
         self.current_config = new_config;
         Ok(())
     }
@@ -148,7 +133,6 @@ mod tests {
         let cfg = Config::default();
         assert!(cfg.validate().is_ok()); // Empty address is allowed.
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
@@ -156,7 +140,6 @@ mod tests {
         };
         assert!(cfg.validate().is_ok());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::days(999), // invalid
             max_resource_groups: 2000,
@@ -164,7 +147,6 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: usize::MAX, // invalid
@@ -172,7 +154,6 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
         let cfg = Config {
-            enabled: false,
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
