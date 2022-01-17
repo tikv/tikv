@@ -241,7 +241,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     return Some(Err(KvError::from(err).into()));
                 }
 
-                locks.map.get(key).map(|(lock, _)| {
+                locks.get(key).map(|(lock, _)| {
                     // For write commands that are executed in serial, it should be impossible
                     // to read a deleted lock.
                     // For read commands in the scheduler, it should read the lock marked deleted
