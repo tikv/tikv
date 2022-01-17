@@ -14,6 +14,7 @@ use crate::{
     codec::Encoder,
     endpoint::Task,
     errors::Error,
+    metadata::StreamTask,
     metrics::SKIP_KV_COUNTER,
     utils::{self, SlotMap},
 };
@@ -84,6 +85,7 @@ impl ApplyEvent {
                 Either::Left(t) => t,
                 Either::Right(req) => {
                     debug!("ignoring unexpected request"; "type" => ?req.get_cmd_type());
+                    SKIP_KV_COUNTER.inc();
                     continue;
                 }
             };
@@ -225,7 +227,7 @@ impl RouterInner {
     /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
     /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
     /// We keep ranges in memory to filter kv events not in these ranges.  
-    fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
+    pub(crate) fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
         // TODO reigister ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
