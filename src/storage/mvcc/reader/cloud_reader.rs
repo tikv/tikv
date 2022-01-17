@@ -1,10 +1,10 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
+use crate::storage::mvcc::{Result, TxnCommitRecord};
+use rfstore::{UserMeta, EXTRA_CF, LOCK_CF, WRITE_CF};
 use std::sync::Arc;
-use engine_traits::CF_LOCK;
-use rfstore::{EXTRA_CF, LOCK_CF, UserMeta, WRITE_CF};
-use tikv_kv::Snapshot;
 use tikv_util::codec::number::NumberEncoder;
-use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
-use crate::storage::mvcc::{TxnCommitRecord, Result};
+use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub struct CloudReader {
     snapshot: Arc<kvengine::SnapAccess>,
@@ -28,19 +28,28 @@ impl CloudReader {
                 (WriteType::Delete, None)
             };
             let write = Write::new(write_type, TimeStamp::new(user_meta.start_ts), short_value);
-            return Some(TxnCommitRecord::SingleRecord {commit_ts: TimeStamp::new(user_meta.commit_ts), write})
+            return Some(TxnCommitRecord::SingleRecord {
+                commit_ts: TimeStamp::new(user_meta.commit_ts),
+                write,
+            });
         }
         None
     }
 
-    pub fn get_txn_commit_record(&mut self, key: &Key, start_ts: TimeStamp) -> Result<TxnCommitRecord> {
+    pub fn get_txn_commit_record(
+        &mut self,
+        key: &Key,
+        start_ts: TimeStamp,
+    ) -> Result<TxnCommitRecord> {
         let mut raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, 0);
         if item.user_meta_len() == 0 {
-            return Ok(TxnCommitRecord::None { overlapped_write: None})
+            return Ok(TxnCommitRecord::None {
+                overlapped_write: None,
+            });
         }
         if let Some(record) = Self::get_commit_by_item(&item, start_ts) {
-            return Ok(record)
+            return Ok(record);
         }
         let mut data_iter = self.snapshot.new_iterator(WRITE_CF, false, true);
         data_iter.seek(&raw_key);
@@ -50,13 +59,15 @@ impl CloudReader {
                 break;
             }
             if let Some(record) = Self::get_commit_by_item(&data_iter.item(), start_ts) {
-                return Ok(record)
+                return Ok(record);
             }
         }
         raw_key.encode_u64_desc(start_ts.into_inner())?;
         let item = self.snapshot.get(EXTRA_CF, &raw_key, 0);
         if item.value_len() == 0 {
-            return Ok(TxnCommitRecord::None { overlapped_write: None})
+            return Ok(TxnCommitRecord::None {
+                overlapped_write: None,
+            });
         }
         let user_meta = UserMeta::from_slice(item.user_meta());
         let write: Write;
@@ -65,7 +76,10 @@ impl CloudReader {
         } else {
             write = Write::new(WriteType::Lock, start_ts, None);
         }
-        Ok(TxnCommitRecord::SingleRecord {commit_ts: TimeStamp::new(user_meta.commit_ts), write})
+        Ok(TxnCommitRecord::SingleRecord {
+            commit_ts: TimeStamp::new(user_meta.commit_ts),
+            write,
+        })
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
@@ -75,19 +89,19 @@ impl CloudReader {
             return Ok(None);
         }
         let lock = Lock::parse(item.get_value())?;
-        return Ok(Some(lock))
+        return Ok(Some(lock));
     }
 
     pub fn get(
         &mut self,
         key: &Key,
-        mut ts: TimeStamp,
+        ts: TimeStamp,
         _gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<Value>> {
         let raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner());
         if item.value_len() > 0 {
-            return Ok(Some(item.get_value().to_vec()))
+            return Ok(Some(item.get_value().to_vec()));
         }
         return Ok(None);
     }
@@ -95,12 +109,11 @@ impl CloudReader {
     pub fn get_write(
         &mut self,
         key: &Key,
-        mut ts: TimeStamp,
+        ts: TimeStamp,
         _gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<Write>> {
-        self.seek_write(key, ts).map(|opt| {
-            opt.map(|(ts, write) | write)
-        })
+        self.seek_write(key, ts)
+            .map(|opt| opt.map(|(_, write)| write))
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
@@ -118,28 +131,25 @@ impl CloudReader {
                 short_value = Some(item.get_value().to_vec())
             }
             let write = Write::new(write_type, TimeStamp::new(user_meta.start_ts), short_value);
-            return Ok(Some((TimeStamp::new(user_meta.commit_ts), write.to_owned())))
+            return Ok(Some((
+                TimeStamp::new(user_meta.commit_ts),
+                write.to_owned(),
+            )));
         }
-        return Ok(None)
+        return Ok(None);
     }
 
     #[inline(always)]
-    pub fn get_old_value(
-        &mut self,
-        key: &Key,
-        ts: TimeStamp,
-        prev_write_loaded: bool,
-        prev_write: Option<Write>,
-    ) -> Result<OldValue> {
+    pub fn get_old_value(&mut self, prev_write: Option<Write>) -> Result<OldValue> {
         if let Some(write) = prev_write {
             if write.write_type == WriteType::Delete {
-                return Ok(OldValue::None)
+                return Ok(OldValue::None);
             }
             // Locks and Rolbacks are stored in extra CF, will not be seeked by seek_write.
             assert_eq!(write.write_type, WriteType::Put);
-            return Ok(OldValue::value(write.short_value.unwrap()))
+            return Ok(OldValue::value(write.short_value.unwrap()));
         }
-        return Ok(OldValue::None)
+        return Ok(OldValue::None);
     }
 
     /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
@@ -154,7 +164,7 @@ impl CloudReader {
         filter: F,
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
-        where
+    where
         F: Fn(&Lock) -> bool,
     {
         let mut locks = vec![];
@@ -182,6 +192,6 @@ impl CloudReader {
             }
             lock_iter.next();
         }
-        Ok((locks,false))
+        Ok((locks, false))
     }
 }

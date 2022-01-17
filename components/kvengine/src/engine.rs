@@ -53,9 +53,7 @@ impl Engine {
         meta_change_listener: Box<dyn MetaChangeListener>,
     ) -> Result<Engine> {
         info!("open KVEngine");
-        check_options(&opts)?;
-        // TODO: add diretory lock to avoid multiple instance open the same dir.
-        let lock_path = opts.dir.join("LOCK");
+        let lock_path = fs.local_dir().join("LOCK");
         let mut x = fslock::LockFile::open(&lock_path)?;
         x.lock()?;
         let mut max_capacity =
@@ -66,6 +64,10 @@ impl Engine {
         let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity, 64);
         let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
         let (flush_result_tx, flush_result_rx) = mpsc::bounded(opts.num_mem_tables);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .build()
+            .unwrap();
         let core = EngineCore {
             shards: DashMap::new(),
             opts: opts.clone(),
@@ -75,6 +77,7 @@ impl Engine {
             comp_client: CompactionClient::new(fs.clone(), opts.remote_compaction_addr.clone()),
             id_allocator,
             managed_safe_ts: AtomicU64::new(0),
+            runtime,
         };
         let en = Engine {
             core: Arc::new(core),
@@ -128,6 +131,7 @@ pub struct EngineCore {
     pub(crate) comp_client: CompactionClient,
     pub(crate) id_allocator: Arc<dyn IDAllocator>,
     pub(crate) managed_safe_ts: AtomicU64,
+    pub(crate) runtime: tokio::runtime::Runtime,
 }
 
 impl EngineCore {
@@ -164,7 +168,7 @@ impl EngineCore {
             let tbl = SSTable::new(file, self.cache.clone())?;
             scf_builders[fm.cf as usize].add_table(tbl, fm.level as usize);
         }
-        l0_tbls.sort_by(|a, b| b.commit_ts().cmp(&a.commit_ts()));
+        l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
         shard.l0_tbls.store(
             epoch::Owned::new(Arc::new(L0Tables::new(l0_tbls))),
             Ordering::Release,
@@ -222,6 +226,8 @@ impl EngineCore {
             if i == 1 && shard.get_split_stage() == kvenginepb::SplitStage::PreSplit {
                 mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplitFlushDone);
             }
+            let mut mem_tbl = mem_tbl.clone();
+            mem_tbl.set_version(shard.load_mem_table_version());
             info!(
                 "shard {}:{} trigger flush mem-table ts {}, size {}",
                 shard.id,
@@ -234,21 +240,10 @@ impl EngineCore {
                     shard_id: shard.id,
                     shard_ver: shard.ver,
                     split_stage: shard.get_split_stage(),
-                    mem_tbl: mem_tbl.clone(),
+                    mem_tbl,
                     next_mem_tbl_size: 0,
                 })
                 .unwrap();
         }
     }
-}
-
-fn check_options(opts: &Options) -> Result<()> {
-    if !opts.dir.exists() {
-        std::fs::create_dir_all(&opts.dir)?;
-        return Ok(());
-    }
-    if !opts.dir.is_dir() {
-        return Err(Error::ErrOpen("path is not dir".to_string()));
-    }
-    Ok(())
 }

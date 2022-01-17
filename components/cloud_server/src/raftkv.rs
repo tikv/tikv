@@ -15,17 +15,13 @@ use thiserror::Error;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::Op;
+use engine_traits::{CfName, KvEngine, MvccProperties, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::raft_cmdpb::CustomRequest;
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
     metapb,
-    raft_cmdpb::{
-        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-        RaftRequestHeader, Request, Response,
-    },
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
 use raftstore::coprocessor::{
     dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
@@ -34,9 +30,7 @@ use rfstore::store::{
     rlog, Callback as StoreCallback, CustomBuilder, ReadIndexContext, ReadResponse, RegionSnapshot,
     WriteResponse,
 };
-use rfstore::{
-    Error as RaftServerError, LocalReadRouter, RaftRouter, RaftStoreRouter, ServerRaftStoreRouter,
-};
+use rfstore::{Error as RaftServerError, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::metrics::*;
 use tikv::storage::kv::{
     self, write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
@@ -286,6 +280,7 @@ impl Debug for RaftKv {
     }
 }
 
+#[allow(dead_code)]
 impl Engine for RaftKv {
     type Snap = RegionSnapshot;
     type Local = kvengine::Engine;
@@ -635,16 +630,10 @@ fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
             Modify::Put(cf, key, val) => match cf {
                 CF_DEFAULT => {
                     let raw_key = key.to_raw().unwrap();
-
-
                     values.insert(raw_key, val);
                 }
                 CF_LOCK => {
                     let raw_key = key.to_raw().unwrap();
-                    if raw_key[0] == 'm' as u8 {
-                        let debug_key = bytes::Bytes::copy_from_slice(&raw_key);
-                        debug!("lock raw_key {:?}", debug_key);
-                    }
                     let mut lock = Lock::parse(&val).unwrap();
                     if lock.lock_type == LockType::Put && lock.short_value.is_none() {
                         lock.short_value = values.remove(&raw_key);

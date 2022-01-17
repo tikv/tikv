@@ -66,6 +66,8 @@ pub struct Config {
 
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
 
+    pub update_safe_ts_interval: ReadableDuration,
+
     pub consistency_check_interval: ReadableDuration,
 
     pub channel_capacity: usize,
@@ -98,6 +100,7 @@ impl Default for Config {
             region_split_size: ReadableSize::gb(1),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            update_safe_ts_interval: ReadableDuration::secs(60),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),

@@ -8,9 +8,9 @@ pub mod sched_pool;
 pub mod scheduler;
 
 mod actions;
+mod cloud_store;
 mod latch;
 mod store;
-mod cloud_store;
 
 use std::error::Error as StdError;
 use std::io::Error as IoError;
@@ -34,6 +34,7 @@ pub use self::actions::{
     gc::gc,
     prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
 };
+pub use self::cloud_store::{CloudStore, CloudStoreScanner};
 pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::latch::{Latches, Lock};
 pub use self::scheduler::Scheduler;
@@ -41,7 +42,6 @@ pub use self::store::{
     EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
     TxnEntryScanner, TxnEntryStore,
 };
-pub use self::cloud_store::{CloudStore, CloudStoreScanner};
 
 /// Process result of a command.
 #[derive(Debug)]

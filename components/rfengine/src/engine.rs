@@ -13,7 +13,6 @@ use std::{
     sync::mpsc::SyncSender,
     thread::{self, JoinHandle},
 };
-use slog_global::debug;
 use thiserror::Error as ThisError;
 
 use crate::*;

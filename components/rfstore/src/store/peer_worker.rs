@@ -216,7 +216,12 @@ impl ApplyWorker {
         router: RaftRouter,
         receiver: Receiver<ApplyBatch>,
     ) -> Self {
-        let ctx = ApplyContext::new(engine, Some(region_sched), Some(split_scheduler), Some(router));
+        let ctx = ApplyContext::new(
+            engine,
+            Some(region_sched),
+            Some(split_scheduler),
+            Some(router),
+        );
         Self { ctx, receiver }
     }
 

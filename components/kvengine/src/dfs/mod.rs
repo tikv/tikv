@@ -1,10 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod s3;
+
 use async_trait::async_trait;
+use aws_sdk_s3::SdkError;
 use bytes::Bytes;
-use futures::executor::ThreadPool;
+pub use s3::S3FS;
+use std::fmt::Debug;
+use std::path::{Path, PathBuf};
 use std::{io, result, sync::Arc};
 use thiserror::Error;
+use tokio::runtime::Runtime;
 
 // DFS represents a distributed file system.
 #[async_trait]
@@ -25,9 +31,14 @@ pub trait DFS: Sync + Send {
     async fn create(&self, file_id: u64, data: Bytes, opts: Options) -> Result<()>;
 
     // remove removes the file from the DFS.
-    fn remove(&self, file_id: u64, opts: Options);
+    async fn remove(&self, file_id: u64, opts: Options) -> Result<()>;
 
-    fn get_future_pool(&self) -> ThreadPool;
+    // get_runtime gets the tokio runtime for the DFS.
+    fn get_runtime(&self) -> &tokio::runtime::Runtime;
+
+    fn local_dir(&self) -> &Path;
+
+    fn tenant_id(&self) -> u32;
 }
 
 pub trait File: Sync + Send {
@@ -39,24 +50,24 @@ pub trait File: Sync + Send {
 
     // read reads the data at given offset.
     fn read(&self, off: u64, length: usize) -> Result<Bytes>;
-
-    // close releases the local resource like on-disk cache or memory of the file.
-    // It should be called when a file will not be used locally but may be used by other nodes.
-    // For example when a peer is moved out of the store.
-    // Should not be called on process exit.
-    fn close(&self) -> Result<()>;
 }
 
 pub struct InMemFS {
     files: dashmap::DashMap<u64, Arc<InMemFile>>,
-    pool: ThreadPool,
+    local_dir: PathBuf,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl InMemFS {
-    pub fn new() -> Self {
+    pub fn new(local_dir: PathBuf) -> Self {
         Self {
             files: dashmap::DashMap::new(),
-            pool: ThreadPool::builder().pool_size(1).create().unwrap(),
+            local_dir,
+            runtime: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap(),
         }
     }
 }
@@ -90,12 +101,21 @@ impl DFS for InMemFS {
         Ok(())
     }
 
-    fn remove(&self, file_id: u64, _opts: Options) {
+    async fn remove(&self, file_id: u64, _opts: Options) -> Result<()> {
         self.files.remove(&file_id);
+        Ok(())
     }
 
-    fn get_future_pool(&self) -> ThreadPool {
-        return self.pool.clone();
+    fn get_runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
+    fn local_dir(&self) -> &Path {
+        &self.local_dir
+    }
+
+    fn tenant_id(&self) -> u32 {
+        return 0;
     }
 }
 
@@ -126,10 +146,6 @@ impl File for InMemFile {
         let off_usize = off as usize;
         Ok(self.data.slice(off_usize..off_usize + length))
     }
-
-    fn close(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -155,6 +171,8 @@ pub enum Error {
     Io(String),
     #[error("File {0} not exists")]
     NotExists(u64),
+    #[error("S3 error {0}")]
+    S3(String),
 }
 
 impl From<io::Error> for Error {
@@ -162,4 +180,18 @@ impl From<io::Error> for Error {
     fn from(e: io::Error) -> Error {
         Error::Io(e.to_string())
     }
+}
+
+impl<E: Debug> From<aws_sdk_s3::SdkError<E>> for Error {
+    fn from(err: SdkError<E>) -> Self {
+        Error::S3(format!("{:?}", err))
+    }
+}
+
+pub fn new_filename(file_id: u64) -> PathBuf {
+    PathBuf::from(format!("{:016x}.sst", file_id))
+}
+
+pub fn new_tmp_filename(file_id: u64) -> PathBuf {
+    PathBuf::from(format!("{:016x}.tmp", file_id))
 }

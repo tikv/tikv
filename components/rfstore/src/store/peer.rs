@@ -11,7 +11,10 @@ use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::PeerRole;
 use kvproto::pdpb::PeerStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest, RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
+    RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::*;
 use protobuf::{Message, ProtobufEnum};
@@ -34,13 +37,11 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use kvproto::errorpb::RegionNotFound;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use time::Timespec;
 use uuid::Uuid;
-use crate::RaftStoreRouter;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -465,9 +466,11 @@ impl Peer {
         let truncated_term = ps.truncated_term();
         let last = ps.last_index();
 
-
         let applied_index = ps.applied_index();
-        debug!("new peer storage {:?} {:?} {:?} {:?}, a: {:?}", first, truncated, truncated_term, last, applied_index);
+        debug!(
+            "new peer storage first:{:?} truncated:{:?} t_term:{:?} last:{:?}, applied: {:?}",
+            first, truncated, truncated_term, last, applied_index
+        );
 
         let raft_cfg = raft::Config {
             id: peer.get_id(),
@@ -784,7 +787,7 @@ impl Peer {
     #[inline]
     pub fn build_raft_messages(
         &mut self,
-        ctx: &RaftContext,
+        _ctx: &RaftContext,
         msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
@@ -1038,6 +1041,7 @@ impl Peer {
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
                     self.require_updating_max_ts(&ctx.global.pd_scheduler);
+                    self.heartbeat_pd(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -1287,6 +1291,8 @@ impl Peer {
                     lease_to_be_updated = false;
                 }
             }
+        }
+        for entry in committed_entries.iter() {
             self.preprocess_committed_entry(ctx, entry);
         }
         if let Some(last_entry) = committed_entries.last() {
@@ -1394,14 +1400,15 @@ impl Peer {
         }
         shard_meta.apply_change_set(&mut cs);
         info!(
-            "shard meta apply change set {:?}", &cs;
+            "shard meta apply change set {:?}, all files {:?}", &cs, shard_meta.all_files();
             "region" => tag,
         );
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
 
         if cs.has_flush() {
-            ctx.raft_wb.truncate_raft_log(region_id, cs.get_sequence());
+            ctx.raft_wb
+                .truncate_raft_log(region_id, shard_meta.write_sequence);
             self.mut_store().initial_flushed = true;
         }
     }
@@ -1418,8 +1425,7 @@ impl Peer {
         let new_metas = shard_meta.apply_split(change_set, RAFT_INIT_LOG_INDEX);
         for new_meta in new_metas {
             info!(
-                "split add snapshot files";
-                "region" => self.tag(),
+                "split new meta files {:?} {}:{}", new_meta.all_files(), new_meta.id, new_meta.ver;
             );
             ctx.raft_wb
                 .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
@@ -1449,8 +1455,7 @@ impl Peer {
             self.raft_group.store().region(),
         );
 
-        let progress_to_be_updated =
-            self.mut_store().applied_index_term() != applied_index_term;
+        let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
         if !self.is_leader() {
             // TODO(x) post_pending_read_index_on_replica
@@ -1464,7 +1469,8 @@ impl Peer {
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             if applied_index_term == self.term() {
-                ctx.global.coprocessor_host
+                ctx.global
+                    .coprocessor_host
                     .on_applied_current_term(StateRole::Leader, self.region());
             }
             let progress = ReadProgress::applied_index_term(applied_index_term);
@@ -1570,20 +1576,20 @@ impl Peer {
         }
     }
 
-    fn send_read_command(
-        &self,
-        ctx: &mut RaftContext,
-        read_cmd: RaftCommand,
-    ) {
+    fn send_read_command(&self, ctx: &mut RaftContext, read_cmd: RaftCommand) {
         let mut err = errorpb::Error::default();
-        let read_cb = match ctx.global.router.send(self.region_id, PeerMsg::RaftCommand(read_cmd)) {
+        let read_cb = match ctx
+            .global
+            .router
+            .send(self.region_id, PeerMsg::RaftCommand(read_cmd))
+        {
             Ok(()) => return,
             Err(Error::RegionNotFound(region_id, msg)) => {
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
                 msg.unwrap().take_callback()
-            },
-            _ => unreachable!()
+            }
+            _ => unreachable!(),
         };
         let mut resp = RaftCmdResponse::default();
         resp.mut_header().set_error(err);
@@ -1758,10 +1764,8 @@ impl Peer {
             meta.readers.remove(&r.get_id());
         }
         debug!("meta reader insert read delegate {}", self.region_id);
-        meta.readers.insert(
-            self.region_id,
-            ReadDelegate::from_peer(&self),
-        );
+        meta.readers
+            .insert(self.region_id, ReadDelegate::from_peer(&self));
 
         if is_region_initialized(&prev_region) {
             info!(
@@ -2326,7 +2330,10 @@ impl Peer {
         raft_ctx: &mut RaftContext,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
-        raft_ctx.global.coprocessor_host.pre_propose(self.region(), req)?;
+        raft_ctx
+            .global
+            .coprocessor_host
+            .pre_propose(self.region(), req)?;
         let mut ctx = ProposalContext::empty();
         if req.has_custom_request() {
             if rlog::is_engine_meta_log(req.get_custom_request().get_data()) {
@@ -2607,7 +2614,10 @@ impl Peer {
         let raft_messages = self.build_raft_messages(ctx, light_ready.take_messages());
         self.send_raft_messages(ctx, raft_messages);
         if light_ready.committed_entries().len() > 0 {
-            ctx.global.router.send(self.region_id, PeerMsg::CommittedEntries(light_ready.take_committed_entries()));
+            ctx.global.router.send(
+                self.region_id,
+                PeerMsg::CommittedEntries(light_ready.take_committed_entries()),
+            );
         }
     }
 

@@ -14,11 +14,6 @@ use slog_global::*;
 
 use crate::*;
 
-pub(crate) struct RotateTask {
-    pub(crate) epoch_id: u32,
-    pub(crate) states: BTreeMap<StateKey, Bytes>,
-}
-
 #[derive(PartialEq, PartialOrd, Eq, Ord, Clone)]
 pub(crate) struct StateKey {
     pub(crate) region_id: u64,

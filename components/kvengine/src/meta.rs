@@ -22,7 +22,8 @@ pub struct ShardMeta {
     pub pre_split: Option<pb::PreSplit>,
     split: Option<pb::Split>,
     pub split_stage: pb::SplitStage,
-    pub base_ts: u64,
+    pub base_version: u64,
+    pub write_sequence: u64,
     pub parent: Option<Box<ShardMeta>>,
 }
 
@@ -37,7 +38,8 @@ impl ShardMeta {
             seq: cs.sequence,
             properties: Properties::new().apply_pb(snap.get_properties()),
             split_stage: cs.stage,
-            base_ts: snap.base_ts,
+            base_version: snap.base_version,
+            write_sequence: snap.write_sequence,
             ..Default::default()
         };
         if snap.get_split_keys().len() > 0 {
@@ -134,10 +136,7 @@ impl ShardMeta {
 
     pub fn is_duplicated_change_set(&self, cs: &mut pb::ChangeSet) -> bool {
         if cs.sequence > 0 && self.seq >= cs.sequence {
-            info!(
-                "{}:{} skip duplicated change, meta seq:{}",
-                self.id, self.ver, cs.sequence
-            );
+            info!("{}:{} skip duplicated change {:?}", self.id, self.ver, cs);
             return true;
         }
         if cs.has_pre_split() {
@@ -151,7 +150,7 @@ impl ShardMeta {
             return false;
         }
         if cs.has_split_files() {
-            let dup =  self.split_stage == cs.stage;
+            let dup = self.split_stage == cs.stage;
             if dup {
                 info!("{}:{} is already split files done", self.id, self.ver);
             }
@@ -223,6 +222,17 @@ impl ShardMeta {
             let l0 = flush.get_l0_create();
             self.add_file(l0.id, -1, 0, l0.get_smallest(), l0.get_biggest());
         }
+        let new_seq = flush.get_version() - self.base_version;
+        debug!(
+            "{}:{} apply flush update write sequence from {} to {}, flush ver {} base {}",
+            self.id,
+            self.ver,
+            self.write_sequence,
+            new_seq,
+            flush.get_version(),
+            self.base_version
+        );
+        self.write_sequence = new_seq;
     }
 
     fn apply_pre_split(&mut self, pre_split: &pb::PreSplit) {
@@ -258,7 +268,7 @@ impl ShardMeta {
         for id in split_files.get_table_deletes() {
             self.files.remove(id);
         }
-        for l0 in split_files.get_table_creates() {
+        for l0 in split_files.get_l0_creates() {
             self.add_file(l0.id, -1, 0, l0.get_smallest(), l0.get_biggest());
         }
         for tbl in split_files.get_table_creates() {
@@ -294,10 +304,16 @@ impl ShardMeta {
             );
             if id == old.id {
                 old.split = Some(split.clone());
-                meta.base_ts = old.base_ts;
+                meta.base_version = old.base_version;
+                meta.write_sequence = old.write_sequence;
                 meta.seq = old.seq;
             } else {
-                meta.base_ts = old.base_ts + cs.sequence;
+                debug!(
+                    "new base for {}:{}, {} {}",
+                    meta.id, meta.ver, old.base_version, cs.sequence
+                );
+                meta.base_version = old.base_version + cs.sequence;
+                meta.write_sequence = initial_seq;
                 meta.seq = initial_seq;
             }
             new_shards.push(meta);
@@ -319,6 +335,8 @@ impl ShardMeta {
         if let Some(pre_split) = &self.pre_split {
             snap.set_split_keys(RepeatedField::from_slice(pre_split.get_keys()));
         }
+        snap.set_base_version(self.base_version);
+        snap.set_write_sequence(self.write_sequence);
         for (k, v) in self.files.iter() {
             if v.level == 0 {
                 let mut l0 = pb::L0Create::new();

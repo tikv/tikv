@@ -1190,7 +1190,7 @@ pub struct Flush {
     // message fields
     pub l0_create: ::protobuf::SingularPtrField<L0Create>,
     pub properties: ::protobuf::SingularPtrField<Properties>,
-    pub commit_ts: u64,
+    pub version: u64,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -1273,19 +1273,19 @@ impl Flush {
         self.properties.take().unwrap_or_else(|| Properties::new())
     }
 
-    // uint64 commitTS = 3;
+    // uint64 version = 3;
 
 
-    pub fn get_commit_ts(&self) -> u64 {
-        self.commit_ts
+    pub fn get_version(&self) -> u64 {
+        self.version
     }
-    pub fn clear_commit_ts(&mut self) {
-        self.commit_ts = 0;
+    pub fn clear_version(&mut self) {
+        self.version = 0;
     }
 
     // Param is passed by value, moved
-    pub fn set_commit_ts(&mut self, v: u64) {
-        self.commit_ts = v;
+    pub fn set_version(&mut self, v: u64) {
+        self.version = v;
     }
 }
 
@@ -1319,7 +1319,7 @@ impl ::protobuf::Message for Flush {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint64()?;
-                    self.commit_ts = tmp;
+                    self.version = tmp;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -1341,8 +1341,8 @@ impl ::protobuf::Message for Flush {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
-        if self.commit_ts != 0 {
-            my_size += ::protobuf::rt::value_size(3, self.commit_ts, ::protobuf::wire_format::WireTypeVarint);
+        if self.version != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.version, ::protobuf::wire_format::WireTypeVarint);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -1360,8 +1360,8 @@ impl ::protobuf::Message for Flush {
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
-        if self.commit_ts != 0 {
-            os.write_uint64(3, self.commit_ts)?;
+        if self.version != 0 {
+            os.write_uint64(3, self.version)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1416,9 +1416,9 @@ impl ::protobuf::Message for Flush {
                     |m: &mut Flush| { &mut m.properties },
                 ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "commitTS",
-                    |m: &Flush| { &m.commit_ts },
-                    |m: &mut Flush| { &mut m.commit_ts },
+                    "version",
+                    |m: &Flush| { &m.version },
+                    |m: &mut Flush| { &mut m.version },
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<Flush>(
                     "Flush",
@@ -1444,7 +1444,7 @@ impl ::protobuf::Clear for Flush {
     fn clear(&mut self) {
         self.l0_create.clear();
         self.properties.clear();
-        self.commit_ts = 0;
+        self.version = 0;
         self.unknown_fields.clear();
     }
 }
@@ -1456,7 +1456,7 @@ impl ::protobuf::PbPrint for Flush {
         let old_len = buf.len();
         ::protobuf::PbPrint::fmt(&self.l0_create, "l0_create", buf);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", buf);
-        ::protobuf::PbPrint::fmt(&self.commit_ts, "commit_ts", buf);
+        ::protobuf::PbPrint::fmt(&self.version, "version", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -1469,7 +1469,7 @@ impl ::std::fmt::Debug for Flush {
         let mut s = String::new();
         ::protobuf::PbPrint::fmt(&self.l0_create, "l0_create", &mut s);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", &mut s);
-        ::protobuf::PbPrint::fmt(&self.commit_ts, "commit_ts", &mut s);
+        ::protobuf::PbPrint::fmt(&self.version, "version", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -1489,7 +1489,8 @@ pub struct Snapshot {
     pub split_keys: ::protobuf::RepeatedField<::std::vec::Vec<u8>>,
     pub l0_creates: ::protobuf::RepeatedField<L0Create>,
     pub table_creates: ::protobuf::RepeatedField<TableCreate>,
-    pub base_ts: u64,
+    pub base_version: u64,
+    pub write_sequence: u64,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -1666,19 +1667,34 @@ impl Snapshot {
         ::std::mem::replace(&mut self.table_creates, ::protobuf::RepeatedField::new())
     }
 
-    // uint64 baseTS = 7;
+    // uint64 baseVersion = 7;
 
 
-    pub fn get_base_ts(&self) -> u64 {
-        self.base_ts
+    pub fn get_base_version(&self) -> u64 {
+        self.base_version
     }
-    pub fn clear_base_ts(&mut self) {
-        self.base_ts = 0;
+    pub fn clear_base_version(&mut self) {
+        self.base_version = 0;
     }
 
     // Param is passed by value, moved
-    pub fn set_base_ts(&mut self, v: u64) {
-        self.base_ts = v;
+    pub fn set_base_version(&mut self, v: u64) {
+        self.base_version = v;
+    }
+
+    // uint64 writeSequence = 8;
+
+
+    pub fn get_write_sequence(&self) -> u64 {
+        self.write_sequence
+    }
+    pub fn clear_write_sequence(&mut self) {
+        self.write_sequence = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_write_sequence(&mut self, v: u64) {
+        self.write_sequence = v;
     }
 }
 
@@ -1729,7 +1745,14 @@ impl ::protobuf::Message for Snapshot {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint64()?;
-                    self.base_ts = tmp;
+                    self.base_version = tmp;
+                },
+                8 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.write_sequence = tmp;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -1764,8 +1787,11 @@ impl ::protobuf::Message for Snapshot {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         };
-        if self.base_ts != 0 {
-            my_size += ::protobuf::rt::value_size(7, self.base_ts, ::protobuf::wire_format::WireTypeVarint);
+        if self.base_version != 0 {
+            my_size += ::protobuf::rt::value_size(7, self.base_version, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.write_sequence != 0 {
+            my_size += ::protobuf::rt::value_size(8, self.write_sequence, ::protobuf::wire_format::WireTypeVarint);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -1797,8 +1823,11 @@ impl ::protobuf::Message for Snapshot {
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         };
-        if self.base_ts != 0 {
-            os.write_uint64(7, self.base_ts)?;
+        if self.base_version != 0 {
+            os.write_uint64(7, self.base_version)?;
+        }
+        if self.write_sequence != 0 {
+            os.write_uint64(8, self.write_sequence)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1873,9 +1902,14 @@ impl ::protobuf::Message for Snapshot {
                     |m: &mut Snapshot| { &mut m.table_creates },
                 ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "baseTS",
-                    |m: &Snapshot| { &m.base_ts },
-                    |m: &mut Snapshot| { &mut m.base_ts },
+                    "baseVersion",
+                    |m: &Snapshot| { &m.base_version },
+                    |m: &mut Snapshot| { &mut m.base_version },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "writeSequence",
+                    |m: &Snapshot| { &m.write_sequence },
+                    |m: &mut Snapshot| { &mut m.write_sequence },
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<Snapshot>(
                     "Snapshot",
@@ -1905,7 +1939,8 @@ impl ::protobuf::Clear for Snapshot {
         self.split_keys.clear();
         self.l0_creates.clear();
         self.table_creates.clear();
-        self.base_ts = 0;
+        self.base_version = 0;
+        self.write_sequence = 0;
         self.unknown_fields.clear();
     }
 }
@@ -1921,7 +1956,8 @@ impl ::protobuf::PbPrint for Snapshot {
         ::protobuf::PbPrint::fmt(&self.split_keys, "split_keys", buf);
         ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", buf);
         ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", buf);
-        ::protobuf::PbPrint::fmt(&self.base_ts, "base_ts", buf);
+        ::protobuf::PbPrint::fmt(&self.base_version, "base_version", buf);
+        ::protobuf::PbPrint::fmt(&self.write_sequence, "write_sequence", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -1938,7 +1974,8 @@ impl ::std::fmt::Debug for Snapshot {
         ::protobuf::PbPrint::fmt(&self.split_keys, "split_keys", &mut s);
         ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", &mut s);
         ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", &mut s);
-        ::protobuf::PbPrint::fmt(&self.base_ts, "base_ts", &mut s);
+        ::protobuf::PbPrint::fmt(&self.base_version, "base_version", &mut s);
+        ::protobuf::PbPrint::fmt(&self.write_sequence, "write_sequence", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -3607,30 +3644,31 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.enginepb.TableCreate\
     B\0\x12\x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\x17\n\rbottomDelet\
     es\x18\x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\x06\x20\x01(\x08B\0\
-    :\0\"q\n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01(\x0b2\x12.enginepb.\
+    :\0\"p\n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01(\x0b2\x12.enginepb.\
     L0CreateB\0\x12*\n\nproperties\x18\x02\x20\x01(\x0b2\x14.enginepb.Proper\
-    tiesB\0\x12\x12\n\x08commitTS\x18\x03\x20\x01(\x04B\0:\0\"\xd7\x01\n\x08\
-    Snapshot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\n\x03end\x18\
+    tiesB\0\x12\x11\n\x07version\x18\x03\x20\x01(\x04B\0:\0\"\xf5\x01\n\x08S\
+    napshot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\n\x03end\x18\
     \x02\x20\x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\x14.engine\
     pb.PropertiesB\0\x12\x13\n\tsplitKeys\x18\x04\x20\x03(\x0cB\0\x12'\n\tl0\
     Creates\x18\x05\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCr\
-    eates\x18\x06\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\x10\n\x06bas\
-    eTS\x18\x07\x20\x01(\x04B\0:\0\"~\n\nSplitFiles\x12'\n\tl0Creates\x18\
-    \x01\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\
-    \x02\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\x16\n\x0ctableDeletes\
-    \x18\x03\x20\x03(\x04B\0:\0\"A\n\x08L0Create\x12\x0c\n\x02ID\x18\x01\x20\
-    \x01(\x04B\0\x12\x12\n\x08smallest\x18\x02\x20\x01(\x0cB\0\x12\x11\n\x07\
-    biggest\x18\x03\x20\x01(\x0cB\0:\0\"c\n\x0bTableCreate\x12\x0c\n\x02ID\
-    \x18\x01\x20\x01(\x04B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12\
-    \x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\x12\x12\n\x08smallest\x18\x04\x20\
-    \x01(\x0cB\0\x12\x11\n\x07biggest\x18\x05\x20\x01(\x0cB\0:\0\"\x1c\n\x08\
-    PreSplit\x12\x0e\n\x04Keys\x18\x01\x20\x03(\x0cB\0:\0\"D\n\x05Split\x12)\
-    \n\tnewShards\x18\x01\x20\x03(\x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\
-    \x04Keys\x18\x03\x20\x03(\x0cB\0:\0\"C\n\nProperties\x12\x11\n\x07shardI\
-    D\x18\x01\x20\x01(\x04B\0\x12\x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\
-    \x10\n\x06values\x18\x03\x20\x03(\x0cB\0:\0*Y\n\nSplitStage\x12\x0b\n\
-    \x07INITIAL\x10\0\x12\r\n\tPRE_SPLIT\x10\x01\x12\x18\n\x14PRE_SPLIT_FLUS\
-    H_DONE\x10\x02\x12\x13\n\x0fSPLIT_FILE_DONE\x10\x03\x1a\0B\0b\x06proto3\
+    eates\x18\x06\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\x15\n\x0bbas\
+    eVersion\x18\x07\x20\x01(\x04B\0\x12\x17\n\rwriteSequence\x18\x08\x20\
+    \x01(\x04B\0:\0\"~\n\nSplitFiles\x12'\n\tl0Creates\x18\x01\x20\x03(\x0b2\
+    \x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\
+    \x15.enginepb.TableCreateB\0\x12\x16\n\x0ctableDeletes\x18\x03\x20\x03(\
+    \x04B\0:\0\"A\n\x08L0Create\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\
+    \x12\n\x08smallest\x18\x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x03\
+    \x20\x01(\x0cB\0:\0\"c\n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\x01(\
+    \x04B\0\x12\x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\x18\x03\
+    \x20\x01(\x05B\0\x12\x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\
+    \x07biggest\x18\x05\x20\x01(\x0cB\0:\0\"\x1c\n\x08PreSplit\x12\x0e\n\x04\
+    Keys\x18\x01\x20\x03(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\
+    \x20\x03(\x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\
+    \x03(\x0cB\0:\0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\
+    \x04B\0\x12\x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\
+    \x03\x20\x03(\x0cB\0:\0*Y\n\nSplitStage\x12\x0b\n\x07INITIAL\x10\0\x12\r\
+    \n\tPRE_SPLIT\x10\x01\x12\x18\n\x14PRE_SPLIT_FLUSH_DONE\x10\x02\x12\x13\
+    \n\x0fSPLIT_FILE_DONE\x10\x03\x1a\0B\0b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

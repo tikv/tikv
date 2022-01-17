@@ -262,10 +262,7 @@ impl CustomBuilder {
 
 pub fn is_engine_meta_log(data: &[u8]) -> bool {
     match data[0] as CustomRaftlogType {
-        TYPE_FLUSH
-        | TYPE_COMPACTION
-        | TYPE_PRE_SPLIT
-        | TYPE_SPLIT_FILES => true,
+        TYPE_FLUSH | TYPE_COMPACTION | TYPE_PRE_SPLIT | TYPE_SPLIT_FILES => true,
         _ => false,
     }
 }

@@ -13,6 +13,9 @@ protobuf-codec = [
 
 [dependencies]
 async-trait = "0.1"
+aws-config = "0.3.0"
+aws-sdk-s3 = "0.3.0"
+aws-types = "0.3.0"
 bytes = "1.0"
 thiserror = "1.0"
 rand = "0.8"
@@ -23,6 +26,7 @@ crossbeam-epoch = "0.9.5"
 dashmap = "4.0"
 dyn-clone = "1.0"
 fslock = "0.1.7"
+http = "0.2"
 moka = "0.5.1"
 farmhash = "1.1.5"
 crc32c = "0.6"

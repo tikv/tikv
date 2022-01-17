@@ -117,6 +117,7 @@ pub enum Task {
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     },
+    UpdateSafeTS,
 }
 
 #[derive(Default, Clone)]
@@ -249,6 +250,7 @@ impl Display for Task {
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
             ),
+            Task::UpdateSafeTS => write!(f, "update safe ts"),
         }
     }
 }
@@ -276,6 +278,7 @@ where
 
     concurrency_manager: ConcurrencyManager,
     remote: Remote<yatp::task::future::TaskCell>,
+    kv: kvengine::Engine,
 }
 
 const HOTSPOT_KEY_RATE_THRESHOLD: u64 = 128;
@@ -319,6 +322,7 @@ where
         store_heartbeat_interval: Duration,
         concurrency_manager: ConcurrencyManager,
         remote: Remote<yatp::task::future::TaskCell>,
+        kv: kvengine::Engine,
     ) -> Runner<T> {
         // TODO(x): support stats monitor.
         Runner {
@@ -333,6 +337,7 @@ where
             region_cpu_records: HashMap::default(),
             concurrency_manager,
             remote,
+            kv,
         }
     }
 
@@ -914,6 +919,23 @@ where
             self.remote.spawn(f);
         }
     }
+
+    fn handle_update_safe_ts(&mut self) {
+        let pd_client = self.pd_client.clone();
+        let kv = self.kv.clone();
+        let f = async move {
+            match pd_client.get_gc_safe_point().await {
+                Ok(ts) => {
+                    kv.update_managed_safe_ts(ts);
+                    info!("update safe ts {}", ts);
+                }
+                Err(err) => {
+                    warn!("failed to update safe ts {:?}", err);
+                }
+            }
+        };
+        self.remote.spawn(f);
+    }
 }
 
 impl<T> Runnable for Runner<T>
@@ -1052,6 +1074,7 @@ where
                 initial_status,
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
+            Task::UpdateSafeTS => self.handle_update_safe_ts(),
         };
     }
 

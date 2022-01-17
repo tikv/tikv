@@ -7,11 +7,15 @@ use crate::{mvcc, RaftRouter, UserMeta};
 use bytes::Buf;
 use fail::fail_point;
 use kvengine::SnapAccess;
+use kvenginepb::SplitStage;
 use kvproto::metapb;
 use kvproto::metapb::{PeerRole, Region};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse, ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader, Response};
-use protobuf::{ProtobufEnum, RepeatedField};
-use raft::eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
+    ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
+};
+use protobuf::RepeatedField;
+use raft::eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, EntryType};
 use raft::StateRole;
 use raft_proto::eraftpb;
 use raftstore::store::fsm::metrics::*;
@@ -24,9 +28,8 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use std::vec::Drain;
 use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, debug, error, info, warn};
+use tikv_util::{box_err, error, info, warn};
 use time::Timespec;
-use kvenginepb::SplitStage;
 use txn_types::LockType;
 
 pub(crate) struct PendingCmd {
@@ -105,6 +108,7 @@ impl Debug for Range {
     }
 }
 
+#[allow(unused)]
 impl Range {
     fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
         Range {
@@ -164,9 +168,6 @@ pub(crate) struct YieldState {
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<ApplyMsg>,
-
-    /// Cache heap size for itself.
-    heap_size: Option<usize>,
 }
 
 impl Debug for YieldState {
@@ -297,7 +298,7 @@ impl Applier {
                     user_meta,
                     commit_ts,
                 )
-            },
+            }
             LockType::Put => {
                 let val = lock.short_value.unwrap();
                 wb.put(mvcc::WRITE_CF, key, &val, 0, user_meta, commit_ts);
@@ -365,6 +366,7 @@ impl Applier {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn exec_delete_range(&mut self, kv: &kvengine::Engine, cl: &CustomRaftLog) {
         // TODO(x)
     }
@@ -406,7 +408,11 @@ impl Applier {
         Ok((resp, exec_result))
     }
 
-    pub(crate) fn exec_custom_log(&mut self, ctx: &mut ApplyContext, cl: &CustomRaftLog) -> Result<(RaftCmdResponse, ApplyResult)> {
+    pub(crate) fn exec_custom_log(
+        &mut self,
+        ctx: &mut ApplyContext,
+        cl: &CustomRaftLog,
+    ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let wb = ctx.wb.get_engine_wb(self.region.get_id());
         let engine = &ctx.engine;
         wb.set_sequence(ctx.exec_log_index);
@@ -452,11 +458,15 @@ impl Applier {
                 cs.sequence = ctx.exec_log_index;
                 if cs.has_flush() {
                     if let Some(shard) = ctx.engine.get_shard(self.region.get_id()) {
-                        shard.mark_mem_table_applying_flush(cs.get_flush().get_commit_ts());
+                        shard.mark_mem_table_applying_flush(cs.get_flush().get_version());
                     }
                 }
                 let task = RegionTask::ApplyChangeSet { change: cs };
-                ctx.region_scheduler.as_ref().unwrap().schedule(task);
+                ctx.region_scheduler
+                    .as_ref()
+                    .unwrap()
+                    .schedule(task)
+                    .unwrap();
             }
             TYPE_NEX_MEM_TABLE_SIZE => {
                 let mut cs = cl.get_change_set().unwrap();
@@ -518,7 +528,7 @@ impl Applier {
         return match self.exec_custom_log(ctx, &custom) {
             Ok((resp, result)) => (resp, result),
             Err(e) => (err_resp(e, ctx.exec_log_term), ApplyResult::None),
-        }
+        };
     }
 
     fn handle_apply_result(
@@ -563,8 +573,6 @@ impl Applier {
     }
 
     fn find_callback(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback> {
-        let region_id = self.region.get_id();
-        let peer_id = self.get_peer().get_id();
         if is_conf_change {
             if let Some(cmd) = self.pending_cmds.take_conf_change() {
                 if cmd.index == index && cmd.term == term {
@@ -1103,7 +1111,9 @@ impl Applier {
         );
         let mut resp = AdminResponse::default();
         let mut result: ApplyResult;
-        if let Err(kvengine::Error::WrongSplitStage) = ctx.engine.finish_split(cs, RAFT_INIT_LOG_INDEX) {
+        if let Err(kvengine::Error::WrongSplitStage) =
+            ctx.engine.finish_split(cs, RAFT_INIT_LOG_INDEX)
+        {
             // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
             // in the background worker.
             warn!("region is not in split file done stage for finish split, pause apply";
@@ -1211,7 +1221,6 @@ impl Applier {
                     });
                     self.yield_state = Some(YieldState {
                         pending_msgs: vec![pending_msg],
-                        heap_size: None,
                     });
                     return;
                 }
@@ -1240,16 +1249,21 @@ impl Applier {
             SplitStage::Initial => {
                 return;
             }
-            SplitStage::PreSplit | SplitStage::PreSplitFlushDone => {
-                SplitMethod::SplitFiles
-            }
-            SplitStage::SplitFileDone => {
-                SplitMethod::Finish
-            }
+            SplitStage::PreSplit | SplitStage::PreSplitFlushDone => SplitMethod::SplitFiles,
+            SplitStage::SplitFileDone => SplitMethod::Finish,
         };
         info!("shard recover split"; "region" => self.tag());
-        let split_task = SplitTask::new(self.region.clone(), self.get_peer().clone(), Callback::None, method);
-        ctx.split_scheduler.as_ref().unwrap().schedule(split_task).unwrap();
+        let split_task = SplitTask::new(
+            self.region.clone(),
+            self.get_peer().clone(),
+            Callback::None,
+            method,
+        );
+        ctx.split_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(split_task)
+            .unwrap();
     }
 
     fn handle_apply(&mut self, ctx: &mut ApplyContext, mut apply: MsgApply) {
@@ -1343,7 +1357,7 @@ impl Applier {
                 ApplyMsg::UnsafeDestroy { region_id } => {
                     self.handle_unsafe_destroy(ctx, region_id);
                 }
-                ApplyMsg::Resume { region_id } => unreachable!()
+                ApplyMsg::Resume { region_id } => unreachable!(),
             }
         }
     }

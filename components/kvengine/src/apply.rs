@@ -1,12 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::*;
-use crate::{Iterator, meta::is_move_down, table::sstable::{self, SSTable}};
+use crate::{
+    meta::is_move_down,
+    table::sstable::{self, SSTable},
+};
 use crossbeam_epoch as epoch;
 use kvenginepb as pb;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {
@@ -127,8 +129,14 @@ impl Engine {
         let fs = self.fs.clone();
         let opts = dfs::Options::new(shard.id, shard.ver);
         g.defer(move || {
+            let runtime = fs.get_runtime();
             for id in del_files {
-                fs.remove(id, opts)
+                let fs_n = fs.clone();
+                runtime.spawn(async move {
+                    if let Err(err) = fs_n.remove(id, opts).await {
+                        warn!("failed to remove dfs file {} err:{:?}", id, err)
+                    }
+                });
             }
         });
     }
@@ -183,10 +191,22 @@ impl Engine {
             .tables
             .sort_by(|a, b| a.smallest().cmp(b.smallest()));
         if !check_tables_order(&new_level.tables) {
-            panic!("invalid table order, shard:[{}:{}][{:?},{:?}][{:?}], cf:{}, level:{}, creates:{:?}, deletes:{:?}, tables:{:?}",
-                shard.id, shard.ver, &shard.start, &shard.end,
-                   shard.get_all_files(), cf, level, creates, del_ids,
-                new_level.tables.iter().map(|t| t.id()).collect::<Vec<u64>>(),
+            panic!(
+                "invalid table order, shard:[{}:{}][{:?},{:?}][{:?}], cf:{}, level:{}, creates:{:?}, deletes:{:?}, tables:{:?}",
+                shard.id,
+                shard.ver,
+                &shard.start,
+                &shard.end,
+                shard.get_all_files(),
+                cf,
+                level,
+                creates,
+                del_ids,
+                new_level
+                    .tables
+                    .iter()
+                    .map(|t| t.id())
+                    .collect::<Vec<u64>>(),
             );
         };
         if !cas_resource(&shard.cfs[cf], g, shared, Arc::new(new_scf)) {
@@ -221,9 +241,7 @@ impl Engine {
                 new_l0s.tbls.push(old_l0.clone());
             }
         }
-        new_l0s
-            .tbls
-            .sort_by(|a, b| b.commit_ts().cmp(&a.commit_ts()));
+        new_l0s.tbls.sort_by(|a, b| b.version().cmp(&a.version()));
         let ok = cas_resource(&shard.l0_tbls, g, old_l0s_shared, Arc::new(new_l0s));
         assert!(ok);
         let mut scf_builders: Vec<ShardCFBuilder> = Vec::new();
@@ -300,10 +318,10 @@ impl Engine {
             let fs = self.fs.clone();
             let opts = dfs::Options::new(cs.shard_id, cs.shard_ver);
             let tx = result_tx.clone();
-            self.fs.get_future_pool().spawn_ok(async move {
+            self.runtime.spawn(async move {
                 let res = fs.prefetch(id, opts).await;
                 tx.send(res).unwrap();
-            })
+            });
         }
         for _ in 0..length {
             result_rx.recv().unwrap()?;
@@ -323,7 +341,7 @@ pub(crate) fn check_tables_order(tables: &Vec<SSTable>) -> bool {
             || ti.smallest() >= tj.smallest()
             || ti.biggest() >= tj.biggest()
         {
-            return false
+            return false;
         }
     }
     true

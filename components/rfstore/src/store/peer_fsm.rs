@@ -9,7 +9,7 @@ use kvproto::raft_cmdpb::{
     Request, StatusCmdType, StatusResponse,
 };
 use kvproto::raft_serverpb::RaftMessage;
-use protobuf::{Message, ProtobufEnum};
+use protobuf::ProtobufEnum;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, Ready, StateRole};
 use raft_proto::eraftpb;
@@ -18,13 +18,11 @@ use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::time::Instant;
 use std::{cmp, u64};
-use tikv_util::worker::ScheduleError;
 use tikv_util::{box_err, debug, error, info, trace, warn};
 
-use crate::store::cmd_resp::{bind_term, err_resp, new_error};
+use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::Callback;
 use crate::store::peer::{ConsistencyState, Peer};
-use crate::store::{raft_state_key, SplitMethod, SplitTask, worker};
 use crate::store::{notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask};
 use crate::store::{
     raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
@@ -35,10 +33,10 @@ use crate::store::{
     write_peer_state, ChangePeer, ExecResult, MsgApplyChangeSetResult, SnapState,
     EXTRA_CTX_SPLIT_FILE_DONE,
 };
+use crate::store::{SplitMethod, SplitTask};
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
-use tikv_util::future::paired_future_callback;
 use txn_types::WriteBatchFlags;
 
 /// Limits the maximum number of regions returned by error.
@@ -1176,8 +1174,17 @@ impl<'a> PeerMsgHandler<'a> {
         }
         let region = self.fsm.peer.region();
         let peer = &self.fsm.peer.peer;
-        let split_task = SplitTask::new(region.clone(), peer.clone(), cb, SplitMethod::Keys(split_keys.clone()));
-        self.ctx.global.split_scheduler.schedule(split_task).unwrap();
+        let split_task = SplitTask::new(
+            region.clone(),
+            peer.clone(),
+            cb,
+            SplitMethod::Keys(split_keys.clone()),
+        );
+        self.ctx
+            .global
+            .split_scheduler
+            .schedule(split_task)
+            .unwrap();
     }
 
     fn validate_split_region(
@@ -1268,7 +1275,7 @@ impl<'a> PeerMsgHandler<'a> {
             // So need to wait for the split, then proposed it.
             let store = self.peer.mut_store();
             store.pending_flush = Some(cs);
-            return
+            return;
         }
         self.propose_change_set(cs);
     }
@@ -1283,7 +1290,10 @@ impl<'a> PeerMsgHandler<'a> {
         let cb = Callback::write(Box::new(move |resp| {
             if resp.response.get_header().has_error() {
                 let err_msg = resp.response.get_header().get_error().get_message();
-                error!("failed to propose engine change set {:?} for {:?}", err_msg, tag);
+                error!(
+                    "failed to propose engine change set {:?} for {:?}",
+                    err_msg, tag
+                );
             } else {
                 info!("proposed meta change event for {:?}", tag);
             }
@@ -1383,38 +1393,6 @@ pub fn new_admin_request(region_id: u64, peer: metapb::Peer) -> RaftCmdRequest {
     let mut request = RaftCmdRequest::default();
     request.mut_header().set_region_id(region_id);
     request.mut_header().set_peer(peer);
-    request
-}
-
-fn new_verify_hash_request(
-    region_id: u64,
-    peer: metapb::Peer,
-    state: &ConsistencyState,
-) -> RaftCmdRequest {
-    let mut request = new_admin_request(region_id, peer);
-
-    let mut admin = AdminRequest::default();
-    admin.set_cmd_type(AdminCmdType::VerifyHash);
-    admin.mut_verify_hash().set_index(state.index);
-    admin.mut_verify_hash().set_context(state.context.clone());
-    admin.mut_verify_hash().set_hash(state.hash.clone());
-    request.set_admin_request(admin);
-    request
-}
-
-fn new_compact_log_request(
-    region_id: u64,
-    peer: metapb::Peer,
-    compact_index: u64,
-    compact_term: u64,
-) -> RaftCmdRequest {
-    let mut request = new_admin_request(region_id, peer);
-
-    let mut admin = AdminRequest::default();
-    admin.set_cmd_type(AdminCmdType::CompactLog);
-    admin.mut_compact_log().set_compact_index(compact_index);
-    admin.mut_compact_log().set_compact_term(compact_term);
-    request.set_admin_request(admin);
     request
 }
 

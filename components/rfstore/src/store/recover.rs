@@ -2,7 +2,7 @@
 
 use crate::store::{
     parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, RaftApplyState, RaftState,
-    KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
+    RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
 };
 use bytes::Buf;
 use engine_traits::RaftEngineReadOnly;
@@ -14,7 +14,7 @@ use protobuf::{Message, ProtobufEnum};
 use raft_proto::eraftpb;
 use slog_global::info;
 use std::sync::Arc;
-use tikv_util::{error, warn};
+use tikv_util::{debug, error, warn};
 
 #[derive(Clone)]
 pub struct RecoverHandler {
@@ -65,6 +65,8 @@ impl RecoverHandler {
                 .unwrap();
             let mut raft_state = RaftState::default();
             raft_state.unmarshal(val.as_ref());
+            let id_ver = RegionIDVer::from_region(&region);
+            debug!("load raft state {:?} for region {}", raft_state, id_ver);
             return Ok((region, raft_state.commit));
         }
         Err(kvengine::Error::ErrOpen(
@@ -104,9 +106,12 @@ impl kvengine::RecoverHandler for RecoverHandler {
         shard: &Arc<Shard>,
         meta: &ShardMeta,
     ) -> kvengine::Result<()> {
-        info!("recover region:{}, ver:{}", shard.id, shard.ver);
-        let mut ctx = ApplyContext::new(engine.clone(), None, None, None);
         let applied_index = shard.get_write_sequence();
+        info!(
+            "recover region:{}, ver:{} from index {}",
+            shard.id, shard.ver, applied_index
+        );
+        let mut ctx = ApplyContext::new(engine.clone(), None, None, None);
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
         let (region_meta, commit_idx) = self.load_region_meta(shard.id, shard.ver)?;

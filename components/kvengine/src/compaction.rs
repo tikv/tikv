@@ -70,7 +70,6 @@ pub(crate) struct CompactionRequest {
     pub(crate) block_size: usize,
     pub(crate) max_table_size: usize,
     pub(crate) bloom_fpr: f64,
-    pub(crate) instance_id: u32,
     pub(crate) start_id: u64,
     pub(crate) end_id: u64,
 }
@@ -435,7 +434,6 @@ impl Engine {
             shard_ver: shard.ver,
             cf,
             level,
-            instance_id: self.opts.instance_id,
             safe_ts: load_u64(&self.managed_safe_ts),
             block_size: self.opts.table_builder_options.block_size,
             max_table_size: self.opts.table_builder_options.max_table_size,
@@ -550,7 +548,8 @@ pub(crate) fn compact_l0(
             }
             let afs = fs.clone();
             let atx = tx.clone();
-            fs.get_future_pool().spawn_ok(async move {
+
+            fs.get_runtime().spawn(async move {
                 if let Err(err) = afs.create(tbl_create.id, data, opts).await {
                     atx.send(Err(err)).unwrap();
                 } else {
@@ -580,7 +579,7 @@ pub(crate) fn load_table_files(
         let aid = *id;
         let atx = tx.clone();
         let afs = fs.clone();
-        fs.get_future_pool().spawn_ok(async move {
+        fs.get_runtime().spawn(async move {
             let res = afs
                 .read_file(aid, opts)
                 .await
@@ -729,10 +728,6 @@ impl CompactL0Helper {
         table_create.set_biggest(res.biggest);
         Ok((table_create, buf.freeze()))
     }
-
-    fn set_fid(&mut self, id: u64) {
-        self.builder.reset(id);
-    }
 }
 
 pub(crate) fn compact_tables(
@@ -824,7 +819,7 @@ pub(crate) fn compact_tables(
         tbl_create.set_biggest(res.biggest);
         let afs = fs.clone();
         let atx = tx.clone();
-        fs.get_future_pool().spawn_ok(async move {
+        fs.get_runtime().spawn(async move {
             if let Err(err) = afs.create(tbl_create.id, buf.freeze(), opts).await {
                 atx.send(Err(err)).unwrap();
             } else {
@@ -859,8 +854,8 @@ fn filter(safe_ts: u64, cf: usize, val: table::Value) -> Decision {
     let user_meta = val.user_meta();
     if cf == WRITE_CF {
         if user_meta.len() == 16 {
-            let commit_ts = LittleEndian::read_u64(&user_meta[8..]);
-            if commit_ts < safe_ts && val.get_value().len() == 0 {
+            let version = LittleEndian::read_u64(&user_meta[8..]);
+            if version < safe_ts && val.get_value().len() == 0 {
                 return Decision::MarkTombStone;
             }
         }

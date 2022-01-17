@@ -44,7 +44,12 @@ impl Engine {
     pub(crate) fn flush_mem_table(&self, task: FlushTask) -> FlushResultRx {
         let (res_tx, res_rx) = mpsc::bounded(1);
         let mut cs = new_change_set(task.shard_id, task.shard_ver, task.split_stage);
-        cs.set_flush(pb::Flush::new());
+        let flush_version = task.mem_tbl.get_version();
+        debug!(
+            "{}:{} flush version {}",
+            flush_version, task.shard_id, task.shard_ver
+        );
+        cs.mut_flush().set_version(flush_version);
         if let Some(props) = task.mem_tbl.get_properties() {
             cs.mut_flush().set_properties(props);
         }
@@ -93,7 +98,7 @@ impl Engine {
         let l0_data = l0_builder.finish();
         let (smallest, biggest) = l0_builder.smallest_biggest();
         info!(
-            "shard {}:{} flush memtable id:{}, size:{}, l0_size:{}, commit_ts:{}",
+            "shard {}:{} flush memtable id:{}, size:{}, l0_size:{}, version:{}",
             task.shard_id,
             task.shard_ver,
             fid,
@@ -102,7 +107,7 @@ impl Engine {
             m.get_version()
         );
         let fs = self.fs.clone();
-        self.fs.get_future_pool().spawn_ok(async move {
+        self.fs.get_runtime().spawn(async move {
             let task = &result.task;
             if let Err(err) = fs
                 .create(
@@ -135,7 +140,10 @@ impl Engine {
                 }
                 let id = result.change_set.shard_id;
                 let ver = result.change_set.shard_ver;
-                debug!("engine on flush result {}:{} {:?}", id, ver, &result.change_set);
+                debug!(
+                    "engine on flush result {}:{} {:?}",
+                    id, ver, &result.change_set
+                );
                 self.meta_change_listener.on_change_set(result.change_set);
                 let task = result.task;
                 if task.next_mem_tbl_size > 0 {

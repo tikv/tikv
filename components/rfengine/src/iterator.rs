@@ -17,7 +17,6 @@ pub(crate) struct WALIterator {
     pub(crate) offset: u64,
 }
 
-const READER_BUF_SIZE: usize = 256 * 1024;
 const MAX_BATCH_SIZE: usize = 256 * 1024 * 1024;
 
 impl WALIterator {

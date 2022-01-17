@@ -4,7 +4,7 @@
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use crate::storage::mvcc::{
     default_not_found_error,
-    reader::{OverlappedWrite, TxnCommitRecord, cloud_reader::CloudReader},
+    reader::{cloud_reader::CloudReader, OverlappedWrite, TxnCommitRecord},
     Result,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -27,9 +27,9 @@ pub struct SnapshotReader<S: EngineSnapshot> {
 
 impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn new(start_ts: TimeStamp, snapshot: S, fill_cache: bool) -> Self {
-        let cloud_reader = snapshot.get_kvengine_snap().map(|snap| {
-            CloudReader::new(snap.clone())
-        });
+        let cloud_reader = snapshot
+            .get_kvengine_snap()
+            .map(|snap| CloudReader::new(snap.clone()));
         SnapshotReader {
             reader: MvccReader::new(snapshot, None, fill_cache),
             start_ts,
@@ -40,7 +40,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn get_txn_commit_record(&mut self, key: &Key) -> Result<TxnCommitRecord> {
         if self.cloud_reader.is_some() {
-            return self.cloud_reader.as_mut().unwrap().get_txn_commit_record(key, self.start_ts);
+            return self
+                .cloud_reader
+                .as_mut()
+                .unwrap()
+                .get_txn_commit_record(key, self.start_ts);
         }
         self.reader.get_txn_commit_record(key, self.start_ts)
     }
@@ -56,9 +60,12 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         if self.cloud_reader.is_some() {
-            return Ok(self.cloud_reader.as_mut().unwrap()
+            return Ok(self
+                .cloud_reader
+                .as_mut()
+                .unwrap()
                 .get_write(key, ts, Some(self.start_ts))?
-                          .is_some());
+                .is_some());
         }
         Ok(self
             .reader
@@ -69,7 +76,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn get(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
         if self.cloud_reader.is_some() {
-            return self.cloud_reader.as_mut().unwrap().get(key, ts, Some(self.start_ts));
+            return self
+                .cloud_reader
+                .as_mut()
+                .unwrap()
+                .get(key, ts, Some(self.start_ts));
         }
         self.reader.get(key, ts, Some(self.start_ts))
     }
@@ -77,7 +88,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn get_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Write>> {
         if self.cloud_reader.is_some() {
-            return self.cloud_reader.as_mut().unwrap().get_write(key, ts, Some(self.start_ts));
+            return self
+                .cloud_reader
+                .as_mut()
+                .unwrap()
+                .get_write(key, ts, Some(self.start_ts));
         }
         self.reader.get_write(key, ts, Some(self.start_ts))
     }
@@ -93,7 +108,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         if self.cloud_reader.is_some() {
-            return Ok(write.short_value.unwrap())
+            return Ok(write.short_value.unwrap());
         }
         self.reader.load_data(key, write)
     }
@@ -107,7 +122,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         prev_write: Option<Write>,
     ) -> Result<OldValue> {
         if self.cloud_reader.is_some() {
-            return self.cloud_reader.as_mut().unwrap().get_old_value(key, ts, prev_write_loaded, prev_write);
+            return self
+                .cloud_reader
+                .as_mut()
+                .unwrap()
+                .get_old_value(prev_write);
         }
         self.reader
             .get_old_value(key, ts, prev_write_loaded, prev_write)
@@ -116,7 +135,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn take_statistics(&mut self) -> Statistics {
         if self.cloud_reader.is_some() {
-            return std::mem::take(&mut self.cloud_reader.as_mut().unwrap().statistics)
+            return std::mem::take(&mut self.cloud_reader.as_mut().unwrap().statistics);
         }
         std::mem::take(&mut self.reader.statistics)
     }

@@ -107,7 +107,7 @@ impl WriteBatch {
 }
 
 impl Engine {
-    pub(crate) fn switch_mem_table(&self, shard: &Shard, commit_ts: u64) -> memtable::CFTable {
+    pub(crate) fn switch_mem_table(&self, shard: &Shard, version: u64) -> memtable::CFTable {
         let g = &epoch::pin();
         let mut writable = shard.get_writable_mem_table(g).clone();
         if writable.is_empty() {
@@ -116,12 +116,12 @@ impl Engine {
             let new_tbl = memtable::CFTable::new();
             shard.atomic_add_mem_table(g, new_tbl);
         }
-        writable.set_version(commit_ts);
+        writable.set_version(version);
         info!(
             "shard {}:{} set mem-table version {}, empty {}, size {}",
             shard.id,
             shard.ver,
-            commit_ts,
+            version,
             writable.is_empty(),
             writable.size()
         );
@@ -131,8 +131,8 @@ impl Engine {
     pub fn write(&self, wb: &mut WriteBatch) {
         let g = &epoch::pin();
         let shard = self.get_shard(wb.shard_id).unwrap();
-        let commit_ts = shard.base_ts + wb.sequence;
-        self.update_write_batch_version(wb, commit_ts);
+        let version = shard.base_version + wb.sequence;
+        self.update_write_batch_version(wb, version);
         if shard.is_splitting() {
             if shard.ingest_pre_split_seq == 0 || wb.sequence > shard.ingest_pre_split_seq {
                 let split_ctx = shard.get_split_ctx(g);
@@ -144,7 +144,7 @@ impl Engine {
         }
         let mut mem_tbl = shard.get_writable_mem_table(g);
         if mem_tbl.size() + wb.estimated_size() > shard.get_max_mem_table_size() as usize {
-            let old_mem_tbl = self.switch_mem_table(&shard, commit_ts);
+            let old_mem_tbl = self.switch_mem_table(&shard, version);
             self.schedule_flush_task(&shard, old_mem_tbl);
             mem_tbl = shard.get_writable_mem_table(g);
         }
@@ -166,11 +166,11 @@ impl Engine {
         store_u64(&shard.write_sequence, wb.sequence);
     }
 
-    fn update_write_batch_version(&self, wb: &mut WriteBatch, commit_ts: u64) {
+    fn update_write_batch_version(&self, wb: &mut WriteBatch, version: u64) {
         for cf in 0..NUM_CFS {
             if !self.opts.cfs[cf].managed {
                 wb.get_cf_mut(cf).iterate(|e, _| {
-                    e.version = commit_ts;
+                    e.version = version;
                 });
             };
         }

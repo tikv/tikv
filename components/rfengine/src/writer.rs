@@ -191,7 +191,7 @@ pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {
 }
 
 pub(crate) fn raft_log_size(op: &RaftLogOp) -> usize {
-    ENTRY_HEADER_SIZE + 16 + 8 + op.data.len()
+    ENTRY_HEADER_SIZE + 16 + 8 + 1 + op.data.len()
 }
 
 pub(crate) fn state_size(key: &[u8], val: &[u8]) -> usize {

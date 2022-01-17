@@ -7,7 +7,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use moka::sync::SegmentedCache;
 
-use crate::{dfs, table::Value, NUM_CFS, Iterator};
+use crate::{dfs, table::Value, NUM_CFS};
 
 use super::*;
 use crate::table::table::Result;
@@ -16,14 +16,14 @@ const L0_FOOTER_SIZE: usize = std::mem::size_of::<L0Footer>();
 
 #[derive(Default, Clone)]
 struct L0Footer {
-    commit_ts: u64,
+    version: u64,
     num_cfs: u32,
     magic: u32,
 }
 
 impl L0Footer {
     fn unmarshal(&mut self, bin: &[u8]) {
-        self.commit_ts = LittleEndian::read_u64(bin);
+        self.version = LittleEndian::read_u64(bin);
         self.num_cfs = LittleEndian::read_u32(&bin[8..]);
         self.magic = LittleEndian::read_u32(&bin[12..]);
     }
@@ -58,7 +58,6 @@ pub struct L0TableCore {
     footer: L0Footer,
     file: Arc<dyn dfs::File>,
     cfs: [Option<sstable::SSTable>; NUM_CFS],
-    cf_offs: [u32; NUM_CFS],
     smallest: Bytes,
     biggest: Bytes,
 }
@@ -96,7 +95,6 @@ impl L0TableCore {
             footer,
             file,
             cfs,
-            cf_offs,
             smallest,
             biggest,
         })
@@ -146,27 +144,24 @@ impl L0TableCore {
         self.biggest.chunk()
     }
 
-    pub fn commit_ts(&self) -> u64 {
-        self.footer.commit_ts
+    pub fn version(&self) -> u64 {
+        self.footer.version
     }
 }
 
 pub struct L0Builder {
     builders: Vec<Builder>,
-    commit_ts: u64,
+    version: u64,
 }
 
 impl L0Builder {
-    pub fn new(fid: u64, opt: TableBuilderOptions, commit_ts: u64) -> Self {
+    pub fn new(fid: u64, opt: TableBuilderOptions, version: u64) -> Self {
         let mut builders = Vec::with_capacity(4);
         for _ in 0..NUM_CFS {
             let builder = Builder::new(fid, opt);
             builders.push(builder);
         }
-        Self {
-            builders,
-            commit_ts,
-        }
+        Self { builders, version }
     }
 
     pub fn add(&mut self, cf: usize, key: &[u8], val: Value) {
@@ -190,7 +185,7 @@ impl L0Builder {
         for offset in offsets {
             buf.put_u32_le(offset);
         }
-        buf.put_u64_le(self.commit_ts);
+        buf.put_u64_le(self.version);
         buf.put_u32_le(NUM_CFS as u32);
         buf.put_u32_le(MAGIC_NUMBER);
         buf.freeze()

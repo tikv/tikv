@@ -2342,6 +2342,37 @@ impl Default for ResolvedTsConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct DFSConfig {
+    #[online_config(skip)]
+    pub tenant_id: u32,
+
+    #[online_config(skip)]
+    pub s3_endpoint: String,
+
+    #[online_config(skip)]
+    pub s3_key_id: String,
+
+    #[online_config(skip)]
+    pub s3_secret_key: String,
+
+    #[online_config(skip)]
+    pub s3_bucket: String,
+
+    #[online_config(skip)]
+    pub s3_region: String,
+}
+
+impl DFSConfig {
+    #[allow(dead_code)]
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        // TODO(x) validate dfs config
+        Ok(())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2450,6 +2481,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(submodule)]
+    pub dfs: DFSConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2488,6 +2522,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            dfs: DFSConfig::default(),
         }
     }
 }

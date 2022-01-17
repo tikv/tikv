@@ -51,6 +51,17 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     Ok(())
 }
 
+pub fn load_store_ident(engines: &Engines) -> Option<StoreIdent> {
+    match engines.raft.get_state(0, STORE_IDENT_KEY) {
+        None => None,
+        Some(bin) => {
+            let mut ident = StoreIdent::default();
+            ident.merge_from_bytes(&bin).unwrap();
+            Some(ident)
+        }
+    }
+}
+
 /// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
@@ -72,13 +83,14 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     Ok(())
 }
 
-fn initial_ingest_tree(region_id: u64, version: u64) -> kvengine::IngestTree {
+fn initial_ingest_tree(region_id: u64, shard_ver: u64) -> kvengine::IngestTree {
     let mut change_set = ChangeSet::default();
     change_set.set_shard_id(region_id);
-    change_set.set_shard_ver(version);
+    change_set.set_shard_ver(shard_ver);
     change_set.set_sequence(RAFT_INIT_LOG_INDEX);
     let mut snap = Snapshot::default();
     snap.set_end(kvengine::GLOBAL_SHARD_END_KEY.to_vec());
+    snap.set_write_sequence(RAFT_INIT_LOG_INDEX);
     let props = new_initial_properties(region_id);
     snap.set_properties(props);
     change_set.set_snapshot(snap);

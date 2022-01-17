@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use slog_global::info;
 use std::{
     collections::HashMap,

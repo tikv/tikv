@@ -10,12 +10,12 @@ use kvproto::pdpb;
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use pd_client::PdClient;
 use protobuf::Message;
+use raft_proto::eraftpb;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::util;
 use raftstore::store::util::is_initial_msg;
-use raft_proto::eraftpb;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -114,7 +114,13 @@ impl RaftBatchSystem {
         let pd_scheduler = workers.pd_worker.scheduler();
         let split_scheduler = workers.split_worker.scheduler();
         let split_remote = workers.split_worker.remote();
-        let split_runner = SplitRunner::new(engines.kv.clone(), self.router(), split_scheduler.clone(), pd_scheduler.clone(), split_remote);
+        let split_runner = SplitRunner::new(
+            engines.kv.clone(),
+            self.router(),
+            split_scheduler.clone(),
+            pd_scheduler.clone(),
+            split_remote,
+        );
         workers.split_worker.start(split_runner);
         let ctx = GlobalContext {
             cfg,
@@ -152,6 +158,7 @@ impl RaftBatchSystem {
             ctx.cfg.value().pd_store_heartbeat_tick_interval.into(),
             concurrency_manager,
             workers.pd_worker.remote(),
+            ctx.engines.kv.clone(),
         );
         assert!(workers.pd_worker.start(pd_runner));
         self.workers = Some(workers);
@@ -298,7 +305,8 @@ impl StoreMeta {
             panic!("{} region corrupted", peer.region_id);
         }
         peer.set_region(host, region);
-        self.readers.insert(region_id, ReadDelegate::from_peer(peer));
+        self.readers
+            .insert(region_id, ReadDelegate::from_peer(peer));
     }
 }
 
@@ -457,6 +465,13 @@ impl StoreMsgHandler {
         if self.store.ticker.is_on_store_tick(STORE_TICK_PD_HEARTBEAT) {
             self.on_pd_heartbeat_tick();
         }
+        if self
+            .store
+            .ticker
+            .is_on_store_tick(STORE_TICK_UPDATE_SAFE_TS)
+        {
+            self.on_update_safe_ts();
+        }
     }
 
     fn store_heartbeat_pd(&mut self) {
@@ -495,6 +510,15 @@ impl StoreMsgHandler {
         self.store.ticker.schedule_store(STORE_TICK_PD_HEARTBEAT);
     }
 
+    fn on_update_safe_ts(&mut self) {
+        self.ctx
+            .global
+            .pd_scheduler
+            .schedule(PdTask::UpdateSafeTS)
+            .unwrap();
+        self.store.ticker.schedule_store(STORE_TICK_UPDATE_SAFE_TS);
+    }
+
     fn start(&mut self, store: metapb::Store) {
         if self.store.start_time.is_some() {
             panic!("store unable to start again");
@@ -503,6 +527,7 @@ impl StoreMsgHandler {
         self.store.start_time = Some(time::get_time());
         self.store_heartbeat_pd();
         self.store.ticker.schedule_store(STORE_TICK_PD_HEARTBEAT);
+        self.store.ticker.schedule_store(STORE_TICK_UPDATE_SAFE_TS);
     }
 
     fn on_store_unreachable(&mut self, store_id: u64) {

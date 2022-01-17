@@ -1,23 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Result as EngineResult};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::Region;
-use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
+use engine_traits::{CfName, IterOptions, ReadOptions};
 use std::sync::Arc;
 
 use crate::{
-    self as kv, Error, Error as KvError, ErrorInner, Iterator as EngineIterator,
-    Snapshot as EngineSnapshot, SnapshotExt,
+    self as kv, Error, ErrorInner,
 };
 
 use crate::{DummySnapshotExt, Iterator, Snapshot};
-use engine_traits::Error as EngineError;
 use kvengine::SnapAccess;
 use rfstore::Error as RaftServerError;
-use tikv_util::keybuilder::KeyBuilder;
-use tikv_util::metrics::CRITICAL_ERROR;
 use txn_types::{Key, Value};
 
 impl From<RaftServerError> for Error {
@@ -26,6 +18,7 @@ impl From<RaftServerError> for Error {
     }
 }
 
+#[allow(unused)]
 impl Snapshot for rfstore::store::RegionSnapshot {
     type Iter = rfstore::store::RegionSnapshotIterator;
     type Ext<'a> = DummySnapshotExt;
@@ -69,6 +62,7 @@ impl Snapshot for rfstore::store::RegionSnapshot {
     }
 }
 
+#[allow(dead_code)]
 impl Iterator for rfstore::store::RegionSnapshotIterator {
     fn next(&mut self) -> kv::Result<bool> {
         unreachable!()

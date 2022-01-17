@@ -30,13 +30,13 @@ use crate::coprocessor::interceptors::*;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
+use crate::storage::txn::CloudStore;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use resource_metering::{FutureExt, ResourceMeteringTag, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::time::Instant;
 use txn_types::Lock;
-use crate::storage::txn::CloudStore;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
 /// which means they don't need a permit from the semaphore before execution.

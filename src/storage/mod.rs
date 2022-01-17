@@ -65,7 +65,6 @@ pub use self::{
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
-use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSwap};
 use crate::storage::txn::flow_controller::FlowController;
 
@@ -81,6 +80,7 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 
+use crate::storage::txn::CloudStore;
 use engine_traits::{
     key_prefix::{self, KeyPrefix},
     raw_value::{ttl_to_expire_ts, RawValue},
@@ -102,10 +102,8 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use rfstore::LOCK_CF;
 use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
-use crate::storage::txn::CloudStore;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -464,7 +462,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // The bypass_locks and access_locks set will be checked at most once.
                 // `TsSet::vec` is more efficient here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                let access_locks = TsSet::vec_from_u64s(ctx.take_committed_locks());
 
                 let snap_ctx = prepare_snap_ctx(
                     &ctx,
@@ -638,7 +635,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     match snap.await {
                         Ok(snapshot) => {
                             if snapshot.get_kvengine_snap().is_some() {
-                                let cloud_store = CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
+                                let cloud_store =
+                                    CloudStore::new(snapshot, start_ts.into_inner(), bypass_locks);
                                 let mut stat = Statistics::default();
                                 let perf_statistics = PerfStatisticsInstant::new();
                                 let v = cloud_store.get(&key, &mut stat);
@@ -754,7 +752,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
-                let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
 
                 let snap_ctx = prepare_snap_ctx(
                     &ctx,
@@ -880,7 +877,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
-                let access_locks = TsSet::from_u64s(ctx.take_committed_locks());
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 if !ctx.get_stale_read() {
@@ -1062,7 +1058,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let mut reader = mvcc::CloudReader::new(snapshot.get_kvengine_snap().unwrap().clone());
+                    let mut reader =
+                        mvcc::CloudReader::new(snapshot.get_kvengine_snap().unwrap().clone());
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),

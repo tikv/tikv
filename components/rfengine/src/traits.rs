@@ -2,8 +2,7 @@
 
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{RFEngine, StateKey, WriteBatch};
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::{RFEngine, WriteBatch};
 use engine_traits::Error::EntriesUnavailable;
 use engine_traits::{RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;

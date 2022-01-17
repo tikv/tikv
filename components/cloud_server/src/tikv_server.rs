@@ -699,12 +699,20 @@ impl TiKVServer {
     fn init_raw_engines(pd: Arc<pd_client::RpcClient>, conf: &TiKvConfig) -> Engines {
         // Create raft engine.
         let raft_db_path = Path::new(&conf.raft_store.raftdb_path);
+        let kv_engine_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("db"));
         let wal_size = 1024 * 1024 * 1024;
         let mut rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
-
-        let dfs = Arc::new(kvengine::dfs::InMemFS::new());
+        let dfs_conf = &conf.dfs;
+        let dfs = Arc::new(kvengine::dfs::S3FS::new(
+            dfs_conf.tenant_id,
+            kv_engine_path,
+            dfs_conf.s3_endpoint.clone(),
+            dfs_conf.s3_key_id.clone(),
+            dfs_conf.s3_secret_key.clone(),
+            dfs_conf.s3_region.clone(),
+            dfs_conf.s3_bucket.clone(),
+        ));
         let mut kv_opts = kvengine::Options::default();
-        kv_opts.dir = PathBuf::from(&conf.storage.data_dir);
         let opts = Arc::new(kv_opts);
         let recoverer = rfstore::store::RecoverHandler::new(rf_engine.clone());
         let meta_iter = recoverer.clone();

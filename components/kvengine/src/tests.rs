@@ -5,6 +5,7 @@ use bytes::{Buf, Bytes};
 use kvenginepb as pb;
 use kvenginepb::ChangeSet;
 use protobuf::RepeatedField;
+use std::path::PathBuf;
 use std::{
     ops::Deref,
     sync::{atomic::AtomicU64, Arc},
@@ -110,7 +111,7 @@ impl EngineTester {
         Self {
             core: Arc::new(EngineTesterCore {
                 metas,
-                fs: Arc::new(InMemFS::new()),
+                fs: Arc::new(InMemFS::new(PathBuf::from("/tmp"))),
                 opts: Arc::new(new_test_options()),
                 id: AtomicU64::new(0),
             }),
@@ -339,8 +340,7 @@ impl Splitter {
             "splitter before block on split-files ver {}",
             self.shard_ver
         );
-        let cs =
-            self.engine.split_shard_files(1, self.shard_ver).unwrap();
+        let cs = self.engine.split_shard_files(1, self.shard_ver).unwrap();
         self.send_task(cs);
         info!("splitter sent split-files task to applier");
     }
@@ -422,12 +422,7 @@ fn i_to_key(i: i32) -> Vec<u8> {
     format!("key{:06}", i).into_bytes()
 }
 
-fn load_data(
-    opts: Arc<Options>,
-    begin: usize,
-    end: usize,
-    tx: mpsc::Sender<ApplyTask>,
-) {
+fn load_data(opts: Arc<Options>, begin: usize, end: usize, tx: mpsc::Sender<ApplyTask>) {
     let mut wb = WriteBatch::new(1, opts.cfs.clone());
     for i in begin..end {
         let key = format!("key{:06}", i);
@@ -455,12 +450,7 @@ fn write_data(wb: WriteBatch, applier_tx: &mpsc::Sender<ApplyTask>) {
     result_rx.recv().unwrap().unwrap();
 }
 
-fn check_get(
-    begin: usize,
-    end: usize,
-    split_keys: &Vec<Vec<u8>>,
-    en: &Engine,
-) {
+fn check_get(begin: usize, end: usize, split_keys: &Vec<Vec<u8>>, en: &Engine) {
     for i in begin..end {
         let key = format!("key{:06}", i);
         let shard = get_shard_for_key(key.as_bytes(), en);
@@ -522,7 +512,7 @@ fn get_shard_for_key(key: &[u8], en: &Engine) -> Arc<Shard> {
     return en.get_shard(1).unwrap();
 }
 
-fn init_logger() {
+pub(crate) fn init_logger() {
     use slog::Drain;
     let decorator = slog_term::PlainDecorator::new(std::io::stdout());
     let drain = slog_term::CompactFormat::new(decorator).build();

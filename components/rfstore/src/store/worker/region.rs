@@ -1,7 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::cmd_resp::err_resp;
-use crate::store::{Callback, MsgApplyChangeSetResult, MsgWaitFollowerSplitFiles, PeerMsg, RegionIDVer};
+use crate::store::{
+    Callback, MsgApplyChangeSetResult, MsgWaitFollowerSplitFiles, PeerMsg, RegionIDVer,
+};
 use crate::RaftRouter;
 use bytes::Bytes;
 use kvenginepb::SplitStage;
@@ -9,20 +11,16 @@ use kvproto::{metapb, raft_cmdpb};
 use protobuf::{ProtobufEnum, RepeatedField};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
-use yatp::Remote;
 use tikv_util::mpsc::Receiver;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{error, info, warn};
+use yatp::Remote;
 
 /// Region related task
 #[derive(Debug)]
 pub enum Task {
-    ApplyChangeSet {
-        change: kvenginepb::ChangeSet,
-    },
-    RejectChangeSet {
-        change: kvenginepb::ChangeSet,
-    },
+    ApplyChangeSet { change: kvenginepb::ChangeSet },
+    RejectChangeSet { change: kvenginepb::ChangeSet },
 }
 
 impl Display for Task {
@@ -46,7 +44,7 @@ impl Display for Task {
 #[derive(PartialEq, Eq, Hash)]
 struct ChangeSetKey {
     region_id: u64,
-    sequence: u64
+    sequence: u64,
 }
 
 impl ChangeSetKey {
@@ -85,7 +83,8 @@ impl Runner {
     ) -> Option<Receiver<crate::Result<Task>>> {
         let kv = &self.kv;
         let tp = get_change_set_type(&change_set);
-        let change_set_key = ChangeSetKey::new(change_set.get_shard_id(), change_set.get_sequence());
+        let change_set_key =
+            ChangeSetKey::new(change_set.get_shard_id(), change_set.get_sequence());
         let id_ver = RegionIDVer::new(change_set.get_shard_id(), change_set.get_shard_ver());
         if let Some(meta_change) = self.rejects.remove(&change_set_key) {
             if let Some(shard) = self.kv.get_shard(change_set.get_shard_id()) {

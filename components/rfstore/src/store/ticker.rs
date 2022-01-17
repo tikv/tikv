@@ -38,7 +38,7 @@ impl Ticker {
         let base_interval = config.raft_base_tick_interval.as_millis();
         let schedules = vec![
             TickSchedule::new(config.pd_store_heartbeat_tick_interval.as_millis() / base_interval),
-            TickSchedule::new(config.consistency_check_interval.as_millis() / base_interval),
+            TickSchedule::new(config.update_safe_ts_interval.as_millis() / base_interval),
         ];
         Self { tick: 0, schedules }
     }
@@ -91,3 +91,4 @@ pub struct StoreTick {
 }
 
 pub(crate) const STORE_TICK_PD_HEARTBEAT: StoreTick = StoreTick { idx: 0 };
+pub(crate) const STORE_TICK_UPDATE_SAFE_TS: StoreTick = StoreTick { idx: 1 };

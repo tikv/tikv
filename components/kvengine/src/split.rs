@@ -7,8 +7,6 @@ use crate::{table::sstable, *};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use crossbeam_epoch as epoch;
-use futures::future::try_join_all;
-use futures::task::SpawnExt;
 use kvenginepb as pb;
 use slog_global::{info, warn};
 
@@ -31,7 +29,8 @@ impl Engine {
         if !shard.set_split_keys(cs.get_pre_split().get_keys()) {
             return Err(Error::WrongSplitStage);
         }
-        let mem_tbl = self.switch_mem_table(&shard, shard.load_mem_table_ts());
+        let version = shard.base_version + cs.sequence;
+        let mem_tbl = self.switch_mem_table(&shard, version);
         self.schedule_flush_task(&shard, mem_tbl);
         Ok(())
     }
@@ -44,9 +43,9 @@ impl Engine {
         }
         let mut cs = new_change_set(shard_id, shard_ver, pb::SplitStage::SplitFileDone);
 
-        let guard = shard.compact_lock.lock().unwrap();
+        let _guard = shard.compact_lock.lock().unwrap();
         self.wait_for_pre_split_flush_state(&shard);
-        self.split_shard_l0_files(&shard, cs.mut_split_files());
+        self.split_shard_l0_files(&shard, cs.mut_split_files())?;
 
         let dfs_opts = dfs::Options::new(shard_id, shard_ver);
         for cf in 0..NUM_CFS {
@@ -82,11 +81,7 @@ impl Engine {
         }
     }
 
-    fn split_shard_l0_files(
-        &self,
-        shard: &Shard,
-        split_files: &mut pb::SplitFiles,
-    ) -> Result<()> {
+    fn split_shard_l0_files(&self, shard: &Shard, split_files: &mut pb::SplitFiles) -> Result<()> {
         let g = &epoch::pin();
         let l0s = load_resource(&shard.l0_tbls, g);
         let split_keys = shard.get_ref_split_keys(g);
@@ -132,14 +127,14 @@ impl Engine {
             .map_err(|err| Error::ErrAllocID(err))?;
         for key in &end_keys {
             if let Some((create, data)) =
-                self.build_shard_l0_before_key(&mut iters, key, ids.pop().unwrap(), l0.commit_ts())?
+                self.build_shard_l0_before_key(&mut iters, key, ids.pop().unwrap(), l0.version())?
             {
                 l0_creates.push(create);
                 l0_datas.push(data);
             }
         }
         let dfs_opts = dfs::Options::new(shard.id, shard.ver);
-        let pool = self.fs.get_future_pool();
+        let rt = self.fs.get_runtime();
         let (tx, rx) = tikv_util::mpsc::bounded(l0_creates.len());
         for (idx, l0_create) in l0_creates.iter().enumerate() {
             let fs = self.fs.clone();
@@ -150,7 +145,7 @@ impl Engine {
                 let res = fs.create(id, data, dfs_opts).await;
                 let _ = f_tx.send(res);
             };
-            pool.spawn_ok(future);
+            rt.spawn(future);
         }
         for _ in 0..l0_creates.len() {
             rx.recv().unwrap()?;
@@ -163,9 +158,9 @@ impl Engine {
         iters: &mut Vec<Option<Box<sstable::TableIterator>>>,
         key: &Bytes,
         id: u64,
-        commit_ts: u64,
+        version: u64,
     ) -> Result<Option<(pb::L0Create, Bytes)>> {
-        let mut builder = sstable::L0Builder::new(id, self.opts.table_builder_options, commit_ts);
+        let mut builder = sstable::L0Builder::new(id, self.opts.table_builder_options, version);
         let mut has_data = false;
         for cf in 0..NUM_CFS {
             if let Some(iter) = &mut iters[cf] {
@@ -201,7 +196,7 @@ impl Engine {
     ) -> Result<()> {
         let mut to_del_ids = HashSet::new();
         let mut related_keys = vec![];
-        let pool = self.fs.get_future_pool();
+        let rt = self.fs.get_runtime();
         let (tx, rx) = tikv_util::mpsc::unbounded();
         let mut future_cnt = 0;
         for tbl in lh.tables.iter() {
@@ -242,7 +237,7 @@ impl Engine {
                         let res = fs.create(id, data, dfs_opts).await;
                         let _ = f_tx.send(res);
                     };
-                    pool.spawn_ok(future);
+                    rt.spawn(future);
                     future_cnt += 1;
                 }
             }
@@ -326,7 +321,7 @@ impl Engine {
             );
             if new_shard.id == old_shard.id {
                 new_shard.set_active(old_shard.is_active());
-                new_shard.base_ts = old_shard.base_ts;
+                new_shard.base_version = old_shard.base_version;
                 store_u64(&new_shard.meta_seq, sequence);
                 store_u64(&new_shard.write_sequence, sequence);
                 // derived shard need larger mem-table size.
@@ -336,7 +331,7 @@ impl Engine {
                 new_shard.set_property(MEM_TABLE_SIZE_KEY, size_bin);
                 store_u64(&new_shard.max_mem_table_size, mem_size);
             } else {
-                new_shard.base_ts = old_shard.base_ts + sequence;
+                new_shard.base_version = old_shard.base_version + sequence;
                 store_u64(&new_shard.meta_seq, initial_seq);
                 store_u64(&new_shard.write_sequence, initial_seq);
             }
@@ -376,13 +371,13 @@ impl Engine {
             let id = shard.id;
             debug!("split insert shard {}:{}", id, shard.ver);
             self.shards.insert(id, shard.clone());
-            let mem_ts = shard.load_mem_table_ts();
-            let mem_tbl = self.switch_mem_table(&shard, mem_ts);
+            let version = shard.load_mem_table_version();
+            let mem_tbl = self.switch_mem_table(&shard, version);
             self.schedule_flush_task(&shard, mem_tbl);
             let all_files = shard.get_all_files();
             info!(
-                "new shard {}:{}, start {:x}, end {:x} mem-ts {}， all files {:?}",
-                shard.id, shard.ver, shard.start, shard.end, mem_ts, all_files
+                "new shard {}:{}, start {:x}, end {:x} mem-version {}， all files {:?}",
+                shard.id, shard.ver, shard.start, shard.end, version, all_files
             );
         }
         Ok(())

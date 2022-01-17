@@ -7,27 +7,24 @@ use std::time::Duration;
 use super::server::Result;
 use super::RaftKv;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Peekable, RaftEngine};
 use kvproto::metapb;
-use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
+use kvproto::raft_serverpb::RegionLocalState;
 use kvproto::replication_modepb::ReplicationStatus;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use protobuf::Message;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{initial_region, FlowStatsReporter};
-use rfengine::RFEngine;
-use rfstore::router::{LocalReadRouter, RaftRouter, RaftStoreRouter};
+use rfstore::router::RaftRouter;
 use rfstore::store::store_fsm::StoreMeta;
 use rfstore::store::{self, Config as StoreConfig, Engines};
-use rfstore::store::{PdTask, RaftBatchSystem, SplitTask, Transport};
-use tikv::import::SSTImporter;
+use rfstore::store::{PdTask, RaftBatchSystem, Transport};
 use tikv::read_pool::ReadPoolHandle;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::txn::flow_controller::FlowController;
 use tikv::storage::{config::Config as StorageConfig, Storage};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, LazyWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -193,27 +190,10 @@ where
         self.store.get_id()
     }
 
-    /// Gets a transmission end of a channel which is used to send `Msg` to the
-    /// raftstore.
-    pub fn get_router(&self) -> RaftRouter {
-        self.system.router()
-    }
-
-    fn load_store_ident(&self, engines: &Engines) -> Result<Option<StoreIdent>> {
-        match engines.raft.get_state(0, keys::STORE_IDENT_KEY) {
-            None => Ok(None),
-            Some(bin) => {
-                let mut ident = StoreIdent::default();
-                ident.merge_from_bytes(&bin)?;
-                Ok(Some(ident))
-            }
-        }
-    }
-
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
     fn check_store(&self, engines: &Engines) -> Result<u64> {
-        let res = self.load_store_ident(engines)?;
+        let res = rfstore::store::load_store_ident(engines);
         if res.is_none() {
             return Ok(INVALID_ID);
         }
@@ -240,7 +220,7 @@ where
         Ok(id)
     }
 
-    fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
+    fn load_all_stores(&mut self, _status: Option<ReplicationStatus>) {
         // TODO(x)
         /*
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);

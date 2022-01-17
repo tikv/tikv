@@ -15,7 +15,6 @@ use tikv_util::mpsc::{Receiver, Sender};
 #[derive(Clone)]
 pub struct Engines {
     pub kv: kvengine::Engine,
-    kv_path: PathBuf,
     pub raft: rfengine::RFEngine,
     raft_path: PathBuf,
     pub meta_change_channel: Arc<Mutex<Option<(Sender<StoreMsg>, Receiver<StoreMsg>)>>>,
@@ -27,11 +26,9 @@ impl Engines {
         raft: rfengine::RFEngine,
         meta_change_channel: (Sender<StoreMsg>, Receiver<StoreMsg>),
     ) -> Self {
-        let kv_path = kv.opts.dir.clone();
         let raft_path = raft.dir.clone();
         Self {
             kv,
-            kv_path,
             raft,
             raft_path,
             meta_change_channel: Arc::new(Mutex::new(Some(meta_change_channel))),

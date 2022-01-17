@@ -129,10 +129,10 @@ impl raft::Storage for PeerStorage {
             return Ok(0);
         }
         if idx == self.last_index() {
-            return Ok(self.last_term())
+            return Ok(self.last_term());
         }
         if idx == self.truncated_index() {
-            return Ok(self.truncated_term())
+            return Ok(self.truncated_term());
         }
         self.check_range(idx, idx + 1)?;
         if self.truncated_term() == self.last_term {
@@ -295,12 +295,10 @@ impl PeerStorage {
 
     #[inline]
     pub fn truncated_term(&self) -> u64 {
-        self.shard_meta
-            .as_ref()
-            .map_or(0, |m| {
-                debug!("get property term key");
-                m.get_property(TERM_KEY).unwrap().get_u64_le()
-            })
+        self.shard_meta.as_ref().map_or(0, |m| {
+            debug!("get property term key");
+            m.get_property(TERM_KEY).unwrap().get_u64_le()
+        })
     }
 
     pub fn region(&self) -> &metapb::Region {
@@ -373,11 +371,7 @@ impl PeerStorage {
         res
     }
 
-    pub fn update_commit_index(
-        &mut self,
-        ctx: &mut RaftContext,
-        commit_idx: u64,
-    ) {
+    pub fn update_commit_index(&mut self, ctx: &mut RaftContext, commit_idx: u64) {
         assert!(self.raft_state.commit < commit_idx);
         self.raft_state.commit = commit_idx;
         self.write_raft_state(ctx);
@@ -448,7 +442,7 @@ impl PeerStorage {
 
 fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) -> Result<RaftState> {
     let mut rs = RaftState::default();
-    let rs_key = raft_state_key(region.id);
+    let rs_key = raft_state_key(region.get_region_epoch().get_version());
     let rs_val = raft_engine.get_state(region.id, rs_key.chunk());
     if rs_val.is_none() {
         if region.peers.len() > 0 {
@@ -469,7 +463,13 @@ fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) ->
 fn init_apply_state(kv_engine: &kvengine::Engine, region: &metapb::Region) -> RaftApplyState {
     if let Some(shard) = kv_engine.get_shard(region.get_id()) {
         let mut term_bin = shard.get_property(TERM_KEY).unwrap();
-        return RaftApplyState::new(shard.get_write_sequence(), term_bin.get_u64_le());
+        let mut applied_index = shard.get_write_sequence();
+        if applied_index < shard.get_meta_sequence() {
+            // When a shard's last raft log is meta change,
+            // the write sequence is less than meta sequence.
+            applied_index = shard.get_meta_sequence();
+        }
+        return RaftApplyState::new(applied_index, term_bin.get_u64_le());
     }
     if region.get_peers().len() > 0 {
         return RaftApplyState::new(RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM);

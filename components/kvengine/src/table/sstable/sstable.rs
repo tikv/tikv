@@ -16,7 +16,6 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 #[derive(Clone)]
 pub struct SSTable {
@@ -128,10 +127,11 @@ impl SSTableCore {
             return Err(table::Error::InvalidMagicNumber);
         }
         let idx_data = file.read(start_off + footer.index_offset as u64, footer.index_len())?;
-        let idx_hash = farmhash::fingerprint64(&idx_data);
-
         let idx = Index::new(idx_data.clone(), footer.checksum_type)?;
-        let old_idx_data = file.read(start_off + footer.old_index_offset as u64, footer.old_index_len())?;
+        let old_idx_data = file.read(
+            start_off + footer.old_index_offset as u64,
+            footer.old_index_len(),
+        )?;
         let old_idx = Index::new(old_idx_data.clone(), footer.checksum_type)?;
         let props_data = file.read(
             start_off + footer.properties_offset as u64,
@@ -340,6 +340,7 @@ fn validate_checksum(data: &[u8], checksum_type: u8) -> Result<()> {
 
 const FILE_SUFFIX: &str = ".sst";
 
+#[allow(dead_code)]
 fn parse_file_id(path: &PathBuf) -> Result<u64> {
     let name = path.file_name().unwrap().to_str().unwrap();
     if name.as_bytes().ends_with(FILE_SUFFIX.as_bytes()) {

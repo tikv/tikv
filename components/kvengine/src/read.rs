@@ -134,7 +134,13 @@ impl SnapAccess {
         item
     }
 
-    fn get_value(&self, cf: usize, key: &[u8], version: u64, path: &mut AccessPath) -> table::Value {
+    fn get_value(
+        &self,
+        cf: usize,
+        key: &[u8],
+        version: u64,
+        path: &mut AccessPath,
+    ) -> table::Value {
         let key_hash = farmhash::fingerprint64(key);
         if let Some(split_ctx) = self.splitting.clone() {
             let tbl = split_ctx.get_spliting_table(key);
@@ -232,6 +238,10 @@ impl SnapAccess {
 
     pub fn get_version(&self) -> u64 {
         self.shard.ver
+    }
+
+    pub fn get_all_files(&self) -> Vec<u64> {
+        self.shard.get_all_files()
     }
 }
 

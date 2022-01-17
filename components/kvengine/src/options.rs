@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use dyn_clone::DynClone;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::table::sstable;
@@ -13,11 +12,6 @@ use crate::*;
 // work for most applications. Consider using that as a starting point before
 // customizing it for your own needs.
 pub struct Options {
-    // 1. Mandatory flags
-    // -------------------
-    // Directory to store the data in. Should exist and be writable.
-    pub dir: PathBuf,
-
     // base_size is th maximum L1 size before trigger a compaction.
     // The L2 size is 10x of the base size, L3 size is 100x of the base size.
     pub base_size: u64,
@@ -33,9 +27,6 @@ pub struct Options {
     pub table_builder_options: sstable::TableBuilderOptions,
 
     pub remote_compaction_addr: String,
-
-    // instance_id is used to compose SST file name.
-    pub instance_id: u32,
 
     pub cfs: [CFConfig; NUM_CFS],
 
@@ -54,14 +45,12 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            dir: Default::default(),
             base_size: 64 << 20,
             num_mem_tables: 16,
             max_block_cache_size: 0,
             num_compactors: 3,
             table_builder_options: Default::default(),
             remote_compaction_addr: Default::default(),
-            instance_id: Default::default(),
             cfs: [
                 CFConfig::new(true, 3),
                 CFConfig::new(false, 2),

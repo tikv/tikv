@@ -5,6 +5,7 @@ use bytes::{Buf, Bytes};
 use dashmap::DashMap;
 use protobuf::ProtobufEnum;
 use std::iter::Iterator;
+use std::sync::Mutex;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering::*, *},
@@ -12,7 +13,6 @@ use std::{
     },
     time::Instant,
 };
-use std::sync::Mutex;
 
 use crate::*;
 use crate::{
@@ -128,7 +128,7 @@ pub struct Shard {
     pub(crate) last_switch_time: AtomicU64,
     pub(crate) max_mem_table_size: AtomicU64,
 
-    pub(crate) base_ts: u64,
+    pub(crate) base_version: u64,
 
     pub(crate) estimated_size: AtomicU64,
     pub(crate) meta_seq: AtomicU64,
@@ -169,7 +169,7 @@ impl Shard {
             initial_flushed: Default::default(),
             last_switch_time: Default::default(),
             max_mem_table_size: AtomicU64::new(base_size / 4),
-            base_ts: 1,
+            base_version: Default::default(),
             estimated_size: Default::default(),
             meta_seq: Default::default(),
             write_sequence: Default::default(),
@@ -204,9 +204,9 @@ impl Shard {
         }
         shard.set_split_stage(meta.split_stage);
         store_bool(&shard.initial_flushed, true);
-        shard.base_ts = meta.base_ts;
+        shard.base_version = meta.base_version;
         shard.meta_seq.store(meta.seq, Release);
-        shard.write_sequence.store(meta.seq, Release);
+        shard.write_sequence.store(meta.write_sequence, Release);
         shard
     }
 
@@ -236,19 +236,20 @@ impl Shard {
         }
         shard.set_split_stage(cs.get_stage());
         store_bool(&shard.initial_flushed, true);
-        shard.base_ts = snap.base_ts;
+        shard.base_version = snap.base_version;
         shard.meta_seq.store(cs.sequence, Release);
         shard.write_sequence.store(cs.sequence, Release);
         info!(
-            "ingest shard {}:{} max_table_size {}, mem_table_ts {}",
+            "ingest shard {}:{} max_table_size {}, mem_table_version {}",
             cs.shard_id,
             cs.shard_ver,
             shard.get_max_mem_table_size(),
-            shard.load_mem_table_ts()
+            shard.load_mem_table_version()
         );
         shard
     }
 
+    #[allow(dead_code)]
     fn table_ids(&self) -> Vec<u64> {
         let g = &epoch::pin();
         let mut ids = Vec::new();
@@ -389,7 +390,10 @@ impl Shard {
     }
 
     pub(crate) fn set_split_stage(&self, stage: pb::SplitStage) {
-        debug!("shard {}:{} set split stage {:?}", self.id, self.ver, &stage);
+        debug!(
+            "shard {}:{} set split stage {:?}",
+            self.id, self.ver, &stage
+        );
         self.split_stage.store(stage.value(), Release);
     }
 
@@ -452,8 +456,8 @@ impl Shard {
         bounded
     }
 
-    pub(crate) fn load_mem_table_ts(&self) -> u64 {
-        self.base_ts + self.meta_seq.load(Acquire)
+    pub(crate) fn load_mem_table_version(&self) -> u64 {
+        self.base_version + self.write_sequence.load(Acquire)
     }
 
     pub fn get_all_files(&self) -> Vec<u64> {
@@ -520,10 +524,10 @@ impl Shard {
 
     pub fn atomic_add_l0_table<'a>(&self, g: &'a Guard, l0_tbl: L0Table) {
         info!(
-            "shard {}:{} atomic add l0 table, commit_ts {}",
+            "shard {}:{} atomic add l0 table, version {}",
             self.id,
             self.ver,
-            l0_tbl.commit_ts()
+            l0_tbl.version()
         );
         loop {
             let l0_tbl = l0_tbl.clone();
@@ -567,16 +571,16 @@ impl Shard {
         self.meta_seq.load(Ordering::Acquire)
     }
 
-    pub fn mark_mem_table_applying_flush(&self, commit_ts: u64) {
+    pub fn mark_mem_table_applying_flush(&self, version: u64) {
         let g = &epoch::pin();
         let shared = self.mem_tbls.load(Acquire, g);
         let mems = unsafe { &shared.deref().tbls };
         for mem in mems.iter().rev() {
             let mem_version = mem.get_version();
-            if mem_version > commit_ts {
+            if mem_version > version {
                 return;
             }
-            if mem_version == commit_ts {
+            if mem_version == version {
                 mem.set_applying();
                 break;
             }

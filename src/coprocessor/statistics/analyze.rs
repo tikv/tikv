@@ -34,8 +34,8 @@ use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::MEMTRACE_ANALYZE;
 use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
 use crate::storage::txn::CloudStore;
+use crate::storage::{Snapshot, Statistics};
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;

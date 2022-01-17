@@ -38,7 +38,7 @@ impl Engine {
             let l0_tbl = L0Table::new(file, self.cache.clone())?;
             l0_tbls.push(l0_tbl);
         }
-        l0_tbls.sort_by(|a, b| b.commit_ts().cmp(&a.commit_ts()));
+        l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
         let mut scfs = vec![];
         for i in 0..NUM_CFS {
             let num_level = self.opts.cfs[i].max_levels;

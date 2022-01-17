@@ -1156,7 +1156,12 @@ fn future_scan<L: LockManager>(
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
     let debug_start = bytes::Bytes::copy_from_slice(req.get_start_key());
     let debug_end = bytes::Bytes::copy_from_slice(req.get_end_key());
-    debug!("scan start:{:?}, end:{:?}, limit: {}", debug_start, debug_end, req.get_limit());
+    debug!(
+        "scan start:{:?}, end:{:?}, limit: {}",
+        debug_start,
+        debug_end,
+        req.get_limit()
+    );
     let v = storage.scan(
         req.take_context(),
         start_key,
@@ -1176,7 +1181,6 @@ fn future_scan<L: LockManager>(
         } else {
             match v {
                 Ok(kv_res) => {
-                    debug!("scan got pairs {}", kv_res.len());
                     resp.set_pairs(map_kv_pairs(kv_res).into());
                 }
                 Err(e) => {
