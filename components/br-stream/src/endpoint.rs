@@ -5,7 +5,6 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
-
 use engine_traits::KvEngine;
 
 use kvproto::metapb::Region;
@@ -20,7 +19,7 @@ use txn_types::TimeStamp;
 
 use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
-use crate::metadata::{MetadataClient, MetadataEvent, Task as MetaTask};
+use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::metrics;
 use crate::router::{ApplyEvent, Router};
 use crate::utils::{self, StopWatch};
@@ -121,7 +120,7 @@ where
         });
         Endpoint {
             config,
-            meta_client: Some(meta_client),
+            meta_client: cli,
             range_router,
             scheduler,
             observer,
@@ -223,7 +222,7 @@ where
     }
 
     // register task ranges
-    pub fn on_register(&self, task: MetaTask) {
+    pub fn on_register(&self, task: StreamTask) {
         if let Some(cli) = self.meta_client.as_ref() {
             let cli = cli.clone();
             let init = self.make_initial_loader();
@@ -308,19 +307,10 @@ where
         };
     }
 
-    pub async fn do_flush(router: Router, task: String) -> Result<()> {
-        let temp_files = router.take_temporary_files(&task).await?;
-        let meta = temp_files.generate_metadata().await?;
-        // TODO flush the files to external storage
-        info!("flushing data to external storage"; "local_file_simple" => ?meta.files.get(0));
-        Ok(())
-    }
-
-    pub fn on_flush(&self, task: String) {
+    pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
         self.pool.spawn(async move {
-            // TODO handle the error
-            let _ = Self::do_flush(router, task).await;
+            router.do_flush(&task, store_id).await;
         });
     }
 
@@ -369,7 +359,7 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
 }
 
 pub enum Task {
-    WatchTask(MetaTask),
+    WatchTask(StreamTask),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(ConfigChange),
     /// Flush the task with name.
@@ -417,8 +407,8 @@ where
         match task {
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
-            Task::Flush(task) => self.on_flush(task),
             Task::ObserverRegion { region } => self.on_observe_region(region),
+            Task::Flush(task) => self.on_flush(task, self.store_id),
             _ => (),
         }
     }

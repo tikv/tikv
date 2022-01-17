@@ -6,7 +6,7 @@ use std::{
     iter::FromIterator,
 };
 
-use super::{MetadataClient, Task};
+use super::{MetadataClient, StreamTask};
 use crate::metadata::store::SlashEtcStore;
 use crate::{errors::Result, metadata::MetadataEvent};
 use kvproto::brpb::{Noop, StorageBackend};
@@ -16,8 +16,8 @@ fn test_meta_cli() -> MetadataClient<SlashEtcStore> {
     MetadataClient::new(SlashEtcStore::default(), 42)
 }
 
-fn simple_task(name: &str) -> Task {
-    let mut task = Task::default();
+fn simple_task(name: &str) -> StreamTask {
+    let mut task = StreamTask::default();
     task.info.set_name(name.to_owned());
     task.info.set_start_ts(1);
     task.info.set_end_ts(1000);
@@ -68,7 +68,7 @@ async fn test_basic() -> Result<()> {
     Ok(())
 }
 
-fn task_matches(expected: &[Task], real: &[Task]) {
+fn task_matches(expected: &[StreamTask], real: &[StreamTask]) {
     assert_eq!(
         expected.len(),
         real.len(),

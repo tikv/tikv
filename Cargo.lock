@@ -416,6 +416,8 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "etcd-client",
+ "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.15",
  "hex 0.4.2",
