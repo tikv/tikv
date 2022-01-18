@@ -1328,9 +1328,12 @@ dependencies = [
 name = "engine_test"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "file_system",
+ "raft_log_engine",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -5117,6 +5120,7 @@ dependencies = [
  "crossbeam",
  "encryption_export",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "fail",
  "file_system",

@@ -303,6 +303,11 @@ mod flow_control_factors;
 pub use crate::flow_control_factors::*;
 mod table_properties;
 pub use crate::table_properties::*;
+// FIXME: Move raft engine traits to a separate crate.
+mod raft_engine;
+pub use raft_engine::{
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask,
+};
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -327,8 +332,6 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
-mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask};
 
 // These modules need further scrutiny
 

@@ -20,13 +20,21 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     ) -> Result<usize>;
 }
 
+// TODO: Remove use of trait object and merge this trait into `RaftEngineReadOnly`.
+pub trait RaftEngineDebug: Sync + Send + 'static {
+    /// Scan all log entries of given raft group in order.
+    fn scan_entries<F>(&self, raft_group_id: u64, f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>;
+}
+
 pub struct RaftLogGCTask {
     pub raft_group_id: u64,
     pub from: u64,
     pub to: u64,
 }
 
-pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
+pub trait RaftEngine: RaftEngineReadOnly + RaftEngineDebug + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;

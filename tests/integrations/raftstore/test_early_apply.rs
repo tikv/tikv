@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{RaftEngine, RaftEngineReadOnly};
-use raft::eraftpb::{Entry, MessageType};
-use raft_log_engine::RaftLogEngine;
+use engine_traits::RaftEngine;
+use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use std::time::*;
 use test_raftstore::*;
@@ -21,15 +20,6 @@ enum DataLost {
     ///
     /// Typically, both leader and followers lose commit index.
     AllLost,
-}
-
-fn dump_entries(e: &RaftLogEngine, id: u64) -> Vec<Entry> {
-    let mut entries = Vec::new();
-    if let (Some(first), Some(last)) = (e.first_index(id), e.last_index(id)) {
-        e.fetch_entries_to(id, first, last + 1, None /*max_size*/, &mut entries)
-            .unwrap();
-    }
-    entries
 }
 
 fn test<A, C>(cluster: &mut Cluster<NodeCluster>, action: A, check: C, mode: DataLost)
@@ -64,7 +54,7 @@ where
         .zip(last_index)
         .map(|(id, index)| {
             cluster.wait_last_index(1, *id, index + 1, Duration::from_secs(3));
-            dump_entries(&cluster.get_raft_engine(*id), *id)
+            dump_raft_entries(&cluster.get_raft_engine(*id), *id)
         })
         .collect();
 
@@ -175,7 +165,7 @@ fn test_update_internal_apply_index() {
     let mut snaps = Vec::new();
     for id in 1..3 {
         cluster.wait_last_index(1, id, last_index + 2, Duration::from_secs(3));
-        snaps.push((id, dump_entries(&cluster.get_raft_engine(id), id)));
+        snaps.push((id, dump_raft_entries(&cluster.get_raft_engine(id), id)));
     }
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");

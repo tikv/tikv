@@ -5,13 +5,12 @@ use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, Peekable, RaftEngineReadOnly, CF_RAFT};
-use raft_log_engine::RaftLogEngine;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 
-fn get_raft_msg_or_default<M: protobuf::Message + Default>(
-    engines: &Engines<RocksEngine, RaftLogEngine>,
+fn get_raft_msg_or_default<M: protobuf::Message + Default, ER: RaftEngineReadOnly>(
+    engines: &Engines<RocksEngine, ER>,
     key: &[u8],
 ) -> M {
     engines
@@ -45,8 +44,8 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     panic!("after inserting 1000 entries, compaction is still not finished.");
 }
 
-fn is_compacted(
-    all_engines: &HashMap<u64, Engines<RocksEngine, RaftLogEngine>>,
+fn is_compacted<ER: RaftEngineReadOnly>(
+    all_engines: &HashMap<u64, Engines<RocksEngine, ER>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
 ) -> bool {

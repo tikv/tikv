@@ -6,7 +6,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::Config;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
@@ -15,8 +14,9 @@ use engine_rocks::raw::DB;
 use engine_rocks::{
     get_env, CompactionListener, Compat, RocksCompactionJobInfo, RocksEngine, RocksSnapshot,
 };
+use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -34,9 +34,10 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
-use raft::eraftpb::ConfChangeType;
-use raft_log_engine::RaftLogEngine;
+use pd_client::PdClient;
+use raft::eraftpb::{ConfChangeType, Entry};
 use raftstore::store::fsm::RaftRouter;
+pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::store::*;
 use raftstore::Result;
 use rand::RngCore;
@@ -48,10 +49,7 @@ use tikv_util::time::ThreadReadId;
 use tikv_util::{escape, HandyRwLock};
 use txn_types::Key;
 
-use crate::{Cluster, ServerCluster, Simulator, TestPdClient};
-use pd_client::PdClient;
-
-pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
+use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -95,7 +93,7 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftLogEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -113,8 +111,12 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftLogEngine>, region:
             })
             .unwrap();
     }
-    assert_eq!(engine.raft.first_index(id), None);
-    assert_eq!(engine.raft.last_index(id), None);
+
+    engine
+        .raft
+        .scan_entries(id, |_| panic!("[region {}] unexpected entry", id))
+        .unwrap();
+
     let state: Option<RaftLocalState> = engine.raft.get_raft_state(id).unwrap();
     assert!(
         state.is_none(),
@@ -122,6 +124,17 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftLogEngine>, region:
         id,
         state
     );
+}
+
+pub fn dump_raft_entries(engine: &RaftTestEngine, region_id: u64) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    engine
+        .scan_entries(region_id, |e| {
+            entries.push(e.clone());
+            Ok(true)
+        })
+        .unwrap();
+    entries
 }
 
 lazy_static! {
@@ -611,11 +624,11 @@ fn dummpy_filter(_: &RocksCompactionJobInfo<'_>) -> bool {
 
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksEngine, RaftLogEngine>>,
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
 ) -> (
-    Engines<RocksEngine, RaftLogEngine>,
+    Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
 ) {
@@ -625,6 +638,7 @@ pub fn create_test_engine(
             .unwrap()
             .map(Arc::new);
 
+    #[allow(clippy::redundant_clone)]
     let env = get_env(key_manager.clone(), limiter.clone()).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
@@ -632,7 +646,8 @@ pub fn create_test_engine(
     let kv_path_str = kv_path.to_str().unwrap();
 
     let mut kv_db_opt = cfg.rocksdb.build_opt();
-    kv_db_opt.set_env(env);
+    #[allow(clippy::redundant_clone)]
+    kv_db_opt.set_env(env.clone());
 
     if let Some(router) = router {
         let router = Mutex::new(router);
@@ -656,15 +671,33 @@ pub fn create_test_engine(
     let engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
     );
-
-    let raft_path = dir.path().join("raft-engine");
-    let mut raft_engine_cfg = cfg.raft_engine.config();
-    raft_engine_cfg.dir = raft_path.to_str().unwrap().to_owned();
-    let raft_engine = RaftLogEngine::new(raft_engine_cfg, key_manager.clone(), limiter).unwrap();
-
     let mut engine = RocksEngine::from_db(engine);
     let shared_block_cache = cache.is_some();
     engine.set_shared_block_cache(shared_block_cache);
+
+    #[cfg(feature = "test-engine-raft-rocksdb")]
+    let raft_engine = {
+        let path = dir.path().join("raft");
+        let mut db_opt = cfg.raftdb.build_opt();
+        db_opt.set_env(env);
+
+        let cfs_opt = cfg.raftdb.build_cf_opts(&cache);
+        let engine = Arc::new(
+            engine_rocks::raw_util::new_engine_opt(path.to_str().unwrap(), db_opt, cfs_opt)
+                .unwrap(),
+        );
+        let mut engine = RocksEngine::from_db(engine);
+        engine.set_shared_block_cache(shared_block_cache);
+        engine
+    };
+    #[cfg(feature = "test-engine-raft-raft-engine")]
+    let raft_engine = {
+        let path = dir.path().join("test-raft-engine");
+        let mut cfg = cfg.raft_engine.config();
+        cfg.dir = path.to_str().unwrap().to_owned();
+        RaftTestEngine::new(cfg, key_manager.clone(), limiter).unwrap()
+    };
+
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }

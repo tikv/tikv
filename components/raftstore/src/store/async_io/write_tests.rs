@@ -7,9 +7,8 @@ use crate::Result;
 
 use collections::HashSet;
 use crossbeam::channel::unbounded;
-use engine_rocks::RocksWriteBatch;
-use engine_test::kv::KvTestEngine;
-use engine_test::new_temp_engine;
+use engine_rocks::util::new_temp_engine;
+use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::{Mutable, Peekable, WriteBatchExt};
 use kvproto::raft_serverpb::RaftMessage;
 use tempfile::Builder;
@@ -17,7 +16,7 @@ use tempfile::Builder;
 use super::*;
 
 fn must_have_entries_and_state(
-    raft_engine: &KvTestEngine,
+    raft_engine: &RocksEngine,
     entries_state: Vec<(u64, Vec<Entry>, RaftLocalState)>,
 ) {
     let snapshot = raft_engine.snapshot();
@@ -143,8 +142,8 @@ fn must_wait_same_notifies(
 }
 
 fn init_write_batch(
-    engines: &Engines<KvTestEngine, KvTestEngine>,
-    task: &mut WriteTask<KvTestEngine, KvTestEngine>,
+    engines: &Engines<RocksEngine, RocksEngine>,
+    task: &mut WriteTask<RocksEngine, RocksEngine>,
 ) {
     task.kv_wb = Some(engines.kv.write_batch());
     task.raft_wb = Some(engines.raft.write_batch());
@@ -163,13 +162,13 @@ fn delete_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8]) {
 }
 
 struct TestWorker {
-    worker: Worker<KvTestEngine, KvTestEngine, TestNotifier, TestTransport>,
+    worker: Worker<RocksEngine, RocksEngine, TestNotifier, TestTransport>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
 
 impl TestWorker {
-    fn new(cfg: &Config, engines: &Engines<KvTestEngine, KvTestEngine>) -> Self {
+    fn new(cfg: &Config, engines: &Engines<RocksEngine, RocksEngine>) -> Self {
         let (_, task_rx) = unbounded();
         let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
@@ -192,13 +191,13 @@ impl TestWorker {
 }
 
 struct TestWriters {
-    writers: StoreWriters<KvTestEngine, KvTestEngine>,
+    writers: StoreWriters<RocksEngine, RocksEngine>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
 
 impl TestWriters {
-    fn new(cfg: &Config, engines: &Engines<KvTestEngine, KvTestEngine>) -> Self {
+    fn new(cfg: &Config, engines: &Engines<RocksEngine, RocksEngine>) -> Self {
         let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
@@ -220,7 +219,7 @@ impl TestWriters {
         }
     }
 
-    fn write_sender(&self, id: usize) -> &Sender<WriteMsg<KvTestEngine, KvTestEngine>> {
+    fn write_sender(&self, id: usize) -> &Sender<WriteMsg<RocksEngine, RocksEngine>> {
         &self.writers.senders()[id]
     }
 }
@@ -231,7 +230,7 @@ fn test_worker() {
     let engines = new_temp_engine(&path);
     let mut t = TestWorker::new(&Config::default(), &engines);
 
-    let mut task_1 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
+    let mut task_1 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 10);
     init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
     put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
@@ -246,7 +245,7 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_1);
 
-    let mut task_2 = WriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 15);
+    let mut task_2 = WriteTask::<RocksEngine, RocksEngine>::new(2, 2, 15);
     init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
     put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
@@ -260,7 +259,7 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_2);
 
-    let mut task_3 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 11);
+    let mut task_3 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 11);
     init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
     put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
@@ -317,7 +316,7 @@ fn test_basic_flow() {
     cfg.store_io_pool_size = 2;
     let mut t = TestWriters::new(&cfg, &engines);
 
-    let mut task_1 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 10);
+    let mut task_1 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 10);
     init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
     put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
@@ -331,7 +330,7 @@ fn test_basic_flow() {
 
     t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
 
-    let mut task_2 = WriteTask::<KvTestEngine, KvTestEngine>::new(2, 2, 20);
+    let mut task_2 = WriteTask::<RocksEngine, RocksEngine>::new(2, 2, 20);
     init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
     put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
@@ -345,7 +344,7 @@ fn test_basic_flow() {
 
     t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
 
-    let mut task_3 = WriteTask::<KvTestEngine, KvTestEngine>::new(1, 1, 15);
+    let mut task_3 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 15);
     init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
     delete_kv(&mut task_3.kv_wb, b"kv_k1");

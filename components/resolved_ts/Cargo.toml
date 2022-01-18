@@ -13,6 +13,12 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+test-engine-kv-rocksdb = [
+  "tikv/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "tikv/test-engine-raft-raft-engine"
+]
 test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 test-engines-panic = ["tikv/test-engines-panic"]
 
