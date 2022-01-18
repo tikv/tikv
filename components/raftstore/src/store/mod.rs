@@ -56,8 +56,10 @@ pub use self::snap::{
     ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
     Snapshot, SnapshotStatistics,
 };
-pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::txn_ext::{PeerPessimisticLocks, TxnExt};
+pub use self::transport::{
+    CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport,
+};
+pub use self::txn_ext::{PeerPessimisticLocks, PessimisticLockPair, TxnExt};
 pub use self::util::{RegionReadProgress, RegionReadProgressRegistry};
 pub use self::worker::RefreshConfigTask;
 pub use self::worker::{

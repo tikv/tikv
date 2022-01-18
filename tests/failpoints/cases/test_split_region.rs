@@ -869,8 +869,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        locks.insert(Key::from_raw(b"a"), lock_a);
-        locks.insert(Key::from_raw(b"c"), lock_c);
+        locks.insert(vec![(Key::from_raw(b"a"), lock_a)]);
+        locks.insert(vec![(Key::from_raw(b"c"), lock_c)]);
     }
 
     let mut mutation = Mutation::default();
