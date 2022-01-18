@@ -4794,8 +4794,10 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct ApplyObserver {
+        #[allow(dead_code)]
         pre_admin_count: Arc<AtomicUsize>,
         pre_query_count: Arc<AtomicUsize>,
+        #[allow(dead_code)]
         post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,

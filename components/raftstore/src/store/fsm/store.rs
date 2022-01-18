@@ -1263,7 +1263,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
-        assert!(!self.workers.is_none());
+        assert!(self.workers.is_some());
         self.workers
             .as_ref()
             .unwrap()

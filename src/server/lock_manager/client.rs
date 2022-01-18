@@ -30,6 +30,7 @@ pub fn env() -> Arc<Environment> {
 
 #[derive(Clone)]
 pub struct Client {
+    #[allow(dead_code)]
     addr: String,
     client: DeadlockClient,
     sender: Option<UnboundedSender<DeadlockRequest>>,

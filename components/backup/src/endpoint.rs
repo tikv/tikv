@@ -88,6 +88,7 @@ impl fmt::Debug for Task {
 #[derive(Clone)]
 struct LimitedStorage {
     limiter: Limiter,
+    #[allow(dead_code)]
     storage: Arc<dyn ExternalStorage>,
 }
 

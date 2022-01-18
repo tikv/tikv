@@ -806,7 +806,7 @@ mod tests {
         // which are [f, i), [m, n), [p, t)
         let timeout2 = 12;
         let overlap_ranges =
-            pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+            pending_delete_ranges.drain_overlap_ranges(b"g".as_ref(), b"q".as_ref());
         assert_eq!(
             overlap_ranges,
             [
