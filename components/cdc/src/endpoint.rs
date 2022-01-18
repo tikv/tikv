@@ -2529,7 +2529,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_more_old_value_cache_when_all_downstream_deregister() {
+    fn test_no_more_old_value_cache_when_all_downstream_deregistered() {
         let mut suite = mock_endpoint(&CdcConfig::default(), None);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -2567,7 +2567,7 @@ mod tests {
         suite.run(Task::TxnExtra(txn_extra));
         assert_eq!(suite.endpoint.old_value_cache.cache.len(), 1);
 
-        // Unregister all downstreams.
+        // Deregister all downstreams.
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
         let deregister = Deregister::Downstream {
