@@ -13,7 +13,7 @@ fn test_check_cn_success() {
     let mut cluster = new_server_cluster(0, 1);
     let mut allowed_cn = HashSet::default();
     allowed_cn.insert("tikv-server".to_owned());
-    cluster.cfg.security = test_util::new_security_cfg(Some(allowed_cn));
+    cluster.cfg.security = test_util::new_security_cfg(Some(allowed_cn), None);
     cluster.run();
 
     let leader = cluster.get_region(b"").get_peers()[0].clone();
@@ -33,7 +33,7 @@ fn test_check_cn_fail() {
     let mut cluster = new_server_cluster(0, 1);
     let mut allowed_cn = HashSet::default();
     allowed_cn.insert("invaild-server".to_owned());
-    cluster.cfg.security = test_util::new_security_cfg(Some(allowed_cn));
+    cluster.cfg.security = test_util::new_security_cfg(Some(allowed_cn), None);
     cluster.run();
 
     let leader = cluster.get_region(b"").get_peers()[0].clone();
