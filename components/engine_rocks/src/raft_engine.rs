@@ -193,9 +193,9 @@ impl RaftEngine for RocksEngine {
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
-        let seek_key = keys::raft_log_key(raft_group_id, 0);
-        let prefix = keys::raft_log_prefix(raft_group_id);
         if first_index == 0 {
+            let seek_key = keys::raft_log_key(raft_group_id, 0);
+            let prefix = keys::raft_log_prefix(raft_group_id);
             fail::fail_point!("engine_rocks_raft_engine_clean_seek", |_| Ok(()));
             if let Some((key, _)) = self.seek(&seek_key)? {
                 if !key.starts_with(&prefix) {
