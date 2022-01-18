@@ -3363,7 +3363,9 @@ where
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
-        meta.readers.remove(&source.get_id());
+        meta.readers
+            .get_mut(&source.get_id())
+            .map(|d| d.mark_pending_remove());
 
         // After the region commit merged, the region's key range is extended and the region's `safe_ts`
         // should reset to `min(source_safe_ts, target_safe_ts)`
@@ -3601,7 +3603,9 @@ where
             let prev = meta.region_ranges.remove(&enc_end_key(r));
             assert_eq!(prev, Some(r.get_id()));
             assert!(meta.regions.remove(&r.get_id()).is_some());
-            meta.readers.remove(&r.get_id());
+            meta.readers
+                .get_mut(&r.get_id())
+                .map(|d| d.mark_pending_remove());
         }
         // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`
         // which are added before applying snapshot
