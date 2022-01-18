@@ -21,7 +21,7 @@ fn new_engine_basic() {
 fn new_engine_opt_basic() {
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();
-    let db_opts = DBOptions::new();
+    let db_opts = DBOptions::default();
     let cf_opts = ALL_CFS
         .iter()
         .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
@@ -45,7 +45,7 @@ fn new_engine_opt_missing_dir() {
     let dir = tempdir();
     let path = dir.path();
     let path = path.join("missing").to_str().unwrap().to_owned();
-    let db_opts = DBOptions::new();
+    let db_opts = DBOptions::default();
     let cf_opts = ALL_CFS
         .iter()
         .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
@@ -88,7 +88,7 @@ fn new_engine_opt_readonly_dir() {
     fs::set_permissions(&path, perms).unwrap();
 
     let path = path.to_str().unwrap();
-    let db_opts = DBOptions::new();
+    let db_opts = DBOptions::default();
     let cf_opts = ALL_CFS
         .iter()
         .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))

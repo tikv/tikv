@@ -692,7 +692,7 @@ pub fn create_test_engine(
     };
     #[cfg(feature = "test-engine-raft-raft-engine")]
     let raft_engine = {
-        let path = dir.path().join("test-raft-engine");
+        let path = dir.path().join("raft-engine");
         let mut cfg = cfg.raft_engine.config();
         cfg.dir = path.to_str().unwrap().to_owned();
         RaftTestEngine::new(cfg, key_manager.clone(), limiter).unwrap()

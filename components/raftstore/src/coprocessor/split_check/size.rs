@@ -289,7 +289,7 @@ pub mod tests {
     fn test_split_check_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
@@ -415,7 +415,7 @@ pub mod tests {
     fn test_cf_lock_without_range_prop() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
 
@@ -480,7 +480,8 @@ pub mod tests {
                 CFOptions::new(cf, cf_opts)
             })
             .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+        let engine =
+            engine_test::kv::new_engine_opt(path_str, DBOptions::default(), cfs_opts).unwrap();
 
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
@@ -548,7 +549,7 @@ pub mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.set_no_range_properties(true);
@@ -586,7 +587,7 @@ pub mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -701,7 +702,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS
@@ -734,7 +735,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = LARGE_CFS
@@ -772,7 +773,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = LARGE_CFS

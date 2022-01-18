@@ -1821,7 +1821,7 @@ mod tests {
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(sched, path);
         let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
-        store.append(ents[1..].to_vec(), &mut write_task);
+        store.append(ents[0..].to_vec(), &mut write_task);
         store
             .apply_state
             .mut_truncated_state()
@@ -1900,6 +1900,7 @@ mod tests {
         }
     }
 
+    // Does not include raftdb state key.
     fn get_meta_key_count(store: &PeerStorage<KvTestEngine, RaftTestEngine>) -> usize {
         let region_id = store.get_region_id();
         let mut count = 0;
@@ -2250,11 +2251,6 @@ mod tests {
                 ],
                 vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
             ),
-            // truncate incoming entries, truncate the existing entries and append
-            (
-                vec![new_entry(2, 3), new_entry(3, 3), new_entry(4, 5)],
-                vec![new_entry(4, 5)],
-            ),
             // truncate the existing entries and append
             (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
             // direct append
@@ -2527,7 +2523,7 @@ mod tests {
         let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
         let mut s3 = new_storage_from_ents(sched, &td3, ents);
-        validate_cache(&s3, &ents[1..]);
+        validate_cache(&s3, &ents[0..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
         let snap_region = s3.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
         let mut snap_data = RaftSnapshotData::default();
@@ -2671,23 +2667,23 @@ mod tests {
         engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
-        engines
-            .raft
-            .append(1, vec![new_entry(20, RAFT_INIT_LOG_TERM)])
-            .unwrap();
         raft_state.set_last_index(20);
+        let entries = (12..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        engines.raft.append(1, entries).unwrap();
+        raft_state.mut_hard_state().set_commit(12);
         engines.raft.put_raft_state(1, &raft_state).unwrap();
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
         // Missing last log is invalid.
-        engines.raft.gc(1, 20, 21).unwrap();
+        raft_state.set_last_index(21);
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
-        engines
-            .raft
-            .append(1, vec![new_entry(20, RAFT_INIT_LOG_TERM)])
-            .unwrap();
+        raft_state.set_last_index(20);
+        engines.raft.put_raft_state(1, &raft_state).unwrap();
 
         // applied_index > commit_index is invalid.
         let mut apply_state = RaftApplyState::default();
@@ -2704,6 +2700,7 @@ mod tests {
         assert!(build_storage().is_err());
 
         // It should not recover if corresponding log doesn't exist.
+        engines.raft.gc(1, 14, 15).unwrap();
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         engines
@@ -2712,32 +2709,35 @@ mod tests {
             .unwrap();
         assert!(build_storage().is_err());
 
-        engines
-            .raft
-            .append(1, vec![new_entry(14, RAFT_INIT_LOG_TERM)])
-            .unwrap();
+        let entries = (14..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        engines.raft.gc(1, 0, u64::MAX).unwrap();
+        engines.raft.append(1, entries).unwrap();
         raft_state.mut_hard_state().set_commit(14);
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
         assert_eq!(initial_state.hard_state, *raft_state.get_hard_state());
 
-        // log term miss match is invalid.
-        engines
-            .raft
-            .append(1, vec![new_entry(14, RAFT_INIT_LOG_TERM - 1)])
-            .unwrap();
+        // log term mismatch is invalid.
+        let mut entries: Vec<_> = (14..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        entries[0].set_term(RAFT_INIT_LOG_TERM - 1);
+        engines.raft.append(1, entries).unwrap();
         assert!(build_storage().is_err());
 
         // hard state term miss match is invalid.
-        engines
-            .raft
-            .append(1, vec![new_entry(14, RAFT_INIT_LOG_TERM)])
-            .unwrap();
+        let entries = (14..=20)
+            .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
+            .collect();
+        engines.raft.append(1, entries).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM - 1);
         engines.raft.put_raft_state(1, &raft_state).unwrap();
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
+        engines.raft.gc(1, 0, u64::MAX).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
         engines

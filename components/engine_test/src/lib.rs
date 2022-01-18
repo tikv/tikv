@@ -169,28 +169,11 @@ pub mod ctor {
 
     #[derive(Clone, Default)]
     pub struct DBOptions {
-        key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        pub key_manager: Option<Arc<DataKeyManager>>,
+        pub rate_limiter: Option<Arc<IORateLimiter>>,
     }
 
     pub type RaftDBOptions = DBOptions;
-
-    impl DBOptions {
-        pub fn new() -> DBOptions {
-            DBOptions {
-                key_manager: None,
-                rate_limiter: None,
-            }
-        }
-
-        pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
-            self.key_manager = key_manager;
-        }
-
-        pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
-            self.rate_limiter = rate_limiter;
-        }
-    }
 
     pub struct CFOptions<'a> {
         pub cf: &'a str,
