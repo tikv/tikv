@@ -411,6 +411,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes 0.4.12",
+ "crossbeam",
+ "crossbeam-channel",
  "dashmap 5.0.0",
  "engine_panic",
  "engine_rocks",
