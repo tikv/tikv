@@ -85,14 +85,14 @@ impl ThreadID {
                     let mut s = line.split_whitespace();
                     if let (Some(field), Some(value)) = (s.next(), s.next()) {
                         if field.starts_with("read_bytes") {
-                            io_bytes.read = u64::from_str(&value).ok()?;
+                            io_bytes.read = u64::from_str(value).ok()?;
                         } else if field.starts_with("write_bytes") {
-                            io_bytes.write = u64::from_str(&value).ok()?;
+                            io_bytes.write = u64::from_str(value).ok()?;
                         }
                     }
                 }
             }
-            return Some(io_bytes);
+            Some(io_bytes)
         } else {
             None
         }
