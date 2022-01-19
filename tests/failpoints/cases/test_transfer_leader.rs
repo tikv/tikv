@@ -119,7 +119,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
 
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.unwrap();
-    txn_ext.pessimistic_locks.write().insert(
+    txn_ext.pessimistic_locks.write().insert(vec![(
         Key::from_raw(b"key"),
         PessimisticLock {
             primary: b"key".to_vec().into_boxed_slice(),
@@ -128,7 +128,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
             for_update_ts: 10.into(),
             min_commit_ts: 20.into(),
         },
-    );
+    )]);
 
     let addr = cluster.sim.rl().get_addr(1);
     let env = Arc::new(Environment::new(1));
@@ -192,19 +192,16 @@ fn test_delete_lock_proposed_before_proposing_locks() {
 
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.unwrap();
-    txn_ext.pessimistic_locks.write().map.insert(
+    txn_ext.pessimistic_locks.write().insert(vec![(
         Key::from_raw(b"key"),
-        (
-            PessimisticLock {
-                primary: b"key".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 1000,
-                for_update_ts: 10.into(),
-                min_commit_ts: 20.into(),
-            },
-            false,
-        ),
-    );
+        PessimisticLock {
+            primary: b"key".to_vec().into_boxed_slice(),
+            start_ts: 10.into(),
+            ttl: 1000,
+            for_update_ts: 10.into(),
+            min_commit_ts: 20.into(),
+        },
+    )]);
 
     let addr = cluster.sim.rl().get_addr(1);
     let env = Arc::new(Environment::new(1));
@@ -273,19 +270,16 @@ fn test_read_lock_after_become_follower() {
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.unwrap();
     let for_update_ts = block_on(cluster.pd_client.get_tso()).unwrap();
-    txn_ext.pessimistic_locks.write().map.insert(
+    txn_ext.pessimistic_locks.write().insert(vec![(
         Key::from_raw(b"key"),
-        (
-            PessimisticLock {
-                primary: b"key".to_vec().into_boxed_slice(),
-                start_ts,
-                ttl: 1000,
-                for_update_ts,
-                min_commit_ts: for_update_ts,
-            },
-            false,
-        ),
-    );
+        PessimisticLock {
+            primary: b"key".to_vec().into_boxed_slice(),
+            start_ts,
+            ttl: 1000,
+            for_update_ts,
+            min_commit_ts: for_update_ts,
+        },
+    )]);
 
     let addr = cluster.sim.rl().get_addr(3);
     let env = Arc::new(Environment::new(1));
