@@ -1327,13 +1327,16 @@ fn test_source_peer_read_delegate_after_apply() {
     // Merge finish means the leader of the target region have call `on_ready_commit_merge`
     pd_client.must_merge(source.get_id(), target.get_id());
 
-    // The source peer's `ReadDelegate` should not be removed yet
-    cluster.store_metas[&1]
-        .lock()
-        .unwrap()
-        .readers
-        .get(&source.get_id())
-        .unwrap();
+    // The source peer's `ReadDelegate` should not be removed yet and mark as `pending_remove`
+    assert!(
+        cluster.store_metas[&1]
+            .lock()
+            .unwrap()
+            .readers
+            .get(&source.get_id())
+            .unwrap()
+            .pending_remove
+    );
 
     fail::remove(on_destroy_peer_fp);
     // Wait for source peer is destroyed
