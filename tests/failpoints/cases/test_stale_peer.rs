@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::{Peekable, RaftEngineReadOnly};
 use kvproto::raft_serverpb::RaftLocalState;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
@@ -129,4 +129,47 @@ fn test_stale_learner_restart() {
     fail::remove("on_handle_apply_1003");
     cluster.run_node(2).unwrap();
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
+
+/// Logs scan are now moved to raftlog gc threads. The case is to test if logs
+/// are still cleaned up when there is stale logs before first index during destroy.
+#[test]
+fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 15;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 15;
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    cluster.run();
+    // Simulate raft log gc are pending in queue.
+    let fp = "worker_gc_raft_log";
+    fail::cfg(fp, "return(0)").unwrap();
+
+    let state = cluster.truncated_state(1, 3);
+    for i in 0..30 {
+        let b = format!("k{}", i).into_bytes();
+        cluster.must_put(&b, &b);
+    }
+    must_get_equal(&cluster.get_engine(3), b"k29", b"k29");
+    cluster.wait_log_truncated(1, 3, state.get_index() + 1);
+    cluster.stop_node(3);
+    let truncated_index = cluster.truncated_state(1, 3).get_index();
+    let raft_engine = cluster.engines[&3].raft.clone();
+    // Make sure there are stale logs.
+    raft_engine.get_entry(1, truncated_index).unwrap().unwrap();
+
+    pd_client.must_remove_peer(1, new_peer(3, 3));
+    cluster.must_put(b"k30", b"v30");
+    must_get_equal(&cluster.get_engine(1), b"k30", b"v30");
+
+    fail::remove(fp);
+    // So peer (3, 3) will be destroyed by gc message. And all stale logs before first
+    // index should be cleaned up.
+    cluster.run_node(3).unwrap();
+    must_get_none(&cluster.get_engine(3), b"k29");
+
+    // All logs should be deleted.
+    assert_eq!(cluster.get_first_log(1, 3), None);
 }

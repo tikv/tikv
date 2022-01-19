@@ -46,7 +46,7 @@ fn clear_raft_engine(engine: &RaftLogEngine) -> Result<(), EngineError> {
     let mut batch_to_clean = engine.log_batch(0);
     for id in engine.raft_groups() {
         let state = engine.get_raft_state(id)?.unwrap();
-        engine.clean(id, &state, &mut batch_to_clean)?;
+        engine.clean(id, 0, &state, &mut batch_to_clean)?;
     }
     engine.consume(&mut batch_to_clean, true).map(|_| ())
 }
