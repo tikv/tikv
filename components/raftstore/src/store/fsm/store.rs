@@ -859,9 +859,21 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.tag,
                 self.poll_ctx.pending_count,
                 self.poll_ctx.ready_count,
-                self.poll_ctx.raft_metrics.ready.append.saturating_sub(self.previous_metrics.append),
-                self.poll_ctx.raft_metrics.ready.message.saturating_sub(self.previous_metrics.message),
-                self.poll_ctx.raft_metrics.ready.snapshot.saturating_sub(self.previous_metrics.snapshot),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .append
+                    .saturating_sub(self.previous_metrics.append),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .message
+                    .saturating_sub(self.previous_metrics.message),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .snapshot
+                    .saturating_sub(self.previous_metrics.snapshot),
             );
             dur
         } else {
