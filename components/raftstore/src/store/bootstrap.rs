@@ -95,7 +95,7 @@ pub fn clear_prepare_bootstrap_cluster(
     let mut wb = engines.raft.log_batch(1024);
     box_try!(engines
         .raft
-        .clean(region_id, &RaftLocalState::default(), &mut wb));
+        .clean(region_id, 0, &RaftLocalState::default(), &mut wb));
     box_try!(engines.raft.consume(&mut wb, true));
 
     let mut wb = engines.kv.write_batch();
