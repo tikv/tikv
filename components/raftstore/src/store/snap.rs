@@ -1740,7 +1740,7 @@ pub mod tests {
     pub fn gen_db_options_with_encryption(prefix: &str) -> (TempDir, DBOptions) {
         let (_enc_dir, key_manager) = create_encryption_key_manager(prefix);
         let mut db_opts = DBOptions::default();
-        db_opts.key_manager = Some(key_manager);
+        db_opts.set_key_manager(Some(key_manager));
         (_enc_dir, db_opts)
     }
 
@@ -1799,28 +1799,22 @@ pub mod tests {
 
     #[test]
     fn test_empty_snap_file() {
-        test_snap_file(open_test_empty_db, None);
-
-        let (_enc_dir, db_opts) = gen_db_options_with_encryption("test_empty_snap_file_enc");
-        test_snap_file(open_test_empty_db, Some(db_opts));
+        test_snap_file(open_test_empty_db);
     }
 
     #[test]
     fn test_non_empty_snap_file() {
-        test_snap_file(open_test_db, None);
-        // FIXME: SnapManagerCore alone doesn't work well with encryption.
-        // let (_enc_dir, db_opts) = gen_db_options_with_encryption("test_empty_snap_file_enc");
-        // test_snap_file(open_test_db, Some(db_opts));
+        test_snap_file(open_test_db);
     }
 
-    fn test_snap_file(get_db: DBBuilder<KvTestEngine>, db_opt: Option<DBOptions>) {
+    fn test_snap_file(get_db: DBBuilder<KvTestEngine>) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = Builder::new()
             .prefix("test-snap-file-db-src")
             .tempdir()
             .unwrap();
-        let db = get_db(src_db_dir.path(), db_opt.clone(), None).unwrap();
+        let db = get_db(src_db_dir.path(), None, None).unwrap();
         let snapshot = db.snapshot();
 
         let src_dir = Builder::new()
@@ -1899,7 +1893,7 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = engine_test::kv::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap();
+        let dst_db = engine_test::kv::new_engine(dst_db_path, None, &dst_cfs, None).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),
             region,
