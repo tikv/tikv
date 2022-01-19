@@ -270,17 +270,16 @@ mod tests {
     };
     use crate::metrics::*;
     use crate::IOType;
-    use rand::Rng;
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::{
-        fs::OpenOptions, io::Read, io::Seek, io::SeekFrom, io::Write, os::unix::fs::OpenOptionsExt,
-    };
-    use tempfile::TempDir;
-    use test::Bencher;
+    use crate::OpenOptions;
 
     use libc::O_DIRECT;
     use maligned::A512;
     use maligned::{AsBytes, AsBytesMut};
+    use rand::Rng;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::{io::Read, io::Seek, io::SeekFrom, io::Write};
+    use tempfile::TempDir;
+    use test::Bencher;
 
     #[test]
     fn test_biosnoop() {

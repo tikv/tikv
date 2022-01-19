@@ -30,6 +30,7 @@ thread_local! {
     static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other);
 }
 
+#[derive(Debug)]
 struct ThreadID {
     pid: Pid,
     tid: Pid,
@@ -47,8 +48,7 @@ impl ThreadID {
         }
     }
 
-    fn fetch_io_bytes(&mut self) -> IOBytes {
-        let mut io_bytes = IOBytes::default();
+    fn fetch_io_bytes(&mut self) -> Option<IOBytes> {
         if self.proc_reader.is_none() {
             let path = PathBuf::from("/proc")
                 .join(format!("{}", self.pid))
@@ -65,28 +65,37 @@ impl ThreadID {
             }
         }
         if let Some(ref mut reader) = self.proc_reader {
-            if let Err(e) = reader.seek(std::io::SeekFrom::Start(0)) {
-                warn!("failed to seek proc file: {}", e);
-            } else {
-                for line in reader.lines().flatten() {
-                    if line.is_empty() || !line.contains(' ') {
-                        continue;
-                    }
+            reader
+                .seek(std::io::SeekFrom::Start(0))
+                .map_err(|e| {
+                    warn!("failed to seek proc file: {}", e);
+                })
+                .ok()?;
+            let mut io_bytes = IOBytes::default();
+            for line in reader.lines() {
+                let line = line
+                    .map_err(|e| {
+                        // ESRCH 3 No such process
+                        if e.raw_os_error() != Some(3) {
+                            warn!("failed to read proc file: {}", e);
+                        }
+                    })
+                    .ok()?;
+                if line.len() > 11 {
                     let mut s = line.split_whitespace();
-
                     if let (Some(field), Some(value)) = (s.next(), s.next()) {
-                        if let Ok(value) = u64::from_str(value) {
-                            match &field[..field.len() - 1] {
-                                "read_bytes" => io_bytes.read = value,
-                                "write_bytes" => io_bytes.write = value,
-                                _ => continue,
-                            }
+                        if field.starts_with("read_bytes") {
+                            io_bytes.read = u64::from_str(&value).ok()?;
+                        } else if field.starts_with("write_bytes") {
+                            io_bytes.write = u64::from_str(&value).ok()?;
                         }
                     }
                 }
             }
+            return Some(io_bytes);
+        } else {
+            None
         }
-        io_bytes
     }
 }
 
@@ -129,10 +138,11 @@ impl AtomicIOBytes {
 /// Flushes the local I/O stats to global I/O stats, and updates the local I/O type.
 #[inline]
 fn flush_thread_io(sentinel: &mut LocalIOStats, new_io_type: Option<IOType>) {
-    let io_bytes = sentinel.id.fetch_io_bytes();
-    GLOBAL_IO_STATS[sentinel.io_type as usize]
-        .fetch_add(io_bytes - sentinel.last_flushed, Ordering::Relaxed);
-    sentinel.last_flushed = io_bytes;
+    if let Some(io_bytes) = sentinel.id.fetch_io_bytes() {
+        GLOBAL_IO_STATS[sentinel.io_type as usize]
+            .fetch_add(io_bytes - sentinel.last_flushed, Ordering::Relaxed);
+        sentinel.last_flushed = io_bytes;
+    }
     if let Some(new_io_type) = new_io_type {
         sentinel.io_type = new_io_type;
     }
@@ -176,20 +186,19 @@ pub fn fetch_io_bytes(bytes_vec: &mut [IOBytes], allow_cache: bool) {
 mod tests {
     use libc::O_DIRECT;
     use maligned::{AsBytes, AsBytesMut, A512};
-    use std::{
-        fs::OpenOptions,
-        io::{Read, Write},
-        os::unix::prelude::OpenOptionsExt,
-    };
+    use std::io::{Read, Write};
+    use std::os::unix::fs::OpenOptionsExt;
     use tempfile::{tempdir, tempdir_in};
 
     use super::*;
+    use crate::{OpenOptions, WithIOType};
 
     #[test]
     fn test_read_bytes() {
         let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
         let file_path = tmp.path().join("test_read_bytes.txt");
         let mut id = ThreadID::current();
+        let _type = WithIOType::new(IOType::Compaction);
         {
             let mut f = OpenOptions::new()
                 .write(true)
@@ -207,14 +216,12 @@ mod tests {
             .open(&file_path)
             .unwrap();
         let mut w = vec![A512::default(); 1];
-        let origin_io_bytes = id.fetch_io_bytes();
-
+        let base_local_bytes = id.fetch_io_bytes().unwrap();
         for i in 1..=10 {
             f.read_exact(w.as_bytes_mut()).unwrap();
 
-            let io_bytes = id.fetch_io_bytes();
-
-            assert_eq!(i * 512 + origin_io_bytes.read, io_bytes.read);
+            let local_bytes = id.fetch_io_bytes().unwrap();
+            assert_eq!(i * 512 + base_local_bytes.read, local_bytes.read);
         }
     }
 
@@ -223,29 +230,27 @@ mod tests {
         let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
         let file_path = tmp.path().join("test_write_bytes.txt");
         let mut id = ThreadID::current();
+        let _type = WithIOType::new(IOType::Compaction);
         let mut f = OpenOptions::new()
             .write(true)
             .create(true)
             .custom_flags(O_DIRECT)
             .open(&file_path)
             .unwrap();
-
         let w = vec![A512::default(); 8];
-
-        let origin_io_bytes = id.fetch_io_bytes();
+        let base_local_bytes = id.fetch_io_bytes().unwrap();
         for i in 1..=10 {
             f.write_all(w.as_bytes()).unwrap();
             f.sync_all().unwrap();
 
-            let io_bytes = id.fetch_io_bytes();
-
-            assert_eq!(i * 4096 + origin_io_bytes.write, io_bytes.write);
+            let local_bytes = id.fetch_io_bytes().unwrap();
+            assert_eq!(i * 4096 + base_local_bytes.write, local_bytes.write);
         }
     }
 
     #[bench]
     fn bench_fetch_thread_io_bytes(b: &mut test::Bencher) {
         let mut id = ThreadID::current();
-        b.iter(|| id.fetch_io_bytes());
+        b.iter(|| id.fetch_io_bytes().unwrap());
     }
 }
