@@ -125,6 +125,16 @@ pub fn set_global_logger(
     Ok(())
 }
 
+// Terminates the current process gracefully by dropping async guard and forcing
+// a flush of logs to ensure messages aren't lost. For more information please
+// refer to:
+//   https://docs.rs/slog-async/2.7.0/slog_async/#beware-of-stdprocessexit
+pub fn exit_process_gracefully(code: i32) -> ! {
+    // force async logger to flush by dropping its guard.
+    *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
+    std::process::exit(code);
+}
+
 /// Constructs a new file writer which outputs log to a file at the specified
 /// path. The file writer rotates for the specified timespan.
 pub fn file_writer<N>(
