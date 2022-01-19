@@ -1066,18 +1066,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        let io_tracing = file_system::init_tracing()
-            .map_err(|e| warn!("failed to init I/O tracer: {}", e))
+        let stats_collector_enabled = file_system::init_io_stats_collector()
+            .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
             .is_ok();
 
         let limiter = Arc::new(
             self.config
                 .storage
                 .io_rate_limit
-                .build(!io_tracing /*enable_statistics*/),
+                .build(!stats_collector_enabled /*enable_statistics*/),
         );
-        let fetcher = if io_tracing {
-            BytesFetcher::FromIOTracer()
+        let fetcher = if stats_collector_enabled {
+            BytesFetcher::FromIOStatsCollector()
         } else {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };

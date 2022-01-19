@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::io_stats::fetch_io_bytes;
 use crate::metrics::{tls_flush, IO_BYTES_VEC};
-use crate::tracing::fetch_io_bytes;
 use crate::IOBytes;
 use crate::IORateLimiterStatistics;
 use crate::{IOOp, IOType};
@@ -15,8 +15,8 @@ use tikv_util::time::Instant;
 pub enum BytesFetcher {
     /// Fetch IO statistics from IO rate limiter, which records passed-through IOs in atomic counters.
     FromRateLimiter(Arc<IORateLimiterStatistics>),
-    /// Fetch IO statistics from OS I/O tracer.
-    FromIOTracer(),
+    /// Fetch IO statistics from OS I/O stats collector.
+    FromIOStatsCollector(),
 }
 
 impl BytesFetcher {
@@ -28,7 +28,9 @@ impl BytesFetcher {
                     bytes_vec[t as usize].write = stats.fetch(t, IOOp::Write) as u64;
                 }
             }
-            BytesFetcher::FromIOTracer() => fetch_io_bytes(bytes_vec, false /*allow_cache*/),
+            BytesFetcher::FromIOStatsCollector() => {
+                fetch_io_bytes(bytes_vec, false /*allow_cache*/)
+            }
         }
     }
 }
