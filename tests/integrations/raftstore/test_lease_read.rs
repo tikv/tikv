@@ -777,7 +777,7 @@ fn test_infinite_lease() {
 fn test_node_local_read_renew_lease() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::secs(3);
-    configure_for_lease_read(&mut cluster, Some(100), Some(20));
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
@@ -801,7 +801,7 @@ fn test_node_local_read_renew_lease() {
     cluster.add_send_filter(CloneFilterFactory(detector.clone()));
 
     // election_timeout_ticks * base_tick_interval * 3
-    let hibernate_wait = 20 * Duration::from_millis(100) * 3;
+    let hibernate_wait = 10 * Duration::from_millis(100) * 3;
     let request_wait = Duration::from_millis(100);
     let max_renew_lease_time = 3;
     let round = hibernate_wait.as_millis() / request_wait.as_millis();
