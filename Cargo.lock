@@ -5605,7 +5605,6 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "smallvec",
  "sst_importer",
  "strum",
  "sysinfo",

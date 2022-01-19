@@ -2543,7 +2543,7 @@ pub struct TiKvConfig {
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub tracing: TracingConfig,
 }
 
