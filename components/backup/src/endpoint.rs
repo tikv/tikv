@@ -85,13 +85,6 @@ impl fmt::Debug for Task {
     }
 }
 
-#[derive(Clone)]
-struct LimitedStorage {
-    limiter: Limiter,
-    #[allow(dead_code)]
-    storage: Arc<dyn ExternalStorage>,
-}
-
 impl Task {
     /// Create a backup task based on the given backup request.
     pub fn new(
@@ -484,7 +477,7 @@ impl BackupRange {
         &self,
         engine: E,
         db: Arc<DB>,
-        storage: &LimitedStorage,
+        limiter: &Limiter,
         file_name: String,
         cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
@@ -496,7 +489,7 @@ impl BackupRange {
             db,
             &file_name,
             cf,
-            storage.limiter.clone(),
+            limiter.clone(),
             compression_type,
             compression_level,
             cipher,
@@ -794,7 +787,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         request: Request,
         saver_tx: async_channel::Sender<InMemBackupFiles>,
         resp_tx: UnboundedSender<BackupResponse>,
-        backend: Arc<dyn ExternalStorage>,
+        _backend: Arc<dyn ExternalStorage>,
     ) {
         let start_ts = request.start_ts;
         let backup_ts = request.end_ts;
@@ -807,11 +800,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let limit = self.softlimit.limit();
 
         self.pool.borrow_mut().spawn(async move {
-            let storage = LimitedStorage {
-                limiter: request.limiter,
-                storage: backend,
-            };
-
             loop {
                 // when get the guard, release it until we finish scanning a batch, 
                 // because if we were suspended during scanning, 
@@ -869,7 +857,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             .backup_raw_kv_to_file(
                                 engine,
                                 db.clone(),
-                                &storage,
+                                &request.limiter,
                                 name,
                                 cf.into(),
                                 ct,
@@ -881,7 +869,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     } else {
                         let writer_builder = BackupWriterBuilder::new(
                             store_id,
-                            storage.limiter.clone(),
+                            request.limiter.clone(),
                             brange.region.clone(),
                             db.clone(),
                             ct,
