@@ -18,12 +18,14 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
+use engine_rocks::get_env;
 use engine_rocks::properties::MvccPropertiesCollectorFactory;
 use engine_rocks::raw::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionFilterFactory, CompactionPriority,
-    DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode,
-    LRUCacheOptions, TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
+    TitanDBOptions,
 };
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::util::{
@@ -36,7 +38,7 @@ use engine_rocks::{
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use file_system::IOPriority;
+use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -177,8 +179,8 @@ struct BackgroundJobLimits {
 }
 
 const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
-    max_background_jobs: 10,
-    max_background_flushes: 4,
+    max_background_jobs: 9,
+    max_background_flushes: 3,
     max_sub_compactions: 3,
     max_titan_background_gc: 4,
 };
@@ -190,19 +192,18 @@ const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobL
     max_titan_background_gc: 4,
 };
 
+// `defaults` serves as an upper bound for returning limits.
 fn get_background_job_limits_impl(
     cpu_num: u32,
     defaults: &BackgroundJobLimits,
 ) -> BackgroundJobLimits {
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
-    // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
-    // the rest shared by flush and compaction.
-    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num));
+    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
-        (max_background_jobs + 2) / 3,
+        (max_background_jobs + 3) / 4,
         defaults.max_background_flushes,
     );
     // Cap max_sub_compactions to allow at least two compactions.
@@ -605,8 +606,7 @@ impl DefaultCfConfig {
                         cf_opts
                             .set_compaction_filter_factory(
                                 "ttl_compaction_filter_factory",
-                                Box::new(TTLCompactionFilterFactory::<API>::default())
-                                    as Box<dyn CompactionFilterFactory>,
+                                TTLCompactionFilterFactory::<API>::default(),
                             )
                             .unwrap();
                     }
@@ -692,9 +692,11 @@ impl WriteCfConfig {
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
-        let e = Box::new(FixedSuffixSliceTransform::new(8));
         cf_opts
-            .set_prefix_extractor("FixedSuffixSliceTransform", e)
+            .set_prefix_extractor(
+                "FixedSuffixSliceTransform",
+                FixedSuffixSliceTransform::new(8),
+            )
             .unwrap();
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
@@ -711,7 +713,7 @@ impl WriteCfConfig {
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
-                Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                WriteCompactionFilterFactory,
             )
             .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -781,9 +783,8 @@ impl LockCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
-        let f = Box::new(NoopSliceTransform);
         cf_opts
-            .set_prefix_extractor("NoopSliceTransform", f)
+            .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
@@ -855,9 +856,8 @@ impl RaftCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_RAFT, cache, no_region_info_accessor);
-        let f = Box::new(NoopSliceTransform);
         cf_opts
-            .set_prefix_extractor("NoopSliceTransform", f)
+            .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -1221,7 +1221,7 @@ impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
-        let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
+        let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
@@ -2464,6 +2464,8 @@ pub struct TiKvConfig {
     #[online_config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
 
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     pub enable_io_snoop: bool,
 
@@ -2722,10 +2724,51 @@ impl TiKvConfig {
             self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
             self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
 
+            // disable kvdb write stall, and override related configs
             self.rocksdb.defaultcf.disable_write_stall = true;
+            self.rocksdb.defaultcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.writecf.disable_write_stall = true;
+            self.rocksdb.writecf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.lockcf.disable_write_stall = true;
+            self.rocksdb.lockcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
             self.rocksdb.raftcf.disable_write_stall = true;
+            self.rocksdb.raftcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .soft_pending_compaction_bytes_limit;
+            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = self
+                .storage
+                .flow_control
+                .hard_pending_compaction_bytes_limit;
         }
 
         if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
@@ -3055,6 +3098,24 @@ impl TiKvConfig {
         let total = SysQuota::memory_limit_in_bytes();
         // Reserve some space for page cache. The
         ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)
+    }
+
+    pub fn build_shared_rocks_env(
+        &self,
+        key_manager: Option<Arc<DataKeyManager>>,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> Result<Arc<Env>, String> {
+        let env = get_env(key_manager, limiter)?;
+        if !self.raft_engine.enable {
+            // RocksDB makes sure there are at least `max_background_flushes`
+            // high-priority workers in env. That is not enough when multiple
+            // RocksDB instances share the same env. We manually configure the
+            // worker count in this case.
+            env.set_high_priority_background_threads(
+                self.raftdb.max_background_flushes + self.rocksdb.max_background_flushes,
+            );
+        }
+        Ok(env)
     }
 }
 
@@ -3829,10 +3890,24 @@ mod tests {
     }
 
     #[test]
-    fn test_change_flow_control() {
+    fn test_flow_control() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
         let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
+
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_slowdown_writes_trigger(),
+            50
+        );
+        assert_eq!(
+            db.get_options_cf(CF_DEFAULT)
+                .unwrap()
+                .get_level_zero_stop_writes_trigger(),
+            50
+        );
 
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4331,6 +4406,7 @@ mod tests {
 
     #[test]
     fn test_background_job_limits() {
+        // cpu num = 1
         assert_eq!(
             get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
@@ -4341,6 +4417,19 @@ mod tests {
             }
         );
         assert_eq!(
+            get_background_job_limits_impl(
+                1, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 1,
+            }
+        );
+        // cpu num = 2
+        assert_eq!(
             get_background_job_limits_impl(2 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
                 max_background_jobs: 2,
@@ -4350,34 +4439,70 @@ mod tests {
             }
         );
         assert_eq!(
+            get_background_job_limits_impl(
+                2, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 2,
+            }
+        );
+        // cpu num = 4
+        assert_eq!(
             get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
-                max_background_jobs: 4,
-                max_background_flushes: 2,
+                max_background_jobs: 3,
+                max_background_flushes: 1,
                 max_sub_compactions: 1,
                 max_titan_background_gc: 4,
             }
         );
         assert_eq!(
+            get_background_job_limits_impl(
+                4, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 3,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        // cpu num = 8
+        assert_eq!(
             get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
             BackgroundJobLimits {
-                max_background_jobs: 8,
-                max_background_flushes: 3,
+                max_background_jobs: 7,
+                max_background_flushes: 2,
                 max_sub_compactions: 3,
                 max_titan_background_gc: 4,
             }
         );
         assert_eq!(
             get_background_job_limits_impl(
+                8, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
+        );
+        // cpu num = 16
+        assert_eq!(
+            get_background_job_limits_impl(
                 16, /*cpu_num*/
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
-            BackgroundJobLimits {
-                max_background_jobs: 10,
-                max_background_flushes: 4,
-                max_sub_compactions: 3,
-                max_titan_background_gc: 4,
-            }
+            KVDB_DEFAULT_BACKGROUND_JOB_LIMITS,
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                16, /*cpu_num*/
+                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
         );
     }
 
