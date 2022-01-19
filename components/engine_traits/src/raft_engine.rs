@@ -18,6 +18,9 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize>;
+
+    /// Get all available entries in the region.
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
 }
 
 // TODO: Remove use of trait object and merge this trait into `RaftEngineReadOnly`.
@@ -58,6 +61,7 @@ pub trait RaftEngine: RaftEngineReadOnly + RaftEngineDebug + Clone + Sync + Send
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()>;

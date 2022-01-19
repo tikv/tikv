@@ -105,11 +105,11 @@ def get_features(path):
 
 print()
 
-# cargo_check_default()
+cargo_check_default()
 cargo_check_test_engines("panic")
 cargo_check_test_engines("rocksdb")
 cargo_check_test_engines_ext("rocksdb", "raft-engine")
-# cargo_test_default()
+cargo_test_default()
 cargo_test_test_engines("panic")
 cargo_test_test_engines("rocksdb")
 cargo_test_test_engines_ext("rocksdb", "raft-engine")

@@ -25,6 +25,10 @@ impl RaftEngineReadOnly for PanicEngine {
     ) -> Result<usize> {
         panic!()
     }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        panic!()
+    }
 }
 
 impl RaftEngineDebug for PanicEngine {
@@ -64,6 +68,7 @@ impl RaftEngine for PanicEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
