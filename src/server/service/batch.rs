@@ -4,7 +4,7 @@ use crate::new_request_tracer;
 // #[PerformanceCriticalPath]
 use crate::server::metrics::REQUEST_BATCH_SIZE_HISTOGRAM_VEC;
 use crate::server::service::kv::{batch_commands_response, TracedSingleResponse};
-use crate::server::service::tracing::{RequestTracer, TracingHandle};
+use crate::server::service::tracing::{RequestTracer, TracerFactory};
 use crate::storage::kv::{PerfStatisticsDelta, Statistics};
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
@@ -57,9 +57,9 @@ impl ReqBatcher {
         &mut self,
         mut req: GetRequest,
         id: u64,
-        tracing_handle: &TracingHandle,
+        tracer_factory: &TracerFactory,
     ) {
-        let tracer = new_request_tracer!(kv_get, &mut req, tracing_handle);
+        let tracer = new_request_tracer!(kv_get, &mut req, tracer_factory);
 
         self.gets.push(req);
         self.get_ids.push(id);
@@ -70,9 +70,9 @@ impl ReqBatcher {
         &mut self,
         mut req: RawGetRequest,
         id: u64,
-        tracing_handle: &TracingHandle,
+        tracer_factory: &TracerFactory,
     ) {
-        let tracer = new_request_tracer!(raw_get, &mut req, tracing_handle);
+        let tracer = new_request_tracer!(raw_get, &mut req, tracer_factory);
 
         self.raw_gets.push(req);
         self.raw_get_ids.push(id);

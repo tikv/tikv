@@ -10,7 +10,7 @@ use crate::new_request_tracer;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
-use crate::server::service::tracing::{RequestTracer, TracingHandle};
+use crate::server::service::tracing::{RequestTracer, TracerFactory};
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
 use crate::server::Proxy;
@@ -85,7 +85,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     // Go `server::Config` to get more details.
     reject_messages_on_memory_ratio: f64,
 
-    tracing_handle: TracingHandle,
+    tracer_factory: TracerFactory,
 }
 
 impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone>
@@ -105,7 +105,7 @@ impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockM
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
-            tracing_handle: self.tracing_handle.clone(),
+            tracer_factory: self.tracer_factory.clone(),
         }
     }
 }
@@ -125,7 +125,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         enable_req_batch: bool,
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
-        tracing_handle: TracingHandle,
+        tracer_factory: TracerFactory,
     ) -> Self {
         Service {
             store_id,
@@ -140,7 +140,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             grpc_thread_load,
             proxy,
             reject_messages_on_memory_ratio,
-            tracing_handle,
+            tracer_factory,
         }
     }
 
@@ -175,7 +175,7 @@ macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, mut req: $req_ty, sink: UnarySink<$resp_ty>) {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
-            let tracer = new_request_tracer!($fn_name, &mut req, &self.tracing_handle);
+            let tracer = new_request_tracer!($fn_name, &mut req, &self.tracer_factory);
             let _g = tracer.root_span.set_local_parent();
 
             let resp = $future_name(&self.storage, req);
@@ -356,7 +356,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
     fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
 
-        let tracer = new_request_tracer!(coprocessor, &mut req, &self.tracing_handle);
+        let tracer = new_request_tracer!(coprocessor, &mut req, &self.tracer_factory);
         let _g = tracer.root_span.set_local_parent();
 
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
@@ -383,7 +383,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         mut req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
-        let tracer = new_request_tracer!(raw_coprocessor, &mut req, &self.tracing_handle);
+        let tracer = new_request_tracer!(raw_coprocessor, &mut req, &self.tracer_factory);
         let _g = tracer.root_span.set_local_parent();
 
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
@@ -968,7 +968,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
-        let tracing_handle = self.tracing_handle.clone();
+        let tracer_factory = self.tracer_factory.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -985,7 +985,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
                     id,
                     req,
                     &tx,
-                    &tracing_handle,
+                    &tracer_factory,
                 );
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1180,7 +1180,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     id: u64,
     req: batch_commands_request::Request,
     tx: &Sender<TracedSingleResponse>,
-    tracing_handle: &TracingHandle,
+    tracer_factory: &TracerFactory,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1205,9 +1205,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_get_request(req, id, tracing_handle);
+                        batcher.as_mut().unwrap().add_get_request(req, id, tracer_factory);
                     } else {
-                        let tracer = new_request_tracer!(kv_get, &mut req, tracing_handle);
+                        let tracer = new_request_tracer!(kv_get, &mut req, tracer_factory);
                         let _g = tracer.root_span.set_local_parent();
 
                         let resp = future_get(storage, req)
@@ -1220,9 +1220,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
-                        batcher.as_mut().unwrap().add_raw_get_request(req, id, tracing_handle);
+                        batcher.as_mut().unwrap().add_raw_get_request(req, id, tracer_factory);
                     } else {
-                        let tracer = new_request_tracer!(raw_get, &mut req, tracing_handle);
+                        let tracer = new_request_tracer!(raw_get, &mut req, tracer_factory);
                         let _g = tracer.root_span.set_local_parent();
 
                         let resp = future_raw_get(storage, req)
@@ -1232,7 +1232,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
-                    let tracer = new_request_tracer!(coprocessor, &mut req, tracing_handle);
+                    let tracer = new_request_tracer!(coprocessor, &mut req, tracer_factory);
                     let _g = tracer.root_span.set_local_parent();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
                         .map_ok(|resp| {
@@ -1250,7 +1250,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     response_batch_commands_request(id, resp, tx.clone(), tracer);
                 },
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
-                    let tracer = new_request_tracer!($metric_name, &mut req, tracing_handle);
+                    let tracer = new_request_tracer!($metric_name, &mut req, tracer_factory);
                     let _g = tracer.root_span.set_local_parent();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))

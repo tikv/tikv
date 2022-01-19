@@ -655,7 +655,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start tracing
-        let (tracing_service, tracing_handle, tracing_cfg_mgr) = init_tracing(&self.config.tracing);
+        let (tracing_service, tracer_factory, tracing_cfg_mgr) = init_tracing(&self.config.tracing);
         tracing_service.register_service();
         cfg_controller.register(tikv::config::Module::Tracing, Box::new(tracing_cfg_mgr));
 
@@ -789,7 +789,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
-            tracing_handle,
+            tracer_factory,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

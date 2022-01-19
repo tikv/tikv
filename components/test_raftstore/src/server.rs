@@ -339,7 +339,7 @@ impl Simulator for ServerCluster {
             self.init_resource_metering(&cfg.resource_metering);
 
         // Start tracing
-        let (tracing_service, tracing_handle, _tracing_cfg_mgr) = init_tracing(&cfg.tracing);
+        let (tracing_service, tracer_factory, _tracing_cfg_mgr) = init_tracing(&cfg.tracing);
         tracing_service.register_service();
 
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
@@ -456,7 +456,7 @@ impl Simulator for ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
-                tracing_handle.clone(),
+                tracer_factory.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

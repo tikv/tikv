@@ -2365,7 +2365,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/andylokandy/kvproto?branch=trace#40cec920f3302b1c244eb8bb1d955d4827d1f41b"
+source = "git+https://github.com/andylokandy/kvproto?branch=trace#29917bc30ad68048420256ff47733925792f2d36"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2618,20 +2618,25 @@ checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
 
 [[package]]
 name = "minitrace"
-version = "0.2.0"
-source = "git+https://github.com/andylokandy/minitrace-rust.git?branch=publish#6e7f375979338e3d5c3cfed290a034a11ed89f44"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0313823e46be8dde523fac897334b82c28aecda1c376a1855daf7e680d3343b"
 dependencies = [
  "crossbeam",
+ "futures 0.3.15",
  "minitrace-macro",
  "minstant",
+ "once_cell",
+ "parking_lot",
  "pin-project",
- "smallvec",
+ "retain_mut",
 ]
 
 [[package]]
 name = "minitrace-macro"
-version = "0.2.0"
-source = "git+https://github.com/andylokandy/minitrace-rust.git?branch=publish#6e7f375979338e3d5c3cfed290a034a11ed89f44"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c055100e79c2048078546d451e635d82ba60f4d74aa4e9d3d6e29aba5857777"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -3318,18 +3323,18 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.0.1"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee41d838744f60d959d7074e3afb6b35c7456d0f61cad38a24e35e6553f73841"
+checksum = "58ad3879ad3baf4e44784bc6a718a8698867bb991f8ce24d1bcbe2cfb4c3a75e"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.0.1"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81a4ffa594b66bff340084d4081df649a7dc049ac8d7fc458d8e628bfbbb2f86"
+checksum = "744b6f092ba29c3650faf274db506afd39944f48420f6c86b17cfe0ee1cb36bb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3479,9 +3484,9 @@ checksum = "369a6ed065f249a159e06c45752c780bda2fb53c995718f9e484d08daa9eb42e"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.26"
+version = "1.0.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a152013215dca273577e18d2bf00fa862b89b24169fb78c4c95aeb07992c9cec"
+checksum = "c7342d5883fbccae1cc37a2353b09c87c9b0f3afd73f5fb9bba687a1f733b029"
 dependencies = [
  "unicode-xid",
 ]
@@ -4141,6 +4146,12 @@ dependencies = [
  "thread-id",
  "tikv_util",
 ]
+
+[[package]]
+name = "retain_mut"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11000e6ba5020e53e7cc26f73b91ae7d5496b4977851479edb66b694c0675c21"
 
 [[package]]
 name = "rev_lines"
@@ -4969,9 +4980,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.72"
+version = "1.0.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1e8cdbefb79a9a5a65e0db8b47b723ee907b7c7f8496c76a1770b5c310bab82"
+checksum = "a684ac3dcd8913827e18cd09a68384ee66c1de24157e3c556c9ab16d85695fb7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5594,6 +5605,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "smallvec",
  "sst_importer",
  "strum",
  "sysinfo",
