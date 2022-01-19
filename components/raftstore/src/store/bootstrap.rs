@@ -97,7 +97,7 @@ pub fn clear_prepare_bootstrap_cluster(
     box_try!(
         engines
             .raft
-            .clean(region_id, &RaftLocalState::default(), &mut wb)
+            .clean(region_id, 0, &RaftLocalState::default(), &mut wb)
     );
     box_try!(engines.raft.consume(&mut wb, true));
 
