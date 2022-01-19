@@ -369,13 +369,13 @@ fn test_destroy_clean_up_logs_with_log_gc() {
     pd_client.must_remove_peer(1, new_peer(3, 4));
     must_get_none(&cluster.get_engine(3), b"k1");
     // Peer created by snapshot should also cleanup all logs.
-    cluster.get_first_log(1, 3).unwrap();
+    assert_eq!(None, cluster.get_first_log(1, 3));
 
     pd_client.must_add_peer(1, new_peer(3, 5));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
-    assert_eq!(cluster.get_first_log(1, 3), None);
+    cluster.get_first_log(1, 3).unwrap();
 
     let state = cluster.truncated_state(1, 3);
     for _ in 0..50 {
