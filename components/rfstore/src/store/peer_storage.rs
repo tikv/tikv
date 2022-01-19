@@ -146,7 +146,7 @@ impl raft::Storage for PeerStorage {
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        Ok(self.shard_meta.as_ref().map_or(0, |m| m.seq + 1))
+        Ok(self.shard_meta.as_ref().map_or(1, |m| m.write_sequence + 1))
     }
 
     fn last_index(&self) -> raft::Result<u64> {
@@ -159,7 +159,7 @@ impl raft::Storage for PeerStorage {
             return Err(raft::Error::Store(StorageError::Unavailable));
         }
         let shard_meta = self.shard_meta.as_ref().unwrap();
-        let snap_index = shard_meta.seq;
+        let snap_index = shard_meta.write_sequence;
         if snap_index < request_index {
             info!("requesting index is too high"; "region" => self.tag(),
                 "request_index" => request_index, "snap_index" => snap_index);
@@ -177,6 +177,7 @@ impl raft::Storage for PeerStorage {
         let conf_state = conf_state_from_region(self.region());
         snap_meta.set_conf_state(conf_state);
         snap.set_metadata(snap_meta);
+        debug!("peer storage generate snapshot {}", self.tag());
         Ok(snap)
     }
 }
@@ -190,18 +191,15 @@ impl PeerStorage {
         let raft_state = init_raft_state(&engines.raft, &region)?;
         let apply_state = init_apply_state(&engines.kv, &region);
         let mut shard_meta: Option<ShardMeta> = None;
-        let (mut meta_index, mut meta_term) = (0u64, 0u64);
         if apply_state.applied_index > 0 {
             let res = engines.raft.get_state(region.get_id(), KV_ENGINE_META_KEY);
             let shard_meta_bin = res.unwrap();
             let mut change_set = kvenginepb::ChangeSet::default();
             change_set.merge_from_bytes(&shard_meta_bin).unwrap();
             let meta = kvengine::ShardMeta::new(change_set);
-            meta_index = meta.seq;
-            meta_term = meta.get_property(TERM_KEY).unwrap().get_u64_le();
             shard_meta = Some(meta);
         }
-        let last_term = init_last_term(&engines.raft, &region, raft_state, meta_index, meta_term)?;
+        let last_term = init_last_term(&engines.raft, &region, raft_state)?;
         let mut initial_flushed = false;
         if let Some(shard) = engines.kv.get_shard(region.get_id()) {
             initial_flushed = shard.get_initial_flushed();
@@ -290,7 +288,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn truncated_index(&self) -> u64 {
-        self.shard_meta.as_ref().map_or(0, |m| m.seq)
+        self.shard_meta.as_ref().map_or(0, |m| m.write_sequence)
     }
 
     #[inline]
@@ -372,7 +370,10 @@ impl PeerStorage {
     }
 
     pub fn update_commit_index(&mut self, ctx: &mut RaftContext, commit_idx: u64) {
-        assert!(self.raft_state.commit < commit_idx);
+        if commit_idx == self.raft_state.commit {
+            return;
+        }
+        assert!(commit_idx > self.raft_state.commit);
         self.raft_state.commit = commit_idx;
         self.write_raft_state(ctx);
     }
@@ -404,7 +405,6 @@ impl PeerStorage {
         self.last_term = last_term;
         self.apply_state.applied_index = last_index;
         self.apply_state.applied_index_term = last_term;
-
         ctx.raft_wb.set_state(
             region.get_id(),
             KV_ENGINE_META_KEY,
@@ -481,16 +481,12 @@ fn init_last_term(
     rf: &rfengine::RFEngine,
     region: &metapb::Region,
     raft_state: RaftState,
-    meta_index: u64,
-    meta_term: u64,
 ) -> Result<u64> {
     let last_index = raft_state.last_index;
     if last_index == 0 {
         return Ok(0);
     } else if last_index == RAFT_INIT_LOG_INDEX {
         return Ok(RAFT_INIT_LOG_TERM);
-    } else if last_index == meta_index {
-        return Ok(meta_term);
     } else {
         assert!(last_index > RAFT_INIT_LOG_INDEX)
     }
@@ -563,6 +559,7 @@ pub fn decode_snap_data(data: &[u8]) -> Result<(metapb::Region, kvenginepb::Chan
     region.merge_from_bytes(&data[offset..(offset + size1)])?;
     offset += size1;
     let size2 = LittleEndian::read_u32(&data[offset..]) as usize;
+    offset += 4;
     let mut change_set = kvenginepb::ChangeSet::default();
     change_set.merge_from_bytes(&data[offset..(offset + size2)])?;
     Ok((region, change_set))

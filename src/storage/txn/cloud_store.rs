@@ -3,6 +3,7 @@
 use crate::storage::mvcc;
 use crate::storage::mvcc::NewerTsCheckState;
 use crate::storage::txn::Result;
+use bytes::{Buf, Bytes};
 use kvengine::Item;
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -85,11 +86,16 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner> {
-        let lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
+        let lower_bound = lower_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
+        let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
         let mut stats = Statistics::default();
-        let lower_bound = lower_bound.map(|k| k.to_raw().unwrap());
-        let upper_bound = upper_bound.map(|k| k.to_raw().unwrap());
-        self.check_locks(lock_iter, &lower_bound, &upper_bound, &mut stats)?;
+        let mut lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
+        self.check_locks(
+            lock_iter,
+            lower_bound.clone(),
+            upper_bound.clone(),
+            &mut stats,
+        )?;
         let iter = self.snapshot.new_data_iterator(desc, self.start_ts, false);
         Ok(CloudStoreScanner {
             iter,
@@ -153,23 +159,21 @@ impl<S: Snapshot> CloudStore<S> {
     fn check_locks(
         &self,
         mut lock_iter: kvengine::read::Iterator,
-        lower_bound: &Option<Vec<u8>>,
-        upper_bound: &Option<Vec<u8>>,
+        lower_bound: Option<Bytes>,
+        upper_bound: Option<Bytes>,
         stats: &mut Statistics,
     ) -> mvcc::Result<()> {
+        if let Some(upper) = upper_bound {
+            lock_iter.set_bound(upper)
+        }
         if let Some(seek_key) = lower_bound {
-            lock_iter.seek(seek_key);
+            lock_iter.seek(&seek_key);
         } else {
             lock_iter.rewind();
         }
         stats.lock.seek += 1;
         while lock_iter.valid() {
             let key = Key::from_raw(lock_iter.key());
-            if let Some(upper_bound_key) = &upper_bound {
-                if lock_iter.key() >= upper_bound_key.as_slice() {
-                    break;
-                }
-            }
             let lock = Lock::parse(lock_iter.item().get_value())?;
             Lock::check_ts_conflict(
                 Cow::Borrowed(&lock),
@@ -178,6 +182,7 @@ impl<S: Snapshot> CloudStore<S> {
                 &self.bypass_locks,
             )?;
             lock_iter.next();
+            stats.lock.next += 1;
         }
         return Ok(());
     }
@@ -187,8 +192,8 @@ pub struct CloudStoreScanner {
     iter: kvengine::read::Iterator,
     stats: Statistics,
     is_started: bool,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<Bytes>,
+    upper_bound: Option<Bytes>,
     stopped: bool,
     desc: bool,
 }
@@ -229,14 +234,14 @@ impl super::Scanner for CloudStoreScanner {
             let iter_key = self.iter.key();
             if self.desc {
                 if let Some(bound_key) = &self.lower_bound {
-                    if iter_key < bound_key.as_slice() {
+                    if iter_key < bound_key.chunk() {
                         self.stopped = true;
                         return Ok(None);
                     }
                 }
             } else {
                 if let Some(bound_key) = &self.upper_bound {
-                    if iter_key >= bound_key.as_slice() {
+                    if iter_key >= bound_key.chunk() {
                         self.stopped = true;
                         return Ok(None);
                     }

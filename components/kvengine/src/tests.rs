@@ -396,7 +396,7 @@ fn new_initial_cs() -> pb::ChangeSet {
     cs.set_shard_ver(1);
     cs.set_sequence(1);
     let mut snap = pb::Snapshot::new();
-    snap.set_base_ts(1);
+    snap.set_base_version(1);
     snap.set_end(GLOBAL_SHARD_END_KEY.to_vec());
     let props = snap.mut_properties();
     props.shard_id = 1;

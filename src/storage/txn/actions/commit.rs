@@ -84,10 +84,14 @@ pub fn commit<S: Snapshot>(
             };
         }
     };
+    let short_value = match reader.cloud_reader {
+        Some(_) => None, // cloud reader doesn't need to put short value to commit entry.
+        None => lock.short_value.take(),
+    };
     let mut write = Write::new(
         WriteType::from_lock_type(lock.lock_type).unwrap(),
         reader.start_ts,
-        lock.short_value.take(),
+        short_value,
     );
 
     for ts in &lock.rollback_ts {

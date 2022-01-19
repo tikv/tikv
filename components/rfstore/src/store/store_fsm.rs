@@ -274,8 +274,54 @@ pub struct StoreMeta {
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
     pub pending_msgs: RingQueue<RaftMessage>,
-    /// The regions with pending snapshots.
-    pub pending_snapshot_regions: Vec<Region>,
+
+    /// pending_new_regions is used to avoid the race between create peer by split and create peer by
+    /// raft message.
+    ///
+    /// Events:
+    ///
+    /// A1: The split log is committed.
+    /// 	If the new region is found and initialized, avoid update the new region.
+    /// 	Otherwise add pending create in store meta.
+    ///
+    /// A2: Handle apply result of split.
+    /// 	If the new region is found, it must be initialized, then avoid create the peer.
+    /// 	Otherwise, create the peer and remove pending create.
+    ///
+    /// B1: store handle raft message maybe create peer.
+    /// 	If region or pending create is found, avoid create the peer.
+    /// 	Otherwise create the peer with the uninitialized region.
+    ///
+    /// B2: new peer recevied snapshot.
+    /// 	If prev region is uninitialized and the region in store is initialized, avoid update the store meta.
+    /// 	Otherwise update the store meta.
+    ///
+    /// There are 5 possible sequences to analyze:
+    ///
+    /// - A1, A2
+    /// 	After A2, the peer can be found in router.
+    ///
+    /// - A1, B1, A2
+    /// 	A1 set pending create in store meta.
+    /// 	B1 found the pending create in store meta, then avoid create peer.
+    ///
+    /// - B1, A1, A2, B2,
+    /// 	B1 create the peer in the store meta.
+    /// 	A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
+    /// 	A2 replace the uninitialized region by split, removed the pending create.
+    /// 	B2 found no pending create, and prev region is not initialized, meta region is initialized, avoid update the meta.
+    ///
+    /// - B1, A1, B2, A2
+    /// 	B1 create the peer in the store meta.
+    /// 	A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
+    /// 	B2 found pending create, avoid update the meta.
+    /// 	A2 replace the uninitialized region by split, removed the pending create.
+    ///
+    /// - B1. B2, A1, A2
+    /// 	B2 updated the meta with initialized region.
+    /// 	A1 found region is initialized, do not add pending create.
+    /// 	A2 do not create the initialized region on ready split.
+    pub(crate) pending_new_regions: HashMap<u64, bool>,
 }
 
 impl StoreMeta {
@@ -287,7 +333,7 @@ impl StoreMeta {
             readers: HashMap::default(),
             leaders: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
-            pending_snapshot_regions: Vec::default(),
+            pending_new_regions: HashMap::default(),
         }
     }
 
@@ -790,18 +836,6 @@ impl StoreMsgHandler {
         msg: &RaftMessage,
         is_local_first: bool,
     ) -> Result<bool> {
-        if is_local_first
-            && self
-                .ctx
-                .global
-                .engines
-                .raft
-                .get_state(region_id, &keys::raft_state_key(region_ver))
-                .is_some()
-        {
-            return Ok(false);
-        }
-
         let target = msg.get_to_peer();
 
         let mut meta = self.ctx.global.store_meta.lock().unwrap();
@@ -809,7 +843,9 @@ impl StoreMsgHandler {
             return Ok(true);
         }
         fail_point!("after_acquire_store_meta_on_maybe_create_peer_internal");
-        // TODO(x) handle the race issue between create peer and split region.
+        if meta.pending_new_regions.contains_key(&region_id) {
+            return Ok(false);
+        }
 
         // TODO(x) handle overlap exisitng region.
 

@@ -9,7 +9,7 @@ use kvproto::raft_cmdpb::{
     Request, StatusCmdType, StatusResponse,
 };
 use kvproto::raft_serverpb::RaftMessage;
-use protobuf::ProtobufEnum;
+use protobuf::{Message, ProtobufEnum};
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, Ready, StateRole};
 use raft_proto::eraftpb;
@@ -37,6 +37,7 @@ use crate::store::{SplitMethod, SplitTask};
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
+use raftstore::store::util::is_region_initialized;
 use txn_types::WriteBatchFlags;
 
 /// Limits the maximum number of regions returned by error.
@@ -418,17 +419,7 @@ impl<'a> PeerMsgHandler<'a> {
         };
 
         if is_snapshot {
-            if !self.fsm.peer.has_pending_snapshot() {
-                // This snapshot is rejected by raft-rs.
-                let mut meta = self.ctx.global.store_meta.lock().unwrap();
-                meta.pending_snapshot_regions
-                    .retain(|r| self.fsm.region_id() != r.get_id());
-            } else {
-                // This snapshot may be accepted by raft-rs.
-                // If it's rejected by raft-rs, the snapshot region in `pending_snapshot_regions`
-                // will be removed together with the latest snapshot region after applying that snapshot.
-                // But if `regions_to_destroy` is not empty, the pending snapshot must be this msg's snapshot
-                // because this kind of snapshot is exclusive.
+            if self.fsm.peer.has_pending_snapshot() {
                 self.destroy_regions_for_snapshot(regions_to_destroy);
             }
         }
@@ -599,11 +590,6 @@ impl<'a> PeerMsgHandler<'a> {
         self.fsm.peer.pending_remove = true;
 
         let mut meta = self.ctx.global.store_meta.lock().unwrap();
-
-        // It's possible that this region gets a snapshot then gets a stale peer msg.
-        // So the data in `pending_snapshot_regions` should be removed here.
-        meta.pending_snapshot_regions
-            .retain(|r| self.fsm.region_id() != r.get_id());
 
         // Destroy read delegates.
         meta.readers.remove(&region_id);
@@ -840,31 +826,21 @@ impl<'a> PeerMsgHandler<'a> {
                 assert!(not_exist, "[region {}] should not exist", new_region_id);
                 continue;
             }
-
-            // TODO(x) check split conflict with add peer.
+            if let Some(r) = meta.regions.get(&new_region_id) {
+                if is_region_initialized(r) {
+                    // The region is created by raft message.
+                    info!("initialized region already exists, must be created by raft message.");
+                    continue;
+                }
+            }
             // Now all checking passed.
-
             // Insert new regions and validation
             info!(
                 "insert new region";
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );
-            if let Some(r) = meta.regions.get(&new_region_id) {
-                // Suppose a new node is added by conf change and the snapshot comes slowly.
-                // Then, the region splits and the first vote message comes to the new node
-                // before the old snapshot, which will create an uninitialized peer on the
-                // store. After that, the old snapshot comes, followed with the last split
-                // proposal. After it's applied, the uninitialized peer will be met.
-                // We can remove this uninitialized peer directly.
-                if util::is_region_initialized(r) {
-                    panic!(
-                        "[region {}] duplicated region {:?} for split region {:?}",
-                        new_region_id, r, new_region
-                    );
-                }
-                self.ctx.global.router.close(new_region_id);
-            }
+            meta.pending_new_regions.remove(&new_region_id);
 
             let mut new_peer = match PeerFsm::create(
                 self.ctx.store_id(),

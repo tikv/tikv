@@ -318,7 +318,8 @@ impl Engine {
             let fs = self.fs.clone();
             let opts = dfs::Options::new(cs.shard_id, cs.shard_ver);
             let tx = result_tx.clone();
-            self.runtime.spawn(async move {
+            let runtime = self.fs.get_runtime();
+            runtime.spawn(async move {
                 let res = fs.prefetch(id, opts).await;
                 tx.send(res).unwrap();
             });

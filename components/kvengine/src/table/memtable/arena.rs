@@ -19,10 +19,10 @@ const MAX_VAL_SIZE: u32 = 1 << 24 - 1;
 
 const VALUE_NODE_SHIFT: u64 = 63;
 const VALUE_NODE_MASK: u64 = 0x8000_0000_0000_0000;
-const BLOCK_IDX_SHIFT: u64 = 48;
-const BLOCK_IDX_MASK: u64 = 0x7fff_0000_0000_0000;
+const BLOCK_IDX_SHIFT: u64 = 56;
+const BLOCK_IDX_MASK: u64 = 0x7f00_0000_0000_0000;
 const BLOCK_OFF_SHIFT: u64 = 24;
-const BLOCK_OFF_MASK: u64 = 0x0000_ffff_ff00_0000;
+const BLOCK_OFF_MASK: u64 = 0x00ff_ffff_ff00_0000;
 const SIZE_MASK: u64 = 0x0000_0000_00ff_ffff;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -77,7 +77,7 @@ impl ArenaAddr {
 const MB: u32 = 1024 * 1024;
 
 const BLOCK_SIZE_ARRAY: [u32; 32] = [
-    64 * 1024, // Make the first arenea block small to save memory.
+    64 * 1024, // Make the first arena block small to save memory.
     1 * MB,
     1 * MB,
     1 * MB,

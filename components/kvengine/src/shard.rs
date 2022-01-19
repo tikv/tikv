@@ -477,6 +477,16 @@ impl Shard {
         files
     }
 
+    pub fn get_l0_files(&self) -> Vec<u64> {
+        let mut files = Vec::new();
+        let g = &epoch::pin();
+        let l0s = self.get_l0_tbls(g);
+        for l0 in &l0s.tbls {
+            files.push(l0.id());
+        }
+        files
+    }
+
     pub fn get_writable_mem_table<'a>(&self, g: &'a Guard) -> &'a memtable::CFTable {
         let mem_tbls = self.get_mem_tbls(g);
         &mem_tbls.tbls[0]

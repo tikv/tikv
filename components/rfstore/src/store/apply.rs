@@ -191,7 +191,7 @@ impl Debug for YieldState {
 /// located at this store, and it will get the corresponding applier to
 /// handle the apply task to make the code logic more clear.
 pub(crate) struct Applier {
-    pub(crate) peer_idx: usize,
+    pub(crate) peer: metapb::Peer,
     pub(crate) term: u64,
     pub(crate) region: metapb::Region,
 
@@ -221,9 +221,8 @@ impl Applier {
     }
 
     pub(crate) fn new_from_reg(reg: MsgRegistration) -> Self {
-        let peer_idx = get_peer_idx_by_store_id(&reg.region, reg.peer.store_id);
         Self {
-            peer_idx,
+            peer: reg.peer,
             term: reg.term,
             region: reg.region,
             stopped: false,
@@ -250,8 +249,9 @@ impl Applier {
         apply_state: RaftApplyState,
     ) -> Self {
         let peer_idx = get_peer_idx_by_store_id(&region, store_id);
+        let peer = region.peers[peer_idx].clone();
         Self {
-            peer_idx,
+            peer,
             term: RAFT_INIT_LOG_TERM,
             region,
             stopped: false,
@@ -265,7 +265,7 @@ impl Applier {
     }
 
     pub(crate) fn get_peer(&self) -> &metapb::Peer {
-        &self.region.peers[self.peer_idx]
+        &self.peer
     }
 
     pub(crate) fn id(&self) -> u64 {
@@ -551,8 +551,9 @@ impl Applier {
                 ExecResult::ChangePeer(cp) => {
                     self.region = cp.region.clone();
                     let peer_id = self.get_peer().get_id();
-                    if peer_id == cp.changes[0].get_peer().get_id() {
-                        self.peer_idx = get_peer_idx_by_peer_id(&self.region, peer_id);
+                    let new_peer = cp.changes[0].get_peer().clone();
+                    if peer_id == new_peer.get_id() {
+                        self.peer = new_peer;
                     }
                 }
                 ExecResult::SplitRegion { regions } => {
@@ -1133,7 +1134,6 @@ impl Applier {
 
     /// Handles proposals, and appends the commands to the apply delegate.
     fn append_proposal(&mut self, props_drainer: Drain<Proposal>) {
-        let (region_id, peer_id) = (self.region.get_id(), self.get_peer().get_id());
         let propose_num = props_drainer.len();
         if self.stopped {
             for p in props_drainer {

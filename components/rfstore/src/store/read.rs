@@ -5,11 +5,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::store::cmd_resp::{err_resp, new_error};
 use crate::store::{
     cf_name_to_num, cmd_resp, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
     RegionSnapshot, RequestInspector, RequestPolicy, StoreMeta,
 };
-use crate::{RaftRouter, Result};
+use crate::{Error, RaftRouter, Result};
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -51,13 +52,14 @@ impl ReadProgress {
 }
 
 pub trait ReadExecutor {
-    fn get_snapshot(&self, region_id: u64) -> RegionSnapshot;
+    fn get_snapshot(&self, region_id: u64, region_ver: u64) -> Result<RegionSnapshot>;
     fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let region_snap = self.get_snapshot(region.get_id());
+        let region_snap =
+            self.get_snapshot(region.get_id(), region.get_region_epoch().get_version())?;
         let cf_num = cf_name_to_num(req.get_get().get_cf());
         let item = region_snap.snap.get(cf_num, key, u64::MAX);
         let mut resp = Response::default();
@@ -96,9 +98,18 @@ pub trait ReadExecutor {
                     }
                 },
                 CmdType::Snap => {
-                    let snapshot = self.get_snapshot(region.get_id());
-                    response.snapshot = Some(snapshot);
-                    Response::default()
+                    match self
+                        .get_snapshot(region.get_id(), region.get_region_epoch().get_version())
+                    {
+                        Ok(snapshot) => {
+                            response.snapshot = Some(snapshot);
+                            Response::default()
+                        }
+                        Err(e) => {
+                            response.response = cmd_resp::new_error(e);
+                            return response;
+                        }
+                    }
                 }
                 CmdType::ReadIndex => {
                     let mut resp = Response::default();
@@ -217,9 +228,13 @@ pub struct LocalReader {
 }
 
 impl ReadExecutor for LocalReader {
-    fn get_snapshot(&self, region_id: u64) -> RegionSnapshot {
-        let snap = self.kv_engine.get_snap_access(region_id).unwrap();
-        RegionSnapshot::from_snapshot(snap)
+    fn get_snapshot(&self, region_id: u64, region_ver: u64) -> Result<RegionSnapshot> {
+        if let Some(snap) = self.kv_engine.get_snap_access(region_id) {
+            if snap.get_version() == region_ver {
+                return Ok(RegionSnapshot::from_snapshot(snap));
+            }
+        }
+        Err(Error::StaleCommand)
     }
 }
 

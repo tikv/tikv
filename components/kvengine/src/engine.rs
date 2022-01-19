@@ -64,10 +64,6 @@ impl Engine {
         let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity, 64);
         let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
         let (flush_result_tx, flush_result_rx) = mpsc::bounded(opts.num_mem_tables);
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .build()
-            .unwrap();
         let core = EngineCore {
             shards: DashMap::new(),
             opts: opts.clone(),
@@ -77,7 +73,6 @@ impl Engine {
             comp_client: CompactionClient::new(fs.clone(), opts.remote_compaction_addr.clone()),
             id_allocator,
             managed_safe_ts: AtomicU64::new(0),
-            runtime,
         };
         let en = Engine {
             core: Arc::new(core),
@@ -131,7 +126,6 @@ pub struct EngineCore {
     pub(crate) comp_client: CompactionClient,
     pub(crate) id_allocator: Arc<dyn IDAllocator>,
     pub(crate) managed_safe_ts: AtomicU64,
-    pub(crate) runtime: tokio::runtime::Runtime,
 }
 
 impl EngineCore {

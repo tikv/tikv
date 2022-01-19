@@ -374,7 +374,8 @@ pub fn new_filename(id: u64, dir: &PathBuf) -> PathBuf {
 }
 
 #[cfg(test)]
-pub(crate) static TEST_ID_ALLOC: AtomicU64 = AtomicU64::new(1);
+pub(crate) static TEST_ID_ALLOC: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
 
 #[cfg(test)]
 pub(crate) fn generate_key_values(prefix: &str, n: usize) -> Vec<(String, String)> {

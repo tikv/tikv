@@ -465,11 +465,12 @@ impl Peer {
         let truncated = ps.truncated_index();
         let truncated_term = ps.truncated_term();
         let last = ps.last_index();
+        let commit = ps.commit_index();
 
         let applied_index = ps.applied_index();
         debug!(
-            "new peer storage first:{:?} truncated:{:?} t_term:{:?} last:{:?}, applied: {:?}",
-            first, truncated, truncated_term, last, applied_index
+            "new peer storage first:{:?} truncated:{:?} t_term:{:?} last:{:?}, applied: {:?}, commit: {:?}",
+            first, truncated, truncated_term, last, applied_index, commit,
         );
 
         let raft_cfg = raft::Config {
@@ -1191,7 +1192,6 @@ impl Peer {
             return;
         }
         if self.unhandled_committed.is_some() {
-            debug!("handle unhandled committed entries");
             let entries = self.unhandled_committed.take().unwrap();
             let committed_index = entries.last().unwrap().index;
             self.handle_raft_committed_entries(ctx, entries, None);
@@ -1234,8 +1234,10 @@ impl Peer {
                 );
                 self.peer = peer;
             };
+            if !self.update_store_meta_for_snap(ctx, snap_res) {
+                return;
+            }
             self.activate(&mut ctx.apply_msgs);
-            self.update_store_meta_for_snap(ctx, snap_res);
         }
         if let Some(ss) = ready.ss() {
             if ss.raft_state == raft::StateRole::Leader {
@@ -1424,18 +1426,27 @@ impl Peer {
         let shard_meta = self.mut_store().mut_engine_meta();
         let new_metas = shard_meta.apply_split(change_set, RAFT_INIT_LOG_INDEX);
         for new_meta in new_metas {
-            info!(
-                "split new meta files {:?} {}:{}", new_meta.all_files(), new_meta.id, new_meta.ver;
-            );
-            ctx.raft_wb
-                .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
             if new_meta.id == self.region_id {
+                ctx.raft_wb
+                    .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
                 let store = self.mut_store();
                 store.shard_meta = Some(new_meta);
                 store.split_stage = kvenginepb::SplitStage::Initial;
                 store.initial_flushed = false;
                 // The raft state key changed when region version change, we need to set it here.
                 store.write_raft_state(ctx);
+            } else {
+                let mut store_meta = ctx.global.store_meta.lock().unwrap();
+                if let Some(region) = store_meta.regions.get(&new_meta.id) {
+                    if is_region_initialized(region) {
+                        // new region is already created by raft message.
+                        continue;
+                    }
+                }
+                // prevent the new region being created by raft message.
+                store_meta.pending_new_regions.insert(new_meta.id, true);
+                ctx.raft_wb
+                    .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
             }
         }
     }
@@ -1736,7 +1747,7 @@ impl Peer {
         &mut self,
         ctx: &mut RaftContext,
         apply_result: ApplySnapResult,
-    ) {
+    ) -> bool {
         let prev_region = apply_result.prev_region;
         let region = apply_result.region;
         info!(
@@ -1750,11 +1761,16 @@ impl Peer {
 
         let mut meta = ctx.global.store_meta.lock().unwrap();
 
-        // Remove this region's snapshot region from the `pending_snapshot_regions`
-        // The `pending_snapshot_regions` is only used to occupy the key range, so if this
-        // peer is added to `region_ranges`, it can be remove from `pending_snapshot_regions`
-        meta.pending_snapshot_regions
-            .retain(|r| self.region_id != r.get_id());
+        if meta.pending_new_regions.contains_key(&self.region_id) {
+            // The region is about to be created by split, do not update store meta.
+            return false;
+        }
+        if let Some(meta_region) = meta.regions.get(&self.region_id) {
+            if !is_region_initialized(&prev_region) && is_region_initialized(meta_region) {
+                // The region is updated by split, the peer is already replaced.
+                return false;
+            }
+        }
 
         // Remove its source peers' metadata
         for r in &apply_result.destroyed_regions {
@@ -1795,6 +1811,7 @@ impl Peer {
         let prev = meta.regions.insert(region.get_id(), region.clone());
         assert_eq!(prev, Some(prev_region));
         drop(meta);
+        true
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
@@ -2608,11 +2625,12 @@ impl Peer {
     pub(crate) fn handle_post_persist_task(
         &mut self,
         ctx: &mut RaftContext,
-        task: PostPersistTask,
+        mut task: PostPersistTask,
     ) {
-        let mut light_ready = self.raft_group.advance_append(task.ready);
-        let raft_messages = self.build_raft_messages(ctx, light_ready.take_messages());
+        let persisted_messages = task.ready.take_persisted_messages();
+        let raft_messages = self.build_raft_messages(ctx, persisted_messages);
         self.send_raft_messages(ctx, raft_messages);
+        let mut light_ready = self.raft_group.advance_append(task.ready);
         if light_ready.committed_entries().len() > 0 {
             ctx.global.router.send(
                 self.region_id,
@@ -2739,14 +2757,18 @@ impl RequestInspector for Peer {
 }
 
 impl ReadExecutor for RaftContext {
-    fn get_snapshot(&self, region_id: u64) -> RegionSnapshot {
-        let snap = self.global.engines.kv.get_snap_access(region_id).unwrap();
-        RegionSnapshot {
-            snap,
-            max_ts_sync_status: None,
-            term: None,
-            txn_extra_op: TxnExtraOp::Noop,
+    fn get_snapshot(&self, region_id: u64, region_ver: u64) -> Result<RegionSnapshot> {
+        if let Some(snap) = self.global.engines.kv.get_snap_access(region_id) {
+            if snap.get_version() == region_ver {
+                return Ok(RegionSnapshot {
+                    snap,
+                    max_ts_sync_status: None,
+                    term: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+            }
         }
+        Err(Error::StaleCommand)
     }
 }
 

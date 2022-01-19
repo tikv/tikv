@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 
 use crate::shard::{L0Tables, MemTables};
 use crate::table::table;
@@ -108,6 +108,7 @@ impl SnapAccess {
             key: BytesMut::new(),
             val: table::Value::new(),
             inner: self.new_table_iterator(cf, reversed),
+            bound: None,
         }
     }
 
@@ -119,6 +120,7 @@ impl SnapAccess {
             key: BytesMut::new(),
             val: table::Value::new(),
             inner: self.new_table_iterator(0, reversed),
+            bound: None,
         }
     }
 
@@ -211,6 +213,10 @@ impl SnapAccess {
             if lh.tables.len() == 0 {
                 continue;
             }
+            if lh.tables.len() == 1 {
+                iters.push(lh.tables[0].new_iterator(reversed));
+                continue;
+            }
             iters.push(Box::new(ConcatIterator::new(
                 scf.clone(),
                 lh.level,
@@ -243,6 +249,10 @@ impl SnapAccess {
     pub fn get_all_files(&self) -> Vec<u64> {
         self.shard.get_all_files()
     }
+
+    pub fn get_l0_files(&self) -> Vec<u64> {
+        self.shard.get_l0_files()
+    }
 }
 
 pub struct Iterator {
@@ -252,6 +262,7 @@ pub struct Iterator {
     pub key: BytesMut,
     val: table::Value,
     pub inner: Box<dyn table::Iterator>,
+    pub bound: Option<Bytes>,
 }
 
 impl Iterator {
@@ -292,6 +303,17 @@ impl Iterator {
 
     fn parse_item(&mut self) {
         while self.inner.valid() {
+            if let Some(bound) = &self.bound {
+                if self.reversed {
+                    if self.key.chunk() < bound.chunk() {
+                        break;
+                    }
+                } else {
+                    if self.key.chunk() >= bound.chunk() {
+                        break;
+                    }
+                }
+            }
             let val = self.inner.value();
             if val.version > self.read_ts {
                 if !self.inner.seek_to_version(self.read_ts) {
@@ -339,5 +361,9 @@ impl Iterator {
 
     pub fn is_reverse(&self) -> bool {
         return self.reversed;
+    }
+
+    pub fn set_bound(&mut self, bound: Bytes) {
+        self.bound = Some(bound)
     }
 }

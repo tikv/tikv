@@ -3,6 +3,7 @@
 use crate::table::sstable::{L0Table, SSTable};
 use crate::*;
 use crossbeam_epoch::Owned;
+use dashmap::mapref::entry::Entry;
 use std::iter::Iterator;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
@@ -22,7 +23,21 @@ impl Engine {
             store_resource(&shard.cfs[cf], Arc::new(scf));
         }
         shard.refresh_estimated_size();
-        self.shards.insert(shard.id, Arc::new(shard));
+        match self.shards.entry(shard.id) {
+            Entry::Occupied(entry) => {
+                let old = entry.get();
+                let old_total_seq = old.get_write_sequence() + old.get_meta_sequence();
+                let new_total_seq = shard.get_write_sequence() + shard.get_meta_sequence();
+                if new_total_seq > old_total_seq {
+                    entry.replace_entry(Arc::new(shard));
+                } else {
+                    info!("ingest found shard already exists with higher sequence, skip insert");
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Arc::new(shard));
+            }
+        }
         Ok(())
     }
 

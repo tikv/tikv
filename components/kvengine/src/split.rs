@@ -7,6 +7,7 @@ use crate::{table::sstable, *};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use crossbeam_epoch as epoch;
+use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
 use slog_global::{info, warn};
 
@@ -340,7 +341,7 @@ impl Engine {
             new_shards.push(Arc::new(new_shard));
         }
         let l0s = old_shard.get_l0_tbls(g);
-        for l0 in &l0s.tbls {
+        for l0 in l0s.tbls.iter().rev() {
             let idx = get_split_shard_index(split.get_keys(), l0.smallest());
             let new_shard = &new_shards[idx];
             new_shard.atomic_add_l0_table(g, l0.clone());
@@ -369,8 +370,20 @@ impl Engine {
         for shard in new_shards.drain(..) {
             shard.refresh_estimated_size();
             let id = shard.id;
-            debug!("split insert shard {}:{}", id, shard.ver);
-            self.shards.insert(id, shard.clone());
+            if id != old_shard.id {
+                match self.shards.entry(id) {
+                    Entry::Occupied(_) => {
+                        // The shard already exists, it must be created by ingest, and it maybe
+                        // newer than this one, we avoid insert it.
+                        continue;
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(shard.clone());
+                    }
+                }
+            } else {
+                self.shards.insert(id, shard.clone());
+            }
             let version = shard.load_mem_table_version();
             let mem_tbl = self.switch_mem_table(&shard, version);
             self.schedule_flush_task(&shard, mem_tbl);

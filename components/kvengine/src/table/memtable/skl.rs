@@ -22,8 +22,8 @@ const RAND_SEED: u32 = 410958445;
 const MAX_NODE_SIZE: usize = std::mem::size_of::<Node>();
 
 pub struct WriteBatch {
-    entries: Vec<WriteBatchEntry>,
-    buf: BytesMut,
+    pub(crate) entries: Vec<WriteBatchEntry>,
+    pub(crate) buf: BytesMut,
 }
 
 impl WriteBatch {
@@ -276,9 +276,8 @@ impl SkipListCore {
                 h.next[i] = next;
                 if matched {
                     // In-place update.
-
                     let node = deref(self.arena.get_node(h.next[i]));
-                    node.set_val_addr(self.arena.put_val(buf, entry));
+                    self.set_value(node, buf, entry);
                     let mut j = i;
                     while j > 0 {
                         h.prev[j - 1] = h.prev[j];
@@ -293,7 +292,7 @@ impl SkipListCore {
             if !h.next[0].is_null() {
                 let node = deref(self.arena.get_node(h.next[0]));
                 if self.arena.get(node.key_addr).eq(key) {
-                    node.set_val_addr(self.arena.put_val(buf, entry));
+                    self.set_value(node, buf, entry);
                     return;
                 }
             }
@@ -667,16 +666,17 @@ impl SKIterator {
         let n_node = deref(self.list.arena.get_node(self.n));
         self.uk
             .extend_from_slice(self.list.arena.get(n_node.key_addr));
-        let off = n_node.get_val_addr();
-        if !off.is_value_node_addr() {
-            self.v = self.list.arena.get_val(off);
+        let mut val_addr = n_node.get_val_addr();
+        if !val_addr.is_value_node_addr() {
+            self.v = self.list.arena.get_val(val_addr);
             return;
         }
         loop {
-            let vn = self.list.arena.get_value_node(off);
+            let vn = self.list.arena.get_value_node(val_addr);
             self.val_list.push(vn.val_addr);
-            if !vn.next_val_addr.is_value_node_addr() {
-                self.val_list.push(vn.next_val_addr);
+            val_addr = vn.next_val_addr;
+            if !val_addr.is_value_node_addr() {
+                self.val_list.push(val_addr);
                 break;
             }
         }

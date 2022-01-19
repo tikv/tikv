@@ -240,7 +240,13 @@ impl RaftStoreRouter for RaftRouter {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         let raft_msg = PeerMsg::RaftMessage(msg);
-        self.send(region_id, raft_msg)
+        if let Err(RegionNotFound(_, Some(PeerMsg::RaftMessage(raft_msg)))) =
+            self.send(region_id, raft_msg)
+        {
+            let store_msg = StoreMsg::RaftMessage(raft_msg);
+            self.send_store(store_msg)
+        }
+        Ok(())
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {

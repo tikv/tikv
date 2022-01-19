@@ -9,6 +9,7 @@ use moka::sync::SegmentedCache;
 use protobuf::RepeatedField;
 use slog_global::error;
 
+use crate::apply::check_tables_order;
 use crate::dfs;
 use crate::table::{
     search,
@@ -521,13 +522,14 @@ pub(crate) fn compact_l0(
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let l0_files = load_table_files(&req.tops, fs.clone(), opts)?;
     let cache = SegmentedCache::new(256, 1);
-    let l0_tbls = in_mem_files_to_l0_tables(&l0_files, cache.clone());
-
+    let mut l0_tbls = in_mem_files_to_l0_tables(&l0_files, cache.clone());
+    l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
     let mut mult_cf_bot_tbls = vec![];
     for cf in 0..NUM_CFS {
         let bot_ids = &req.multi_cf_bottoms[cf];
         let bot_files = load_table_files(&bot_ids, fs.clone(), opts)?;
-        let bot_tbls = in_mem_files_to_tables(&bot_files, cache.clone());
+        let mut bot_tbls = in_mem_files_to_tables(&bot_files, cache.clone());
+        bot_tbls.sort_by(|a, b| a.smallest().cmp(b.smallest()));
         mult_cf_bot_tbls.push(bot_tbls);
     }
 
@@ -686,6 +688,7 @@ impl CompactL0Helper {
                 if self.builder.estimated_size() > self.opts.max_table_size {
                     break;
                 }
+                self.last_key.truncate(0);
                 self.last_key.extend_from_slice(key);
             }
 
@@ -723,6 +726,7 @@ impl CompactL0Helper {
         let res = self.builder.finish(0, &mut buf);
         let mut table_create = pb::TableCreate::new();
         table_create.set_id(id);
+        table_create.set_level(1);
         table_create.set_cf(self.cf as i32);
         table_create.set_smallest(res.smallest);
         table_create.set_biggest(res.biggest);
@@ -737,9 +741,11 @@ pub(crate) fn compact_tables(
     let cache = SegmentedCache::new(256, 1);
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let top_tables = in_mem_files_to_tables(&top_files, cache.clone());
+    let mut top_tables = in_mem_files_to_tables(&top_files, cache.clone());
+    top_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
     let bot_files = load_table_files(&req.bottoms, fs.clone(), opts)?;
-    let bot_tables = in_mem_files_to_tables(&bot_files, cache.clone());
+    let mut bot_tables = in_mem_files_to_tables(&bot_files, cache.clone());
+    bot_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
     let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false));
     let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false));
     let mut iter = table::new_merge_iterator(vec![top_iter, bot_iter], false);

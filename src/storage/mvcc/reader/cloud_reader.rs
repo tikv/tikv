@@ -61,9 +61,11 @@ impl CloudReader {
             if let Some(record) = Self::get_commit_by_item(&data_iter.item(), start_ts) {
                 return Ok(record);
             }
+            data_iter.next();
         }
-        raw_key.encode_u64_desc(start_ts.into_inner())?;
-        let item = self.snapshot.get(EXTRA_CF, &raw_key, 0);
+        let rollback_key =
+            rfstore::mvcc::encode_extra_txn_status_key(&raw_key, start_ts.into_inner());
+        let item = self.snapshot.get(EXTRA_CF, &rollback_key, 0);
         if item.value_len() == 0 {
             return Ok(TxnCommitRecord::None {
                 overlapped_write: None,
@@ -82,7 +84,7 @@ impl CloudReader {
         })
     }
 
-    pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+    pub fn load_lock(&self, key: &Key) -> Result<Option<Lock>> {
         let raw_key = key.to_raw().unwrap();
         let item = self.snapshot.get(LOCK_CF, &raw_key, 0);
         if item.value_len() == 0 {
