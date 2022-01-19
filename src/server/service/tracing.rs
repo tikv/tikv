@@ -108,9 +108,7 @@ impl RequestTracer {
         let client_enabled = !trace_ctx.remote_parent_spans.is_empty();
         let begin_instant = Instant::now_coarse();
 
-        if global_enabled
-        /* && client_enabled */
-        {
+        if global_enabled && client_enabled {
             let (root_span, collector) = Span::root_with_args(
                 req_name,
                 CollectArgs::default().max_span_count(Some(config.max_span_count)),
@@ -247,26 +245,26 @@ impl Default for TracingConfig {
 impl Default for TracingDurationThreshold {
     fn default() -> Self {
         TracingDurationThreshold {
-            kv_get: ReadableDuration(Duration::from_millis(50)),
-            kv_scan: ReadableDuration(Duration::from_millis(50)),
-            kv_prewrite: ReadableDuration(Duration::from_millis(50)),
-            kv_pessimistic_lock: ReadableDuration(Duration::from_millis(50)),
-            kv_pessimistic_rollback: ReadableDuration(Duration::from_millis(50)),
-            kv_commit: ReadableDuration(Duration::from_millis(50)),
-            kv_cleanup: ReadableDuration(Duration::from_millis(50)),
-            kv_batch_get: ReadableDuration(Duration::from_millis(50)),
-            kv_batch_rollback: ReadableDuration(Duration::from_millis(50)),
-            kv_txn_heart_beat: ReadableDuration(Duration::from_millis(50)),
-            kv_check_txn_status: ReadableDuration(Duration::from_millis(50)),
-            kv_check_secondary_locks: ReadableDuration(Duration::from_millis(50)),
-            kv_scan_lock: ReadableDuration(Duration::from_millis(50)),
-            kv_resolve_lock: ReadableDuration(Duration::from_millis(50)),
-            kv_delete_range: ReadableDuration(Duration::from_millis(50)),
-            kv_import: ReadableDuration(Duration::from_millis(50)),
-            kv_gc: ReadableDuration(Duration::from_millis(50)),
-            coprocessor: ReadableDuration(Duration::from_millis(50)),
-            mvcc_get_by_key: ReadableDuration(Duration::from_millis(50)),
-            mvcc_get_by_start_ts: ReadableDuration(Duration::from_millis(50)),
+            kv_get: ReadableDuration(Duration::from_millis(300)),
+            kv_scan: ReadableDuration(Duration::from_millis(300)),
+            kv_prewrite: ReadableDuration(Duration::from_millis(300)),
+            kv_pessimistic_lock: ReadableDuration(Duration::from_millis(300)),
+            kv_pessimistic_rollback: ReadableDuration(Duration::from_millis(300)),
+            kv_commit: ReadableDuration(Duration::from_millis(300)),
+            kv_cleanup: ReadableDuration(Duration::from_millis(300)),
+            kv_batch_get: ReadableDuration(Duration::from_millis(300)),
+            kv_batch_rollback: ReadableDuration(Duration::from_millis(300)),
+            kv_txn_heart_beat: ReadableDuration(Duration::from_millis(300)),
+            kv_check_txn_status: ReadableDuration(Duration::from_millis(300)),
+            kv_check_secondary_locks: ReadableDuration(Duration::from_millis(300)),
+            kv_scan_lock: ReadableDuration(Duration::from_millis(300)),
+            kv_resolve_lock: ReadableDuration(Duration::from_millis(300)),
+            kv_delete_range: ReadableDuration(Duration::from_millis(300)),
+            kv_import: ReadableDuration(Duration::from_millis(300)),
+            kv_gc: ReadableDuration(Duration::from_millis(300)),
+            coprocessor: ReadableDuration(Duration::from_secs(1)),
+            mvcc_get_by_key: ReadableDuration(Duration::from_millis(300)),
+            mvcc_get_by_start_ts: ReadableDuration(Duration::from_millis(300)),
             raw_get: ReadableDuration(Duration::from_millis(50)),
             raw_batch_get: ReadableDuration(Duration::from_millis(50)),
             raw_scan: ReadableDuration(Duration::from_millis(50)),
