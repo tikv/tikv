@@ -615,7 +615,7 @@ impl RemoteLease {
 
     pub fn need_renew(&self, ts: Timespec) -> bool {
         self.inspect(Some(ts + self.advance_renew_lease)) == LeaseState::Expired
-            && self.renewing.swap(true, AtomicOrdering::Relaxed)
+            && !self.renewing.swap(true, AtomicOrdering::Relaxed)
     }
 
     fn expire(&self) {
