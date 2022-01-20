@@ -675,7 +675,7 @@ where
             raft_log_size_hint: 0,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
-                cfg.check_leader_lease_interval(),
+                cfg.renew_leader_lease_advance_duration(),
             ),
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
@@ -4490,14 +4490,12 @@ where
     pub fn need_renew_lease_at<T>(
         &self,
         ctx: &PollContext<EK, ER, T>,
-        renew_bound: Timespec,
+        current_time: Timespec,
     ) -> bool {
-        if !matches!(
-            self.leader_lease.inspect(Some(renew_bound)),
-            LeaseState::Expired
-        ) {
-            return false;
-        }
+        let renew_bound = match self.leader_lease.need_renew(current_time) {
+            Some(ts) => ts,
+            None => return false,
+        };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
         let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
             // If there is any read index whose lease can cover till next heartbeat

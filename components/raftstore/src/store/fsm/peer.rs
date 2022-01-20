@@ -95,7 +95,6 @@ enum DelayReason {
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
-const RENEW_LEADER_LEASE_DURATION_MILLIS: i64 = 100;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -1520,10 +1519,7 @@ where
         }
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-        let renew_bound = current_time
-            + self.ctx.cfg.check_leader_lease_interval()
-            + time::Duration::milliseconds(RENEW_LEADER_LEASE_DURATION_MILLIS);
-        if self.fsm.peer.need_renew_lease_at(self.ctx, renew_bound) {
+        if self.fsm.peer.need_renew_lease_at(self.ctx, current_time) {
             let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
             if dropped {
                 self.ctx.raft_metrics.propose.dropped_read_index += 1;

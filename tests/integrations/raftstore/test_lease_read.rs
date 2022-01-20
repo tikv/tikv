@@ -41,6 +41,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.cfg.raft_store.renew_leader_lease_advance_duration = ReadableDuration::secs(0);
 
     let node_id = 1u64;
     let store_id = 1u64;

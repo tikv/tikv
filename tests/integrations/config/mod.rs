@@ -230,6 +230,7 @@ fn test_serde_custom_tikv_config() {
         inspect_interval: ReadableDuration::millis(444),
         raft_msg_flush_interval: ReadableDuration::micros(250),
         check_leader_lease_interval: ReadableDuration::millis(123),
+        renew_leader_lease_advance_duration: ReadableDuration::millis(456),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
