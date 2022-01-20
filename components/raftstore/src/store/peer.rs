@@ -3536,10 +3536,7 @@ where
                     && self.get_store().applied_index() < self.prepare_merge_fence
                 {
                     self.pending_prepare_merge = Some(mem::take(req));
-                    return Err(box_err!(
-                        "prepare merge should wait until applying to index {}",
-                        last_index
-                    ));
+                    return Err(Error::PendingPrepareMerge);
                 }
             }
         }
@@ -3602,7 +3599,7 @@ where
                 cmd_type
             ));
         }
-        let entry_size_limit = ctx.cfg.raft_entry_max_size.0 as usize * 10 / 9;
+        let entry_size_limit = ctx.cfg.raft_entry_max_size.0 as usize * 9 / 10;
         if entry_size > entry_size_limit {
             return Err(box_err!(
                 "log gap size exceed entry size limit, skip merging."
@@ -3628,6 +3625,8 @@ where
             pessimistic_locks.is_valid = false;
             return Ok(());
         }
+        // The proposed pessimistic locks here will also be carried in CommitMerge. Check the size
+        // to avoid CommitMerge exceeding the size limit of a raft entry,
         if pessimistic_locks.memory_size > size_limit {
             return Err(box_err!(
                 "pessimistic locks size {} exceed size limit {}, skip merging.",
@@ -3733,13 +3732,15 @@ where
         let ctx = match self.pre_propose(poll_ctx, &mut req) {
             Ok(ctx) => ctx,
             Err(e) => {
-                warn!(
-                    "skip proposal";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
-                );
+                if !matches!(e, Error::PendingPrepareMerge) {
+                    warn!(
+                        "skip proposal";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    );
+                }
                 return Err(e);
             }
         };
