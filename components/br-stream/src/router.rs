@@ -658,7 +658,7 @@ impl MetadataInfo {
 
     fn marshal_to(self) -> Result<Vec<u8>> {
         let mut metadata = Metadata::new();
-        metadata.set_file(self.files.into());
+        metadata.set_files(self.files.into());
         metadata.set_store_id(self.store_id as _);
         metadata.set_resloved_ts(self.min_resolved_ts as _);
 
@@ -766,6 +766,8 @@ impl DataFile {
         meta.set_start_key(std::mem::take(&mut self.start_key));
         meta.set_end_key(std::mem::take(&mut self.end_key));
 
+        meta.set_is_meta(file_key.is_meta);
+        meta.set_table_id(file_key.table_id);
         meta.set_cf(file_key.cf.clone());
         meta.set_region_id(file_key.region_id as i64);
         meta.set_type(file_key.get_file_type());
