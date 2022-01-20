@@ -307,6 +307,7 @@ impl Duration {
     }
 
     #[inline]
+    #[must_use]
     pub fn minimize_fsp(self) -> Self {
         Duration {
             fsp: MIN_FSP as u8,
@@ -315,6 +316,7 @@ impl Duration {
     }
 
     #[inline]
+    #[must_use]
     pub fn maximize_fsp(self) -> Self {
         Duration {
             fsp: MAX_FSP as u8,
@@ -366,6 +368,7 @@ impl Duration {
 
     /// Returns the absolute value of `Duration`
     #[inline]
+    #[must_use]
     pub fn abs(self) -> Self {
         Duration {
             nanos: self.nanos.abs(),

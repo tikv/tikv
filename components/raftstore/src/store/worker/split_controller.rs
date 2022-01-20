@@ -300,7 +300,7 @@ impl Recorder {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct WriteStats {
     pub region_infos: HashMap<u64, QueryStats>,
 }
@@ -316,14 +316,6 @@ impl WriteStats {
 
     pub fn is_empty(&self) -> bool {
         self.region_infos.is_empty()
-    }
-}
-
-impl Default for WriteStats {
-    fn default() -> WriteStats {
-        WriteStats {
-            region_infos: HashMap::default(),
-        }
     }
 }
 
