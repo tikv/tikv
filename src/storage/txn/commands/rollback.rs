@@ -35,11 +35,11 @@ impl CommandExt for Rollback {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
-    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
-            &mut context.statistics,
+            context.statistics,
         );
 
         let rows = self.keys.len();
