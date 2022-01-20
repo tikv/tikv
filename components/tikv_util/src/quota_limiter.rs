@@ -104,9 +104,9 @@ impl QuotaLimiter {
 fn cpu_freq_factor() -> f64 {
     let freq = cpu_freq::get();
     if !freq.is_empty() {
-        // Cost time of per write/read request is tested on CPU with 2.6 GHz frequency,
+        // Cost time of per write/read request is tested on CPU with 2.4 GHz frequency,
         // so need to adjust the abs cost if the target CPU frequency is different.
-        freq[0].max.map_or(1.0, |v| (v / 2.6) as f64)
+        freq[0].cur.map_or(1.0, |v| (v / 2400_f32) as f64)
     } else {
         1.0
     }
