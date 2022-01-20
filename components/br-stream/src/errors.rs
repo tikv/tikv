@@ -43,7 +43,7 @@ macro_rules! annotate {
         Error::Other(tikv_util::box_err!("{}: {}", $message, $inner))
     };
     ($inner: expr, $format: literal, $($args: expr),+) => {
-        annotate!($inner, format!($format, $($args),+))
+        annotate!($inner, format_args!($format, $($args),+))
     }
 }
 

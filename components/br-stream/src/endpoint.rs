@@ -176,7 +176,7 @@ where
                 // TODO build a error handle mechanism #error 6
                 if kv.should_record() {
                     if let Err(err) = router.on_event(kv).await {
-                        err.report(format!("failed to send event."));
+                        err.report("failed to send event.");
                     }
                     metrics::HEAP_MEMORY
                         .with_label_values(&["free"])

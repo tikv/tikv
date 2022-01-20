@@ -55,7 +55,7 @@ impl BackupStreamObserver {
         if let Err(err) = self.scheduler.schedule(Task::ObserverRegion {
             region: region.clone(),
         }) {
-            Error::from(err).report(format!(
+            Error::from(err).report(format_args!(
                 "failed to schedule role change for region {}",
                 region.get_id()
             ))

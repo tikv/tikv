@@ -219,7 +219,7 @@ where
         loop {
             let regions = pager.next_page(8)?;
             info!("scanning for entries in region."; "regions" => ?regions);
-            if regions.len() == 0 {
+            if regions.is_empty() {
                 break;
             }
             for r in regions {

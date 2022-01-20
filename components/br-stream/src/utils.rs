@@ -91,7 +91,7 @@ impl<P: RegionInfoProvider> RegionPager<P> {
             .last()
             .map(|region| region.region.end_key.to_owned())
             // no leader region found.
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
         if self.start_key.is_empty() {
             self.reach_last_region = true;
         }
