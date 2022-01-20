@@ -47,6 +47,7 @@ test-engines-panic = [
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
+testvalue-hook = ["raftstore/testvalue-hook"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -133,6 +134,7 @@ prometheus-static-metric = "0.5"
 sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = "0.16"
 tempfile = "3.0"
+testvalue = { git = "https://github.com/v01dstar/testvalue-rs.git" }
 match_template = { path = "components/match_template" }
 paste = "1.0"
 thiserror = "1.0"

@@ -14,6 +14,11 @@ name = "integrations"
 path = "integrations/mod.rs"
 required-features = ["testexport"]
 
+[[test]]
+name = "testvalue"
+path = "testvalue/mod.rs"
+required-features = ["testvalue-hook"]
+
 [[bench]]
 name = "raftstore"
 harness = false
@@ -51,6 +56,7 @@ cloud-aws = [ "external_storage_export/cloud-aws" ]
 cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 cloud-azure = [ "external_storage_export/cloud-azure" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
+testvalue-hook = ["testvalue/testvalue-hook", "tikv/testvalue-hook"]
 profiling = ["profiler/profiling"]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",

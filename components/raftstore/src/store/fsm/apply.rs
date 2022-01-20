@@ -48,6 +48,7 @@ use raft::eraftpb::{
 use raft_proto::ConfChangeI;
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SSTImporter;
+use testvalue::adjust;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::memory::HeapSize;
@@ -640,6 +641,10 @@ where
         );
         self.committed_count = 0;
         is_synced
+    }
+
+    pub fn get_store_id(&self) -> u64 {
+        self.store_id
     }
 }
 
@@ -3261,6 +3266,8 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
+        // let mut store_id = apply_ctx.get_store_id();
+        adjust!("handle_apply_context", &mut apply_ctx.get_store_id());
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;

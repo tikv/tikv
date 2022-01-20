@@ -1529,35 +1529,6 @@ where
 
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
-        // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
-        if self.fsm.unsafe_recovery_target_commit_index != 0 {
-            if self.fsm.peer.raft_group.store().applied_index()
-                >= self.fsm.unsafe_recovery_target_commit_index
-            {
-                if self
-                    .fsm
-                    .unsafe_recovery_wait_apply_counter
-                    .fetch_sub(1, Ordering::Relaxed)
-                    == 1
-                {
-                    let stats = StoreStats::default();
-                    let store_info = StoreInfo {
-                        kv_engine: self.ctx.engines.kv.clone(),
-                        raft_engine: self.ctx.engines.raft.clone(),
-                        capacity: self.ctx.cfg.capacity.0,
-                    };
-                    let task = PdTask::StoreHeartbeat {
-                        stats,
-                        store_info,
-                        send_detailed_report: true,
-                    };
-                    if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                        panic!("fail to send detailed report to pd {:?}", e);
-                    }
-                }
-                self.fsm.unsafe_recovery_target_commit_index = 0;
-            }
-        }
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
@@ -1609,6 +1580,35 @@ where
                         .unwrap();
                     *is_ready = true;
                 }
+            }
+        }
+        // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
+        if self.fsm.unsafe_recovery_target_commit_index != 0 {
+            if self.fsm.peer.raft_group.store().applied_index()
+                >= self.fsm.unsafe_recovery_target_commit_index
+            {
+                if self
+                    .fsm
+                    .unsafe_recovery_wait_apply_counter
+                    .fetch_sub(1, Ordering::Relaxed)
+                    == 1
+                {
+                    let stats = StoreStats::default();
+                    let store_info = StoreInfo {
+                        kv_engine: self.ctx.engines.kv.clone(),
+                        raft_engine: self.ctx.engines.raft.clone(),
+                        capacity: self.ctx.cfg.capacity.0,
+                    };
+                    let task = PdTask::StoreHeartbeat {
+                        stats,
+                        store_info,
+                        send_detailed_report: true,
+                    };
+                    if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                        panic!("fail to send detailed report to pd {:?}", e);
+                    }
+                }
+                self.fsm.unsafe_recovery_target_commit_index = 0;
             }
         }
     }

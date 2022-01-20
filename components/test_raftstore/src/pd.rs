@@ -321,6 +321,9 @@ struct PdCluster {
 
     // for merging
     pub check_merge_target_integrity: bool,
+
+    unsafe_recovery_require_report: bool,
+    unsafe_recovery_store_reported: i32,
 }
 
 impl PdCluster {
@@ -353,6 +356,8 @@ impl PdCluster {
             replication_status: None,
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
+            unsafe_recovery_require_report: false,
+            unsafe_recovery_store_reported: 0,
         }
     }
 
@@ -710,6 +715,26 @@ impl PdCluster {
     fn get_gc_safe_point(&self) -> u64 {
         self.gc_safe_point
     }
+
+    fn handle_store_heartbeat(&mut self, store_id: u64) -> Result<pdpb::StoreHeartbeatResponse> {
+        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        resp.set_require_detailed_report(self.unsafe_recovery_require_report);
+        self.unsafe_recovery_require_report = false;
+
+        Ok(resp)
+    }
+
+    fn set_require_report(&mut self, require_report: bool) {
+        self.unsafe_recovery_require_report = require_report;
+    }
+
+    fn get_store_reported(&self) -> i32 {
+        self.unsafe_recovery_store_reported
+    }
+
+    fn store_reported_inc(&mut self) {
+        self.unsafe_recovery_store_reported += 1;
+    }
 }
 
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
@@ -751,7 +776,6 @@ pub struct TestPdClient {
     tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
     feature_gate: FeatureGate,
-    require_report: bool,
 }
 
 impl TestPdClient {
@@ -767,7 +791,6 @@ impl TestPdClient {
             tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
             feature_gate,
-	    require_report: false,
         }
     }
 
@@ -1258,8 +1281,12 @@ impl TestPdClient {
         unsafe { self.feature_gate.reset_version(version).unwrap() }
     }
 
-    fn must_set_require_report(&mut self, require_report: bool) {
-	self.require_report = require_report;
+    pub fn must_set_require_report(&self, require_report: bool) {
+        self.cluster.wl().set_require_report(require_report);
+    }
+
+    pub fn must_get_store_reported(&self) -> i32 {
+        self.cluster.rl().get_store_reported()
     }
 }
 
@@ -1411,6 +1438,11 @@ impl PdClient for TestPdClient {
     {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
+        {
+            if let Err(e) = self.cluster.try_write() {
+                println!("try write {:?}", e);
+            }
+        }
         let mut cluster = self.cluster.wl();
         let store = cluster
             .stores
@@ -1511,7 +1543,7 @@ impl PdClient for TestPdClient {
     fn store_heartbeat(
         &self,
         stats: pdpb::StoreStats,
-        _: Option<pdpb::StoreReport>,
+        report: Option<pdpb::StoreReport>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
@@ -1539,13 +1571,17 @@ impl PdClient for TestPdClient {
             peer_stat_sum.set_region_id(region_id);
         }
 
-        cluster.store_stats.insert(store_id, stats);
+        cluster.store_stats.insert(store_id.clone(), stats);
 
-        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        if let Some(_) = report {
+            cluster.store_reported_inc();
+        }
+
+        let mut resp = cluster.handle_store_heartbeat(store_id).unwrap();
+
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());
         }
-	resp.set_require_detailed_report(self.require_report);
         Box::pin(ok(resp))
     }
 
