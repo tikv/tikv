@@ -152,6 +152,7 @@ pub struct ReadDelegate {
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
+    pub pending_remove: bool,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -230,12 +231,18 @@ impl ReadDelegate {
             txn_extra_op: peer.txn_extra_op.clone(),
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
+            pending_remove: false,
             track_ver: TrackVer::new(),
         }
     }
 
     fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
+    }
+
+    pub fn mark_pending_remove(&mut self) {
+        self.pending_remove = true;
+        self.track_ver.inc();
     }
 
     pub fn update(&mut self, progress: Progress) {
@@ -449,7 +456,7 @@ where
     // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
-        match self.delegates.get(&region_id) {
+        let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
             Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
             _ => {
@@ -475,7 +482,9 @@ where
                     None => None,
                 }
             }
-        }
+        };
+        // Return `None` if the read delegate is pending remove
+        rd.filter(|r| !r.pending_remove)
     }
 
     fn pre_propose_raft_command(
@@ -968,6 +977,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
+                pending_remove: false,
                 track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
@@ -1210,6 +1220,7 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
+                pending_remove: false,
             };
             meta.readers.insert(1, read_delegate);
         }
