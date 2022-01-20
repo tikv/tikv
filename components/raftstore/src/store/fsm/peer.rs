@@ -64,7 +64,6 @@ use crate::store::peer::{
     ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
-use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -1520,15 +1519,12 @@ where
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
         if self.fsm.peer.need_renew_lease_at(self.ctx, current_time) {
-            let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
-            if dropped {
-                self.ctx.raft_metrics.propose.dropped_read_index += 1;
-                return;
-            }
-            self.ctx.raft_metrics.propose.read_index += 1;
-            let read_proposal = ReadIndexRequest::noop(id, current_time);
-            self.fsm.peer.push_pending_read(read_proposal, true);
-            self.fsm.has_ready = true;
+            let cmd = new_read_index_request(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                self.fsm.peer.peer.clone(),
+            );
+            self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
         }
     }
 
