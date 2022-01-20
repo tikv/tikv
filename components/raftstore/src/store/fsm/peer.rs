@@ -1519,12 +1519,17 @@ where
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
         if self.fsm.peer.need_renew_lease_at(self.ctx, current_time) {
-            let cmd = new_read_index_request(
+            let mut cmd = new_read_index_request(
                 self.region_id(),
                 self.region().get_region_epoch().clone(),
                 self.fsm.peer.peer.clone(),
             );
-            self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
+            cmd.mut_header().set_read_quorum(true);
+            self.propose_raft_command(
+                cmd,
+                Callback::Read(Box::new(|_| ())),
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
         }
     }
 

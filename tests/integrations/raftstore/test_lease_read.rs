@@ -807,11 +807,11 @@ fn test_node_local_read_renew_lease() {
     let request_wait = Duration::from_millis(base_tick_ms);
     let max_renew_lease_time = 3;
     let round = hibernate_wait.as_millis() / request_wait.as_millis();
-    for _ in 0..round {
+    for i in 0..round {
         // Issue a read request and check the value on response.
         must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
         // Plus 1 to prevent case failure when test machine is too slow.
-        assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1);
+        assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
         thread::sleep(request_wait);
     }
 }

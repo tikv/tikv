@@ -27,7 +27,6 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
-    pub static ref EXCEPTED_RENEW_LEADER_LEASE_DURATION: Duration = Duration::from_millis(100);
 }
 
 with_prefix!(prefix_apply "apply-");
@@ -586,8 +585,7 @@ impl Config {
         }
 
         if self.renew_leader_lease_advance_duration.as_millis() == 0 {
-            self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4
-                + ReadableDuration(*EXCEPTED_RENEW_LEADER_LEASE_DURATION);
+            self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
         }
 
         Ok(())
