@@ -889,7 +889,7 @@ where
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
-                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx);
+                    self.fsm.peer.bcast_wake_up_message(self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -920,7 +920,7 @@ where
                     .iter()
                     .any(|p| p.get_id() == self.fsm.peer_id())
                 {
-                    self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
+                    self.fsm.peer.send_wake_up_message(self.ctx, &leader);
                 }
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
@@ -930,7 +930,7 @@ where
                 msg.from = self.fsm.peer.peer_id();
 
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
-                self.fsm.peer.send_raft_messages(&mut self.ctx, raft_msg);
+                self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
         }
     }
@@ -1695,9 +1695,7 @@ where
             }
         }
 
-        if result.is_err() {
-            return result;
-        }
+        result?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -2289,7 +2287,7 @@ where
             match self
                 .fsm
                 .peer
-                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+                .ready_to_transfer_leader(self.ctx, msg.get_index(), &from)
             {
                 Some(reason) => {
                     info!(
@@ -2337,12 +2335,9 @@ where
                 }
             }
         } else {
-            self.fsm.peer.execute_transfer_leader(
-                &mut self.ctx,
-                msg.get_from(),
-                peer_disk_usage,
-                false,
-            );
+            self.fsm
+                .peer
+                .execute_transfer_leader(self.ctx, msg.get_from(), peer_disk_usage, false);
         }
     }
 
@@ -3336,7 +3331,7 @@ where
                             .as_ref()
                             .unwrap()
                             .get_commit(),
-                        &mut self.ctx,
+                        self.ctx,
                     );
                 }
             }
@@ -4632,7 +4627,7 @@ where
                     "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
 
-                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+                self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
 
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
@@ -4736,7 +4731,7 @@ where
         // As the leader can propose the TransferLeader request successfully, the disk of
         // the leader is probably not full.
         self.fsm.peer.execute_transfer_leader(
-            &mut self.ctx,
+            self.ctx,
             self.fsm.peer.leader_id(),
             DiskUsage::Normal,
             true,

@@ -2964,12 +2964,12 @@ impl TiKvConfig {
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
         if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
-            cache_cfg.capacity.0 = Some(ReadableSize {
-                0: self.rocksdb.defaultcf.block_cache_size.0
+            cache_cfg.capacity.0 = Some(ReadableSize(
+                self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
-            });
+            ));
         }
         if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
             warn!(
@@ -3240,7 +3240,7 @@ fn serde_to_online_config(name: String) -> String {
             "raftstore.apply_pool_size",
             "raft_store.apply_batch_system.pool_size",
         ),
-        _ => name.replace("raftstore", "raft_store").replace("-", "_"),
+        _ => name.replace("raftstore", "raft_store").replace('-', "_"),
     }
 }
 
@@ -3363,9 +3363,9 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
             .rev()
             .collect();
         if helper(fields, &TIKVCONFIG_TYPED)? {
-            dst.insert(name.replace("_", "-"), format!("\"{}\"", value));
+            dst.insert(name.replace('_', "-"), format!("\"{}\"", value));
         } else {
-            dst.insert(name.replace("_", "-"), value);
+            dst.insert(name.replace('_', "-"), value);
         }
     }
     Ok(dst)
@@ -4365,7 +4365,7 @@ mod tests {
             let mut cfg = TiKvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {
@@ -4374,7 +4374,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {
@@ -4383,14 +4383,14 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {
             let mut cfg = TiKvConfig::default();
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {

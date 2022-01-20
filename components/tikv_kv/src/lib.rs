@@ -147,7 +147,7 @@ impl WriteData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
@@ -155,17 +155,6 @@ pub struct SnapContext<'a> {
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
-}
-
-impl<'a> Default for SnapContext<'a> {
-    fn default() -> Self {
-        SnapContext {
-            pb_ctx: Default::default(),
-            read_id: None,
-            start_ts: Default::default(),
-            key_ranges: Default::default(),
-        }
-    }
 }
 
 /// Engine defines the common behaviour for a storage engine type.

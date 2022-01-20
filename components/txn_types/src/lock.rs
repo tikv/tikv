@@ -132,12 +132,14 @@ impl Lock {
         }
     }
 
+    #[must_use]
     pub fn use_async_commit(mut self, secondaries: Vec<Vec<u8>>) -> Self {
         self.use_async_commit = true;
         self.secondaries = secondaries;
         self
     }
 
+    #[must_use]
     pub fn with_rollback_ts(mut self, rollback_ts: Vec<TimeStamp>) -> Self {
         self.rollback_ts = rollback_ts;
         self

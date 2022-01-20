@@ -13,31 +13,37 @@ impl FieldTypeBuilder {
         Default::default()
     }
 
+    #[must_use]
     pub fn tp(mut self, v: crate::FieldTypeTp) -> Self {
         FieldTypeAccessor::set_tp(&mut self.0, v);
         self
     }
 
+    #[must_use]
     pub fn flag(mut self, v: crate::FieldTypeFlag) -> Self {
         FieldTypeAccessor::set_flag(&mut self.0, v);
         self
     }
 
+    #[must_use]
     pub fn flen(mut self, v: isize) -> Self {
         FieldTypeAccessor::set_flen(&mut self.0, v);
         self
     }
 
+    #[must_use]
     pub fn decimal(mut self, v: isize) -> Self {
         FieldTypeAccessor::set_decimal(&mut self.0, v);
         self
     }
 
+    #[must_use]
     pub fn collation(mut self, v: crate::Collation) -> Self {
         FieldTypeAccessor::set_collation(&mut self.0, v);
         self
     }
 
+    #[must_use]
     pub fn charset(mut self, v: &str) -> Self {
         self.0.set_charset(String::from(v));
         self

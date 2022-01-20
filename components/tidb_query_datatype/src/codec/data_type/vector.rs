@@ -39,6 +39,7 @@ impl VectorValue {
 
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
+    #[must_use]
     pub fn clone_empty(&self, capacity: usize) -> Self {
         match_template_evaltype! {
             TT, match self {
