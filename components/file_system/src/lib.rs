@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(duration_consts_2)]
+#![feature(duration_consts_float)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -108,16 +108,10 @@ impl Drop for WithIOType {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct IOBytes {
     read: u64,
     write: u64,
-}
-
-impl Default for IOBytes {
-    fn default() -> Self {
-        IOBytes { read: 0, write: 0 }
-    }
 }
 
 impl std::ops::Sub for IOBytes {

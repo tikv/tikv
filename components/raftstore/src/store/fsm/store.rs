@@ -859,9 +859,21 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.tag,
                 self.poll_ctx.pending_count,
                 self.poll_ctx.ready_count,
-                self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.append,
-                self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
-                self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .append
+                    .saturating_sub(self.previous_metrics.append),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .message
+                    .saturating_sub(self.previous_metrics.message),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .snapshot
+                    .saturating_sub(self.previous_metrics.snapshot),
             );
             dur
         } else {
@@ -1263,7 +1275,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
-        assert!(!self.workers.is_none());
+        assert!(self.workers.is_some());
         self.workers
             .as_ref()
             .unwrap()

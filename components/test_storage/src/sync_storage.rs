@@ -59,11 +59,13 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         }
     }
 
+    #[must_use]
     pub fn config(mut self, config: Config) -> Self {
         self.config = Some(config);
         self
     }
 
+    #[must_use]
     pub fn gc_config(mut self, gc_config: GcConfig) -> Self {
         self.gc_config = Some(gc_config);
         self
@@ -154,8 +156,8 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<Vec<Option<Vec<u8>>>> {
         let mut ids = vec![];
         let requests: Vec<GetRequest> = keys
-            .to_owned()
-            .into_iter()
+            .iter()
+            .copied()
             .map(|key| {
                 let mut req = GetRequest::default();
                 req.set_context(ctx.clone());

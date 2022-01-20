@@ -68,6 +68,7 @@ impl QueryStats {
         }
     }
 
+    #[must_use]
     pub fn sub_query_stats(&self, query_stats: &QueryStats) -> QueryStats {
         let mut res = QueryStats::default();
         for kind in QUERY_KINDS {
