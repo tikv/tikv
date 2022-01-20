@@ -387,12 +387,12 @@ impl<'a> Drain {
             });
             let (event_bytes, resolved_ts_bytes) = batcher.statistics();
             let resps = batcher.build();
-            let last_idx = resps.len() - 1;
+            let resps_len = resps.len();
             // Events are about to be sent, free pending events memory counter.
             memory_quota.free(bytes as _);
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
-                let write_flags = WriteFlags::default().buffer_hint(i != last_idx);
+                let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
                 sink.feed((e, write_flags)).await?;
             }
             sink.flush().await?;

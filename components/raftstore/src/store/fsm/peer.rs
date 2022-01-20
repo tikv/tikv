@@ -77,6 +77,19 @@ use crate::store::{
 };
 use crate::{Error, Result};
 
+#[derive(Clone, Copy, Debug)]
+pub struct DelayDestroy {
+    merged_by_target: bool,
+    reason: DelayReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DelayReason {
+    UnPersistedReady,
+    UnFlushLogGc,
+    Shutdown,
+}
+
 /// Limits the maximum number of regions returned by error.
 ///
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
@@ -125,7 +138,10 @@ where
 
     /// Destroy is delayed because of some unpersisted readies in Peer.
     /// Should call `destroy_peer` again after persisting all readies.
-    delayed_destroy: Option<bool>,
+    delayed_destroy: Option<DelayDestroy>,
+    /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
+    /// can start destroying without seeking.
+    logs_gc_flushed: bool,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -233,6 +249,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
+                logs_gc_flushed: false,
             }),
         ))
     }
@@ -276,6 +293,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
+                logs_gc_flushed: false,
             }),
         ))
     }
@@ -871,7 +889,7 @@ where
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
-                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx);
+                    self.fsm.peer.bcast_wake_up_message(self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -902,7 +920,7 @@ where
                     .iter()
                     .any(|p| p.get_id() == self.fsm.peer_id())
                 {
-                    self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
+                    self.fsm.peer.send_wake_up_message(self.ctx, &leader);
                 }
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
@@ -912,7 +930,7 @@ where
                 msg.from = self.fsm.peer.peer_id();
 
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
-                self.fsm.peer.send_raft_messages(&mut self.ctx, raft_msg);
+                self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
         }
     }
@@ -1141,6 +1159,9 @@ where
             SignificantMsg::LeaderCallback(cb) => {
                 self.on_leader_callback(cb);
             }
+            SignificantMsg::RaftLogGcFlushed => {
+                self.on_raft_log_gc_flushed();
+            }
         }
     }
 
@@ -1166,9 +1187,11 @@ where
 
         self.fsm.has_ready = true;
 
-        if let Some(mbt) = self.fsm.delayed_destroy {
-            if !self.fsm.peer.has_unpersisted_ready() {
-                self.destroy_peer(mbt);
+        if let Some(delay) = self.fsm.delayed_destroy {
+            if delay.reason == DelayReason::UnPersistedReady
+                && !self.fsm.peer.has_unpersisted_ready()
+            {
+                self.destroy_peer(delay.merged_by_target);
             }
         }
     }
@@ -1686,9 +1709,7 @@ where
             }
         }
 
-        if result.is_err() {
-            return result;
-        }
+        result?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -2280,7 +2301,7 @@ where
             match self
                 .fsm
                 .peer
-                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+                .ready_to_transfer_leader(self.ctx, msg.get_index(), &from)
             {
                 Some(reason) => {
                     info!(
@@ -2328,12 +2349,9 @@ where
                 }
             }
         } else {
-            self.fsm.peer.execute_transfer_leader(
-                &mut self.ctx,
-                msg.get_from(),
-                peer_disk_usage,
-                false,
-            );
+            self.fsm
+                .peer
+                .execute_transfer_leader(self.ctx, msg.get_from(), peer_disk_usage, false);
         }
     }
 
@@ -2406,24 +2424,106 @@ where
         }
     }
 
-    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
-    fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
-        fail_point!("destroy_peer");
-        // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = true;
-        fail_point!("destroy_peer_after_pending_move", |_| { true });
+    /// Check if destroy can be executed immediately. If it can't, the reason is returned.
+    fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
         if self.fsm.peer.has_unpersisted_ready() {
             assert!(self.ctx.sync_write_worker.is_none());
             // The destroy must be delayed if there are some unpersisted readies.
             // Otherwise there is a race of writting kv db and raft db between here
             // and write worker.
-            if let Some(mbt) = self.fsm.delayed_destroy {
+            return Some(DelayReason::UnPersistedReady);
+        }
+
+        if !self.fsm.logs_gc_flushed {
+            let start_index = self.fsm.peer.last_compacted_idx;
+            let mut end_index = start_index;
+            if end_index == 0 {
+                // Technically, all logs between first index and last index should be accessible
+                // before being destroyed.
+                end_index = self.fsm.peer.get_store().first_index();
+                self.fsm.peer.last_compacted_idx = end_index;
+            }
+            let region_id = self.region_id();
+            let peer_id = self.fsm.peer.peer_id();
+            let mb = match self.ctx.router.mailbox(region_id) {
+                Some(mb) => mb,
+                None => {
+                    if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        // It's shutting down, nothing we can do.
+                        return Some(DelayReason::Shutdown);
+                    }
+                    panic!("{} failed to get mailbox", self.fsm.peer.tag);
+                }
+            };
+            let task = RaftlogGcTask::gc(
+                self.fsm.peer.get_store().get_region_id(),
+                start_index,
+                end_index,
+            )
+            .flush()
+            .when_done(move || {
+                if let Err(e) =
+                    mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
+                {
+                    if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                        return;
+                    }
+                    panic!(
+                        "[region {}] {} failed to respond flush message {:?}",
+                        region_id, peer_id, e
+                    );
+                }
+            });
+            if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
+                if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                    // It's shutting down, nothing we can do.
+                    return Some(DelayReason::Shutdown);
+                }
                 panic!(
-                    "{} destroy peer twice with some unpersisted readies, original {}, now {}",
-                    self.fsm.peer.tag, mbt, merged_by_target
+                    "{} failed to schedule raft log task {:?}",
+                    self.fsm.peer.tag, e
                 );
             }
-            self.fsm.delayed_destroy = Some(merged_by_target);
+            // We need to delete all logs entries to avoid introducing race between
+            // new peers and old peers. Flushing gc logs allow last_compact_index be
+            // used directly without seeking.
+            return Some(DelayReason::UnFlushLogGc);
+        }
+        None
+    }
+
+    fn on_raft_log_gc_flushed(&mut self) {
+        self.fsm.logs_gc_flushed = true;
+        let delay = match self.fsm.delayed_destroy {
+            Some(delay) => delay,
+            None => panic!("{} a delayed destroy should not recover", self.fsm.peer.tag),
+        };
+        self.destroy_peer(delay.merged_by_target);
+    }
+
+    // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
+    fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
+        fail_point!("destroy_peer");
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+
+        fail_point!("destroy_peer_after_pending_move", |_| { true });
+
+        if let Some(reason) = self.maybe_delay_destroy() {
+            if self
+                .fsm
+                .delayed_destroy
+                .map_or(false, |delay| delay.reason == reason)
+            {
+                panic!(
+                    "{} destroy peer twice with same delay reason, original {:?}, now {}",
+                    self.fsm.peer.tag, self.fsm.delayed_destroy, merged_by_target
+                );
+            }
+            self.fsm.delayed_destroy = Some(DelayDestroy {
+                merged_by_target,
+                reason,
+            });
             // TODO: The destroy process can also be asynchronous as snapshot process,
             // if so, all write db operations are removed in store thread.
             info!(
@@ -2431,6 +2531,7 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "merged_by_target" => merged_by_target,
+                "reason" => ?reason,
             );
             return false;
         }
@@ -2744,21 +2845,9 @@ where
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
-        let task = RaftlogGcTask::gc(
-            self.fsm.peer.get_store().get_region_id(),
-            self.fsm.peer.last_compacted_idx,
-            compact_to,
-        );
+        self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().compact_to(compact_to);
-        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
-            error!(
-                "failed to schedule compact task";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
     }
 
     fn on_ready_split_region(
@@ -3256,7 +3345,7 @@ where
                             .as_ref()
                             .unwrap()
                             .get_commit(),
-                        &mut self.ctx,
+                        self.ctx,
                     );
                 }
             }
@@ -3541,7 +3630,7 @@ where
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
-                // `merge_by_target` is true because this region's range already belongs to
+                // `merged_by_target` is true because this region's range already belongs to
                 // its target region so we must not clear data otherwise its target region's
                 // data will corrupt.
                 self.destroy_peer(true);
@@ -4553,7 +4642,7 @@ where
                     "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
 
-                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+                self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
 
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
@@ -4657,7 +4746,7 @@ where
         // As the leader can propose the TransferLeader request successfully, the disk of
         // the leader is probably not full.
         self.fsm.peer.execute_transfer_leader(
-            &mut self.ctx,
+            self.ctx,
             self.fsm.peer.leader_id(),
             DiskUsage::Normal,
             true,

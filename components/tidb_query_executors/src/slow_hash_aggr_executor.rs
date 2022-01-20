@@ -206,7 +206,7 @@ pub struct SlowHashAggregationImpl {
     /// element are stored in `group_key_offsets`.
     ///
     /// `GroupKeyRefUnsafe` contains a raw pointer to this buffer.
-    #[allow(clippy::box_vec)]
+    #[allow(clippy::box_collection)]
     group_key_buffer: Box<Vec<u8>>,
 
     /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has a leading `0`
