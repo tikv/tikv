@@ -1673,6 +1673,7 @@ mod tests {
                 0,
                 "".to_owned(),
             )),
+            pending_remove: false,
         };
         store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
