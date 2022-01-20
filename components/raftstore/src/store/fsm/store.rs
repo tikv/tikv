@@ -1408,14 +1408,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_peers = builder.init()?;
 
         self.start_system::<T, C>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                mgr,
-                pd_client,
-                collector_reg_handle,
+            workers,
+            region_peers,
+            builder,
+            auto_split_controller,
+            concurrency_manager,
+            mgr,
+            pd_client,
+            collector_reg_handle,
         )?;
         Ok(())
     }

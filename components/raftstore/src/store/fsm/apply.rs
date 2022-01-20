@@ -3433,11 +3433,7 @@ where
     }
 
     #[allow(unused_mut, clippy::redundant_closure_call)]
-    fn handle_snapshot(
-        &mut self,
-        apply_ctx: &mut ApplyContext<EK>,
-        snap_task: GenSnapTask,
-    ) {
+    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<EK>, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -3731,7 +3727,6 @@ where
     trace_event: TraceEvent,
 }
 
-
 impl<EK> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK>
 where
     EK: KvEngine,
@@ -3914,10 +3909,9 @@ where
     }
 }
 
-impl<EK, W> Clone for Builder<EK, W>
+impl<EK> Clone for Builder<EK>
 where
     EK: KvEngine,
-    W: WriteBatch<EK>,
 {
     fn clone(&self) -> Self {
         Builder {
@@ -3929,7 +3923,6 @@ where
             engine: self.engine.clone(),
             sender: self.sender.clone_box(),
             router: self.router.clone(),
-            _phantom: self._phantom,
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
         }
