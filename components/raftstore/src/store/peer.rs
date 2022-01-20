@@ -673,7 +673,10 @@ where
                 hash: vec![],
             },
             raft_log_size_hint: 0,
-            leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            leader_lease: Lease::new(
+                cfg.raft_store_max_leader_lease(),
+                cfg.check_leader_lease_interval(),
+            ),
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,

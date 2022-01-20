@@ -263,7 +263,7 @@ impl ReadDelegate {
         &self,
         router: &dyn CasualRouter<EK>,
         ts: Timespec,
-        _metrics: &mut ReadMetrics,
+        metrics: &mut ReadMetrics,
     ) {
         if !self
             .leader_lease
@@ -273,7 +273,7 @@ impl ReadDelegate {
         {
             return;
         }
-        // TODO: add metric
+        metrics.renew_lease_advance += 1;
         let region_id = self.region.get_id();
         if let Err(e) = router.send(region_id, CasualMessage::RenewLease) {
             debug!(
@@ -716,7 +716,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             );
 
             // only for metric.
-            self.metrics.rejected_by_appiled_term += 1;
+            self.metrics.rejected_by_applied_term += 1;
             false
         }
     }
@@ -749,10 +749,11 @@ struct ReadMetrics {
     rejected_by_no_region: u64,
     rejected_by_no_lease: u64,
     rejected_by_epoch: u64,
-    rejected_by_appiled_term: u64,
+    rejected_by_applied_term: u64,
     rejected_by_channel_full: u64,
     rejected_by_cache_miss: u64,
     rejected_by_safe_timestamp: u64,
+    renew_lease_advance: u64,
 
     last_flush_time: Instant,
 }
@@ -770,10 +771,11 @@ impl Default for ReadMetrics {
             rejected_by_no_region: 0,
             rejected_by_no_lease: 0,
             rejected_by_epoch: 0,
-            rejected_by_appiled_term: 0,
+            rejected_by_applied_term: 0,
             rejected_by_channel_full: 0,
             rejected_by_cache_miss: 0,
             rejected_by_safe_timestamp: 0,
+            renew_lease_advance: 0,
             last_flush_time: Instant::now(),
         }
     }
@@ -828,11 +830,11 @@ impl ReadMetrics {
             LOCAL_READ_REJECT.epoch.inc_by(self.rejected_by_epoch);
             self.rejected_by_epoch = 0;
         }
-        if self.rejected_by_appiled_term > 0 {
+        if self.rejected_by_applied_term > 0 {
             LOCAL_READ_REJECT
-                .appiled_term
-                .inc_by(self.rejected_by_appiled_term);
-            self.rejected_by_appiled_term = 0;
+                .applied_term
+                .inc_by(self.rejected_by_applied_term);
+            self.rejected_by_applied_term = 0;
         }
         if self.rejected_by_channel_full > 0 {
             LOCAL_READ_REJECT
@@ -857,6 +859,10 @@ impl ReadMetrics {
         if self.local_executed_stale_read_requests > 0 {
             LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.inc_by(self.local_executed_stale_read_requests);
             self.local_executed_stale_read_requests = 0;
+        }
+        if self.renew_lease_advance > 0 {
+            LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER.inc_by(self.renew_lease_advance);
+            self.renew_lease_advance = 0;
         }
     }
 }
@@ -1006,7 +1012,7 @@ mod tests {
         let leader2 = prs[0].clone();
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
-        let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
+        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
         let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
 
         let mut cmd = RaftCmdRequest::default();
@@ -1051,7 +1057,7 @@ mod tests {
         // The applied_index_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
-        assert_eq!(reader.metrics.rejected_by_appiled_term, 1);
+        assert_eq!(reader.metrics.rejected_by_applied_term, 1);
 
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
@@ -1322,7 +1328,7 @@ mod tests {
         assert_eq!(reader.get_delegate(1).unwrap().applied_index_term, 2);
 
         {
-            let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
+            let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
             let remote = lease.maybe_new_remote_lease(3).unwrap();
             let pg = Progress::leader_lease(remote);
             let mut meta = store_meta.lock().unwrap();

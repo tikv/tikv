@@ -446,13 +446,13 @@ pub enum LeaseState {
 }
 
 impl Lease {
-    pub fn new(max_lease: Duration) -> Lease {
+    pub fn new(max_lease: Duration, advance_renew_lease: Duration) -> Lease {
         Lease {
             bound: None,
             max_lease,
 
             max_drift: max_lease / 3,
-            advance_renew_lease: max_lease / 4,
+            advance_renew_lease,
             last_update: Timespec::new(0, 0),
             remote: None,
         }
@@ -615,15 +615,7 @@ impl RemoteLease {
 
     pub fn need_renew(&self, ts: Timespec) -> bool {
         self.inspect(Some(ts + self.advance_renew_lease)) == LeaseState::Expired
-            && self
-                .renewing
-                .compare_exchange(
-                    false,
-                    true,
-                    AtomicOrdering::Relaxed,
-                    AtomicOrdering::Relaxed,
-                )
-                .is_ok()
+            && self.renewing.swap(true, AtomicOrdering::Relaxed)
     }
 
     fn expire(&self) {
@@ -1379,7 +1371,7 @@ mod tests {
         let duration = TimeDuration::milliseconds(1500);
 
         // Empty lease.
-        let mut lease = Lease::new(duration);
+        let mut lease = Lease::new(duration, duration / 4);
         let remote = lease.maybe_new_remote_lease(1).unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);
