@@ -35,6 +35,8 @@ use tikv_util::{warn, HandyRwLock};
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
+const SLOW_EVENT_THRESHOLD: f64 = 120.0;
+
 pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
@@ -186,7 +188,7 @@ where
             }
             HANDLE_KV_HISTOGRAM.observe(kv_count as _);
             let time_cost = sw.lap().as_secs_f64();
-            if time_cost > 120.0 {
+            if time_cost > SLOW_EVENT_THRESHOLD {
                 warn!("write to temp file too slow."; "time_cost" => ?time_cost, "region_id" => %region_id, "len" => %kv_count);
             }
             HANDLE_EVENT_DURATION_HISTOGRAM

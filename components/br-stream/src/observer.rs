@@ -100,7 +100,7 @@ impl SubscriptionTracer {
     /// check whether the region_id should be observed by this observer.
     pub fn should_observe(&self, region_id: u64) -> bool {
         // The region not traced, return `false` directly.
-        if self.0.contains_key(&region_id) {
+        if !self.0.contains_key(&region_id) {
             return false;
         }
         // The region traced, check it whether is still be observing,
