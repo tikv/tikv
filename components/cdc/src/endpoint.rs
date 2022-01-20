@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use collections::{HashMap, HashSet};
+use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
@@ -412,7 +412,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // The downstream wants to deregister
                 let mut is_last = false;
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                    is_last = delegate.unsubscribe(downstream_id, err);
+                    delegate.unsubscribe(downstream_id, err);
+                    is_last = delegate.downstreams().is_empty();
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
                     if let Some(id) = conn.downstream_id(region_id) {
@@ -423,9 +424,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 }
                 if is_last {
                     let delegate = self.capture_regions.remove(&region_id).unwrap();
-                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                        reader.txn_extra_op.store(TxnExtraOp::Noop);
-                    }
                     // Do not continue to observe the events of the region.
                     let id = delegate.handle.id;
                     let oid = self.observer.unsubscribe_region(region_id, id);
@@ -453,9 +451,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
                         delegate.stop(err);
                     }
-                    if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                        reader.txn_extra_op.store(TxnExtraOp::Noop);
-                    }
                     self.connections
                         .iter_mut()
                         .for_each(|(_, conn)| conn.unsubscribe(region_id));
@@ -476,7 +471,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     conn.take_downstreams().into_iter().for_each(
                         |(region_id, (downstream_id, _))| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                                if delegate.unsubscribe(downstream_id, None) {
+                                delegate.unsubscribe(downstream_id, None);
+                                if delegate.downstreams().is_empty() {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
                                     let id = delegate.handle.id;
@@ -506,6 +502,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let region_id = request.region_id;
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
+
+        let txn_extra_op = match self.get_txn_extra_op(region_id) {
+            Some(txn_extra_op) => txn_extra_op,
+            None => {
+                error!("cdc register for a not found region"; "region_id" => region_id);
+                return;
+            }
+        };
+
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
@@ -553,11 +558,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         }
 
         let mut is_new_delegate = false;
-        let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
-            let d = Delegate::new(region_id);
-            is_new_delegate = true;
-            d
-        });
+        let delegate = match self.capture_regions.entry(region_id) {
+            HashMapEntry::Occupied(e) => e.into_mut(),
+            HashMapEntry::Vacant(e) => {
+                is_new_delegate = true;
+                e.insert(Delegate::new(region_id, txn_extra_op))
+            }
+        };
+
         let observe_id = delegate.handle.id;
         info!("cdc register region";
             "region_id" => region_id,
@@ -593,13 +601,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             );
         };
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
-        let txn_extra_op = request.get_extra_op();
-        if txn_extra_op != TxnExtraOp::Noop {
-            delegate.txn_extra_op = request.get_extra_op();
-            if let Some(reader) = self.store_meta.lock().unwrap().readers.get(&region_id) {
-                reader.txn_extra_op.store(txn_extra_op);
-            }
-        }
+
         let region_epoch = request.take_region_epoch();
         let mut init = Initializer {
             engine: self.engine.clone(),
@@ -611,7 +613,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
-            txn_extra_op: delegate.txn_extra_op,
+            txn_extra_op: delegate.txn_extra_op().load(),
             speed_limiter: self.scan_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
@@ -679,17 +681,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let mut failed_downstreams = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                for downstream in delegate.on_region_ready(resolver, region) {
-                    let conn_id = downstream.get_conn_id();
-                    let downstream_id = downstream.get_id();
-                    if let Err(err) = delegate.subscribe(downstream) {
-                        failed_downstreams.push(Deregister::Downstream {
-                            region_id,
-                            downstream_id,
-                            conn_id,
-                            err: Some(err),
-                        });
-                    }
+                let region_id = delegate.region_id;
+                for (downstream, e) in delegate.on_region_ready(resolver, region) {
+                    failed_downstreams.push(Deregister::Downstream {
+                        region_id,
+                        downstream_id: downstream.get_id(),
+                        conn_id: downstream.get_conn_id(),
+                        err: Some(e),
+                    });
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -954,6 +953,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
+    }
+
+    fn get_txn_extra_op(&self, region_id: u64) -> Option<Arc<AtomicCell<TxnExtraOp>>> {
+        let store_meta = self.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get(&region_id) {
+            return Some(reader.txn_extra_op.clone());
+        }
+        None
     }
 }
 
@@ -1621,6 +1628,8 @@ mod tests {
         fn add_region(&mut self, region_id: u64, cap: usize) {
             let rx = self.raft_router.add_region(region_id, cap);
             self.raft_rxs.insert(region_id, rx);
+            let mut store_meta = self.store_meta.lock().unwrap();
+            store_meta.readers.insert(region_id, ReadDelegate::mock());
         }
 
         fn fill_raft_rx(&self, region_id: u64) {
@@ -2228,6 +2237,12 @@ mod tests {
         req.set_region_id(100);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        suite
+            .store_meta
+            .lock()
+            .unwrap()
+            .readers
+            .insert(100, ReadDelegate::mock());
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2325,6 +2340,7 @@ mod tests {
         req.set_region_id(2);
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         downstream.get_state().store(DownstreamState::Normal);
+        suite.add_region(2, 100);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2362,6 +2378,7 @@ mod tests {
         req.set_region_id(3);
         let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
         downstream.get_state().store(DownstreamState::Normal);
+        suite.add_region(3, 100);
         suite.run(Task::Register {
             request: req,
             downstream,

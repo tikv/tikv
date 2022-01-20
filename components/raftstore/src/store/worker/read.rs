@@ -304,6 +304,25 @@ impl ReadDelegate {
             txn_extra_op: TxnExtraOp::Noop,
         })
     }
+
+    /// Used in some external tests.
+    pub fn mock() -> Self {
+        let region: metapb::Region = Default::default();
+        let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, "mock".to_owned()));
+        ReadDelegate {
+            region: Arc::new(region),
+            peer_id: 0,
+            term: 0,
+            applied_index_term: 0,
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            tag: format!("[region {}] {}", 0, 0),
+            txn_extra_op: Default::default(),
+            txn_ext: Default::default(),
+            read_progress,
+            track_ver: TrackVer::new(),
+        }
+    }
 }
 
 impl Display for ReadDelegate {
