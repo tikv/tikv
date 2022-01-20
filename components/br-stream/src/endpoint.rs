@@ -365,7 +365,10 @@ impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WatchTask(arg0) => f.debug_tuple("WatchTask").field(arg0).finish(),
-            Self::BatchEvent(arg0) => f.debug_tuple("BatchEvent").field(arg0).finish(),
+            Self::BatchEvent(arg0) => f
+                .debug_tuple("BatchEvent")
+                .field(&format!("[{} events...]", arg0.len()))
+                .finish(),
             Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
             Self::ObserverRegion { region } => f

@@ -97,17 +97,17 @@ impl SubscriptionTracer {
         }
     }
 
+    /// check whether the region_id should be observed by this observer.
     pub fn should_observe(&self, region_id: u64) -> bool {
-        if let Some(o) = self.0.get(&region_id) {
-            if o.is_observing() {
-                return true;
-            }
-            // drop the reference to the handle or we may meet deadlock.
-            // (It says "May deadlock if called when holding any sort of reference into the map.")
-            drop(o);
-            self.0.remove_if(&region_id, |_, o| !o.is_observing());
+        // The region not traced, return `false` directly.
+        if self.0.contains_key(&region_id) {
+            return false;
         }
-        false
+        // The region traced, check it whether is still be observing,
+        // if not, remove it.
+        self.0
+            .remove_if(&region_id, |_, o| !o.is_observing())
+            .is_none()
     }
 }
 
@@ -151,7 +151,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
     }
 
     fn on_applied_current_term(&self, role: StateRole, region: &Region) {
-        if role == StateRole::Leader && self.should_register_region(&region) {
+        if role == StateRole::Leader && self.should_register_region(region) {
             self.register_region(region);
         }
     }
@@ -173,15 +173,14 @@ impl RegionChangeObserver for BackupStreamObserver {
         event: RegionChangeEvent,
         _role: StateRole,
     ) {
-        match event {
-            RegionChangeEvent::Destroy => {
-                if self.subs.should_observe(ctx.region().get_id()) {
-                    self.subs.deregister_region(ctx.region().get_id())
-                }
-            }
-            // No need for handling `Create` -- once it becomes leader, it would start by
-            // `on_applied_current_term`.
-            _ => {}
+        // No need for handling `Create` -- once it becomes leader, it would start by
+        // `on_applied_current_term`.
+        // But should we deregister and register again when the region is `Update`d?
+
+        if matches!(event, RegionChangeEvent::Destroy)
+            && self.subs.should_observe(ctx.region().get_id())
+        {
+            self.subs.deregister_region(ctx.region().get_id())
         }
     }
 }
@@ -210,8 +209,8 @@ mod tests {
     fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Region {
         let mut r = Region::new();
         r.set_id(id);
-        r.set_start_key(start.to_vec().into());
-        r.set_end_key(end.to_vec().into());
+        r.set_start_key(start.to_vec());
+        r.set_end_key(end.to_vec());
         r
     }
 
