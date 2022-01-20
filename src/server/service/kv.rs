@@ -8,7 +8,7 @@ use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
 use crate::new_request_tracer;
 use crate::server::gc_worker::GcWorker;
-use crate::server::load_statistics::ThreadLoad;
+use crate::server::load_statistics::ThreadLoadPool;
 use crate::server::metrics::*;
 use crate::server::service::tracing::{RequestTracer, TracerFactory};
 use crate::server::snap::Task as SnapTask;
@@ -78,7 +78,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
 
     enable_req_batch: bool,
 
-    grpc_thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoadPool>,
 
     proxy: Proxy,
 
@@ -121,7 +121,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
-        grpc_thread_load: Arc<ThreadLoad>,
+        grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
@@ -998,7 +998,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         });
         ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
 
-        let thread_load = Arc::clone(&self.grpc_thread_load);
+        let grpc_thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
@@ -1013,7 +1013,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
             let mut r = item.batch_resp;
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
-            r.set_transport_layer_load(thread_load.load() as u64);
+            // TODO: per thread load is more reasonable for batching.
+            r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                 r,
                 WriteFlags::default().buffer_hint(false),

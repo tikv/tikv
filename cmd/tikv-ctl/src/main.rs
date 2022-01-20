@@ -35,7 +35,7 @@ use std::path::Path;
 use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{process, str, thread, u64};
+use std::{str, thread, u64};
 use structopt::clap::ErrorKind;
 use structopt::StructOpt;
 use tikv::config::TiKvConfig;
@@ -266,7 +266,7 @@ fn main() {
                     let limit = limit.unwrap_or(0);
                     if to.is_empty() && limit == 0 {
                         println!(r#"please pass "to" or "limit""#);
-                        process::exit(-1);
+                        tikv_util::logger::exit_process_gracefully(-1);
                     }
                     let cfs = show_cf.iter().map(AsRef::as_ref).collect();
                     debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
@@ -420,7 +420,7 @@ fn main() {
                 Cmd::Fail { cmd: subcmd } => {
                     if host.is_none() {
                         println!("command fail requires host");
-                        process::exit(-1);
+                        tikv_util::logger::exit_process_gracefully(-1);
                     }
                     let client = new_debug_client(host.unwrap(), mgr);
                     match subcmd {
@@ -672,7 +672,7 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             let mut err = String::new();
             stderr.read_to_string(&mut err).unwrap();
             println!("failed to run {}:\n{}", args.join(" "), err);
-            std::process::exit(status);
+            tikv_util::logger::exit_process_gracefully(status);
         }
     };
 

@@ -3451,7 +3451,7 @@ where
         }
     }
 
-    #[allow(unused_mut)]
+    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3466,7 +3466,6 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
@@ -4795,9 +4794,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct ApplyObserver {
-        pre_admin_count: Arc<AtomicUsize>,
         pre_query_count: Arc<AtomicUsize>,
-        post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }
