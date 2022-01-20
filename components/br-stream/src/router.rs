@@ -1053,7 +1053,7 @@ mod tests {
                 entry.path()
             );
             let filename = entry.file_name();
-            if filename.to_str().unwrap().find("v1_backupmeta").is_some() {
+            if filename.to_str().unwrap().contains("v1_backupmeta") {
                 meta_count += 1;
             } else {
                 log_count += 1;

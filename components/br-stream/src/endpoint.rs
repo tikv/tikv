@@ -35,6 +35,8 @@ use tikv_util::{warn, HandyRwLock};
 
 use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
+const SLOW_EVENT_THRESHOLD: f64 = 120.0;
+
 pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
@@ -176,7 +178,7 @@ where
                 // TODO build a error handle mechanism #error 6
                 if kv.should_record() {
                     if let Err(err) = router.on_event(kv).await {
-                        err.report(format!("failed to send event."));
+                        err.report("failed to send event.");
                     }
                     metrics::HEAP_MEMORY
                         .with_label_values(&["free"])
@@ -186,7 +188,7 @@ where
             }
             HANDLE_KV_HISTOGRAM.observe(kv_count as _);
             let time_cost = sw.lap().as_secs_f64();
-            if time_cost > 120.0 {
+            if time_cost > SLOW_EVENT_THRESHOLD {
                 warn!("write to temp file too slow."; "time_cost" => ?time_cost, "region_id" => %region_id, "len" => %kv_count);
             }
             HANDLE_EVENT_DURATION_HISTOGRAM
@@ -365,7 +367,10 @@ impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WatchTask(arg0) => f.debug_tuple("WatchTask").field(arg0).finish(),
-            Self::BatchEvent(arg0) => f.debug_tuple("BatchEvent").field(arg0).finish(),
+            Self::BatchEvent(arg0) => f
+                .debug_tuple("BatchEvent")
+                .field(&format!("[{} events...]", arg0.len()))
+                .finish(),
             Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
             Self::ObserverRegion { region } => f

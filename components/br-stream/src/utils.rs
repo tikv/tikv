@@ -36,7 +36,7 @@ pub fn get_ts(key: &Key) -> Result<TimeStamp> {
     })
 }
 
-pub fn redact<'a>(key: &'a impl AsRef<[u8]>) -> log_wrappers::Value<'a> {
+pub fn redact(key: &impl AsRef<[u8]>) -> log_wrappers::Value<'_> {
     log_wrappers::Value::key(key.as_ref())
 }
 
@@ -91,7 +91,7 @@ impl<P: RegionInfoProvider> RegionPager<P> {
             .last()
             .map(|region| region.region.end_key.to_owned())
             // no leader region found.
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
         if self.start_key.is_empty() {
             self.reach_last_region = true;
         }
@@ -166,7 +166,7 @@ impl<T: Ord + std::fmt::Debug> SegmentTree<T> {
         self.0
             .range(RangeToInclusiveRef(point))
             .next_back()
-            .filter(|(_, end)| <T as Borrow<R>>::borrow(end) > &&point)
+            .filter(|(_, end)| <T as Borrow<R>>::borrow(end) > point)
     }
 
     pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
@@ -174,7 +174,7 @@ impl<T: Ord + std::fmt::Debug> SegmentTree<T> {
         T: Borrow<R>,
         R: Ord + ?Sized,
     {
-        self.get_interval_by_point(&range.0).is_some()
+        self.get_interval_by_point(range.0).is_some()
             || self
                 .get_interval_by_point(range.1)
                 .map(|rng| <T as Borrow<R>>::borrow(rng.0) != range.1)
