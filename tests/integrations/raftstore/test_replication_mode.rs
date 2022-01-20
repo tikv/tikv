@@ -449,7 +449,7 @@ fn test_assign_commit_groups_with_migrate_region() {
 
     // Split 1 region into 2 regions.
     let region = cluster.get_region(b"");
-    cluster.must_split(&region, &b"k".to_vec());
+    cluster.must_split(&region, b"k");
     // Put a key value pair.
     cluster.must_put(b"a1", b"v0");
     cluster.must_put(b"k1", b"v0");

@@ -58,7 +58,7 @@ impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
         &COMPACTION_GUARD
     }
 
-    fn create_partitioner(&self, context: &SstPartitionerContext) -> Option<Self::Partitioner> {
+    fn create_partitioner(&self, context: &SstPartitionerContext<'_>) -> Option<Self::Partitioner> {
         // create_partitioner can be called in RocksDB while holding db_mutex. It can block
         // other operations on RocksDB. To avoid such caces, we defer region info query to
         // the first time should_partition is called.
@@ -146,7 +146,7 @@ impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
 }
 
 impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
-    fn should_partition(&mut self, req: &SstPartitionerRequest) -> SstPartitionerResult {
+    fn should_partition(&mut self, req: &SstPartitionerRequest<'_>) -> SstPartitionerResult {
         if !self.initialized {
             self.initialize();
         }

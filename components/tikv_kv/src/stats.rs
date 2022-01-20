@@ -251,3 +251,23 @@ impl StatisticsSummary {
         self.count += 1;
     }
 }
+
+/// Latency indicators for multi-execution-stages.
+///
+/// The detailed meaning of the indicators is as follows:
+///
+/// ```text
+/// ------> Begin ------> Scheduled ------> SnapshotReceived ------> Finished ------>
+/// |----- schedule_wait_time -----|
+///                                |-- snapshot_wait_time --|
+/// |------------------- wait_wall_time --------------------|
+///                                                         |-- process_wall_time --|
+/// |------------------------------ kv_read_wall_time ------------------------------|
+/// ```
+#[derive(Debug, Default, Copy, Clone)]
+pub struct StageLatencyStats {
+    pub schedule_wait_time_ms: u64,
+    pub snapshot_wait_time_ms: u64,
+    pub wait_wall_time_ms: u64,
+    pub process_wall_time_ms: u64,
+}

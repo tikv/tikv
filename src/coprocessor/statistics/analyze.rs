@@ -61,6 +61,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
+            req_ctx.access_locks.clone(),
             false,
         );
         Ok(Self {
@@ -649,21 +650,11 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct ReservoirRowSampleCollector {
     base: BaseRowSampleCollector,
     samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
     max_sample_size: usize,
-}
-
-impl Default for ReservoirRowSampleCollector {
-    fn default() -> Self {
-        ReservoirRowSampleCollector {
-            base: Default::default(),
-            samples: BinaryHeap::new(),
-            max_sample_size: 0,
-        }
-    }
 }
 
 impl ReservoirRowSampleCollector {

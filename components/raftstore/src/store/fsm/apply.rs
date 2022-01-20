@@ -211,7 +211,7 @@ pub struct Range {
 }
 
 impl Debug for Range {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{{ cf: {:?}, start_key: {:?}, end_key: {:?} }}",
@@ -273,6 +273,9 @@ pub enum ExecResult<S> {
     },
     IngestSst {
         ssts: Vec<SSTMetaInfo>,
+    },
+    TransferLeader {
+        term: u64,
     },
 }
 
@@ -928,7 +931,7 @@ where
     fn handle_raft_committed_entries(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
-        mut committed_entries_drainer: Drain<Entry>,
+        mut committed_entries_drainer: Drain<'_, Entry>,
     ) {
         if committed_entries_drainer.len() == 0 {
             return;
@@ -1068,7 +1071,7 @@ where
         // 2. When a leader tries to read index during transferring leader,
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
             if let Some(cb) = cmd.cb.take() {
                 apply_ctx
                     .applied_batch
@@ -1263,7 +1266,8 @@ where
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSst { .. } => {}
+                | ExecResult::IngestSst { .. }
+                | ExecResult::TransferLeader { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1389,7 +1393,7 @@ where
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(request),
-            AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::TransferLeader => self.exec_transfer_leader(request, ctx.exec_log_term),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             // TODO: is it backward compatible to add new cmd_type?
@@ -2680,6 +2684,23 @@ where
         ))
     }
 
+    fn exec_transfer_leader(
+        &mut self,
+        req: &AdminRequest,
+        term: u64,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        PEER_ADMIN_CMD_COUNTER.transfer_leader.all.inc();
+        let resp = AdminResponse::default();
+
+        let peer = req.get_transfer_leader().get_peer();
+        // Only execute TransferLeader if the expected new leader is self.
+        if peer.get_id() == self.id {
+            Ok((resp, ApplyResult::Res(ExecResult::TransferLeader { term })))
+        } else {
+            Ok((resp, ApplyResult::None))
+        }
+    }
+
     fn exec_compute_hash(
         &self,
         ctx: &ApplyContext<EK>,
@@ -3274,7 +3295,7 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<EK::Snapshot>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
@@ -3380,7 +3401,7 @@ where
         ctx: &mut ApplyContext<EK>,
         catch_up_logs: CatchUpLogs,
     ) {
-        fail_point!("after_handle_catch_up_logs_for_merge");
+        fail_point!("after_handle_catch_up_logs_for_merge", |_| {});
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.delegate.id() == 1003,
@@ -3411,8 +3432,12 @@ where
         }
     }
 
-    #[allow(unused_mut)]
-    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<EK>, snap_task: GenSnapTask) {
+    #[allow(unused_mut, clippy::redundant_closure_call)]
+    fn handle_snapshot(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK>,
+        snap_task: GenSnapTask,
+    ) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -3422,7 +3447,6 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
@@ -3707,7 +3731,11 @@ where
     trace_event: TraceEvent,
 }
 
-impl<EK: KvEngine> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK> {
+
+impl<EK> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK>
+where
+    EK: KvEngine,
+{
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
@@ -3856,7 +3884,10 @@ impl<EK: KvEngine> Builder<EK> {
     }
 }
 
-impl<EK: KvEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK> {
+impl<EK> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK>
+where
+    EK: KvEngine,
+{
     type Handler = ApplyPoller<EK>;
 
     fn build(&mut self, priority: Priority) -> ApplyPoller<EK> {
@@ -3879,6 +3910,28 @@ impl<EK: KvEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK> {
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
+        }
+    }
+}
+
+impl<EK, W> Clone for Builder<EK, W>
+where
+    EK: KvEngine,
+    W: WriteBatch<EK>,
+{
+    fn clone(&self) -> Self {
+        Builder {
+            tag: self.tag.clone(),
+            cfg: self.cfg.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
+            importer: self.importer.clone(),
+            region_scheduler: self.region_scheduler.clone(),
+            engine: self.engine.clone(),
+            sender: self.sender.clone_box(),
+            router: self.router.clone(),
+            _phantom: self._phantom,
+            store_id: self.store_id,
+            pending_create_peers: self.pending_create_peers.clone(),
         }
     }
 }
@@ -4148,6 +4201,7 @@ mod tests {
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
+    use kvproto::kvrpcpb::ApiVersion;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -4184,8 +4238,9 @@ mod tests {
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
-        let importer =
-            Arc::new(SSTImporter::new(&ImportConfig::default(), dir.path(), None, false).unwrap());
+        let importer = Arc::new(
+            SSTImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+        );
         (dir, importer)
     }
 
@@ -4709,9 +4764,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct ApplyObserver {
-        pre_admin_count: Arc<AtomicUsize>,
         pre_query_count: Arc<AtomicUsize>,
-        post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }

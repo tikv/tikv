@@ -16,7 +16,7 @@ use raft::eraftpb::MessageType;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
     Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand, SignificantMsg,
-    StoreMsg, StoreRouter, Transport,
+    SignificantRouter, StoreMsg, StoreRouter, Transport,
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
@@ -230,13 +230,15 @@ impl<C: RaftStoreRouter<RocksEngine>> CasualRouter<RocksEngine> for SimulateTran
     }
 }
 
+impl<C: RaftStoreRouter<RocksEngine>> SignificantRouter<RocksEngine> for SimulateTransport<C> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
+        self.ch.significant_send(region_id, msg)
+    }
+}
+
 impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateTransport<C> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
-    }
-
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
-        self.ch.significant_send(region_id, msg)
     }
 
     fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
@@ -432,37 +434,44 @@ impl RegionPacketFilter {
         }
     }
 
+    #[must_use]
     pub fn direction(mut self, direction: Direction) -> RegionPacketFilter {
         self.direction = direction;
         self
     }
 
     // TODO: rename it to `drop`.
+    #[must_use]
     pub fn msg_type(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.drop_type.push(m_type);
         self
     }
 
+    #[must_use]
     pub fn skip(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.skip_type.push(m_type);
         self
     }
 
+    #[must_use]
     pub fn allow(mut self, number: usize) -> RegionPacketFilter {
         self.block = Either::Left(Arc::new(AtomicUsize::new(number)));
         self
     }
 
+    #[must_use]
     pub fn when(mut self, condition: Arc<AtomicBool>) -> RegionPacketFilter {
         self.block = Either::Right(condition);
         self
     }
 
+    #[must_use]
     pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
         self.dropped_messages = Some(dropped);
         self
     }
 
+    #[must_use]
     pub fn set_msg_callback(
         mut self,
         cb: Arc<dyn Fn(&RaftMessage) + Send + Sync>,

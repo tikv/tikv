@@ -1,9 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use crossbeam::channel::Sender;
-use fail::fail_point;
 use futures::prelude::*;
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcContext, Server,
@@ -13,17 +15,22 @@ use kvproto::resource_usage_agent::{
     create_resource_usage_agent, EmptyResponse, ResourceUsageAgent, ResourceUsageRecord,
 };
 
-#[derive(Clone)]
 pub struct MockReceiverServer {
+    should_block: Arc<AtomicBool>,
     tx: Sender<Vec<ResourceUsageRecord>>,
+    server: Option<Server>,
 }
 
 impl MockReceiverServer {
     pub fn new(tx: Sender<Vec<ResourceUsageRecord>>) -> Self {
-        Self { tx }
+        Self {
+            should_block: Arc::default(),
+            tx,
+            server: None,
+        }
     }
 
-    pub fn build_server(self, port: u16, env: Arc<Environment>) -> Server {
+    pub fn start_server(&mut self, port: u16, env: Arc<Environment>) {
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .max_concurrent_stream(2)
             .max_receive_message_len(-1)
@@ -33,22 +40,48 @@ impl MockReceiverServer {
         let server = ServerBuilder::new(env)
             .channel_args(channel_args)
             .bind("127.0.0.1", port)
-            .register_service(create_resource_usage_agent(self));
+            .register_service(create_resource_usage_agent(MockReceiverService {
+                should_block: self.should_block.clone(),
+                tx: self.tx.clone(),
+            }));
 
-        server
+        let mut server = server
             .build()
-            .expect("failed to build mock receiver server")
+            .expect("failed to build mock receiver server");
+        server.start();
+        self.server = Some(server);
+    }
+
+    pub fn block(&self) {
+        self.should_block.store(true, Ordering::SeqCst);
+    }
+
+    pub fn unblock(&self) {
+        self.should_block.store(false, Ordering::SeqCst);
+    }
+
+    pub async fn shutdown_server(&mut self) {
+        self.server.take().unwrap().shutdown().await.unwrap();
     }
 }
 
-impl ResourceUsageAgent for MockReceiverServer {
+#[derive(Clone)]
+struct MockReceiverService {
+    should_block: Arc<AtomicBool>,
+    tx: Sender<Vec<ResourceUsageRecord>>,
+}
+
+impl ResourceUsageAgent for MockReceiverService {
     fn report(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut stream: RequestStream<ResourceUsageRecord>,
         sink: ClientStreamingSink<EmptyResponse>,
     ) {
-        fail_point!("mock-receiver");
+        while self.should_block.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(100));
+        }
+
         let tx = self.tx.clone();
         let f = async move {
             let mut res = vec![];

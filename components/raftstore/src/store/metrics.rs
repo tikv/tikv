@@ -24,6 +24,7 @@ make_auto_flush_static_metric! {
         transfer_leader,
         conf_change,
         batch,
+        dropped_read_index,
     }
 
     pub label_enum AdminCmdType {
@@ -36,6 +37,7 @@ make_auto_flush_static_metric! {
         commit_merge,
         rollback_merge,
         compact,
+        transfer_leader
     }
 
     pub label_enum AdminCmdStatus {
@@ -258,9 +260,9 @@ lazy_static! {
         ).unwrap();
     pub static ref STORE_WRITE_RAFTDB_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_append_log_duration_seconds",
-            "Bucketed histogram of peer appending log duration.",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            "tikv_raftstore_store_write_raftdb_duration_seconds",
+            "Bucketed histogram of store write raft db duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_SEND_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -272,6 +274,12 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_store_write_callback_duration_seconds",
             "Bucketed histogram of sending callback to store thread duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TO_DB_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_append_log_duration_seconds",
+            "Bucketed histogram of peer appending log duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
@@ -355,12 +363,6 @@ lazy_static! {
     pub static ref PEER_ADMIN_CMD_COUNTER: AdminCmdVec =
         auto_flush_from!(PEER_ADMIN_CMD_COUNTER_VEC, AdminCmdVec);
 
-    pub static ref CHECK_LEADER_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_resolved_ts_check_leader_duration_seconds",
-            "Bucketed histogram of handling check leader request duration",
-            exponential_buckets(0.005, 2.0, 20).unwrap()
-        ).unwrap();
     pub static ref PEER_COMMIT_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
@@ -621,6 +623,21 @@ lazy_static! {
             "Load base split event.",
             &["type"]
         ).unwrap();
+
+    pub static ref LOAD_BASE_SPLIT_SAMPLE_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_load_base_split_sample",
+        "Histogram of query balance",
+        &["type"],
+        linear_buckets(0.0, 0.05, 20).unwrap()
+    ).unwrap();
+
+    pub static ref QUERY_REGION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_query_region",
+        "Histogram of query",
+        &["type"],
+        exponential_buckets(8.0, 2.0, 24).unwrap()
+    ).unwrap();
+
 
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
