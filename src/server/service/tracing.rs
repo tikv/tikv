@@ -53,7 +53,11 @@ impl TracingService {
                         remote_parent_spans,
                         total_duration,
                     };
-                    warn!("[tracing] slow request deteted"; "report" => serde_json::to_string(&report.to_json()).unwrap_or_default());
+                    warn!(
+                        "[tracing] slow request deteted";
+                        "total_duration" => ?total_duration,
+                        "report" => serde_json::to_string(&report.to_json()).unwrap_or_default()
+                    );
                 },
             );
             futures::executor::block_on(print_to_slow_log);
