@@ -149,7 +149,7 @@ pub struct Config {
     pub check_leader_lease_interval: ReadableDuration,
 
     // Check if leader lease will expire at `current_time + renew_leader_lease_advance_duration`.
-    // It will be set to raft_store_max_leader_lease/4+100ms by default.
+    // It will be set to raft_store_max_leader_lease/4 by default.
     pub renew_leader_lease_advance_duration: ReadableDuration,
 
     // Right region derive origin region id when split.
@@ -584,7 +584,7 @@ impl Config {
             self.check_leader_lease_interval = self.raft_store_max_leader_lease / 4;
         }
 
-        if self.renew_leader_lease_advance_duration.as_millis() == 0 {
+        if self.renew_leader_lease_advance_duration.as_millis() == 0 && self.hibernate_regions {
             self.renew_leader_lease_advance_duration = self.raft_store_max_leader_lease / 4;
         }
 
