@@ -3601,6 +3601,10 @@ where
             }
         }
 
+        // Check passed, clear fence and start proposing pessimistic locks and PrepareMerge.
+        self.prepare_merge_fence = 0;
+        self.pending_prepare_merge = None;
+
         fail_point!("before_propose_locks_on_region_merge");
         self.propose_locks_before_prepare_merge(ctx, entry_size_limit - entry_size)?;
 
