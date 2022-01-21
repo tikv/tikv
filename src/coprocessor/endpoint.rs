@@ -604,7 +604,7 @@ impl<E: Engine> Endpoint<E> {
 
 fn is_engine_corruption_error(e: &Error) -> bool {
     // Hack! it depend on the error message to identify the engine corruption error
-    let err_msg = format!("{:?}", e).to_lowercase();
+    let err_msg = e.to_string().to_lowercase();
     err_msg.contains("engine") && err_msg.contains("corruption")
 }
 
