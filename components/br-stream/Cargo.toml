@@ -37,6 +37,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 hex = "0.4"
 uuid = "0.8"
 openssl = "0.10"
+dashmap = "5"
 
 file_system = { path = "../file_system" }
 tidb_query_datatype = {path = "../tidb_query_datatype", default-features = false}
@@ -49,3 +50,4 @@ online_config = { path = "../online_config" }
 
 [dev-dependencies]
 rand = "0.8.0"
+engine_panic = {path = "../engine_panic"}

@@ -10,10 +10,18 @@ use std::{
     },
 };
 
-use crate::{codec::Encoder, endpoint::Task, errors::Error, metadata::StreamTask, utils::SlotMap};
+use crate::{
+    codec::Encoder,
+    endpoint::Task,
+    errors::Error,
+    metadata::StreamTask,
+    metrics::SKIP_KV_COUNTER,
+    utils::{self, SlotMap},
+};
 
 use super::errors::Result;
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -28,7 +36,14 @@ use protobuf::Message;
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
-use tikv_util::{box_err, info, time::Limiter, warn, worker::Scheduler};
+
+use tikv_util::{
+    box_err, defer, info,
+    time::{Instant, Limiter},
+    warn,
+    worker::Scheduler,
+    Either,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::remove_file, fs::File};
@@ -52,7 +67,7 @@ impl ApplyEvent {
     pub fn from_cmd_batch(cmd: CmdBatch, resolved_ts: u64) -> Vec<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
-        for mut req in cmd
+        for req in cmd
             .cmds
             .into_iter()
             .filter(|cmd| {
@@ -71,33 +86,57 @@ impl ApplyEvent {
             })
             .flat_map(|mut cmd| cmd.request.take_requests().into_iter())
         {
-            let (key, value, cf) = match req.get_cmd_type() {
-                CmdType::Put => {
-                    let mut put = req.take_put();
-                    (put.take_key(), put.take_value(), put.cf)
-                }
-                CmdType::Delete => {
-                    let mut del = req.take_delete();
-                    (del.take_key(), Vec::new(), del.cf)
-                }
-                _ => {
-                    debug!(
-                        "backup stream skip other command";
-                        "command" => ?req,
-                    );
+            let cmd_type = req.get_cmd_type();
+            let (key, value, cf) = match utils::request_to_triple(req) {
+                Either::Left(t) => t,
+                Either::Right(req) => {
+                    debug!("ignoring unexpected request"; "type" => ?req.get_cmd_type());
+                    SKIP_KV_COUNTER.inc();
                     continue;
                 }
             };
-            result.push(Self {
+            let item = Self {
                 key,
                 value,
                 cf,
                 region_id,
                 region_resolved_ts: resolved_ts,
-                cmd_type: req.get_cmd_type(),
-            })
+                cmd_type,
+            };
+            if item.should_record() {
+                result.push(item);
+            }
         }
         result
+    }
+
+    /// make an apply event from a prewrite record kv pair.
+    pub fn from_prewrite(key: Vec<u8>, value: Vec<u8>, region: u64) -> Self {
+        Self {
+            key,
+            value,
+            // Uncommitted (prewrite) records can only exist at default CF.
+            cf: CF_DEFAULT.to_owned(),
+            region_id: region,
+            // The prewrite hasn't been committed -- we cannot get more information about it.
+            region_resolved_ts: 0,
+            cmd_type: CmdType::Put,
+        }
+    }
+
+    /// make an apply event from a committed KV pair.
+    pub fn from_committed(cf: CfName, key: Vec<u8>, value: Vec<u8>, region: u64) -> Result<Self> {
+        let key = Key::from_encoded(key);
+        // Once we can scan the write key, the txn must be committed.
+        let resolved_ts = utils::get_ts(&key)?;
+        Ok(Self {
+            key: key.into_encoded(),
+            value,
+            cf: cf.to_owned(),
+            region_id: region,
+            region_resolved_ts: resolved_ts.into_inner(),
+            cmd_type: CmdType::Put,
+        })
     }
 
     /// Check whether the key associate to the event is a meta key.
@@ -113,6 +152,11 @@ impl ApplyEvent {
         // should we handle prewrite here?
         let cmd_can_handle = self.cmd_type == CmdType::Delete || self.cmd_type == CmdType::Put;
         cf_can_handle && cmd_can_handle
+    }
+
+    /// The size of the event.
+    pub fn size(&self) -> usize {
+        self.key.len() + self.value.len()
     }
 }
 
@@ -457,6 +501,8 @@ impl StreamTaskInfo {
     /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
     pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
+        let now = Instant::now_coarse();
+        defer! { crate::metrics::ON_EVENT_COST_HISTOGRAM.with_label_values(&["write_to_tempfile"]).observe(now.saturating_elapsed_secs()) }
         let key = TempFileKey::of(&kv);
 
         if let Some(f) = self.files.read().await.get(&key) {
@@ -704,6 +750,8 @@ impl DataFile {
 
     /// Add a new KV pair to the file, returning its size.
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
+        let now = Instant::now_coarse();
+        let _entry_size = kv.size();
         let encoded = Encoder::encode_event(&kv.key, &kv.value);
         let mut size = 0;
         for slice in encoded {
@@ -722,6 +770,9 @@ impl DataFile {
         self.number_of_entries += 1;
         self.file_size += size;
         self.update_key_bound(key.into_encoded());
+        crate::metrics::ON_EVENT_COST_HISTOGRAM
+            .with_label_values(&["syscall_write"])
+            .observe(now.saturating_elapsed_secs());
         Ok(size)
     }
 
@@ -1004,7 +1055,7 @@ mod tests {
                 entry.path()
             );
             let filename = entry.file_name();
-            if filename.to_str().unwrap().find("v1_backupmeta").is_some() {
+            if filename.to_str().unwrap().contains("v1_backupmeta") {
                 meta_count += 1;
             } else {
                 log_count += 1;

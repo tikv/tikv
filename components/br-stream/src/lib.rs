@@ -4,6 +4,7 @@ mod codec;
 pub mod config;
 mod endpoint;
 pub mod errors;
+mod event_loader;
 pub mod metadata;
 mod metrics;
 pub mod observer;
