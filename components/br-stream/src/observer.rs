@@ -99,15 +99,20 @@ impl SubscriptionTracer {
 
     /// check whether the region_id should be observed by this observer.
     pub fn should_observe(&self, region_id: u64) -> bool {
-        // The region not traced, return `false` directly.
-        if !self.0.contains_key(&region_id) {
-            return false;
-        }
+        let mut exists = false;
+
         // The region traced, check it whether is still be observing,
         // if not, remove it.
-        self.0
-            .remove_if(&region_id, |_, o| !o.is_observing())
-            .is_none()
+        let still_observing = self
+            .0
+            // Assuming this closure would be called iff the key exists.
+            // So we can elide a `contains` check.
+            .remove_if(&region_id, |_, o| {
+                exists = true;
+                !o.is_observing()
+            })
+            .is_none();
+        exists && still_observing
     }
 }
 
