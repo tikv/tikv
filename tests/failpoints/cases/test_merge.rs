@@ -1359,6 +1359,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
+    cluster.run();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
