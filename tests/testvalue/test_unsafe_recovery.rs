@@ -45,7 +45,6 @@ fn test_unsafe_recover_send_report() {
 	           released = cvar2.wait(released).unwrap();
 	        }
 	    }
-	} else {
 	}
 
     });
@@ -77,6 +76,7 @@ fn test_unsafe_recover_send_report() {
     for _ in 0..20 {
 	if pd_client.must_get_store_reported() > 0 {
 	    reported = true;
+	    break;
 	}
 	sleep_ms(100);
     }
