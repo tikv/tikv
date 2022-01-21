@@ -51,6 +51,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         }
     }
 
+    #[must_use]
     pub fn data_version(mut self, data_version: Option<u64>) -> Self {
         self.data_version = data_version;
         self
