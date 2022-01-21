@@ -434,37 +434,44 @@ impl RegionPacketFilter {
         }
     }
 
+    #[must_use]
     pub fn direction(mut self, direction: Direction) -> RegionPacketFilter {
         self.direction = direction;
         self
     }
 
     // TODO: rename it to `drop`.
+    #[must_use]
     pub fn msg_type(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.drop_type.push(m_type);
         self
     }
 
+    #[must_use]
     pub fn skip(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.skip_type.push(m_type);
         self
     }
 
+    #[must_use]
     pub fn allow(mut self, number: usize) -> RegionPacketFilter {
         self.block = Either::Left(Arc::new(AtomicUsize::new(number)));
         self
     }
 
+    #[must_use]
     pub fn when(mut self, condition: Arc<AtomicBool>) -> RegionPacketFilter {
         self.block = Either::Right(condition);
         self
     }
 
+    #[must_use]
     pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
         self.dropped_messages = Some(dropped);
         self
     }
 
+    #[must_use]
     pub fn set_msg_callback(
         mut self,
         cb: Arc<dyn Fn(&RaftMessage) + Send + Sync>,
