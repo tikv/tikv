@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 
-use minitrace::prelude::*;
 use raft::eraftpb::{self, MessageType};
 use thiserror::Error;
 
@@ -362,7 +361,6 @@ where
         write_modifies(&self.engine, modifies)
     }
 
-    #[trace("RaftKv::async_write")]
     fn async_write(
         &self,
         ctx: &Context,
@@ -419,7 +417,6 @@ where
         })
     }
 
-    #[trace("RaftKv::async_snapshot")]
     fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"

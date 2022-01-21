@@ -11,14 +11,12 @@ use kvproto::tracepb;
 use minitrace::prelude::*;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_json::json;
-use tikv_util::config::ReadableDuration;
 use tikv_util::time::{duration_to_sec, Instant};
 
 use crate::server::metrics::{GrpcTypeKind, GRPC_MSG_HISTOGRAM_STATIC};
 
 type CollectTask = (Collector, Vec<tracepb::RemoteParentSpan>, Duration);
 
-// static SPAN_ID_RANDOM_BITS: Lazy<u32> = Lazy::new(|| rand::thread_rng().gen());
 const CHANNEL_SIZE: usize = 1024;
 
 pub fn init_tracing(
@@ -64,49 +62,37 @@ impl TracingService {
     }
 }
 
+#[macro_export]
+macro_rules! new_request_tracer {
+    ($req_name: ident, $req: expr, $factory: expr) => {{
+        let trace_ctx = $req.mut_context().take_trace_context();
+        let factory = $factory;
+        let config = factory.config.load();
+
+        TracerFactory::new_tracer(
+            stringify!($req_name),
+            $crate::server::metrics::GrpcTypeKind::$req_name,
+            trace_ctx,
+            factory.tx.clone(),
+            &config,
+        )
+    }};
+}
+
 #[derive(Clone)]
 pub struct TracerFactory {
     pub config: Arc<ArcSwap<TracingConfig>>,
     pub tx: Sender<CollectTask>,
 }
 
-#[macro_export]
-macro_rules! new_request_tracer {
-    ($req_name: ident, $req: expr, $handle: expr) => {{
-        let trace_ctx = $req.mut_context().take_trace_context();
-        let handle = $handle;
-        let config = handle.config.load();
-        let duration_threshold = config.duration_threshold.$req_name.0;
-
-        RequestTracer::new(
-            stringify!($req_name),
-            $crate::server::metrics::GrpcTypeKind::$req_name,
-            duration_threshold,
-            trace_ctx,
-            handle.tx.clone(),
-            &config,
-        )
-    }};
-}
-
-#[must_use]
-pub struct RequestTracer {
-    pub root_span: Span,
-    req_tag: GrpcTypeKind,
-    begin_instant: Instant,
-    inner: Option<RequestTracerInner>,
-}
-
-impl RequestTracer {
-    #[doc(hidden)]
-    pub fn new(
+impl TracerFactory {
+    pub fn new_tracer(
         req_name: &'static str,
         req_tag: GrpcTypeKind,
-        duration_threshold: Duration,
         trace_ctx: tracepb::TraceContext,
         tx: Sender<CollectTask>,
         config: &TracingConfig,
-    ) -> Self {
+    ) -> RequestTracer {
         let global_enabled = config.enable;
         let client_enabled = !trace_ctx.remote_parent_spans.is_empty();
         let begin_instant = Instant::now_coarse();
@@ -118,10 +104,10 @@ impl RequestTracer {
             );
 
             let inner = RequestTracerInner {
-                remote_parent_spans: trace_ctx.remote_parent_spans.into(),
+                remote_parent_spans: trace_ctx.remote_parent_spans.into_vec(),
+                duration_threshold: Duration::from_millis(trace_ctx.duration_threshold_ms.into()),
                 tx,
                 collector,
-                duration_threshold,
             };
             RequestTracer {
                 root_span,
@@ -138,7 +124,17 @@ impl RequestTracer {
             }
         }
     }
+}
 
+#[must_use]
+pub struct RequestTracer {
+    pub root_span: Span,
+    req_tag: GrpcTypeKind,
+    begin_instant: Instant,
+    inner: Option<RequestTracerInner>,
+}
+
+impl RequestTracer {
     pub fn new_noop() -> Self {
         RequestTracer {
             root_span: Span::new_noop(),
@@ -173,6 +169,9 @@ impl RequestTracer {
     }
 }
 
+
+/// Clone the tracer with necessary information for metrics but not the information for
+/// tracing, because the tracing collector is not cloneable.
 impl Clone for RequestTracer {
     fn clone(&self) -> Self {
         RequestTracer {
@@ -191,48 +190,6 @@ pub struct TracingConfig {
     // Experimental: planned to be removed in the future
     pub enable: bool,
     pub max_span_count: usize,
-    #[online_config(submodule)]
-    pub duration_threshold: TracingDurationThreshold,
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct TracingDurationThreshold {
-    pub kv_get: ReadableDuration,
-    pub kv_scan: ReadableDuration,
-    pub kv_prewrite: ReadableDuration,
-    pub kv_pessimistic_lock: ReadableDuration,
-    pub kv_pessimistic_rollback: ReadableDuration,
-    pub kv_commit: ReadableDuration,
-    pub kv_cleanup: ReadableDuration,
-    pub kv_batch_get: ReadableDuration,
-    pub kv_batch_rollback: ReadableDuration,
-    pub kv_txn_heart_beat: ReadableDuration,
-    pub kv_check_txn_status: ReadableDuration,
-    pub kv_check_secondary_locks: ReadableDuration,
-    pub kv_scan_lock: ReadableDuration,
-    pub kv_resolve_lock: ReadableDuration,
-    pub kv_delete_range: ReadableDuration,
-    pub kv_import: ReadableDuration,
-    pub kv_gc: ReadableDuration,
-    pub coprocessor: ReadableDuration,
-    pub mvcc_get_by_key: ReadableDuration,
-    pub mvcc_get_by_start_ts: ReadableDuration,
-    pub raw_get: ReadableDuration,
-    pub raw_batch_get: ReadableDuration,
-    pub raw_scan: ReadableDuration,
-    pub raw_batch_scan: ReadableDuration,
-    pub raw_put: ReadableDuration,
-    pub raw_batch_put: ReadableDuration,
-    pub raw_delete: ReadableDuration,
-    pub raw_batch_delete: ReadableDuration,
-    pub raw_delete_range: ReadableDuration,
-    pub raw_get_key_ttl: ReadableDuration,
-    pub raw_compare_and_swap: ReadableDuration,
-    pub raw_checksum: ReadableDuration,
-    pub raw_coprocessor: ReadableDuration,
-    pub invalid: ReadableDuration,
 }
 
 impl Default for TracingConfig {
@@ -240,48 +197,6 @@ impl Default for TracingConfig {
         TracingConfig {
             enable: false,
             max_span_count: 100,
-            duration_threshold: TracingDurationThreshold::default(),
-        }
-    }
-}
-
-impl Default for TracingDurationThreshold {
-    fn default() -> Self {
-        TracingDurationThreshold {
-            kv_get: ReadableDuration(Duration::from_millis(300)),
-            kv_scan: ReadableDuration(Duration::from_millis(300)),
-            kv_prewrite: ReadableDuration(Duration::from_millis(300)),
-            kv_pessimistic_lock: ReadableDuration(Duration::from_millis(300)),
-            kv_pessimistic_rollback: ReadableDuration(Duration::from_millis(300)),
-            kv_commit: ReadableDuration(Duration::from_millis(300)),
-            kv_cleanup: ReadableDuration(Duration::from_millis(300)),
-            kv_batch_get: ReadableDuration(Duration::from_millis(300)),
-            kv_batch_rollback: ReadableDuration(Duration::from_millis(300)),
-            kv_txn_heart_beat: ReadableDuration(Duration::from_millis(300)),
-            kv_check_txn_status: ReadableDuration(Duration::from_millis(300)),
-            kv_check_secondary_locks: ReadableDuration(Duration::from_millis(300)),
-            kv_scan_lock: ReadableDuration(Duration::from_millis(300)),
-            kv_resolve_lock: ReadableDuration(Duration::from_millis(300)),
-            kv_delete_range: ReadableDuration(Duration::from_millis(300)),
-            kv_import: ReadableDuration(Duration::from_millis(300)),
-            kv_gc: ReadableDuration(Duration::from_millis(300)),
-            coprocessor: ReadableDuration(Duration::from_millis(300)),
-            mvcc_get_by_key: ReadableDuration(Duration::from_millis(300)),
-            mvcc_get_by_start_ts: ReadableDuration(Duration::from_millis(300)),
-            raw_get: ReadableDuration(Duration::from_millis(50)),
-            raw_batch_get: ReadableDuration(Duration::from_millis(50)),
-            raw_scan: ReadableDuration(Duration::from_millis(50)),
-            raw_batch_scan: ReadableDuration(Duration::from_millis(50)),
-            raw_put: ReadableDuration(Duration::from_millis(50)),
-            raw_batch_put: ReadableDuration(Duration::from_millis(50)),
-            raw_delete: ReadableDuration(Duration::from_millis(50)),
-            raw_batch_delete: ReadableDuration(Duration::from_millis(50)),
-            raw_delete_range: ReadableDuration(Duration::from_millis(50)),
-            raw_get_key_ttl: ReadableDuration(Duration::from_millis(50)),
-            raw_compare_and_swap: ReadableDuration(Duration::from_millis(50)),
-            raw_checksum: ReadableDuration(Duration::from_millis(50)),
-            raw_coprocessor: ReadableDuration(Duration::from_millis(50)),
-            invalid: ReadableDuration(Duration::from_millis(50)),
         }
     }
 }
@@ -312,7 +227,7 @@ impl TracingReport {
         json!({
             "trace_id": self.remote_parent_spans.get(0).map(|parent| parent.trace_id).unwrap_or(0),
             "parent_id": self.remote_parent_spans.get(0).map(|parent| parent.span_id).unwrap_or(0),
-            "spans": self.spans.iter().map( Self::span_to_json).collect::<Vec<_>>()
+            "spans": self.spans.iter().map(Self::span_to_json).collect::<Vec<_>>()
         })
     }
 

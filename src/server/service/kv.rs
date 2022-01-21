@@ -1244,7 +1244,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let tracer = RequestTracer::new_noop();
-                    let _g = tracer.root_span.set_local_parent();
                     let resp = future_handle_empty(req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::Empty))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());

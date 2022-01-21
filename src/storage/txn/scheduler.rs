@@ -714,7 +714,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
-    #[trace("Scheduler::process_read")]
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -730,7 +729,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    #[trace("Scheduler::process_write")]
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let tag = task.cmd.tag();
