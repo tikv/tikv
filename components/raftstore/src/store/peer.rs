@@ -3515,36 +3515,6 @@ where
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
-
-        // Record current proposed index. If there are some in-memory pessimistic locks, we should
-        // wait until applying to the proposed index before proposing pessimistic locks and
-        // PrepareMerge. Otherwise, if an already proposed command will remove a pessimistic lock,
-        // we will make some deleted locks appear again.
-        {
-            let pessimistic_locks = self.txn_ext.pessimistic_locks.read();
-            if !pessimistic_locks.is_empty() {
-                if self.prepare_merge_fence == 0 {
-                    if !pessimistic_locks.is_valid {
-                        return Err(box_err!(
-                            "pessimistic locks is invalid, indicating an ongoing region change, skip merging."
-                        ));
-                    }
-                    self.prepare_merge_fence = last_index;
-                    info!("start rejecting new proposals before prepare merge"; "region_id" => self.region_id);
-                }
-                if self.prepare_merge_fence > 0
-                    && self.get_store().applied_index() < self.prepare_merge_fence
-                {
-                    self.pending_prepare_merge = Some(mem::take(req));
-                    return Err(Error::PendingPrepareMerge);
-                }
-            }
-        }
-
-        // Check passed, clear fence and start proposing PrepareMerge.
-        self.prepare_merge_fence = 0;
-        self.pending_prepare_merge = None;
-
         let (min_matched, min_committed) = self.get_min_progress()?;
         if min_matched == 0
             || min_committed == 0
@@ -3605,6 +3575,32 @@ where
                 "log gap size exceed entry size limit, skip merging."
             ));
         };
+
+        // Record current proposed index. If there are some in-memory pessimistic locks, we should
+        // wait until applying to the proposed index before proposing pessimistic locks and
+        // PrepareMerge. Otherwise, if an already proposed command will remove a pessimistic lock,
+        // we will make some deleted locks appear again.
+        {
+            let pessimistic_locks = self.txn_ext.pessimistic_locks.read();
+            if !pessimistic_locks.is_empty() {
+                if self.prepare_merge_fence == 0 {
+                    if !pessimistic_locks.is_valid {
+                        return Err(box_err!(
+                            "pessimistic locks are invalid, indicating an ongoing region change, skip merging."
+                        ));
+                    }
+                    self.prepare_merge_fence = last_index;
+                    info!("start rejecting new proposals before prepare merge"; "region_id" => self.region_id);
+                }
+                if self.prepare_merge_fence > 0
+                    && self.get_store().applied_index() < self.prepare_merge_fence
+                {
+                    self.pending_prepare_merge = Some(mem::take(req));
+                    return Err(Error::PendingPrepareMerge);
+                }
+            }
+        }
+
         fail_point!("before_propose_locks_on_region_merge");
         self.propose_locks_before_prepare_merge(ctx, entry_size_limit - entry_size)?;
 
