@@ -11,13 +11,15 @@ use grpcio::WriteFlags;
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
+use protobuf::ProtobufEnum;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
+use tikv_util::worker::Scheduler;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Delegate, Task, Validate};
 
 #[test]
 fn test_cdc_basic() {
@@ -2075,4 +2077,47 @@ fn test_resolved_ts_cluster_upgrading() {
 
     event_feed_wrap.replace(None);
     suite.stop();
+}
+
+#[test]
+fn test_no_more_old_value_cache_when_all_downstream_deregistered() {
+    fn check_txn_extra_op(scheduler: &Scheduler<Task>, expected: ExtraOp) {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let checker = move |d: Option<&Delegate>| {
+            tx.send(d.unwrap().txn_extra_op().load()).unwrap();
+        };
+        scheduler
+            .schedule(Task::Validate(Validate::Region(1, Box::new(checker))))
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), expected);
+    }
+
+    let cluster = new_server_cluster(0, 1);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let scheduler = suite.endpoints[&1].scheduler();
+
+    // Add 2 subscriptions for the region, 1 requires old value but the another does not.
+    // Then check `txn_extra_op` for the region CDC delegate.
+    let (mut req_txs, mut event_feeds, mut receive_events) = (vec![], vec![], vec![]);
+    for i in 0i32..2i32 {
+        let (mut req_tx, event_feed, receive_event) =
+            new_event_feed(suite.get_region_cdc_client(1));
+        let mut req = suite.new_changedata_request(1);
+        let extra_op = ExtraOp::from_i32(i).unwrap();
+        req.extra_op = extra_op;
+        block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        receive_event(false); // Wait until the initialization finishes.
+        check_txn_extra_op(&scheduler, extra_op);
+        req_txs.push(req_tx);
+        event_feeds.push(event_feed);
+        receive_events.push(receive_event);
+    }
+
+    // Drop the second subscription which requires old value,
+    // then check `txn_extra_op` for the delegate.
+    drop(req_txs.pop());
+    drop(event_feeds.pop());
+    drop(receive_events.pop());
+    sleep_ms(200);
+    check_txn_extra_op(&scheduler, ExtraOp::Noop);
 }

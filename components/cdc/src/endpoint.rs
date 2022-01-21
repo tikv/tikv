@@ -1442,10 +1442,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
-                if !self.capture_regions.is_empty() {
-                    for (k, v) in txn_extra.old_values {
-                        self.old_value_cache.cache.insert(k, v);
-                    }
+                for (k, v) in txn_extra.old_values {
+                    self.old_value_cache.cache.insert(k, v);
                 }
             }
             Task::Validate(validate) => match validate {
@@ -1530,8 +1528,7 @@ mod tests {
     use raftstore::coprocessor::ObserveHandle;
     use raftstore::errors::{DiscardReason, Error as RaftStoreError};
     use raftstore::store::msg::CasualMessage;
-    use raftstore::store::util::RegionReadProgress;
-    use raftstore::store::{PeerMsg, ReadDelegate, RegionSnapshot, TrackVer};
+    use raftstore::store::{PeerMsg, ReadDelegate, RegionSnapshot};
     use test_raftstore::{MockRaftStoreRouter, TestPdClient};
     use tikv::server::DEFAULT_CLUSTER_ID;
     use tikv::storage::kv::Engine;
@@ -1541,8 +1538,6 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
-    use time::Timespec;
-    use txn_types::OldValues;
 
     use super::*;
     use crate::{channel, recv_timeout};
@@ -1631,8 +1626,15 @@ mod tests {
         fn add_region(&mut self, region_id: u64, cap: usize) {
             let rx = self.raft_router.add_region(region_id, cap);
             self.raft_rxs.insert(region_id, rx);
-            let mut store_meta = self.store_meta.lock().unwrap();
-            store_meta.readers.insert(region_id, ReadDelegate::mock());
+            self.add_local_reader(region_id);
+        }
+
+        fn add_local_reader(&self, region_id: u64) {
+            self.store_meta
+                .lock()
+                .unwrap()
+                .readers
+                .insert(region_id, ReadDelegate::mock(region_id));
         }
 
         fn fill_raft_rx(&self, region_id: u64) {
@@ -1665,39 +1667,13 @@ mod tests {
     }
 
     fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>) -> TestEndpointSuite {
-        let mut region = Region::default();
-        region.set_id(1);
-        let store_meta = Arc::new(StdMutex::new(StoreMeta::new(0)));
-        let read_delegate = ReadDelegate {
-            tag: String::new(),
-            region: Arc::new(region),
-            peer_id: 2,
-            term: 1,
-            applied_index_term: 1,
-            leader_lease: None,
-            last_valid_ts: Timespec::new(0, 0),
-            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-            txn_ext: Arc::new(Default::default()),
-            track_ver: TrackVer::new(),
-            read_progress: Arc::new(RegionReadProgress::new(
-                &Region::default(),
-                0,
-                0,
-                "".to_owned(),
-            )),
-        };
-        store_meta.lock().unwrap().readers.insert(1, read_delegate);
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
-        let observer = CdcObserver::new(task_sched.clone());
-        let pd_client = Arc::new(TestPdClient::new(0, true));
-        let env = Arc::new(Environment::new(1));
-        let security_mgr = Arc::new(SecurityManager::default());
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
-            pd_client,
-            task_sched,
+            Arc::new(TestPdClient::new(0, true)),
+            task_sched.clone(),
             raft_router.clone(),
             engine.unwrap_or_else(|| {
                 TestEngineBuilder::new()
@@ -1705,11 +1681,11 @@ mod tests {
                     .unwrap()
                     .kv_engine()
             }),
-            observer,
-            store_meta,
+            CdcObserver::new(task_sched),
+            Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
-            env,
-            security_mgr,
+            Arc::new(Environment::new(1)),
+            Arc::new(SecurityManager::default()),
             MemoryQuota::new(usize::MAX),
         );
 
@@ -2240,12 +2216,7 @@ mod tests {
         req.set_region_id(100);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
-        suite
-            .store_meta
-            .lock()
-            .unwrap()
-            .readers
-            .insert(100, ReadDelegate::mock());
+        suite.add_local_reader(100);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2543,86 +2514,6 @@ mod tests {
             Ok(other) => panic!("unknown event {:?}", other),
         }
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
-    }
-
-    #[test]
-    fn test_no_more_old_value_cache_when_all_downstream_deregistered() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
-        suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, mut rx) = channel::channel(1, quota);
-        let mut rx = rx.drain();
-
-        let conn = Conn::new(tx, String::new());
-        let conn_id = conn.get_id();
-        suite.run(Task::OpenConn { conn });
-        let mut req_header = Header::default();
-        req_header.set_cluster_id(0);
-        let mut req = ChangeDataRequest::default();
-        req.set_region_id(1);
-        let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
-        let downstream_id = downstream.get_id();
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-            conn_id,
-            version: semver::Version::new(0, 0, 0),
-        });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
-
-        // When there is a down stream, it can be cached normally.
-        let mut old_values = OldValues::default();
-        old_values.insert(
-            Key::from_raw(b"1"),
-            (OldValue::value(b"value".to_vec()), None),
-        );
-        let txn_extra = TxnExtra {
-            old_values,
-            one_pc: false,
-        };
-        suite.run(Task::TxnExtra(txn_extra));
-        assert_eq!(suite.endpoint.old_value_cache.cache.len(), 1);
-
-        // Deregister all downstreams.
-        let mut err_header = ErrorHeader::default();
-        err_header.set_not_leader(Default::default());
-        let deregister = Deregister::Downstream {
-            region_id: 1,
-            downstream_id,
-            conn_id,
-            err: Some(Error::request(err_header.clone())),
-        };
-        suite.run(Task::Deregister(deregister));
-        loop {
-            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-                .unwrap()
-                .unwrap();
-            if let CdcEvent::Event(mut e) = cdc_event.0 {
-                let event = e.event.take().unwrap();
-                match event {
-                    Event_oneof_event::Error(err) => {
-                        assert!(err.has_not_leader());
-                        break;
-                    }
-                    other => panic!("unknown event {:?}", other),
-                }
-            }
-        }
-        assert_eq!(suite.endpoint.capture_regions.len(), 0);
-
-        // No more old value cache.
-        let mut old_values = OldValues::default();
-        old_values.insert(
-            Key::from_raw(b"2"),
-            (OldValue::value(b"value".to_vec()), None),
-        );
-        let txn_extra = TxnExtra {
-            old_values,
-            one_pc: false,
-        };
-        suite.run(Task::TxnExtra(txn_extra));
-        assert_eq!(suite.endpoint.old_value_cache.cache.len(), 1);
     }
 
     #[test]

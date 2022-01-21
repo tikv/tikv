@@ -306,17 +306,18 @@ impl ReadDelegate {
     }
 
     /// Used in some external tests.
-    pub fn mock() -> Self {
-        let region: metapb::Region = Default::default();
+    pub fn mock(region_id: u64) -> Self {
+        let mut region: metapb::Region = Default::default();
+        region.set_id(region_id);
         let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, "mock".to_owned()));
         ReadDelegate {
             region: Arc::new(region),
-            peer_id: 0,
-            term: 0,
-            applied_index_term: 0,
+            peer_id: 1,
+            term: 1,
+            applied_index_term: 1,
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
-            tag: format!("[region {}] {}", 0, 0),
+            tag: format!("[region {}] {}", region_id, 1),
             txn_extra_op: Default::default(),
             txn_ext: Default::default(),
             read_progress,
