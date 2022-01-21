@@ -3266,7 +3266,6 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
-        // let mut store_id = apply_ctx.get_store_id();
         adjust!("handle_apply_context", &mut apply_ctx.get_store_id());
 
         if self.delegate.pending_remove || self.delegate.stopped {
