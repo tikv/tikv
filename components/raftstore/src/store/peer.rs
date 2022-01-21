@@ -3701,7 +3701,8 @@ where
     ) -> Result<Either<u64, u64>> {
         if (self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)
-            || (self.prepare_merge_fence > 0 && !req.has_admin_request())
+            || (self.prepare_merge_fence > 0
+                && req.get_admin_request().get_cmd_type() != AdminCmdType::PrepareMerge)
         {
             return Err(Error::ProposalInMergingMode(self.region_id));
         }
