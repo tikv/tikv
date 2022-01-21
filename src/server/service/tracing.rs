@@ -51,7 +51,6 @@ impl TracingService {
                     let mut report = TracingReport {
                         spans: collector.collect().await,
                         remote_parent_spans,
-                        total_duration,
                     };
                     warn!(
                         "[tracing] slow request deteted";
@@ -266,7 +265,7 @@ impl Default for TracingDurationThreshold {
             kv_delete_range: ReadableDuration(Duration::from_millis(300)),
             kv_import: ReadableDuration(Duration::from_millis(300)),
             kv_gc: ReadableDuration(Duration::from_millis(300)),
-            coprocessor: ReadableDuration(Duration::from_secs(1)),
+            coprocessor: ReadableDuration(Duration::from_millis(300)),
             mvcc_get_by_key: ReadableDuration(Duration::from_millis(300)),
             mvcc_get_by_start_ts: ReadableDuration(Duration::from_millis(300)),
             raw_get: ReadableDuration(Duration::from_millis(50)),
@@ -304,7 +303,6 @@ impl online_config::ConfigManager for TracingConfigManager {
 pub struct TracingReport {
     remote_parent_spans: Vec<tracepb::RemoteParentSpan>,
     spans: Vec<SpanRecord>,
-    total_duration: Duration,
 }
 
 impl TracingReport {
