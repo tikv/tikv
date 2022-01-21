@@ -146,10 +146,7 @@ mod tests {
             None,
         ];
         assert_eq!(ChunkedVecJson::from_slice(test_json).to_vec(), test_json);
-        assert_eq!(
-            ChunkedVecJson::from_slice(&test_json.to_vec()).to_vec(),
-            test_json
-        );
+        assert_eq!(ChunkedVecJson::from_slice(test_json).to_vec(), test_json);
     }
 
     #[test]

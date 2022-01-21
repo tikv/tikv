@@ -2,7 +2,6 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(cell_update)]
-#![feature(shrink_to)]
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
