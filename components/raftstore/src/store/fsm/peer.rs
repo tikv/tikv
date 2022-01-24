@@ -134,8 +134,8 @@ where
     // Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
-    /// Destroy is delayed because of some unpersisted readies in Peer.
-    /// Should call `destroy_peer` again after persisting all readies.
+    /// Destroy is delayed because logs clean is flushed asynchronously in Peer.
+    /// Should call `destroy_peer` again after flush is done.
     delayed_destroy: Option<DelayDestroy>,
     /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
     /// can start destroying without seeking.
