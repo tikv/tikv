@@ -45,6 +45,8 @@ pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
 
+pub const MAX_INIT_ENTRY_COUNT: usize = 1024;
+
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;
 /// The initial region epoch conf_version.
@@ -773,7 +775,8 @@ where
         _context: GetEntriesContext,
     ) -> raft::Result<Vec<Entry>> {
         self.check_range(low, high)?;
-        let mut ents = Vec::with_capacity((high - low) as usize);
+        let mut ents =
+            Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
         if low == high {
             return Ok(ents);
         }

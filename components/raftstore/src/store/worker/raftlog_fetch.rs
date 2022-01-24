@@ -5,7 +5,7 @@ use raft::GetEntriesContext;
 use std::fmt;
 use tikv_util::worker::Runnable;
 
-use crate::store::{RaftlogFetchResult, SignificantMsg, SignificantRouter};
+use crate::store::{RaftlogFetchResult, SignificantMsg, SignificantRouter, MAX_INIT_ENTRY_COUNT};
 
 pub enum Task {
     PeerStorage {
@@ -80,7 +80,8 @@ where
                 tried_cnt,
                 term,
             } => {
-                let mut ents = Vec::with_capacity((high - low) as usize);
+                let mut ents =
+                    Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
                 let res = self.raft_engine.fetch_entries_to(
                     region_id,
                     low,
