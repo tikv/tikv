@@ -1802,7 +1802,7 @@ mod tests {
     use crate::coprocessor::CoprocessorHost;
     use crate::store::async_io::write::write_to_db_for_test;
     use crate::store::fsm::apply::compact_raft_log;
-    use crate::store::worker::{RaftlogFetchRunner, RegionRunner, RegionTask};
+    use crate::store::worker::{RegionRunner, RegionTask};
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_test::raft::RaftTestEngine;
@@ -2088,9 +2088,9 @@ mod tests {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let region_scheduler = region_worker.scheduler();
-            let mut raftlog_fetch_worker = Worker::new("raftlog-fetch").lazy_build("raftlog-fetch");
+            let raftlog_fetch_worker = Worker::new("raftlog-fetch").lazy_build("raftlog-fetch");
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
-            let mut store =
+            let store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
             let e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(false));
             if e != wentries {
