@@ -80,7 +80,7 @@ where
                 tried_cnt,
                 term,
             } => {
-                let mut ents = vec![];
+                let mut ents = Vec::with_capacity(high - low);
                 let res = self.raft_engine.fetch_entries_to(
                     region_id,
                     low,
