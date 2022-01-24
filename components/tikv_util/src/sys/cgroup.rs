@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use num_traits::Bounded;
 use procfs::process::{MountInfo, Process};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -61,7 +62,8 @@ pub struct CGroupSys {
 
 impl CGroupSys {
     pub fn new() -> Result<Self, String> {
-        let lines = read_to_string("/proc/self/cgroup").unwrap();
+        let lines = read_to_string("/proc/self/cgroup")
+            .map_err(|e| format!("fail to read /proc/self/cgroup: {}", e))?;
         let is_v2 = is_cgroup2_unified_mode()?;
         let (cgroups, mount_points) = if !is_v2 {
             (parse_proc_cgroup_v1(&lines), cgroup_mountinfos_v1())
@@ -89,7 +91,7 @@ impl CGroupSys {
                 };
                 return read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()));
             } else {
-                warn!("Cgroup memory controller found but not mounted.");
+                warn!("cgroup memory controller found but not mounted.");
             }
         }
         -1
@@ -104,7 +106,7 @@ impl CGroupSys {
                 return read_to_string(&path)
                     .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
             } else {
-                warn!("Cgroup cpuset controller found but not mounted.");
+                warn!("cgroup cpuset controller found but not mounted.");
             }
         }
         Default::default()
@@ -131,10 +133,20 @@ impl CGroupSys {
                     }
                 }
             } else {
-                warn!("Cgroup cpu controller found but not mounted.");
+                warn!("cgroup cpu controller found but not mounted.");
             }
         }
         None
+    }
+}
+
+fn capping_parse_int<T: std::str::FromStr<Err = std::num::ParseIntError> + Bounded>(
+    s: &str,
+) -> Result<T, std::num::ParseIntError> {
+    match s.parse::<T>() {
+        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => Ok(T::max_value()),
+        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => Ok(T::min_value()),
+        x => x,
     }
 }
 
@@ -161,12 +173,17 @@ fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let mut iter = line.split(':');
-        let _id = iter.next().unwrap();
-        let systems = iter.next().unwrap();
-        let path = iter.next().unwrap();
-        for system in systems.split(',') {
-            subsystems.insert(system.to_owned(), path.to_owned());
+        if let Some(_id) = iter.next() {
+            if let Some(systems) = iter.next() {
+                if let Some(path) = iter.next() {
+                    for system in systems.split(',') {
+                        subsystems.insert(system.to_owned(), path.to_owned());
+                    }
+                    continue;
+                }
+            }
         }
+        warn!("fail to parse cgroup v1: {}", line);
     }
     subsystems
 }
@@ -175,14 +192,28 @@ fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
 // The entry for cgroup v2 is always in the format "0::$PATH"
 fn parse_proc_cgroup_v2(lines: &str) -> HashMap<String, String> {
     let subsystems = parse_proc_cgroup_v1(lines);
-    assert_eq!(subsystems.len(), 1);
-    assert_eq!(subsystems.keys().next().unwrap(), "");
+    if subsystems.len() != 1 {
+        warn!(
+            "cgroup v2 should only have one subsystem, got {}",
+            subsystems.len()
+        );
+    } else if subsystems.keys().next().unwrap() != "" {
+        warn!(
+            "unexpected cgroup v2 subsystem name: {}",
+            subsystems.keys().next().unwrap()
+        );
+    }
     subsystems
 }
 
 fn cgroup_mountinfos_v1() -> HashMap<String, (String, PathBuf)> {
-    let infos = Process::myself().and_then(|x| x.mountinfo()).unwrap();
-    parse_mountinfos_v1(infos)
+    match Process::myself().and_then(|x| x.mountinfo()) {
+        Ok(info) => parse_mountinfos_v1(info),
+        Err(e) => {
+            warn!("fail to get mountinfo: {}", e);
+            HashMap::new()
+        }
+    }
 }
 
 fn parse_mountinfos_v1(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBuf)> {
@@ -200,8 +231,13 @@ fn parse_mountinfos_v1(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
 }
 
 fn cgroup_mountinfos_v2() -> HashMap<String, (String, PathBuf)> {
-    let infos = Process::myself().and_then(|x| x.mountinfo()).unwrap();
-    parse_mountinfos_v2(infos)
+    match Process::myself().and_then(|x| x.mountinfo()) {
+        Ok(info) => parse_mountinfos_v2(info),
+        Err(e) => {
+            warn!("fail to get mountinfo: {}", e);
+            HashMap::new()
+        }
+    }
 }
 
 fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBuf)> {
@@ -231,11 +267,12 @@ fn parse_memory_max(line: &str) -> i64 {
     if line == "max" {
         return -1;
     }
-    match line.parse::<i64>() {
+    match capping_parse_int::<i64>(line) {
         Ok(x) => x,
-        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => i64::MAX,
-        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => i64::MIN,
-        Err(e) => panic!("parse int: {}", e),
+        Err(e) => {
+            warn!("fail to parse memory max: {}", e);
+            -1
+        }
     }
 }
 
@@ -248,35 +285,59 @@ fn parse_cpu_cores(value: &str) -> HashSet<usize> {
     for v in value.split(',') {
         if v.contains('-') {
             let mut v = v.split('-');
-            let s = v.next().unwrap().parse::<usize>().unwrap();
-            let e = v.next().unwrap().parse::<usize>().unwrap();
-            for x in s..=e {
-                cores.insert(x);
+            if let Some(s) = v.next() {
+                if let Ok(s) = capping_parse_int::<usize>(s) {
+                    if let Some(e) = v.next() {
+                        if let Ok(e) = capping_parse_int::<usize>(e) {
+                            for x in s..=e {
+                                cores.insert(x);
+                            }
+                            continue;
+                        }
+                    }
+                }
             }
-        } else {
-            let s = v.parse::<usize>().unwrap();
+        } else if let Ok(s) = capping_parse_int::<usize>(v) {
             cores.insert(s);
+            continue;
         }
+        warn!("fail to parse cpu cores: {}", v);
     }
     cores
 }
 
 fn parse_cpu_quota_v2(line: &str) -> Option<f64> {
     let mut iter = line.split(' ');
-    let max = iter.next().unwrap();
-    if max != "max" {
-        let period = iter.next().unwrap();
-        return Some(max.parse::<f64>().unwrap() / period.parse::<f64>().unwrap());
+    if let Some(max) = iter.next() {
+        if max != "max" {
+            if let Ok(max) = max.parse::<f64>() {
+                if let Some(period) = iter.next() {
+                    if let Ok(period) = period.parse::<f64>() {
+                        if period > 0.0 {
+                            return Some(max / period);
+                        }
+                    }
+                }
+            }
+            warn!("fail to parse cpu quota v2: {}", line);
+        }
     }
     None
 }
 
 fn parse_cpu_quota_v1(line1: &str, line2: &str) -> Option<f64> {
-    let max = line1.parse::<i64>().unwrap();
-    if max >= 0 {
-        let period = line2.parse::<i64>().unwrap();
-        return Some(max as f64 / period as f64);
+    if let Ok(max) = line1.parse::<f64>() {
+        if max > 0.0 {
+            if let Ok(period) = line2.parse::<f64>() {
+                if period > 0.0 {
+                    return Some(max as f64 / period as f64);
+                }
+            }
+        } else {
+            return None;
+        }
     }
+    warn!("fail to parse cpu quota v1: {}, {}", line1, line2);
     None
 }
 
@@ -420,30 +481,30 @@ mod tests {
 
     #[test]
     fn test_parse_proc_cgroup_v2() {
-        let content = "0::/test-all";
-        let cgroups = parse_proc_cgroup_v2(content);
-        assert_eq!(cgroups.get("").unwrap(), "/test-all");
+        let cases = vec![
+            ("0::/test-all", Some("/test-all".to_owned())),
+            ("0::/test-all\n1::/test-2", Some("/test-2".to_owned())),
+            ("0:name:/test-all", None),
+        ];
+        for (lines, expect) in cases.into_iter() {
+            let cgroups = parse_proc_cgroup_v2(lines);
+            assert_eq!(cgroups.get(""), expect.as_ref());
+        }
     }
 
     #[test]
     fn test_parse_memory_max() {
-        let contents = vec![
-            "max",
-            "-1",
-            "9223372036854771712",
-            "21474836480",
-            "18446744073709551610",
-            "-18446744073709551610",
+        let cases = vec![
+            ("max", -1),
+            ("-1", -1),
+            ("9223372036854771712", 9223372036854771712),
+            ("21474836480", 21474836480),
+            // Malformed.
+            ("18446744073709551610", 9223372036854775807),
+            ("-18446744073709551610", -9223372036854775808),
+            ("0.1", -1),
         ];
-        let expects = vec![
-            -1,
-            -1,
-            9223372036854771712,
-            21474836480,
-            9223372036854775807,
-            -9223372036854775808,
-        ];
-        for (content, expect) in contents.into_iter().zip(expects) {
+        for (content, expect) in cases.into_iter() {
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
         }
@@ -451,20 +512,30 @@ mod tests {
 
     #[test]
     fn test_parse_cpu_cores() {
-        let mut cpusets = Vec::new();
-        cpusets.extend(parse_cpu_cores(""));
-        assert!(cpusets.is_empty());
+        assert!(parse_cpu_cores("").is_empty());
 
+        let mut cpusets = Vec::new();
         cpusets.extend(parse_cpu_cores("1-2,5-8,10,12,4"));
         cpusets.sort_unstable();
         assert_eq!(cpusets, vec![1, 2, 4, 5, 6, 7, 8, 10, 12]);
+
+        // Malformed info.
+        let mut cpusets = Vec::new();
+        cpusets.extend(parse_cpu_cores("0.9,8-,-9,7,18446744073709551616,1-4"));
+        cpusets.sort_unstable();
+        assert_eq!(cpusets, vec![1, 2, 3, 4, 7, 18446744073709551615]);
     }
 
     #[test]
     fn test_parse_cpu_quota_v2() {
-        let contents = vec!["max 100000", "10000 100000", "1000000 100000"];
-        let expects = vec![None, Some(0.1), Some(10.0)];
-        for (content, expect) in contents.into_iter().zip(expects) {
+        let cases = vec![
+            ("max 100000", None),
+            ("10000 100000", Some(0.1)),
+            ("1000000 100000", Some(10.0)),
+            // Malformed.
+            ("1000", None),
+        ];
+        for (content, expect) in cases.into_iter() {
             let limit = parse_cpu_quota_v2(content);
             assert_eq!(limit, expect);
         }
@@ -472,11 +543,19 @@ mod tests {
 
     #[test]
     fn test_parse_cpu_quota_v1() {
-        let contents = vec![("-1", "100000"), ("10000", "100000"), ("1000000", "100000")];
-        let expects = vec![None, Some(0.1), Some(10.0)];
-        for (i, (quota, period)) in contents.into_iter().enumerate() {
+        let cases = vec![
+            (("-1", "100000"), None),
+            (("10000", "100000"), Some(0.1)),
+            (("1000000", "100000"), Some(10.0)),
+            // Malformed.
+            (("18446744073709551616", "18446744073709551616"), Some(1.0)),
+            ((",", ""), None),
+            (("", "0.1"), None),
+            (("100", "0"), None),
+        ];
+        for ((quota, period), expect) in cases.into_iter() {
             let limit = parse_cpu_quota_v1(quota, period);
-            assert_eq!(limit, expects[i]);
+            assert_eq!(limit, expect);
         }
     }
 

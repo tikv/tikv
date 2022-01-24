@@ -33,11 +33,13 @@ impl TimeStamp {
         self.0 >> TSO_PHYSICAL_SHIFT_BITS
     }
 
+    #[must_use]
     pub fn next(self) -> TimeStamp {
         assert!(self.0 < u64::MAX);
         TimeStamp(self.0 + 1)
     }
 
+    #[must_use]
     pub fn prev(self) -> TimeStamp {
         assert!(self.0 > 0);
         TimeStamp(self.0 - 1)

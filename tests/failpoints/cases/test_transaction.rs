@@ -531,7 +531,7 @@ fn test_pessimistic_lock_check_valid() {
     // There should be no region error.
     assert!(!resp.has_region_error());
     // The lock should not be written to the in-memory pessimistic lock table.
-    assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+    assert!(txn_ext.pessimistic_locks.read().is_empty());
 }
 
 #[test]
@@ -559,7 +559,7 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(Key::from_raw(b"key"), lock.clone());
+        .insert(vec![(Key::from_raw(b"key"), lock.clone())]);
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();

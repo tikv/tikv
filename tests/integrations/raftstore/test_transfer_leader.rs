@@ -241,7 +241,7 @@ fn test_propose_in_memory_pessimistic_locks() {
     {
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
         assert!(pessimistic_locks.is_valid);
-        pessimistic_locks.insert(Key::from_raw(b"key"), lock.clone());
+        pessimistic_locks.insert(vec![(Key::from_raw(b"key"), lock.clone())]);
     }
 
     cluster.must_transfer_leader(1, new_peer(2, 2));

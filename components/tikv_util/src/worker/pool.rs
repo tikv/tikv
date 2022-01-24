@@ -270,11 +270,13 @@ impl<S: Into<String>> Builder<S> {
     }
 
     /// Pending tasks won't exceed `pending_capacity`.
+    #[must_use]
     pub fn pending_capacity(mut self, pending_capacity: usize) -> Self {
         self.pending_capacity = pending_capacity;
         self
     }
 
+    #[must_use]
     pub fn thread_count(mut self, thread_count: usize) -> Self {
         self.thread_count = thread_count;
         self

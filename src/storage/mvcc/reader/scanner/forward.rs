@@ -2304,7 +2304,7 @@ mod delta_entry_tests {
             test_data
                 .iter()
                 .filter(|(key, ..)| *key >= from_key && (to_key.is_empty() || *key < to_key))
-                .map(|(key, lock, writes)| {
+                .flat_map(|(key, lock, writes)| {
                     let mut entries_of_key = vec![];
 
                     if let Some((ts, lock_type, value)) = lock {
@@ -2351,7 +2351,6 @@ mod delta_entry_tests {
 
                     entries_of_key
                 })
-                .flatten()
                 .collect::<Vec<TxnEntry>>()
         };
 
