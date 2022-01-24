@@ -2086,10 +2086,13 @@ mod tests {
 
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager").lazy_build("snap-manager");
-            let sched = worker.scheduler();
-            let store = new_storage_from_ents(sched, &td, &ents);
-            let e = store.entries(lo, hi, maxsize);
+            let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+            let region_scheduler = region_worker.scheduler();
+            let mut raftlog_fetch_worker = Worker::new("raftlog-fetch").lazy_build("raftlog-fetch");
+            let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
+            let mut store =
+                new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
+            let e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(false));
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
             }
