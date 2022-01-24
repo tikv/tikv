@@ -668,7 +668,17 @@ where
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
-    Err(box_err!("failed to schedule gc task: {:?}", e))
+    let res = Err(box_err!("failed to schedule gc task: {:?}", e));
+    match e.into_inner() {
+        GcTask::Gc { callback, .. } | GcTask::UnsafeDestroyRange { callback, .. } => {
+            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
+        }
+        GcTask::PhysicalScanLock { callback, .. } => {
+            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
+        }
+        _ => {}
+    }
+    res
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
@@ -935,8 +945,13 @@ where
     ) -> Result<()> {
         GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            // Use schedule_force to allow unsafe_destroy_range to schedule even if
+            // the GC worker is full. This will help free up space in the case when
+            // the GC worker is busy with other tasks.
+            // Unsafe destroy range is in store level, so the number of them is
+            // quite small, so we don't need to worry about its memory usage.
             self.worker_scheduler
-                .schedule(GcTask::UnsafeDestroyRange {
+                .schedule_force(GcTask::UnsafeDestroyRange {
                     ctx,
                     start_key,
                     end_key,
@@ -1563,5 +1578,74 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
+    }
+
+    #[test]
+    fn delete_range_when_worker_is_full() {
+        let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
+        must_commit(&engine, b"key", 10, 20);
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        db.flush_cf(cf, true).unwrap();
+
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let (tx, _rx) = mpsc::channel();
+
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcConfig::default(),
+            gate,
+        );
+
+        // Before starting gc_worker, fill the scheduler to full.
+        for _ in 0..GC_MAX_PENDING_TASKS {
+            assert!(
+                gc_worker
+                    .scheduler()
+                    .schedule(GcTask::Gc {
+                        region_id: 0,
+                        start_key: vec![],
+                        end_key: vec![],
+                        safe_point: TimeStamp::from(100),
+                        callback: Box::new(|_res| {})
+                    })
+                    .is_ok()
+            );
+        }
+        // Then, it will fail to schedule another gc command.
+        assert!(
+            gc_worker
+                .gc(TimeStamp::from(1), Box::new(|_res| {}))
+                .is_err()
+        );
+        // If it fails to schedule the task, scheduled_tasks should remain unchanged.
+        assert_eq!(gc_worker.scheduled_tasks.load(Ordering::SeqCst), 0);
+
+        let (tx, rx) = mpsc::channel();
+        // When the gc_worker is full, scheduling an unsafe destroy range task should be
+        // still allowed.
+        assert!(
+            gc_worker
+                .unsafe_destroy_range(
+                    Context::default(),
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"z"),
+                    Box::new(move |res| {
+                        tx.send(res).unwrap();
+                    })
+                )
+                .is_ok()
+        );
+
+        gc_worker.start().unwrap();
+
+        // After the worker starts running, the destroy range task should run,
+        // and the key in the range will be deleted.
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_ok());
+        must_get_none(&engine, b"key", 30);
     }
 }
