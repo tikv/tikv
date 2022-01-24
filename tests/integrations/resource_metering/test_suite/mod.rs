@@ -51,10 +51,10 @@ impl TestSuite {
         tikv_cfg.resource_metering = cfg.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
 
-        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(cfg.precision.as_millis());
-        let (config_notifier, data_sink_reg_handle, reporter_worker) =
-            resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(cfg.clone(), collector_reg_handle);
         let env = Arc::new(Environment::new(2));
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             cfg.receiver_address.clone(),
@@ -71,8 +71,8 @@ impl TestSuite {
 
         let cfg_manager = resource_metering::ConfigManager::new(
             cfg,
-            recorder_handle,
-            config_notifier,
+            recorder_notifier,
+            reporter_notifier,
             address_change_notifier,
         );
         cfg_controller.register(
@@ -166,7 +166,7 @@ impl TestSuite {
     }
 
     pub fn get_current_cfg(&self) -> Config {
-        self.cfg_controller.get_current().resource_metering.clone()
+        self.cfg_controller.get_current().resource_metering
     }
 
     pub fn start_receiver_at(&mut self, port: u16) {
@@ -229,7 +229,7 @@ impl TestSuite {
 
     pub fn nonblock_receiver_all(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
         let mut res = HashMap::new();
-        for r in self.rx.try_recv() {
+        if let Ok(r) = self.rx.try_recv() {
             Self::merge_records(&mut res, r);
         }
         res
@@ -265,7 +265,7 @@ impl TestSuite {
     }
 
     pub fn flush_receiver(&self) {
-        while let Ok(_) = self.rx.try_recv() {}
+        while self.rx.try_recv().is_ok() {}
         let _ = self.rx.recv_timeout(
             self.get_current_cfg().report_receiver_interval.0 + Duration::from_millis(500),
         );

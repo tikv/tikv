@@ -4,7 +4,7 @@ use server::setup::initial_logger;
 use std::borrow::ToOwned;
 use std::error::Error;
 use std::str::FromStr;
-use std::{process, str, u64};
+use std::{str, u64};
 
 use tikv::config::TiKvConfig;
 
@@ -63,7 +63,7 @@ pub fn convert_gbmb(mut bytes: u64) -> String {
 
 pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     println!("{}: {}", prefix, e);
-    process::exit(-1);
+    tikv_util::logger::exit_process_gracefully(-1);
 }
 
 #[cfg(test)]

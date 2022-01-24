@@ -87,8 +87,17 @@ impl Reporter {
     }
 
     fn handle_records(&mut self, records: Arc<RawRecords>) {
-        self.records.append(records);
-        self.records.keep_top_k(self.config.max_resource_groups);
+        let ts = records.begin_unix_time_secs;
+        if self.config.max_resource_groups >= records.records.len() {
+            self.records.append(ts, records.records.iter());
+            return;
+        }
+        let (top, evicted) = records.top_k(self.config.max_resource_groups);
+        self.records.append(ts, top);
+        let others = self.records.others.entry(ts).or_default();
+        evicted.for_each(|(_, v)| {
+            others.merge(v);
+        });
     }
 
     fn handle_config_change(&mut self, config: Config) {
@@ -176,7 +185,7 @@ impl ConfigChangeNotifier {
 
     pub fn notify(&self, config: Config) {
         if let Err(err) = self.scheduler.schedule(Task::ConfigChange(config)) {
-            warn!("failed to schedule Task::ConfigChange"; "err" => ?err);
+            warn!("failed to schedule reporter::Task::ConfigChange"; "err" => ?err);
         }
     }
 }

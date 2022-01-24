@@ -366,17 +366,15 @@ fn test_duplicate_and_close() {
     }
 
     let mut duplicate = DuplicateDetectRequest::default();
-    duplicate.set_context(ctx.clone());
-    duplicate.set_start_key((0 as u64).to_string().as_bytes().to_vec());
+    duplicate.set_context(ctx);
+    duplicate.set_start_key((0_u64).to_string().as_bytes().to_vec());
     let mut stream = import.duplicate_detect(&duplicate).unwrap();
     let ret = block_on(async move {
         let mut ret: Vec<KvPair> = vec![];
         while let Some(resp) = stream.next().await {
             match resp {
                 Ok(mut resp) => {
-                    if resp.has_key_error() {
-                        break;
-                    } else if resp.has_region_error() {
+                    if resp.has_key_error() || resp.has_region_error() {
                         break;
                     }
                     let pairs = resp.take_pairs();

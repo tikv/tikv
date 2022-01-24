@@ -311,7 +311,7 @@ mod parser {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_digit())
-            .unwrap_or_else(|| input.len());
+            .unwrap_or(input.len());
         (end != 0).as_option()?;
         Some((&input[end..], &input[..end]))
     }
@@ -1964,7 +1964,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     struct TimeEnv {
         strict_mode: bool,
         no_zero_in_date: bool,
@@ -1972,19 +1972,6 @@ mod tests {
         allow_invalid_date: bool,
         ignore_truncate: bool,
         time_zone: Option<Tz>,
-    }
-
-    impl Default for TimeEnv {
-        fn default() -> TimeEnv {
-            TimeEnv {
-                strict_mode: false,
-                no_zero_in_date: false,
-                no_zero_date: false,
-                allow_invalid_date: false,
-                ignore_truncate: false,
-                time_zone: None,
-            }
-        }
     }
 
     impl From<TimeEnv> for EvalContext {

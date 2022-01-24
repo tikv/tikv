@@ -46,7 +46,7 @@ impl RawRecord {
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter
 /// [Collector]: crate::collector::Collector
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct RawRecords {
     pub begin_unix_time_secs: u64,
     pub duration: Duration,
@@ -65,6 +65,56 @@ impl Default for RawRecords {
             duration: Duration::default(),
             records: HashMap::default(),
         }
+    }
+}
+
+impl RawRecords {
+    /// Keep a maximum of `k` self.records and aggregate the others into returned [RawRecord].
+    pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
+        let mut others = RawRecord::default();
+        if self.records.len() <= k {
+            return others;
+        }
+        let mut buf = STATIC_BUF.with(|b| b.take());
+        buf.clear();
+        // Find kth top cpu time.
+        for record in self.records.values() {
+            buf.push(record.cpu_time);
+        }
+        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+        let kth = buf[k];
+        // Evict records with cpu time less or equal than `kth`
+        let evicted_records = self.records.drain_filter(|_, r| r.cpu_time <= kth);
+        // Record evicted into others
+        for (_, record) in evicted_records {
+            others.merge(&record);
+        }
+        STATIC_BUF.with(move |b| b.set(buf));
+        others
+    }
+
+    /// Returns (TopK, Evicted).
+    /// It is caller's responsibility to ensure that k < records.len().
+    pub fn top_k(
+        &self,
+        k: usize,
+    ) -> (
+        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
+        impl Iterator<Item = (&Arc<TagInfos>, &RawRecord)>,
+    ) {
+        assert!(self.records.len() > k);
+        let mut buf = STATIC_BUF.with(|b| b.take());
+        buf.clear();
+        for record in self.records.values() {
+            buf.push(record.cpu_time);
+        }
+        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
+        let kth = buf[k];
+        STATIC_BUF.with(move |b| b.set(buf));
+        (
+            self.records.iter().filter(move |(_, v)| v.cpu_time > kth),
+            self.records.iter().filter(move |(_, v)| v.cpu_time <= kth),
+        )
     }
 }
 
@@ -164,7 +214,11 @@ impl From<Records> for Vec<ResourceUsageRecord> {
 
 impl Records {
     /// Aggregates [RawRecords] into [Records].
-    pub fn append(&mut self, raw_records: Arc<RawRecords>) {
+    pub fn append<'a>(
+        &mut self,
+        ts: u64,
+        iter: impl Iterator<Item = (&'a Arc<TagInfos>, &'a RawRecord)>,
+    ) {
         // # Before
         //
         // ts: 1630464417
@@ -189,8 +243,7 @@ impl Records {
         //     | cpu time | ... |    200     |
         //     | total    | $total + 200     |
 
-        let ts = raw_records.begin_unix_time_secs;
-        for (tag, raw_record) in &raw_records.records {
+        for (tag, raw_record) in iter {
             let tag = &tag.extra_attachment;
             if tag.is_empty() {
                 continue;
@@ -222,80 +275,6 @@ impl Records {
                 record.write_keys_list.push(raw_record.write_keys);
             }
         }
-    }
-
-    /// Keep a maximum of `k` items and aggregate the others into `others`.
-    pub fn keep_top_k(&mut self, k: usize) {
-        // # Before
-        //
-        // K: 2
-        //
-        // t1: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 300        |    500     |
-        //     | total    | 800                     |
-        //
-        // t2: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 200        |    700     |
-        //     | total    | 900                     |
-        //
-        // t3: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 100        |    200     |
-        //     | total    | 300                     |
-        //
-        // t4: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 500        |    200     |
-        //     | total    | 700                     |
-
-        // # After
-        //
-        // t1: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 300        |    500     |
-        //     | total    | 800                     |
-        //
-        // t2: | ts       | 1630464416 | 1630464417 |
-        //     | cpu time | 200        |    700     |
-        //     | total    | 900                     |
-        //
-        // others: |  ts      | 1630464416 | 1630464417 |
-        //         | cpu time | 600        | 400        |
-
-        if self.records.len() <= k {
-            return;
-        }
-        if k == 0 {
-            self.records.clear();
-            self.others.clear();
-            return;
-        }
-        let mut buf = STATIC_BUF.with(|b| b.take());
-        buf.clear();
-
-        // Find kth top total cpu time
-        for record in self.records.values() {
-            buf.push(record.total_cpu_time);
-        }
-        pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
-        let kth = buf[k];
-
-        // Evict records with total cpu time less or equal than `kth`
-        let others = &mut self.others;
-        let evicted_records = self.records.drain_filter(|_, r| r.total_cpu_time <= kth);
-
-        // Record evicted into others
-        for (_, record) in evicted_records {
-            for n in 0..record.timestamps.len() {
-                others
-                    .entry(record.timestamps[n])
-                    .or_insert_with(RawRecord::default)
-                    .merge(&RawRecord {
-                        cpu_time: record.cpu_time_list[n],
-                        read_keys: record.read_keys_list[n],
-                        write_keys: record.write_keys_list[n],
-                    });
-            }
-        }
-
-        STATIC_BUF.with(move |b| b.set(buf));
     }
 
     /// Clear all internal data.
@@ -349,6 +328,7 @@ impl SummaryRecord {
     }
 
     /// Gets the value and writes it to zero.
+    #[must_use]
     pub fn take_and_reset(&self) -> Self {
         Self {
             read_keys: AtomicU32::new(self.read_keys.swap(0, Relaxed)),
@@ -442,10 +422,82 @@ mod tests {
             records: raw_map,
         };
         assert_eq!(records.records.len(), 0);
-        records.append(Arc::new(raw));
+        records.append(raw.begin_unix_time_secs, raw.records.iter());
         assert_eq!(records.records.len(), 3);
-        records.keep_top_k(2);
-        assert_eq!(records.records.len(), 2);
-        assert_eq!(records.others.len(), 1);
+    }
+
+    #[test]
+    fn test_raw_records_top_k() {
+        let tag1 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            extra_attachment: b"a".to_vec(),
+        });
+        let tag2 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            extra_attachment: b"b".to_vec(),
+        });
+        let tag3 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            extra_attachment: b"c".to_vec(),
+        });
+        let mut records = HashMap::default();
+        records.insert(
+            tag1,
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 222,
+                write_keys: 333,
+            },
+        );
+        records.insert(
+            tag2,
+            RawRecord {
+                cpu_time: 444,
+                read_keys: 555,
+                write_keys: 666,
+            },
+        );
+        records.insert(
+            tag3,
+            RawRecord {
+                cpu_time: 777,
+                read_keys: 888,
+                write_keys: 999,
+            },
+        );
+        let rs = RawRecords {
+            begin_unix_time_secs: 1,
+            duration: Duration::from_secs(1),
+            records,
+        };
+        let (top, evicted) = rs.top_k(2);
+        let others = evicted
+            .map(|(_, v)| v)
+            .fold(RawRecord::default(), |mut others, r| {
+                others.merge(r);
+                others
+            });
+        assert_eq!(top.count(), 2);
+        assert_eq!(others.cpu_time, 111);
+        assert_eq!(others.read_keys, 222);
+        assert_eq!(others.write_keys, 333);
+        let (top, evicted) = rs.top_k(0);
+        // let top = top.collect::<Vec<(&Arc<TagInfos>, &RawRecord)>>();
+        let others = evicted
+            .map(|(_, v)| v)
+            .fold(RawRecord::default(), |mut others, r| {
+                others.merge(r);
+                others
+            });
+        assert_eq!(top.count(), 0);
+        assert_eq!(others.cpu_time, 111 + 444 + 777);
+        assert_eq!(others.read_keys, 222 + 555 + 888);
+        assert_eq!(others.write_keys, 333 + 666 + 999);
     }
 }

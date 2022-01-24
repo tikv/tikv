@@ -1817,7 +1817,7 @@ fn test_txn_api_version() {
         if let Some(errcode) = errcode {
             let expect_err = |errs: &[KeyError]| {
                 let expect_prefix = format!("Error({}", errcode);
-                assert!(errs.len() > 0, "case {}", i);
+                assert!(!errs.is_empty(), "case {}", i);
                 assert!(
                     errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
                     "case {}: errs[0]: {:?}, expected: {}",

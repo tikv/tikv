@@ -626,10 +626,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start resource metering.
-        let (recorder_handle, collector_reg_handle, resource_tag_factory, recorder_worker) =
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
             resource_metering::init_recorder(self.config.resource_metering.precision.as_millis());
         self.to_stop.push(recorder_worker);
-        let (config_notifier, data_sink_reg_handle, reporter_worker) =
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
             resource_metering::init_reporter(
                 self.config.resource_metering.clone(),
                 collector_reg_handle.clone(),
@@ -645,8 +645,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),
-            recorder_handle,
-            config_notifier,
+            recorder_notifier,
+            reporter_notifier,
             address_change_notifier,
         );
         cfg_controller.register(
@@ -985,7 +985,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Create Diagnostics service
         let diag_service = DiagnosticsService::new(
             servers.server.get_debug_thread_pool().clone(),
-            self.config.log_file.clone(),
+            self.config.log.file.filename.clone(),
             self.config.slow_log_file.clone(),
         );
         if servers
@@ -1066,10 +1066,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        let io_snooper_on = self.config.enable_io_snoop
-            && file_system::init_io_snooper()
-                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
-                .is_ok();
+        // Always set to false because BPF needs root permission which is not feasible in a real deployment.
+        // Maybe enable it when the newer stable kernel has better permission control for BPF.
+        let io_snooper_on = false;
+
         let limiter = Arc::new(
             self.config
                 .storage
@@ -1258,8 +1258,11 @@ impl TiKVServer<RocksEngine> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let env = self
+            .config
+            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .unwrap();
 
         // Create raft engine.
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);

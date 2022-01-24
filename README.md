@@ -12,7 +12,8 @@ The design of TiKV ('Ti' stands for titanium) is inspired by some great distribu
 
 If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-![cncf_logo](images/cncf.png)
+![cncf_logo](images/cncf.png#gh-light-mode-only)
+![cncf_logo](images/cncf-white.png#gh-dark-mode-only)
 
 TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
