@@ -35,7 +35,10 @@ use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
-use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use raft::{
+    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -68,7 +71,7 @@ use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -211,7 +214,8 @@ where
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
@@ -236,7 +240,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    region_scheduler,
+                    raftlog_fetch_scheduler,
+                    engines,
+                    region,
+                    meta_peer,
+                )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -260,7 +272,8 @@ where
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
@@ -280,7 +293,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    region_scheduler,
+                    raftlog_fetch_scheduler,
+                    engines,
+                    &region,
+                    peer,
+                )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -1161,6 +1182,10 @@ where
             }
             SignificantMsg::RaftLogGcFlushed => {
                 self.on_raft_log_gc_flushed();
+            }
+            SignificantMsg::RaftlogFetched { context, .. } => {
+                self.fsm.peer.raft_group.on_entries_fetched(context);
+                self.fsm.has_ready = true;
             }
         }
     }
@@ -2965,6 +2990,7 @@ where
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
+                self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
             ) {
@@ -3210,12 +3236,13 @@ where
             let entries = if low > state.get_commit() {
                 vec![]
             } else {
-                match self
-                    .fsm
-                    .peer
-                    .get_store()
-                    .entries(low, state.get_commit() + 1, NO_LIMIT)
-                {
+                // TODO: fetch entries in async way
+                match self.fsm.peer.get_store().entries(
+                    low,
+                    state.get_commit() + 1,
+                    NO_LIMIT,
+                    GetEntriesContext::empty(false),
+                ) {
                     Ok(ents) => ents,
                     Err(e) => panic!(
                         "[region {}] {} failed to get merge entires: {:?}, low:{}, commit: {}",
