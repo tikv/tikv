@@ -676,7 +676,10 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
         GcTask::PhysicalScanLock { callback, .. } => {
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
         }
-        _ => {}
+        // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a callback.
+        GcTask::GcKeys { .. } | GcTask::OrphanVersions { .. } => {}
+        #[cfg(any(test, feature = "testexport"))]
+        GcTask::Validate(_) => {}
     }
     res
 }
