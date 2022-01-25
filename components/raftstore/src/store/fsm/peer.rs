@@ -1550,7 +1550,7 @@ where
                 self.fsm.peer.peer.clone(),
             );
             cmd.mut_header().set_read_quorum(true);
-            self.propose_raft_command(
+            self.propose_raft_command_internal(
                 cmd,
                 Callback::Read(Box::new(|_| ())),
                 DiskFullOpt::AllowedOnAlmostFull,
