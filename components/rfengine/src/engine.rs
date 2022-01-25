@@ -108,7 +108,7 @@ pub(crate) struct RaftLogOp {
     pub(crate) region_id: u64,
     pub(crate) index: u64,
     pub(crate) term: u32,
-    pub(crate) e_type: i32,
+    pub(crate) e_type: u8,
     pub(crate) context: u8,
     pub(crate) data: Bytes,
 }
@@ -120,7 +120,7 @@ impl RaftLogOp {
             region_id,
             index: entry.index,
             term: entry.term as u32,
-            e_type: entry.entry_type.value(),
+            e_type: entry.entry_type.value() as u8,
             context,
             data: entry.data.clone(),
         }
@@ -389,7 +389,7 @@ impl RegionRaftLogs {
         let local_idx = index - self.range.start_index;
         let op = self.raft_logs.get(local_idx as usize).unwrap();
         let mut entry = eraftpb::Entry::new();
-        entry.set_entry_type(eraftpb::EntryType::from_i32(op.e_type).unwrap());
+        entry.set_entry_type(eraftpb::EntryType::from_i32(op.e_type as i32).unwrap());
         entry.set_term(op.term as u64);
         entry.set_index(index);
         if op.context > 0 {

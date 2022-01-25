@@ -873,6 +873,11 @@ impl<'a> PeerMsgHandler<'a> {
                 // client query miss.
                 new_peer.peer.heartbeat_pd(&self.ctx);
             }
+            self.ctx.global.coprocessor_host.on_region_changed(
+                &new_region,
+                RegionChangeEvent::Create,
+                new_peer.peer.get_role(),
+            );
             meta.regions.insert(new_region_id, new_region.clone());
             let not_exist = meta
                 .region_ranges

@@ -10,9 +10,10 @@ use kvproto::pdpb;
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use pd_client::PdClient;
 use protobuf::Message;
+use raft::StateRole;
 use raft_proto::eraftpb;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost};
+use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use raftstore::store::local_metrics::RaftMetrics;
 use raftstore::store::util;
 use raftstore::store::util::is_initial_msg;
@@ -248,6 +249,11 @@ impl RaftBatchSystem {
                 .region_ranges
                 .insert(raw_end_key(region), region.get_id());
             store_meta.regions.insert(region.get_id(), region.clone());
+            ctx.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
             peers.push(peer);
         }
         Ok(peers)

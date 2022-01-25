@@ -57,7 +57,7 @@ impl Epoch {
         let extention = filename.extension().unwrap();
         if extention == "wal" {
             self.has_wal_file = true;
-        } else if extention == "state" {
+        } else if extention == "states" {
             self.has_state_file = true;
         } else if extention == "rlog" {
             let filename_str = filename.file_name().unwrap().to_str().unwrap();
@@ -163,6 +163,12 @@ impl RFEngine {
         let filename = states_file_name(&self.dir, epoch_id);
         let bin = fs::read(filename)?;
         let mut data = bin.as_slice();
+        let payload_len = data.len() - 4;
+        let checksum = LittleEndian::read_u32(&data[payload_len..]);
+        data = &data[..payload_len];
+        if crc32c::crc32c(data) != checksum {
+            return Err(Error::Checksum);
+        }
         let mut states = self.states.write().unwrap();
         while data.len() > 0 {
             let region_id = LittleEndian::read_u64(data);
@@ -199,8 +205,8 @@ impl RFEngine {
             data = &data[length..];
             let term = LittleEndian::read_u32(entry);
             entry = &entry[4..];
-            let e_type = LittleEndian::read_i32(entry);
-            entry = &entry[4..];
+            let e_type = entry[0];
+            entry = &entry[1..];
             let context = entry[0];
             entry = &entry[1..];
             let op = RaftLogOp {

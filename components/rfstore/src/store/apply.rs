@@ -337,9 +337,23 @@ impl Applier {
         }
         // TODO: investigate why there is duplicated commit.
         let item = snap.get(mvcc::WRITE_CF, key, u64::MAX);
-        assert!(item.user_meta_len() > 0);
+        assert!(
+            item.user_meta_len() > 0,
+            "key {:?}, {}:{} snap_ver:{}",
+            key,
+            region_id,
+            self.region.get_region_epoch().version,
+            snap.get_version()
+        );
         let user_meta = mvcc::UserMeta::from_slice(item.user_meta());
         assert_eq!(user_meta.commit_ts, commit_ts);
+        warn!(
+            "duplicated commit for key {:?}, {}:{} snap_ver:{}",
+            key,
+            region_id,
+            self.region.get_region_epoch().version,
+            snap.get_version()
+        );
         return item.get_value().to_vec();
     }
 

@@ -75,14 +75,15 @@ impl WALIterator {
         if length > MAX_BATCH_SIZE {
             return Err(Error::EOF);
         }
-        let remained_length = ((BATCH_HEADER_SIZE + length + ALIGN_SIZE - 1) & ALIGN_MASK as usize)
-            - BATCH_HEADER_SIZE;
+        let aligned_length = (BATCH_HEADER_SIZE + length + ALIGN_SIZE - 1) as u64 & ALIGN_MASK;
+        let remained_length = aligned_length as usize - BATCH_HEADER_SIZE;
         self.buf.resize(remained_length, 0);
         reader.read_exact(&mut self.buf[..])?;
         let batch = &self.buf[..length];
         if checksum != crc32c::crc32c(batch) {
             return Err(Error::EOF);
         }
+        self.offset += aligned_length;
         Ok(batch)
     }
 }
@@ -106,8 +107,8 @@ pub(crate) fn parse_log(entry: &[u8]) -> RaftLogOp {
     entry = &entry[8..];
     let term = LittleEndian::read_u32(entry);
     entry = &entry[4..];
-    let e_type = LittleEndian::read_i32(entry);
-    entry = &entry[4..];
+    let e_type = entry[0];
+    entry = &entry[1..];
     let context = entry[0];
     entry = &entry[1..];
     let data = Bytes::copy_from_slice(entry);

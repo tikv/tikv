@@ -100,6 +100,11 @@ impl Worker {
         let mut file = fs::File::create(filename)?;
         file.write_all(self.buf.chunk())?;
         file.sync_all()?;
+        info!(
+            "write state file for epoch {}, len {}",
+            epoch_id,
+            self.buf.len()
+        );
         if epoch_id == 1 {
             return Ok(());
         }
@@ -150,9 +155,10 @@ impl Worker {
         let mut file = fs::File::create(filename)?;
         self.buf.truncate(0);
         for op in &entries.raft_logs {
-            self.buf.put_u32_le(8 + op.data.len() as u32);
+            self.buf.put_u32_le(6 + op.data.len() as u32);
             self.buf.put_u32_le(op.term);
-            self.buf.put_i32_le(op.e_type);
+            self.buf.put_u8(op.e_type);
+            self.buf.put_u8(op.context);
             self.buf.extend_from_slice(op.data.chunk());
         }
         let checksum = crc32c::crc32c(self.buf.chunk());

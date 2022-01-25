@@ -31,6 +31,7 @@ impl CompactionClient {
     }
 
     pub(crate) fn compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
+        info!("on compaction request {:?}", &req);
         let mut comp = pb::Compaction::new();
         comp.set_top_deletes(req.tops.clone());
         comp.set_cf(req.cf as i32);
@@ -52,6 +53,7 @@ impl CompactionClient {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CompactionRequest {
     pub(crate) cf: isize,
     pub(crate) level: usize,
@@ -71,8 +73,7 @@ pub(crate) struct CompactionRequest {
     pub(crate) block_size: usize,
     pub(crate) max_table_size: usize,
     pub(crate) bloom_fpr: f64,
-    pub(crate) start_id: u64,
-    pub(crate) end_id: u64,
+    pub(crate) file_ids: Vec<u64>,
 }
 
 impl CompactionRequest {
@@ -414,13 +415,12 @@ impl Engine {
         req: &mut CompactionRequest,
         total_size: u64,
     ) -> Result<()> {
-        let id_cnt = total_size as usize / req.max_table_size + 16; // Add 16 here just in case we run out of ID.
+        let id_cnt = total_size as usize / req.max_table_size + 8; // Add 8 here just in case we run out of ID.
         let ids = self
             .id_allocator
             .alloc_id(id_cnt)
             .map_err(|e| Error::ErrAllocID(e))?;
-        req.start_id = ids[0];
-        req.end_id = ids[ids.len() - 1] + 1;
+        req.file_ids = ids;
         Ok(())
     }
 
@@ -443,8 +443,7 @@ impl Engine {
             tops: vec![],
             bottoms: vec![],
             multi_cf_bottoms: vec![],
-            start_id: 0,
-            end_id: 0,
+            file_ids: vec![],
         }
     }
 
@@ -533,9 +532,9 @@ pub(crate) fn compact_l0(
         mult_cf_bot_tbls.push(bot_tbls);
     }
 
-    let channel_cap = req.end_id - req.start_id;
+    let channel_cap = req.file_ids.len();
     let (tx, rx) = mpsc::sync_channel(channel_cap as usize);
-    let mut id = req.start_id;
+    let mut id_idx = 0;
     for cf in 0..NUM_CFS {
         let mut iter = build_compact_l0_iterator(
             cf,
@@ -544,6 +543,7 @@ pub(crate) fn compact_l0(
         );
         let mut helper = CompactL0Helper::new(cf, req);
         loop {
+            let id = req.file_ids[id_idx];
             let (tbl_create, data) = helper.build_one(&mut iter, id)?;
             if data.is_empty() {
                 break;
@@ -558,12 +558,12 @@ pub(crate) fn compact_l0(
                     atx.send(Ok(tbl_create)).unwrap();
                 }
             });
-            id += 1;
+            id_idx += 1;
         }
     }
     let mut table_creates = vec![];
-    let cnt = id - req.start_id;
-    for _ in 0..cnt {
+    let count = id_idx;
+    for _ in 0..count {
         let tbl_create = rx.recv().unwrap()?;
         table_creates.push(tbl_create);
     }
@@ -754,11 +754,10 @@ pub(crate) fn compact_tables(
     let mut last_key = BytesMut::new();
     let mut skip_key = BytesMut::new();
     let mut builder = sstable::Builder::new(0, req.get_table_builder_options());
-    let mut alloc_id = req.start_id;
-    let (tx, rx) = mpsc::sync_channel((req.end_id - req.start_id) as usize);
+    let mut id_idx = 0;
+    let (tx, rx) = mpsc::sync_channel(req.file_ids.len());
     while iter.valid() {
-        assert!(alloc_id < req.end_id);
-        let id = alloc_id;
+        let id = req.file_ids[id_idx];
         builder.reset(id);
         last_key.truncate(0);
         while iter.valid() {
@@ -832,9 +831,9 @@ pub(crate) fn compact_tables(
                 atx.send(Ok(tbl_create)).unwrap();
             }
         });
-        alloc_id += 1;
+        id_idx += 1;
     }
-    let cnt = alloc_id - req.start_id;
+    let cnt = id_idx;
     let mut tbl_creates = vec![];
     for _ in 0..cnt {
         let tbl_create = rx.recv().unwrap()?;

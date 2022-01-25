@@ -36,7 +36,7 @@ pub struct Options {
 
     // Max mem size is dynamically adjusted for each time the mem-table get flushed.
     // The formula is (factor * write_bytes_per_second)
-    // And limited in range [2MB, 256MB].
+    // And limited in range [2MB, 128MB].
     pub max_mem_table_size_factor: usize,
 
     pub dynamic_mem_table_size: bool,

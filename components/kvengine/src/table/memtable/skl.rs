@@ -58,10 +58,6 @@ impl WriteBatch {
         self.entries.len()
     }
 
-    pub fn estimated_size(&self) -> usize {
-        return self.buf.len() + self.entries.len() * MAX_NODE_SIZE;
-    }
-
     pub fn reset(&mut self) {
         self.entries.clear();
         self.buf.clear();

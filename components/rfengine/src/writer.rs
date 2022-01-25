@@ -65,7 +65,7 @@ impl WALWriter {
     }
 
     pub(crate) fn seek(&mut self, file_offset: u64) {
-        assert_eq!(file_offset & ALIGN_MASK, 0);
+        assert_eq!(file_offset & ALIGN_MASK.reverse_bits(), 0);
         self.file_off = file_offset;
     }
 
@@ -99,7 +99,7 @@ impl WALWriter {
         self.buf.put_u64_le(op.region_id);
         self.buf.put_u64_le(op.index);
         self.buf.put_u32_le(op.term);
-        self.buf.put_i32_le(op.e_type);
+        self.buf.push(op.e_type);
         self.buf.push(op.context);
         self.buf.extend_from_slice(op.data.chunk());
     }
@@ -141,8 +141,7 @@ impl WALWriter {
     }
 
     pub(crate) fn reset_batch(&mut self) {
-        self.buf.truncate(0);
-        self.buf.extend_from_slice(&[0; BATCH_HEADER_SIZE]);
+        self.buf.truncate(BATCH_HEADER_SIZE);
     }
 
     pub(crate) fn rotate(&mut self) -> Result<()> {
@@ -191,7 +190,7 @@ pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {
 }
 
 pub(crate) fn raft_log_size(op: &RaftLogOp) -> usize {
-    ENTRY_HEADER_SIZE + 16 + 8 + 1 + op.data.len()
+    ENTRY_HEADER_SIZE + 16 + 4 + 1 + 1 + op.data.len()
 }
 
 pub(crate) fn state_size(key: &[u8], val: &[u8]) -> usize {

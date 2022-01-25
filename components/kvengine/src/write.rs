@@ -73,14 +73,6 @@ impl WriteBatch {
         self.sequence = seq;
     }
 
-    pub fn estimated_size(&self) -> usize {
-        let mut size = 0;
-        for wb in &self.cf_batches {
-            size += wb.estimated_size();
-        }
-        size
-    }
-
     pub fn num_entries(&self) -> usize {
         let mut num = 0;
         for wb in &self.cf_batches {
@@ -143,12 +135,6 @@ impl Engine {
             // Recover the shard to the pre-split stage when this shard is ingested.
         }
         let mut mem_tbl = shard.get_writable_mem_table(g);
-        if mem_tbl.size() + wb.estimated_size() > shard.get_max_mem_table_size() as usize {
-            let old_mem_tbl = self.switch_mem_table(&shard, version);
-            self.schedule_flush_task(&shard, old_mem_tbl);
-            mem_tbl = shard.get_writable_mem_table(g);
-        }
-
         for cf in 0..NUM_CFS {
             mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf));
         }
@@ -164,6 +150,10 @@ impl Engine {
             }
         }
         store_u64(&shard.write_sequence, wb.sequence);
+        if mem_tbl.size() > shard.get_max_mem_table_size() as usize {
+            let old_mem_tbl = self.switch_mem_table(&shard, version);
+            self.schedule_flush_task(&shard, old_mem_tbl);
+        }
     }
 
     fn update_write_batch_version(&self, wb: &mut WriteBatch, version: u64) {

@@ -445,7 +445,7 @@ impl Shard {
 
     pub(crate) fn bounded_mem_size(size: u64) -> u64 {
         const MAX_MEM_SIZE_UPPER_LIMIT: u64 = 128 * 1024 * 1024;
-        const MAX_MEM_SIZE_LOWER_LIMIT: u64 = 4 * 1024 * 1024;
+        const MAX_MEM_SIZE_LOWER_LIMIT: u64 = 2 * 1024 * 1024;
         let mut bounded = size;
         if bounded > MAX_MEM_SIZE_UPPER_LIMIT {
             bounded = MAX_MEM_SIZE_UPPER_LIMIT;

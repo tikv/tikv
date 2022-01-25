@@ -713,6 +713,15 @@ impl TiKVServer {
             dfs_conf.s3_bucket.clone(),
         ));
         let mut kv_opts = kvengine::Options::default();
+        let capacity = match conf.storage.block_cache.capacity.0 {
+            None => {
+                let total_mem = SysQuota::memory_limit_in_bytes();
+                ((total_mem as f64) * tikv::config::BLOCK_CACHE_RATE) as usize
+            }
+            Some(c) => c.0 as usize,
+        };
+        kv_opts.max_mem_table_size_factor = 16;
+        kv_opts.max_block_cache_size = capacity as i64;
         let opts = Arc::new(kv_opts);
         let recoverer = rfstore::store::RecoverHandler::new(rf_engine.clone());
         let meta_iter = recoverer.clone();
@@ -756,6 +765,7 @@ impl kvengine::IDAllocator for PdIDAllocator {
                 }
             }
         }
+        timestamps.sort();
         Ok(timestamps)
     }
 }
