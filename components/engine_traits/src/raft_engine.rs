@@ -40,6 +40,7 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
