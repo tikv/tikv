@@ -2730,7 +2730,7 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let region_worker = LazyWorker::new("snap-manager");
         let region_sched = region_worker.scheduler();
-        let raftlog_fetch_worker = LazyWorker::new("raftlog-fetch");
+        let raftlog_fetch_worker = LazyWorker::new("raftlog-fetch-worker");
         let raftlog_fetch_sched = raftlog_fetch_worker.scheduler();
         let kv_db =
             engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();

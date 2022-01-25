@@ -1325,7 +1325,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
             purge_worker: Worker::new("purge-worker"),
-            raftlog_fetch_worker: Worker::new("raftlog-fetch"),
+            raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
         };
@@ -1372,7 +1372,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
-            "raftlog-fetch",
+            "raftlog-fetch-worker",
             RaftlogFetchRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
