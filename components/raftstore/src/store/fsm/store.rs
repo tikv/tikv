@@ -1573,6 +1573,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.background_worker.stop();
         workers.purge_worker.stop();
         workers.refresh_config_worker.stop();
+        workers.raftlog_fetch_worker.stop();
     }
 }
 
