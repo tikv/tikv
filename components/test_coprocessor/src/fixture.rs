@@ -6,6 +6,7 @@ use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 
 use engine_rocks::PerfLevel;
+use resource_metering::ResourceTagFactory;
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
@@ -95,7 +96,13 @@ pub fn init_data_with_details<E: Engine>(
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
-    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    let copr = Endpoint::new(
+        cfg,
+        pool.handle(),
+        cm,
+        PerfLevel::EnableCount,
+        ResourceTagFactory::new_for_test(),
+    );
     (store, copr)
 }
 

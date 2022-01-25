@@ -16,15 +16,10 @@ use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, 
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
-use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
+use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::{FilterFn, Level};
-
-// The suffix appended to the end of rotated log files by datetime log rotator
-// Warning: Diagnostics service parses log files by file name format.
-//          Remember to update the corresponding code when suffix layout is changed.
-pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
@@ -56,7 +51,7 @@ where
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
-    let filter = move |record: &Record| {
+    let filter = move |record: &Record<'_>| {
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
@@ -68,7 +63,7 @@ where
             //  ...
             // ```
             // Here get the highest level module name to check.
-            let module = record.module().splitn(2, "::").next().unwrap();
+            let module = record.module().split("::").next().unwrap();
             disabled_targets.iter().all(|target| target != module)
         } else {
             true
@@ -130,21 +125,31 @@ pub fn set_global_logger(
     Ok(())
 }
 
+// Terminates the current process gracefully by dropping async guard and forcing
+// a flush of logs to ensure messages aren't lost. For more information please
+// refer to:
+//   https://docs.rs/slog-async/2.7.0/slog_async/#beware-of-stdprocessexit
+pub fn exit_process_gracefully(code: i32) -> ! {
+    // force async logger to flush by dropping its guard.
+    *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
+    std::process::exit(code);
+}
+
 /// Constructs a new file writer which outputs log to a file at the specified
 /// path. The file writer rotates for the specified timespan.
 pub fn file_writer<N>(
     path: impl AsRef<Path>,
-    rotation_timespan: ReadableDuration,
-    rotation_size: ReadableSize,
+    rotation_size: u64,
+    max_backups: usize,
+    max_age: u64,
     rename: N,
 ) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path, rename)
-            .add_rotator(RotateByTime::new(rotation_timespan))
-            .add_rotator(RotateBySize::new(rotation_size))
+        RotatingFileLoggerBuilder::new(path, rename, max_backups, ReadableDuration::days(max_age))
+            .add_rotator(RotateBySize::new(ReadableSize::mb(rotation_size)))
             .build()?,
     );
     Ok(logger)
@@ -156,29 +161,37 @@ pub fn term_writer() -> io::Stderr {
 }
 
 /// Formats output logs to "TiDB Log Format".
-pub fn text_format<W>(io: W) -> TikvFormat<PlainDecorator<W>>
+pub fn text_format<W>(io: W, enable_timestamp: bool) -> TikvFormat<PlainDecorator<W>>
 where
     W: io::Write,
 {
     let decorator = PlainDecorator::new(io);
-    TikvFormat::new(decorator)
+    TikvFormat::new(decorator, enable_timestamp)
+}
+
+pub fn slow_log_text_format<W>(io: W) -> TikvFormat<PlainDecorator<W>>
+where
+    W: io::Write,
+{
+    let decorator = PlainDecorator::new(io);
+    TikvFormat::new(decorator, true)
 }
 
 /// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger format.
-pub fn rocks_text_format<W>(io: W) -> RocksFormat<PlainDecorator<W>>
+pub fn rocks_text_format<W>(io: W, enable_timestamp: bool) -> RocksFormat<PlainDecorator<W>>
 where
     W: io::Write,
 {
     let decorator = PlainDecorator::new(io);
-    RocksFormat::new(decorator)
+    RocksFormat::new(decorator, enable_timestamp)
 }
 
 /// Formats output logs to JSON format.
-pub fn json_format<W>(io: W) -> slog_json::Json<W>
+pub fn json_format<W>(io: W, enable_timestamp: bool) -> slog_json::Json<W>
 where
     W: io::Write,
 {
-    slog_json::Json::new(io)
+    let builder = slog_json::Json::new(io)
         .set_newlines(true)
         .set_flush(true)
         .add_key_value(slog_o!(
@@ -192,14 +205,26 @@ where
                 record.line(),
             ))),
             "level" => FnValue(|record| get_unified_log_level(record.level())),
-            "time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),
-        ))
-        .build()
+
+        ));
+    if enable_timestamp {
+        builder.add_key_value(slog_o!("time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),)).build()
+    } else {
+        builder.build()
+    }
+}
+
+pub fn slow_log_json_format<W>(io: W) -> slog_json::Json<W>
+where
+    W: io::Write,
+{
+    json_format(io, true)
 }
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "critical" => Some(Level::Critical),
+        // We support `critical` due to legacy.
+        "fatal" | "critical" => Some(Level::Critical),
         "error" => Some(Level::Error),
         // We support `warn` due to legacy.
         "warning" | "warn" => Some(Level::Warning),
@@ -214,9 +239,9 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
 // the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
-        Level::Critical => "critical",
+        Level::Critical => "fatal",
         Level::Error => "error",
-        Level::Warning => "warning",
+        Level::Warning => "warn",
         Level::Debug => "debug",
         Level::Trace => "trace",
         Level::Info => "info",
@@ -268,14 +293,18 @@ where
     D: Decorator,
 {
     decorator: D,
+    enable_timestamp: bool,
 }
 
 impl<D> TikvFormat<D>
 where
     D: Decorator,
 {
-    pub fn new(decorator: D) -> Self {
-        Self { decorator }
+    pub fn new(decorator: D, enable_timestamp: bool) -> Self {
+        Self {
+            decorator,
+            enable_timestamp,
+        }
     }
 }
 
@@ -289,7 +318,7 @@ where
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
             self.decorator.with_record(record, values, |decorator| {
-                write_log_header(decorator, record)?;
+                write_log_header(decorator, record, self.enable_timestamp)?;
                 write_log_msg(decorator, record)?;
                 write_log_fields(decorator, record, values)?;
 
@@ -311,14 +340,18 @@ where
     D: Decorator,
 {
     decorator: D,
+    enable_timestamp: bool,
 }
 
 impl<D> RocksFormat<D>
 where
     D: Decorator,
 {
-    pub fn new(decorator: D) -> Self {
-        Self { decorator }
+    pub fn new(decorator: D, enable_timestamp: bool) -> Self {
+        Self {
+            decorator,
+            enable_timestamp,
+        }
     }
 }
 
@@ -332,13 +365,15 @@ where
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
             if !record.tag().ends_with("_header") {
-                decorator.start_timestamp()?;
-                write!(
-                    decorator,
-                    "[{}][{}]",
-                    chrono::Local::now().format(TIMESTAMP_FORMAT),
-                    thread::current().id().as_u64(),
-                )?;
+                if self.enable_timestamp {
+                    decorator.start_timestamp()?;
+                    write!(
+                        decorator,
+                        "[{}][{}]",
+                        chrono::Local::now().format(TIMESTAMP_FORMAT),
+                        thread::current().id().as_u64(),
+                    )?;
+                }
                 decorator.start_level()?;
                 write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
                 decorator.start_whitespace()?;
@@ -370,7 +405,7 @@ where
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
             if let Err(e) = self.0.log(record, values) {
-                let fatal_drainer = Mutex::new(text_format(term_writer())).ignore_res();
+                let fatal_drainer = Mutex::new(text_format(term_writer(), true)).ignore_res();
                 fatal_drainer.log(record, values).unwrap();
                 let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
                 slog::slog_crit!(
@@ -397,7 +432,7 @@ where
     type Ok = ();
     type Err = slog::Never;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.tag() == "slow_log" {
             let mut s = SlowCostSerializer { cost: None };
             let kv = record.kv();
@@ -437,7 +472,7 @@ pub struct LogCost(pub u64);
 impl slog::Value for LogCost {
     fn serialize(
         &self,
-        _record: &Record,
+        _record: &Record<'_>,
         key: Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -474,7 +509,7 @@ where
     type Ok = ();
     type Err = io::Error;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = record.tag();
         if self.slow.is_some() && tag.starts_with("slow_log") {
             self.slow.as_ref().unwrap().log(record, values)
@@ -489,13 +524,19 @@ where
 }
 
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
-fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record<'_>) -> io::Result<()> {
-    decorator.start_timestamp()?;
-    write!(
-        decorator,
-        "[{}]",
-        chrono::Local::now().format(TIMESTAMP_FORMAT)
-    )?;
+fn write_log_header(
+    decorator: &mut dyn RecordDecorator,
+    record: &Record<'_>,
+    enable_timestamp: bool,
+) -> io::Result<()> {
+    if enable_timestamp {
+        decorator.start_timestamp()?;
+        write!(
+            decorator,
+            "[{}]",
+            chrono::Local::now().format(TIMESTAMP_FORMAT)
+        )?;
+    }
 
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
@@ -659,9 +700,9 @@ mod tests {
         );
 
         slog_warn!(logger, "Type";
-            "Counter" => std::f64::NAN,
-            "Score" => std::f64::INFINITY,
-            "Other" => std::f64::NEG_INFINITY
+            "Counter" => f64::NAN,
+            "Score" => f64::INFINITY,
+            "Other" => f64::NEG_INFINITY
         );
 
         let none: Option<u8> = None;
@@ -688,7 +729,7 @@ mod tests {
     #[test]
     fn test_log_format_text() {
         let decorator = PlainSyncDecorator::new(TestWriter);
-        let drain = TikvFormat::new(decorator).fuse();
+        let drain = TikvFormat::new(decorator, true).fuse();
         let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
@@ -736,7 +777,7 @@ mod tests {
     #[test]
     fn test_log_format_json() {
         use serde_json::{from_str, Value};
-        let drain = Mutex::new(json_format(TestWriter)).map(slog::Fuse);
+        let drain = Mutex::new(json_format(TestWriter, true)).map(slog::Fuse);
         let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
@@ -919,10 +960,10 @@ mod tests {
 
     #[test]
     fn test_slow_log_dispatcher() {
-        let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
-        let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
-        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter));
+        let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter), true);
+        let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter), true);
+        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter), true);
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter), true);
         let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,

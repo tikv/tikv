@@ -199,7 +199,7 @@ where
     }
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -274,7 +274,7 @@ where
     }
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
 
-        update!(state, &mut ctx, Option::<EnumRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<EnumRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -426,7 +426,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
 
-        update!(state, &mut ctx, Option::<SetRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<SetRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();

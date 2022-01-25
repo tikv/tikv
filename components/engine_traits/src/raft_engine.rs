@@ -18,6 +18,15 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize>;
+
+    /// Get all available entries in the region.
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
+}
+
+pub struct RaftLogGCTask {
+    pub raft_group_id: u64,
+    pub from: u64,
+    pub to: u64,
 }
 
 pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
@@ -44,6 +53,7 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
@@ -58,6 +68,14 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Like `cut_logs` but the range could be very large. Return the deleted count.
     /// Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
+
+    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+        let mut total = 0;
+        for task in tasks {
+            total += self.gc(task.raft_group_id, task.from, task.to)?;
+        }
+        Ok(total)
+    }
 
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.

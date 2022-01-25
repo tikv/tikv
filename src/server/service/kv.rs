@@ -7,7 +7,7 @@ use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
-use crate::server::load_statistics::ThreadLoad;
+use crate::server::load_statistics::ThreadLoadPool;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
@@ -76,7 +76,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
 
     enable_req_batch: bool,
 
-    grpc_thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoadPool>,
 
     proxy: Proxy,
 
@@ -116,7 +116,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
-        grpc_thread_load: Arc<ThreadLoad>,
+        grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
@@ -989,7 +989,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         });
         ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
 
-        let thread_load = Arc::clone(&self.grpc_thread_load);
+        let grpc_thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
@@ -1007,7 +1007,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
             let mut r = item.batch_resp;
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
-            r.set_transport_layer_load(thread_load.load() as u64);
+            // TODO: per thread load is more reasonable for batching.
+            r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                 r,
                 WriteFlags::default().buffer_hint(false),
@@ -1309,14 +1310,16 @@ fn future_get<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((val, statistics, perf_statistics_delta)) => {
+                Ok((val, stats)) => {
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    exec_detail_v2
-                        .mut_time_detail()
-                        .set_kv_read_wall_time_ms(duration_ms as i64);
-                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
-                    statistics.write_scan_detail(scan_detail_v2);
-                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                    stats.stats.write_scan_detail(scan_detail_v2);
+                    stats.perf_stats.write_scan_detail(scan_detail_v2);
+                    let time_detail = exec_detail_v2.mut_time_detail();
+                    time_detail.set_kv_read_wall_time_ms(duration_ms as i64);
+                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms as i64);
+                    time_detail
+                        .set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms as i64);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1334,6 +1337,7 @@ fn future_scan<E: Engine, L: LockManager>(
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
+
     let v = storage.scan(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
@@ -1373,8 +1377,8 @@ fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let start = Instant::now();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
 
     async move {
@@ -1385,15 +1389,17 @@ fn future_batch_get<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((kv_res, statistics, perf_statistics_delta)) => {
+                Ok((kv_res, stats)) => {
                     let pairs = map_kv_pairs(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    exec_detail_v2
-                        .mut_time_detail()
-                        .set_kv_read_wall_time_ms(duration_ms as i64);
-                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
-                    statistics.write_scan_detail(scan_detail_v2);
-                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                    stats.stats.write_scan_detail(scan_detail_v2);
+                    stats.perf_stats.write_scan_detail(scan_detail_v2);
+                    let time_detail = exec_detail_v2.mut_time_detail();
+                    time_detail.set_kv_read_wall_time_ms(duration_ms as i64);
+                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms as i64);
+                    time_detail
+                        .set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms as i64);
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {
@@ -1999,7 +2005,6 @@ txn_command_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGe
     }
 });
 
-#[cfg(feature = "protobuf-codec")]
 pub mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
@@ -2008,7 +2013,6 @@ pub mod batch_commands_response {
     }
 }
 
-#[cfg(feature = "protobuf-codec")]
 pub mod batch_commands_request {
     pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
@@ -2017,10 +2021,6 @@ pub mod batch_commands_request {
     }
 }
 
-#[cfg(feature = "prost-codec")]
-pub use kvproto::tikvpb::batch_commands_request;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::tikvpb::batch_commands_response;
 use protobuf::RepeatedField;
 
 /// To measure execute time for a given request.
@@ -2096,7 +2096,7 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
 
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     fail_point!("needs_reject_raft_append", |_| true);
-    if reject_messages_on_memory_ratio - 0.0 < std::f64::EPSILON {
+    if reject_messages_on_memory_ratio < f64::EPSILON {
         return false;
     }
 

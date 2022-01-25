@@ -85,7 +85,7 @@ where
         let file = if !should_encrypt {
             file.unwrap()
         } else {
-            encrypted_file.unwrap().finalize()
+            encrypted_file.unwrap().finalize().unwrap()
         };
         box_try!(file.sync_all());
     } else {
@@ -242,7 +242,6 @@ pub fn get_decrypter_reader(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::f64::INFINITY;
 
     use super::*;
     use crate::store::snap::tests::*;
@@ -304,8 +303,8 @@ mod tests {
                         cf,
                         16,
                         |v| {
-                            v.to_owned()
-                                .into_iter()
+                            v.iter()
+                                .cloned()
                                 .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
                         },
                     )
@@ -340,7 +339,7 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
-        let limiter = Limiter::new(INFINITY);
+        let limiter = Limiter::new(f64::INFINITY);
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();

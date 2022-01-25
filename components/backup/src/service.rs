@@ -27,7 +27,7 @@ impl Service {
 impl Backup for Service {
     fn backup(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: BackupRequest,
         mut sink: ServerStreamingSink<BackupResponse>,
     ) {

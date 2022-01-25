@@ -496,6 +496,10 @@ impl Lease {
         self.bound = Some(Either::Left(bound));
     }
 
+    pub fn is_suspect(&self) -> bool {
+        matches!(self.bound, Some(Either::Left(_)))
+    }
+
     /// Inspect the lease state for the ts or now.
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {
@@ -836,7 +840,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
 pub struct MsgType<'a>(pub &'a RaftMessage);
 
 impl Display for MsgType<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.0.has_extra_msg() {
             write!(f, "{:?}", self.0.get_message().get_msg_type())
         } else {
@@ -935,7 +939,7 @@ impl Default for RegionReadProgressRegistry {
 /// is usually stale i.e seconds ago).
 ///
 /// `safe_ts` is updated by the `(apply index, safe ts)` item:
-/// ```
+/// ```ignore
 /// if self.applied_index >= item.apply_index {
 ///     self.safe_ts = max(self.safe_ts, item.safe_ts)
 /// }
@@ -1023,7 +1027,7 @@ impl RegionReadProgress {
     }
 
     // Dump the `LeaderInfo` and the peer list
-    fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
+    pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
         let mut leader_info = LeaderInfo::default();
         let core = self.core.lock().unwrap();
         let read_state = {
@@ -1247,6 +1251,7 @@ impl RegionReadProgressCore {
 pub struct RaftstoreDuration {
     pub store_wait_duration: Option<std::time::Duration>,
     pub store_process_duration: Option<std::time::Duration>,
+    pub store_write_duration: Option<std::time::Duration>,
     pub apply_wait_duration: Option<std::time::Duration>,
     pub apply_process_duration: Option<std::time::Duration>,
 }
@@ -1255,6 +1260,7 @@ impl RaftstoreDuration {
     pub fn sum(&self) -> std::time::Duration {
         self.store_wait_duration.unwrap_or_default()
             + self.store_process_duration.unwrap_or_default()
+            + self.store_write_duration.unwrap_or_default()
             + self.apply_wait_duration.unwrap_or_default()
             + self.apply_process_duration.unwrap_or_default()
     }
@@ -1282,6 +1288,10 @@ impl LatencyInspector {
 
     pub fn record_store_process(&mut self, duration: std::time::Duration) {
         self.duration.store_process_duration = Some(duration);
+    }
+
+    pub fn record_store_write(&mut self, duration: std::time::Duration) {
+        self.duration.store_write_duration = Some(duration);
     }
 
     pub fn record_apply_wait(&mut self, duration: std::time::Duration) {

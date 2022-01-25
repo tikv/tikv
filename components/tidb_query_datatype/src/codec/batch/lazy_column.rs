@@ -54,6 +54,7 @@ impl LazyBatchColumn {
 
     /// Creates a new empty `LazyBatchColumn` with the same schema.
     #[inline]
+    #[must_use]
     pub fn clone_empty(&self, capacity: usize) -> Self {
         match self {
             LazyBatchColumn::Raw(_) => Self::raw_with_capacity(capacity),
@@ -158,7 +159,7 @@ impl LazyBatchColumn {
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
-        logical_rows: LogicalRows,
+        logical_rows: LogicalRows<'_>,
     ) -> Result<()> {
         if self.is_decoded() {
             return Ok(());

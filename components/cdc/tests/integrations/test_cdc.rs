@@ -8,13 +8,7 @@ use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use futures::SinkExt;
 use grpcio::WriteFlags;
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataEvent,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -255,12 +249,12 @@ fn test_cdc_not_leader() {
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
-            .is_some()
+            .is_none()
     );
 
     // Sleep a while to make sure the stream is deregistered.
@@ -288,12 +282,12 @@ fn test_cdc_not_leader() {
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
-            .is_some()
+            .is_none()
     );
 
     event_feed_wrap.replace(None);

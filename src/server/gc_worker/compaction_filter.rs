@@ -21,7 +21,7 @@ use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
-use tikv_util::worker::Scheduler;
+use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
@@ -62,9 +62,10 @@ lazy_static! {
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
-    static ref GC_COMPACTION_FAILURE: IntCounter = register_int_counter!(
+    static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
-        "Compaction filter meets failure"
+        "Compaction filter meets failure",
+        &["type"]
     )
     .unwrap();
     // A counter for skip performing GC in compactions.
@@ -92,6 +93,12 @@ lazy_static! {
         "Compaction filter orphan versions for default CF",
         &["tag"]
     ).unwrap();
+
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_handled",
+        "MVCC deletion from compaction filter handled"
+    )
+    .unwrap();
 }
 
 pub trait CompactionFilterInitializer<EK>
@@ -217,13 +224,13 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "manual" => context.is_manual_compaction(),
         );
 
-        let filter = Box::new(WriteCompactionFilter::new(
+        let filter = WriteCompactionFilter::new(
             db,
             safe_point,
             context,
             gc_scheduler,
             (store_id, region_info_provider),
-        ));
+        );
         let name = CString::new("write_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
@@ -309,9 +316,20 @@ impl WriteCompactionFilter {
     // `log_on_error` indicates whether to print an error log on scheduling failures.
     // It's only enabled for `GcTask::OrphanVersions`.
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
-        if let Err(e) = self.gc_scheduler.schedule(task) {
-            if log_on_error {
-                error!("compaction filter schedule {} fail", e);
+        match self.gc_scheduler.schedule(task) {
+            Ok(_) => {}
+            Err(e) => {
+                if log_on_error {
+                    error!("compaction filter schedule {} fail", e);
+                }
+                match e {
+                    ScheduleError::Full(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                    }
+                    ScheduleError::Stopped(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                    }
+                }
             }
         }
     }
@@ -402,7 +420,7 @@ impl WriteCompactionFilter {
         Ok(decision)
     }
 
-    fn handle_filtered_write(&mut self, write: WriteRef) -> Result<(), String> {
+    fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
@@ -560,7 +578,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.inc();
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
@@ -578,7 +596,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
+fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(

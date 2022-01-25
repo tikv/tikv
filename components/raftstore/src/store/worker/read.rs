@@ -22,7 +22,7 @@ use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
-    RequestInspector, RequestPolicy,
+    RequestInspector, RequestPolicy, TxnExt,
 };
 use crate::Error;
 use crate::Result;
@@ -150,8 +150,9 @@ pub struct ReadDelegate {
 
     pub tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub max_ts_sync_status: Arc<AtomicU64>,
+    pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
+    pub pending_remove: bool,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -228,14 +229,20 @@ impl ReadDelegate {
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
-            max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
+            pending_remove: false,
             track_ver: TrackVer::new(),
         }
     }
 
     fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
+    }
+
+    pub fn mark_pending_remove(&mut self) {
+        self.pending_remove = true;
+        self.track_ver.inc();
     }
 
     pub fn update(&mut self, progress: Progress) {
@@ -449,7 +456,7 @@ where
     // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
-        match self.delegates.get(&region_id) {
+        let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
             Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
             _ => {
@@ -475,7 +482,9 @@ where
                     None => None,
                 }
             }
-        }
+        };
+        // Return `None` if the read delegate is pending remove
+        rd.filter(|r| !r.pending_remove)
     }
 
     fn pre_propose_raft_command(
@@ -596,13 +605,14 @@ where
                             cb.invoke_read(resp);
                             return;
                         }
+                        self.metrics.local_executed_stale_read_requests += 1;
                         response
                     }
                     _ => unreachable!(),
                 };
                 cmd_resp::bind_term(&mut response.response, delegate.term);
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                    snap.txn_ext = Some(delegate.txn_ext.clone());
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
                 cb.invoke_read(response);
@@ -704,6 +714,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 #[derive(Clone)]
 struct ReadMetrics {
     local_executed_requests: u64,
+    local_executed_stale_read_requests: u64,
     local_executed_snapshot_cache_hit: u64,
     // TODO: record rejected_by_read_quorum.
     rejected_by_store_id_mismatch: u64,
@@ -725,6 +736,7 @@ impl Default for ReadMetrics {
     fn default() -> ReadMetrics {
         ReadMetrics {
             local_executed_requests: 0,
+            local_executed_stale_read_requests: 0,
             local_executed_snapshot_cache_hit: 0,
             rejected_by_store_id_mismatch: 0,
             rejected_by_peer_id_mismatch: 0,
@@ -816,6 +828,10 @@ impl ReadMetrics {
         if self.local_executed_requests > 0 {
             LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
             self.local_executed_requests = 0;
+        }
+        if self.local_executed_stale_read_requests > 0 {
+            LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.inc_by(self.local_executed_stale_read_requests);
+            self.local_executed_stale_read_requests = 0;
         }
     }
 }
@@ -959,8 +975,9 @@ mod tests {
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
+                pending_remove: false,
                 track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
@@ -1200,9 +1217,10 @@ mod tests {
                 leader_lease: None,
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                txn_ext: Arc::new(TxnExt::default()),
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
+                pending_remove: false,
             };
             meta.readers.insert(1, read_delegate);
         }

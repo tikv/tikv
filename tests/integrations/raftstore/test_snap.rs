@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngineReadOnly};
 use file_system::{IOOp, IOType};
 use futures::executor::block_on;
 use grpcio::Environment;
@@ -30,15 +30,16 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let r1 = cluster.run_conf_change();
 
+    let first_value = vec![0; 10240];
     // at least 4m data
-    for i in 0..2 * 1024 {
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+    for i in 0..400 {
+        let key = format!("{:03}", i);
+        cluster.must_put(key.as_bytes(), &first_value);
     }
+    let first_key: &[u8] = b"000";
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, &format!("{:01024}", 0).into_bytes());
+    must_get_none(&engine_2, first_key);
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
@@ -48,9 +49,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, key, value);
 
     // now snapshot must be applied on peer 2;
-    let key = format!("{:01024}", 0);
-    let value = format!("{:01024}", 0);
-    must_get_equal(&engine_2, key.as_bytes(), value.as_bytes());
+    must_get_equal(&engine_2, first_key, &first_value);
     let stale = Arc::new(AtomicBool::new(false));
     cluster.sim.wl().add_recv_filter(
         3,
@@ -60,16 +59,15 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
         )),
     );
     pd_client.must_add_peer(r1, new_peer(3, 3));
-    let mut i = 2 * 1024;
+    let mut i = 400;
     loop {
         i += 1;
-        let key = format!("{:01024}", i);
-        let value = format!("{:01024}", i);
-        cluster.must_put(key.as_bytes(), value.as_bytes());
+        let key = format!("{:03}", i);
+        cluster.must_put(key.as_bytes(), &first_value);
         if stale.load(Ordering::Relaxed) {
             break;
         }
-        if i > 10 * 1024 {
+        if i > 1000 {
             panic!("snapshot should be sent twice after {} kvs", i);
         }
     }
@@ -78,13 +76,6 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k3", b"v3");
 
     // TODO: add more tests.
-}
-
-#[test]
-fn test_node_huge_snapshot() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_huge_snapshot(&mut cluster);
 }
 
 #[test]
@@ -149,11 +140,14 @@ fn test_server_snap_gc() {
 
     let snap_dir = cluster.get_snap_dir(3);
     // it must have more than 2 snaps.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
-        .unwrap()
-        .map(|p| p.unwrap().path())
-        .collect();
-    assert!(snapfiles.len() >= 2);
+
+    assert!(
+        fs::read_dir(snap_dir)
+            .unwrap()
+            .filter(|p| p.is_ok())
+            .count()
+            >= 2
+    );
 
     cluster.sim.wl().clear_recv_filters(3);
     debug!("filters cleared.");
@@ -451,6 +445,7 @@ fn test_server_snapshot_with_append() {
 #[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
+    cluster.cfg.prefer_mem = false;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
     cluster.cfg.raft_store.merge_max_log_gap = 3;
@@ -581,7 +576,8 @@ fn test_gen_during_heavy_recv() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
-
+    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
     drop(cluster);
     let _ = th.join();
 }
@@ -673,4 +669,37 @@ fn test_correct_snapshot_term() {
     cluster.must_put(b"k1", b"v1");
     // If peer 4 panicks, it won't be able to apply new writes.
     must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+}
+
+/// Test when applying a snapshot, old logs should be cleaned up.
+#[test]
+fn test_snapshot_clean_up_logs_with_log_gc() {
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    // Speed up log gc.
+    cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    pd_client.must_add_peer(r, new_peer(4, 4));
+    pd_client.must_remove_peer(r, new_peer(3, 3));
+    cluster.must_transfer_leader(r, new_peer(4, 4));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+    cluster.clear_send_filters();
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    // Peer (4, 4) must become leader at the end and send snapshot to 2.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    let raft_engine = cluster.engines[&2].raft.clone();
+    let mut dest = vec![];
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    // No new log is proposed, so there should be no log at all.
+    assert!(dest.is_empty(), "{:?}", dest);
 }

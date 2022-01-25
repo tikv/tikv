@@ -6,20 +6,10 @@ use std::sync::Arc;
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{
-        row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
-        LogType as EventLogType, Row as EventRow,
-    },
-    Error as EventError, Event,
-};
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
     Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
     Event_oneof_event,
 };
-use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -30,17 +20,16 @@ use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::time::Instant;
+use tikv::storage::Statistics;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
-use crate::channel::{SendError, Sink};
+use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::{CdcEvent, ConnID};
+use crate::service::ConnID;
 use crate::{Error, Result};
 
-const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
@@ -59,7 +48,7 @@ impl Default for DownstreamID {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
     Uninitialized,
     Normal,
@@ -198,9 +187,12 @@ enum PendingLock {
 pub struct Delegate {
     pub handle: ObserveHandle,
     pub region_id: u64,
+
+    // None if the delegate is not initialized.
     region: Option<Region>,
-    pub downstreams: Vec<Downstream>,
     pub resolver: Option<Resolver>,
+
+    pub downstreams: Vec<Downstream>,
     pending: Option<Pending>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
@@ -221,11 +213,21 @@ impl Delegate {
         }
     }
 
-    /// Return false if subscribe failed.
-    pub fn subscribe(&mut self, downstream: Downstream) -> bool {
+    /// Let downstream subscribe the delegate.
+    /// Return error if subscribe fails, caller must deregister the downstream.
+    pub fn subscribe(&mut self, downstream: Downstream) -> Result<()> {
         if let Some(region) = self.region.as_ref() {
+            let req_id = downstream.req_id;
+            let downstream_epoch = downstream.region_epoch.clone();
+            let downstream_id = downstream.get_id();
+            let conn_id = downstream.get_conn_id();
+
+            // The delegate is initialized, push to normal downstreams.
+            self.downstreams.push(downstream);
+
+            // Check if the downstream is out dated.
             if let Err(e) = compare_region_epoch(
-                &downstream.region_epoch,
+                &downstream_epoch,
                 region,
                 false, /* check_conf_ver */
                 true,  /* check_ver */
@@ -233,25 +235,20 @@ impl Delegate {
             ) {
                 info!("cdc fail to subscribe downstream";
                     "region_id" => region.get_id(),
-                    "downstream_id" => ?downstream.get_id(),
-                    "conn_id" => ?downstream.get_conn_id(),
-                    "req_id" => downstream.req_id,
+                    "downstream_id" => ?downstream_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => req_id,
                     "err" => ?e);
-                let err = Error::request(e.into());
-                let error_event = self.error_event(err);
-                if let Err(err) = downstream.sink_error_event(self.region_id, error_event.clone()) {
-                    warn!("cdc send subscribe error failed";
-                        "region_id" => self.region_id, "error" => ?err, "origin_error" => ?error_event,
-                        "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                        "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
-                }
-                return false;
+
+                // Downstream is outdated, mark stop.
+                let downstream = self.downstreams.last_mut().unwrap();
+                downstream.state.store(DownstreamState::Stopped);
+                return Err(Error::request(e.into()));
             }
-            self.downstreams.push(downstream);
         } else {
             self.pending.as_mut().unwrap().downstreams.push(downstream);
         }
-        true
+        Ok(())
     }
 
     pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
@@ -275,7 +272,7 @@ impl Delegate {
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
-        let error_event = err.map(|err| self.error_event(err));
+        let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
         let downstreams = self.downstreams_mut();
         downstreams.retain(|d| {
@@ -299,24 +296,6 @@ impl Delegate {
         is_last
     }
 
-    fn error_event(&self, err: Error) -> EventError {
-        let mut err_event = EventError::default();
-        let mut err = err.extract_region_error();
-        if err.has_not_leader() {
-            let not_leader = err.take_not_leader();
-            err_event.set_not_leader(not_leader);
-        } else if err.has_epoch_not_match() {
-            let epoch_not_match = err.take_epoch_not_match();
-            err_event.set_epoch_not_match(epoch_not_match);
-        } else {
-            // TODO: Add more errors to the cdc protocol
-            let mut region_not_found = errorpb::RegionNotFound::default();
-            region_not_found.set_region_id(self.region_id);
-            err_event.set_region_not_found(region_not_found);
-        }
-        err_event
-    }
-
     pub fn mark_failed(&mut self) {
         self.failed = true;
     }
@@ -337,7 +316,7 @@ impl Delegate {
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
         let region_id = self.region_id;
-        let error = self.error_event(err);
+        let error = err.into_error_event(self.region_id);
         let send = move |downstream: &Downstream| {
             downstream.state.store(DownstreamState::Stopped);
             let error_event = error.clone();
@@ -414,6 +393,7 @@ impl Delegate {
         batch: CmdBatch,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
     ) -> Result<()> {
         // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
@@ -438,6 +418,7 @@ impl Delegate {
                     request.requests.into(),
                     old_value_cb,
                     old_value_cache,
+                    statistics,
                     is_one_pc,
                 )?;
             } else {
@@ -469,12 +450,12 @@ impl Delegate {
                     }
                     decode_default(default.1, &mut row);
                     let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
                     current_rows_size += row_size;
-                    row.old_value = old_value.unwrap_or_default();
+                    row.old_value = old_value.finalized().unwrap_or_default();
                     rows.last_mut().unwrap().push(row);
                 }
                 Some(TxnEntry::Commit {
@@ -501,9 +482,9 @@ impl Delegate {
                         continue;
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.unwrap_or_default();
+                    row.old_value = old_value.finalized().unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
@@ -543,35 +524,24 @@ impl Delegate {
         requests: Vec<Request>,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
         is_one_pc: bool,
     ) -> Result<()> {
         let txn_extra_op = self.txn_extra_op;
-        let mut read_old_value = |row: &mut EventRow, read_old_ts| {
+        let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
             if txn_extra_op == TxnExtraOp::ReadOldValue {
                 let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                let start = Instant::now();
-                let (old_value, statistics) = old_value_cb(key, read_old_ts, old_value_cache);
+                let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
                 row.old_value = old_value.unwrap_or_default();
-                CDC_OLD_VALUE_DURATION_HISTOGRAM
-                    .with_label_values(&["all"])
-                    .observe(start.saturating_elapsed().as_secs_f64());
-                if let Some(statistics) = statistics {
-                    for (cf, cf_details) in statistics.details().iter() {
-                        for (tag, count) in cf_details.iter() {
-                            CDC_OLD_VALUE_SCAN_DETAILS
-                                .with_label_values(&[*cf, *tag])
-                                .inc_by(*count as u64);
-                        }
-                    }
-                }
             }
+            Ok(())
         };
 
         let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)
+                    self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)?;
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
@@ -632,20 +602,19 @@ impl Delegate {
         mut put: PutRequest,
         is_one_pc: bool,
         rows: &mut HashMap<Vec<u8>, EventRow>,
-        mut read_old_value: impl FnMut(&mut EventRow, /* read_old_ts */ TimeStamp),
-    ) {
+        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
                 let mut row = EventRow::default();
-                let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
-                if skip {
-                    return;
+                if decode_write(put.take_key(), put.get_value(), &mut row, true) {
+                    return Ok(());
                 }
 
                 let commit_ts = if is_one_pc {
                     set_event_row_type(&mut row, EventLogType::Committed);
                     let commit_ts = TimeStamp::from(row.commit_ts);
-                    read_old_value(&mut row, commit_ts.prev());
+                    read_old_value(&mut row, commit_ts.prev())?;
                     Some(commit_ts)
                 } else {
                     // 2PC
@@ -680,13 +649,12 @@ impl Delegate {
                 let mut row = EventRow::default();
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
-                let skip = decode_lock(put.take_key(), lock, &mut row);
-                if skip {
-                    return;
+                if decode_lock(put.take_key(), lock, &mut row) {
+                    return Ok(());
                 }
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
-                read_old_value(&mut row, read_old_ts);
+                read_old_value(&mut row, read_old_ts)?;
                 let occupied = rows.entry(row.key.clone()).or_default();
                 if !occupied.value.is_empty() {
                     assert!(row.value.is_empty());
@@ -724,6 +692,7 @@ impl Delegate {
                 panic!("invalid cf {}", other);
             }
         }
+        Ok(())
     }
 
     fn sink_delete(&mut self, mut delete: DeleteRequest) {
@@ -775,14 +744,7 @@ impl Delegate {
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
-    #[cfg(feature = "prost-codec")]
-    {
-        row.r#type = ty.into();
-    }
-    #[cfg(not(feature = "prost-codec"))]
-    {
-        row.r_type = ty;
-    }
+    row.r_type = ty;
 }
 
 fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
@@ -897,11 +859,11 @@ mod tests {
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        delegate.subscribe(downstream);
+        delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
         for downstream in delegate.on_region_ready(resolver, region) {
-            delegate.subscribe(downstream);
+            delegate.subscribe(downstream).unwrap();
         }
 
         let rx_wrap = Cell::new(Some(rx));

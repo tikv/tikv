@@ -5,19 +5,19 @@ use std::error::Error as StdError;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::{errorpb, kvrpcpb};
 use thiserror::Error;
-
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::deadline::DeadlineError;
-use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
-    Result,
+    CommandKind, Result,
 };
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use tikv_util::deadline::DeadlineError;
+use txn_types::{KvPair, TimeStamp};
 
 #[derive(Debug, Error)]
 /// Detailed errors for storage operations. This enum also unifies code for basic error
@@ -53,6 +53,9 @@ pub enum ErrorInner {
     #[error("invalid cf name: {0}")]
     InvalidCf(String),
 
+    #[error("cf is deprecated in API V2, cf name: {0}")]
+    CfDeprecated(String),
+
     #[error("ttl is not enabled, but get put request with ttl")]
     TTLNotEnabled,
 
@@ -61,6 +64,52 @@ pub enum ErrorInner {
 
     #[error("The length of ttls does not equal to the length of pairs")]
     TTLsLenNotEqualsToPairs,
+
+    #[error("Api version in request does not match with TiKV storage, cmd: {:?}, storage: {:?}, request: {:?}", .cmd, .storage_api_version, .req_api_version)]
+    ApiVersionNotMatched {
+        cmd: CommandKind,
+        storage_api_version: ApiVersion,
+        req_api_version: ApiVersion,
+    },
+
+    #[error("Key mode mismatched with the request mode, cmd: {:?}, storage: {:?}, key: {}", .cmd, .storage_api_version, .key)]
+    InvalidKeyMode {
+        cmd: CommandKind,
+        storage_api_version: ApiVersion,
+        key: String,
+    },
+
+    #[error("Key mode mismatched with the request mode, cmd: {:?}, storage: {:?}, range: {:?}", .cmd, .storage_api_version, .range)]
+    InvalidKeyRangeMode {
+        cmd: CommandKind,
+        storage_api_version: ApiVersion,
+        range: (Option<String>, Option<String>),
+    },
+}
+
+impl ErrorInner {
+    pub fn invalid_key_mode(cmd: CommandKind, storage_api_version: ApiVersion, key: &[u8]) -> Self {
+        ErrorInner::InvalidKeyMode {
+            cmd,
+            storage_api_version,
+            key: log_wrappers::hex_encode_upper(key),
+        }
+    }
+
+    pub fn invalid_key_range_mode(
+        cmd: CommandKind,
+        storage_api_version: ApiVersion,
+        range: (Option<&[u8]>, Option<&[u8]>),
+    ) -> Self {
+        ErrorInner::InvalidKeyRangeMode {
+            cmd,
+            storage_api_version,
+            range: (
+                range.0.map(log_wrappers::hex_encode_upper),
+                range.1.map(log_wrappers::hex_encode_upper),
+            ),
+        }
+    }
 }
 
 impl From<DeadlineError> for ErrorInner {
@@ -102,11 +151,15 @@ impl ErrorCodeExt for Error {
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+            ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
             ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
             ErrorInner::TTLsLenNotEqualsToPairs => {
                 error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
             }
+            ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
+            ErrorInner::InvalidKeyMode { .. } => error_code::storage::INVALID_KEY_MODE,
+            ErrorInner::InvalidKeyRangeMode { .. } => error_code::storage::INVALID_KEY_MODE,
         }
     }
 }
@@ -333,6 +386,23 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             let mut commit_ts_too_large = kvrpcpb::CommitTsTooLarge::default();
             commit_ts_too_large.set_commit_ts(min_commit_ts.into_inner());
             key_error.set_commit_ts_too_large(commit_ts_too_large);
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::AssertionFailed {
+                start_ts,
+                key,
+                assertion,
+                existing_start_ts,
+                existing_commit_ts,
+            },
+        ))))) => {
+            let mut assertion_failed = kvrpcpb::AssertionFailed::default();
+            assertion_failed.set_start_ts(start_ts.into_inner());
+            assertion_failed.set_key(key.to_owned());
+            assertion_failed.set_assertion(*assertion);
+            assertion_failed.set_existing_start_ts(existing_start_ts.into_inner());
+            assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
+            key_error.set_assertion_failed(assertion_failed);
         }
         _ => {
             error!(?*err; "txn aborts");
