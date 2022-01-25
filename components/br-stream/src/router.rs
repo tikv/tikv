@@ -336,10 +336,13 @@ impl RouterInner {
                 "size_limit" => self.temp_file_size_limit,
             );
             let cur_size = task_info.total_size();
-            if cur_size > self.temp_file_size_limit {
+            if cur_size > self.temp_file_size_limit && !task_info.is_flushing() {
                 info!("try flushing task"; "task" => %task, "size" => %cur_size);
-                if let Err(e) = self.scheduler.schedule(Task::Flush(task)) {
-                    error!("backup stream schedule task failed"; "error" => ?e);
+                if task_info.set_flushing_status_cas(false, true).is_ok() {
+                    if let Err(e) = self.scheduler.schedule(Task::Flush(task)) {
+                        error!("backup stream schedule task failed"; "error" => ?e);
+                        task_info.set_flushing_status(false);
+                    }
                 }
             }
         }
@@ -349,10 +352,8 @@ impl RouterInner {
     pub async fn do_flush(&self, task_name: &str, store_id: u64) {
         debug!("backup stream do flush"; "task" => task_name);
         if let Some(task_info) = self.tasks.lock().await.get(task_name) {
-            if task_info.set_flushing_status_cas(false, true).is_ok() {
-                if let Err(e) = task_info.do_flush(store_id).await {
-                    warn!("backup steam do flush fail"; "err" => ?e);
-                }
+            if let Err(e) = task_info.do_flush(store_id).await {
+                warn!("backup steam do flush fail"; "err" => ?e);
             }
             // set false to flushing whether success or fail
             task_info.set_flushing_status(false);

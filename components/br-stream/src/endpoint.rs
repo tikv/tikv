@@ -147,23 +147,21 @@ where
                 Ok(tasks) => {
                     for task in tasks.inner {
                         debug!("backup stream get task in flush tick"; "task" => ?task);
-                        match router.get_task_info(&task.info.name).await {
-                            Ok(task_info) => {
-                                if task_info.should_flush() {
-                                    info!("backup stream trigger flush task by tick"; "task" => ?task);
-                                    if let Err(e) =
-                                        scheduler.schedule(Task::Flush(task.info.name.to_string()))
-                                    {
-                                        error!("backup stream schedule task failed"; "error" => ?e);
-                                    }
-                                }
+                        router.get_task_info(&task.info.name).await.and_then(|task_info| {
+                            if task_info.should_flush() && !task_info.is_flushing() && task_info.set_flushing_status_cas(false, true).is_ok() {
+                                info!("backup stream trigger flush task by tick"; "task" => ?task);
+                                scheduler.schedule(Task::Flush(task.info.name.to_string())).map_err(|e| {
+                                    error!("backup stream schedule task failed"; "error" => ?e);
+                                    e.into()
+                                })
+                            } else {
+                                Ok(())
                             }
-                            Err(e) => error!("backup stream get task failed"; "error" => ?e),
-                        }
+                        })?;
                     }
                 }
                 Err(e) => error!("backup stream get tasks failed"; "error" => ?e),
-            };
+            }
         }
     }
 
