@@ -33,6 +33,7 @@ pub enum ChangeRow {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ChangeLog {
     Error(errorpb::Error),
     Rows { index: u64, rows: Vec<ChangeRow> },

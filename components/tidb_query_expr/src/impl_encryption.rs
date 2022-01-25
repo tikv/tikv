@@ -304,7 +304,7 @@ mod tests {
         ];
 
         for (s, exp) in cases {
-            let s = s.map(|inner| hex::decode(inner.as_bytes().to_vec()).unwrap());
+            let s = s.map(|inner| hex::decode(inner.as_bytes()).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(s)
                 .evaluate(ScalarFuncSig::UncompressedLength)
@@ -383,7 +383,7 @@ mod tests {
             ),
         ];
         for (arg, expect) in test_cases {
-            let expect = Some(hex::decode(expect.as_bytes().to_vec()).unwrap());
+            let expect = Some(hex::decode(expect.as_bytes()).unwrap());
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)

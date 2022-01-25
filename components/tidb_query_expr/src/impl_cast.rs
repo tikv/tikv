@@ -516,12 +516,11 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64;
-            if val.is_empty() {
-                r = 0.0;
+            let r = if val.is_empty() {
+                0.0
             } else {
-                r = val.convert(ctx)?;
-            }
+                val.convert(ctx)?
+            };
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -1558,24 +1557,13 @@ mod tests {
         assert!(r.is_none());
     }
 
+    #[derive(Default)]
     struct CtxConfig {
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
         in_insert_stmt: bool,
         in_update_or_delete_stmt: bool,
-    }
-
-    impl Default for CtxConfig {
-        fn default() -> Self {
-            CtxConfig {
-                overflow_as_warning: false,
-                truncate_as_warning: false,
-                should_clip_to_zero: false,
-                in_insert_stmt: false,
-                in_update_or_delete_stmt: false,
-            }
-        }
     }
 
     impl From<CtxConfig> for EvalContext {
@@ -6168,12 +6156,11 @@ mod tests {
                     Ok(v) => match v {
                         Some(dur) => {
                             if expect_max {
-                                let max_val_str: &str;
-                                if dur.is_neg() {
-                                    max_val_str = "-838:59:59";
+                                let max_val_str = if dur.is_neg() {
+                                    "-838:59:59"
                                 } else {
-                                    max_val_str = "838:59:59";
-                                }
+                                    "838:59:59"
+                                };
                                 let max_expect = Duration::parse(&mut ctx, max_val_str, fsp);
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",

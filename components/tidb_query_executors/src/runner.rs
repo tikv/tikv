@@ -162,13 +162,13 @@ pub fn build_executors<S: Storage + 'static>(
         .next()
         .ok_or_else(|| other_err!("No executors"))?;
 
-    let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>>;
     let mut summary_slot_index = 0;
     // Limit executor use this flag to check if its src is table/index scan.
     // Performance enhancement for plan like: limit 1 -> table/index scan.
     let mut is_src_scan_executor = true;
 
-    match first_ed.get_tp() {
+    let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match first_ed.get_tp()
+    {
         ExecType::TypeTableScan => {
             EXECUTOR_COUNT_METRICS.batch_table_scan.inc();
 
@@ -177,7 +177,7 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
-            executor = Box::new(
+            Box::new(
                 BatchTableScanExecutor::new(
                     storage,
                     config.clone(),
@@ -189,7 +189,7 @@ pub fn build_executors<S: Storage + 'static>(
                     primary_prefix_column_ids,
                 )?
                 .collect_summary(summary_slot_index),
-            );
+            )
         }
         ExecType::TypeIndexScan => {
             EXECUTOR_COUNT_METRICS.batch_index_scan.inc();
@@ -197,7 +197,7 @@ pub fn build_executors<S: Storage + 'static>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
-            executor = Box::new(
+            Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
@@ -209,7 +209,7 @@ pub fn build_executors<S: Storage + 'static>(
                     is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
-            );
+            )
         }
         _ => {
             return Err(other_err!(
@@ -217,12 +217,12 @@ pub fn build_executors<S: Storage + 'static>(
                 first_ed.get_tp()
             ));
         }
-    }
+    };
 
     for mut ed in executor_descriptors {
         summary_slot_index += 1;
 
-        let new_executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match ed.get_tp() {
+        executor = match ed.get_tp() {
             ExecType::TypeSelection => {
                 EXECUTOR_COUNT_METRICS.batch_selection.inc();
 
@@ -331,7 +331,6 @@ pub fn build_executors<S: Storage + 'static>(
                 ));
             }
         };
-        executor = new_executor;
         is_src_scan_executor = false;
     }
 
