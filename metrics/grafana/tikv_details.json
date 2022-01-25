@@ -8578,17 +8578,17 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[45s])) by (type)",
+              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])) by (type)",
               "format": "time_series",
-              "intervalFactor": 2,
+              "intervalFactor": 1,
               "legendFormat": " {{type}}",
               "refId": "A",
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[45s]))",
+              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s]))",
               "format": "time_series",
-              "intervalFactor": 2,
+              "intervalFactor": 1,
               "legendFormat": "total",
               "refId": "B",
               "step": 4
@@ -8691,17 +8691,17 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[45s])) by (type)",
+              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])) by (type)",
               "format": "time_series",
-              "intervalFactor": 2,
+              "intervalFactor": 1,
               "legendFormat": "{{type}}",
               "refId": "A",
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[45s]))",
+              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s]))",
               "format": "time_series",
-              "intervalFactor": 2,
+              "intervalFactor": 1,
               "legendFormat": "total",
               "refId": "B",
               "step": 4
