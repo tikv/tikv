@@ -57,7 +57,7 @@ impl TestSuite {
         tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::secs(5);
 
         let resource_metering_cfg = tikv_cfg.resource_metering.clone();
-        let cfg_controller = ConfigController::new(tikv_cfg);
+        let cfg_controller = ConfigController::new(tikv_cfg.clone());
         cfg_controller.register(
             Module::ResourceMetering,
             Box::new(ConfigManager::new(
