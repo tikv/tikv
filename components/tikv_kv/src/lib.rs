@@ -430,22 +430,34 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
     });
 }
 
-/// Get a snapshot of `engine`.
+/// Get a snapshot of `engine` for read.
 pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
+    let fut = snapshot_for_write(engine, ctx);
+    async {
+        let (_, snap) = fut.await?;
+        snap
+    }
+}
+
+/// Get a snapshot and CbContext of `engine` for write.
+pub fn snapshot_for_write<E: Engine>(
+    engine: &E,
+    ctx: SnapContext<'_>,
+) -> impl std::future::Future<Output = Result<(CbContext, Result<E::Snap>)>> {
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
     // make engine not cross yield point
     async move {
         val?; // propagate error
-        let (_ctx, result) = future
+        let result = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
         fail_point!("after-snapshot");
-        result
+        Ok(result)
     }
 }
 
