@@ -24,9 +24,7 @@ use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
-use tikv_util::worker::{
-    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
-};
+use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
@@ -35,12 +33,13 @@ use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
 use crate::storage::txn::Error as TxnError;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
-use super::config::{GcConfig, GcWorkerConfigManager};
-use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{
-    check_need_gc, Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+use super::compaction_filter::{
+    CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
     GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
+use super::config::{GcConfig, GcWorkerConfigManager};
+use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
+use super::{check_need_gc, Callback, Error, ErrorInner, Result};
 use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -53,6 +52,7 @@ const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
+const GC_MAX_PENDING_TASKS: usize = 4096;
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
@@ -232,7 +232,8 @@ where
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
-        self.stats.add(&reader.statistics);
+        let stats = mem::take(&mut reader.statistics);
+        self.stats.add(&stats);
         Ok(())
     }
 
@@ -304,11 +305,10 @@ where
             fn next(&mut self) -> Option<Key> {
                 loop {
                     let region = self.regions.peek()?;
-                    let key = self.keys.peek()?;
-                    let data_key = keys::data_key(key.as_encoded());
-                    if data_key.as_slice() < region.get_start_key() {
+                    let key = self.keys.peek()?.as_encoded().as_slice();
+                    if key < region.get_start_key() {
                         self.keys.next();
-                    } else if data_key.as_slice() < region.get_end_key() {
+                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
                         return self.keys.next();
                     } else {
                         self.regions.next();
@@ -329,6 +329,7 @@ where
                         .into_iter()
                         .filter(move |r| find_peer(r, store_id).is_some())
                         .peekable();
+
                     let keys = keys.into_iter().peekable();
                     return Ok(Box::new(KeysInRegions { keys, regions }));
                 }
@@ -336,14 +337,22 @@ where
             Ok(Box::new(keys.into_iter()))
         }
 
+        let count = keys.len();
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
         let mut txn = Self::new_txn();
-        let mut reader = MvccReader::new(snapshot, None /*scan_mode*/, false);
+        let mut reader = if count <= 1 {
+            MvccReader::new(snapshot, None, false)
+        } else {
+            // keys are closing to each other in one batch of gc keys, so do not use
+            // prefix seek here to avoid too many seeks
+            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+        };
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
+            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc();
             if let Err(e) = self.gc_key(safe_point, &key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
@@ -509,11 +518,13 @@ where
     }
 }
 
-impl<E, RR> FutureRunnable<GcTask> for GcRunner<E, RR>
+impl<E, RR> Runnable for GcRunner<E, RR>
 where
     E: Engine,
     RR: RaftStoreRouter<RocksEngine>,
 {
+    type Task = GcTask;
+
     #[inline]
     fn run(&mut self, task: GcTask) {
         let _io_type_guard = WithIOType::new(IOType::Gc);
@@ -631,14 +642,14 @@ where
 }
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &FutureScheduler<GcTask>,
+    scheduler: &Scheduler<GcTask>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -658,7 +669,7 @@ fn schedule_gc(
 
 /// Does GC synchronously.
 pub fn sync_gc(
-    scheduler: &FutureScheduler<GcTask>,
+    scheduler: &Scheduler<GcTask>,
     region_id: u64,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -692,8 +703,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<FutureWorker<GcTask>>>,
-    worker_scheduler: FutureScheduler<GcTask>,
+    worker: Arc<Mutex<LazyWorker<GcTask>>>,
+    worker_scheduler: Scheduler<GcTask>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -756,15 +767,16 @@ where
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
-        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
+        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
+        let worker = worker_builder.create().lazy_build("gc-worker");
+        let worker_scheduler = worker.scheduler();
         GcWorker {
             engine,
             raft_store_router,
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
-            worker,
+            worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -794,10 +806,11 @@ where
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
+
         let new_handle = GcManager::new(
             cfg,
             safe_point,
-            self.worker_scheduler.clone(),
+            self.scheduler(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
         )
@@ -813,11 +826,8 @@ where
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
         );
-        self.worker
-            .lock()
-            .unwrap()
-            .start(runner)
-            .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+        self.worker.lock().unwrap().start(runner);
+        Ok(())
     }
 
     pub fn start_observe_lock_apply(
@@ -840,15 +850,11 @@ where
             h.stop()?;
         }
         // Stop self.
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            if let Err(e) = h.join() {
-                return Err(box_err!("failed to join gc_worker handle, err: {:?}", e));
-            }
-        }
+        self.worker.lock().unwrap().stop();
         Ok(())
     }
 
-    pub fn scheduler(&self) -> FutureScheduler<GcTask> {
+    pub fn scheduler(&self) -> Scheduler<GcTask> {
         self.worker_scheduler.clone()
     }
 
@@ -989,7 +995,9 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Peer;
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use raft::StateRole;
+    use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
+    use raftstore::coprocessor::RegionChangeEvent;
     use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
@@ -1387,22 +1395,36 @@ mod tests {
         gc_worker.start().unwrap();
 
         let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
         r1.set_start_key(b"".to_vec());
-        r1.set_end_key(format!("zk{:02}", 10).into_bytes());
+        r1.set_end_key(format!("k{:02}", 10).into_bytes());
 
         let mut r2 = Region::default();
-        r2.set_start_key(format!("zk{:02}", 20).into_bytes());
-        r2.set_end_key(format!("zk{:02}", 30).into_bytes());
+        r2.set_id(2);
+        r2.mut_region_epoch().set_version(1);
+        r2.set_start_key(format!("k{:02}", 20).into_bytes());
+        r2.set_end_key(format!("k{:02}", 30).into_bytes());
         r2.mut_peers().push(Peer::default());
         r2.mut_peers()[0].set_store_id(1);
 
-        let regions = vec![r1, r2];
+        let mut r3 = Region::default();
+        r3.set_id(3);
+        r3.mut_region_epoch().set_version(1);
+        r3.set_start_key(format!("k{:02}", 30).into_bytes());
+        r3.set_end_key(b"".to_vec());
+        r3.mut_peers().push(Peer::default());
+        r3.mut_peers()[0].set_store_id(1);
 
         let sp_provider = MockSafePointProvider(200);
-        let ri_provider = MockRegionInfoProvider::new(regions);
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = RegionInfoAccessor::new(&mut host);
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
         gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+        host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
+        host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
@@ -1438,7 +1460,7 @@ mod tests {
             let suffix = Key::from_raw(&k).append_ts(152.into());
             raw_k.extend_from_slice(suffix.as_encoded());
 
-            if !(20..30).contains(&i) {
+            if !(20..100).contains(&i) {
                 // MVCC-DELETIONs can't be cleaned because region info checks can't pass.
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
             } else {
@@ -1446,5 +1468,54 @@ mod tests {
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
         }
+    }
+
+    #[test]
+    fn test_gc_keys_statistics() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = RegionInfoAccessor::new(&mut host);
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        let mut keys = vec![];
+        for i in 0..100 {
+            let k = format!("k{:02}", i).into_bytes();
+            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
+            must_commit(&prefixed_engine, &k, 151, 152);
+            keys.push(Key::from_raw(&k));
+        }
+        db.flush_cf(cf, true).unwrap();
+
+        assert_eq!(runner.stats.write.seek, 0);
+        assert_eq!(runner.stats.write.next, 0);
+        runner
+            .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
+            .unwrap();
+        assert_eq!(runner.stats.write.seek, 1);
+        assert_eq!(runner.stats.write.next, 100 * 2);
     }
 }
