@@ -50,9 +50,8 @@ const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 /// versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
-pub const GC_MAX_EXECUTING_TASKS: usize = 10;
+pub const GC_MAX_EXECUTING_TASKS: usize = 2;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
-const GC_MAX_PENDING_TASKS: usize = 4096;
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
@@ -767,7 +766,7 @@ where
         cfg: GcConfig,
         feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
-        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
+        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(cfg.max_pending_task);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
