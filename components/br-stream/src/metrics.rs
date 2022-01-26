@@ -40,10 +40,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref ON_EVENT_COST_HISTOGRAM : HistogramVec = register_histogram_vec!(
+    pub static ref ON_EVENT_COST_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_stream_on_event_duration_seconds",
         "The time cost of handling events.",
         &["stage"],
         exponential_buckets(0.001, 2.0, 16).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
 }

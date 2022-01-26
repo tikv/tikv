@@ -38,6 +38,8 @@ hex = "0.4"
 uuid = "0.8"
 openssl = "0.10"
 dashmap = "5"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
 
 file_system = { path = "../file_system" }
 tidb_query_datatype = {path = "../tidb_query_datatype", default-features = false}
