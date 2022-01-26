@@ -526,8 +526,7 @@ mod tests {
 
     #[test]
     fn test_cpu_record() {
-        let handle = init_recorder();
-        handle.resume();
+        let handle = init_recorder(true);
 
         // Heavy CPU only with 1 thread
         {
