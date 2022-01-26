@@ -10,7 +10,7 @@ use tikv::server::gc_worker::{GcTask, GcWorker};
 use tikv::storage::kv::TestEngineBuilder;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::Limiter;
-use tikv_util::worker::FutureScheduler;
+use tikv_util::worker::Scheduler;
 
 #[test]
 fn test_gc_config_validate() {
@@ -43,7 +43,7 @@ fn setup_cfg_controller(
     (gc_worker, cfg_controller)
 }
 
-fn validate<F>(scheduler: &FutureScheduler<GcTask>, f: F)
+fn validate<F>(scheduler: &Scheduler<GcTask>, f: F)
 where
     F: FnOnce(&GcConfig, &Limiter) + Send + 'static,
 {
