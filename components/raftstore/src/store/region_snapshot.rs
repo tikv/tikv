@@ -410,8 +410,17 @@ mod tests {
         EK: KvEngine,
         ER: RaftEngine,
     {
-        let (sched, _) = worker::dummy_scheduler();
-        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
+        let (region_sched, _) = worker::dummy_scheduler();
+        let (raftlog_fetch_sched, _) = worker::dummy_scheduler();
+        PeerStorage::new(
+            engines,
+            r,
+            region_sched,
+            raftlog_fetch_sched,
+            0,
+            "".to_owned(),
+        )
+        .unwrap()
     }
 
     fn load_default_dataset<EK, ER>(engines: Engines<EK, ER>) -> (PeerStorage<EK, ER>, DataSet)

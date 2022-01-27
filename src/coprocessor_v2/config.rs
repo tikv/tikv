@@ -2,17 +2,9 @@
 
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub coprocessor_plugin_directory: Option<PathBuf>,
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        Config {
-            coprocessor_plugin_directory: None,
-        }
-    }
 }

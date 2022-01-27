@@ -399,10 +399,7 @@ impl CrypterCore {
 
     fn reset_buffer(&mut self, size: usize) {
         // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
-        self.buffer.reserve(size + self.block_size);
-        unsafe {
-            self.buffer.set_len(size + self.block_size);
-        }
+        self.buffer.resize(size + self.block_size, 0);
     }
 
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {

@@ -737,15 +737,14 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
-        let keys;
-        match self.sim.read() {
-            Ok(s) => keys = s.get_node_ids(),
+        let keys = match self.sim.read() {
+            Ok(s) => s.get_node_ids(),
             Err(_) => {
                 safe_panic!("failed to acquire read lock");
                 // Leave the resource to avoid double panic.
                 return;
             }
-        }
+        };
         for id in keys {
             self.stop_node(id);
         }
