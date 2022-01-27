@@ -395,6 +395,9 @@ pub enum CasualMessage<EK: KvEngine> {
     RejectRaftAppend {
         peer_id: u64,
     },
+
+    // Try renew leader lease
+    RenewLease,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -450,6 +453,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
             }
+            CasualMessage::RenewLease => write!(fmt, "RenewLease"),
         }
     }
 }
