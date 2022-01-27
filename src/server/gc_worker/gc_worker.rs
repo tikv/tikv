@@ -351,7 +351,8 @@ where
         }
 
         let count = keys.len();
-        let exclusive_end_key = {
+        let range_start_key = keys.first().unwrap().clone().into_encoded();
+        let range_end_key = {
             let mut k = keys
                 .last()
                 .unwrap()
@@ -362,7 +363,7 @@ where
         };
         let snapshot = self
             .engine
-            .snapshot_on_kv_engine(keys.first().unwrap().as_encoded(), &exclusive_end_key)?;
+            .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let mut txn = Self::new_txn();
@@ -402,7 +403,9 @@ where
                 gc_info = GcInfo::default();
             } else {
                 Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
+                let snapshot = self
+                    .engine
+                    .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
                 txn = Self::new_txn();
                 reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
@@ -1022,7 +1025,9 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::must_get_none;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::txn::tests::{
+        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
@@ -1567,6 +1572,80 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
+    }
+
+    #[test]
+    fn test_gc_keys_scan_range_limit() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        // Generate some tombstone
+        for i in 10u64..30 {
+            must_rollback(&prefixed_engine, b"k3", i, true);
+        }
+        db.flush_cf(cf, true).unwrap();
+        must_gc(&prefixed_engine, b"k3", 30);
+
+        // Test tombstone counter works
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k3")],
+                TimeStamp::new(200),
+                Some((1, ri_provider.clone())),
+            )
+            .unwrap();
+        assert_eq!(runner.stats.write.seek_tombstone, 20);
+
+        // gc_keys with single key
+        runner.stats.write.seek_tombstone = 0;
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k2")],
+                TimeStamp::new(200),
+                Some((1, ri_provider.clone())),
+            )
+            .unwrap();
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+
+        // gc_keys with multiple key
+        runner.stats.write.seek_tombstone = 0;
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+                TimeStamp::new(200),
+                Some((1, ri_provider)),
+            )
+            .unwrap();
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
     }
 
     #[test]
