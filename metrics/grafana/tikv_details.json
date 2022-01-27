@@ -28996,7 +28996,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(delta(tikv_engine_ingestion_picked_level_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le)",
+              "expr": "sum(delta(tikv_engine_ingestion_picked_level_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}[1m])) by (le)",
               "format": "heatmap",
               "interval": "",
               "intervalFactor": 2,

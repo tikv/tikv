@@ -41,7 +41,7 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     ///
     /// This field is placed before `order_exprs` and `src` because it relies on data in
     /// those fields and we want this field to be dropped first.
-    #[allow(clippy::box_vec)]
+    #[allow(clippy::box_collection)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
     order_exprs: Box<[RpnExpression]>,

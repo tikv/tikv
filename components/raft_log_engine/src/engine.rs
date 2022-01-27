@@ -242,6 +242,15 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .fetch_entries_to::<MessageExtTyped>(raft_group_id, begin, end, max_size, to)
             .map_err(transfer_error)
     }
+
+    fn get_all_entries_to(&self, raft_group_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        if let Some(first) = self.0.first_index(raft_group_id) {
+            let last = self.0.last_index(raft_group_id).unwrap();
+            buf.reserve((last - first + 1) as usize);
+            self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
+        }
+        Ok(())
+    }
 }
 
 impl RaftEngine for RaftLogEngine {
@@ -272,6 +281,7 @@ impl RaftEngine for RaftLogEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        _: u64,
         _: &RaftLocalState,
         batch: &mut RaftLogBatch,
     ) -> Result<()> {
