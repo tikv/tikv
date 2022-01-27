@@ -11,8 +11,8 @@ use std::vec::IntoIter;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
+    CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -351,9 +351,20 @@ where
         }
 
         let count = keys.len();
+        let exclusive_end_key = {
+            let mut k = keys
+                .last()
+                .unwrap()
+                .to_raw()
+                .map_err(|e| EngineError::Codec(e))?;
+            k.push(b'0');
+            Key::from_raw(&k).into_encoded()
+        };
+        let snapshot = self
+            .engine
+            .snapshot_on_kv_engine(keys.first().unwrap().as_encoded(), &exclusive_end_key)?;
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
-        let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
         let mut txn = Self::new_txn();
         let mut reader = if count <= 1 {
             MvccReader::new(snapshot, None, false)
