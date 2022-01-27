@@ -101,33 +101,46 @@ fn test_node_simple_store_stats() {
 fn test_store_heartbeat_report_hotspots() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (mut cluster, client, _) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
     });
-    let (k, v) = (b"key".to_vec(), b"v2".to_vec());
+    let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
+    let (k3, v3) = (b"k3".to_vec(), b"v3".to_vec());
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let left = cluster.get_region(b"k1");
+    let mut left_ctx = Context::default();
+    left_ctx.set_region_id(left.id);
+    left_ctx.set_peer(left.get_peers()[0].clone());
+    left_ctx.set_region_epoch(cluster.get_region_epoch(left.id));
+    let right = cluster.get_region(b"k3");
+    let mut right_ctx = Context::default();
+    right_ctx.set_region_id(right.id);
+    right_ctx.set_peer(right.get_peers()[0].clone());
+    right_ctx.set_region_epoch(cluster.get_region_epoch(right.id));
 
-    // Raw put
-    let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx.clone());
-    put_req.key = k.clone();
-    put_req.value = v.clone();
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(!put_resp.has_region_error());
-    assert!(put_resp.error.is_empty());
+    // raw get k1 100 times
     for _i in 0..100 {
-        // Raw get
         let mut get_req = RawGetRequest::default();
-        get_req.set_context(ctx.clone());
-        get_req.key = k.clone();
+        get_req.set_context(left_ctx.clone());
+        get_req.key = k1.clone();
         let get_resp = client.raw_get(&get_req).unwrap();
-        assert_eq!(get_resp.value, v);
+        assert_eq!(get_resp.value, v1);
+    }
+    // raw get k3 10 times
+    for _i in 0..10 {
+        let mut get_req = RawGetRequest::default();
+        get_req.set_context(right_ctx.clone());
+        get_req.key = k3.clone();
+        let get_resp = client.raw_get(&get_req).unwrap();
+        assert_eq!(get_resp.value, v3);
     }
     sleep_ms(50);
-    let region_id = cluster.get_region_id(b"");
     let store_id = 1;
     let hot_peers = cluster.pd_client.get_store_hotspots(store_id).unwrap();
-    let peer_stat = hot_peers.get(&region_id).unwrap();
-    assert_eq!(peer_stat.get_region_id(), region_id);
+    let peer_stat = hot_peers.get(&left.id).unwrap();
     assert!(peer_stat.get_read_keys() > 0);
     assert!(peer_stat.get_read_bytes() > 0);
     fail::remove("mock_tick_interval");
@@ -257,17 +270,17 @@ fn test_query_stats() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_interval", "return(0)").unwrap();
-    test_query_num(raw_get);
-    test_query_num(raw_batch_get);
-    test_query_num(raw_scan);
-    test_query_num(raw_batch_scan);
-    test_query_num(get);
-    test_query_num(batch_get);
-    test_query_num(scan);
-    test_query_num(scan_lock);
-    test_query_num(get_key_ttl);
-    test_query_num(raw_batch_get_command);
-    test_query_num(batch_get_command);
+    test_query_num(raw_get, true);
+    test_query_num(raw_batch_get, true);
+    test_query_num(raw_scan, true);
+    test_query_num(raw_batch_scan, true);
+    test_query_num(get, false);
+    test_query_num(batch_get, false);
+    test_query_num(scan, false);
+    test_query_num(scan_lock, false);
+    test_query_num(get_key_ttl, true);
+    test_query_num(raw_batch_get_command, true);
+    test_query_num(batch_get_command, false);
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_interval");
@@ -339,7 +352,7 @@ fn put(
     }
 }
 
-fn test_query_num(query: Box<Query>) {
+fn test_query_num(query: Box<Query>, enable_ttl: bool) {
     let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
         cluster.cfg.split.qps_threshold = 0;
@@ -347,13 +360,16 @@ fn test_query_num(query: Box<Query>) {
         cluster.cfg.split.split_contained_score = 2.0;
         cluster.cfg.split.detect_times = 1;
         cluster.cfg.split.sample_threshold = 0;
-        cluster.cfg.storage.enable_ttl = true;
+        cluster.cfg.storage.enable_ttl = enable_ttl;
     });
 
     let k = b"key".to_vec();
     let store_id = 1;
-    raw_put(&cluster, &client, &ctx, store_id, k.clone());
-    put(&cluster, &client, &ctx, store_id, k.clone());
+    if enable_ttl {
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
+    } else {
+        put(&cluster, &client, &ctx, store_id, k.clone());
+    }
     let region_id = cluster.get_region_id(&k);
     query(
         ctx.clone(),
@@ -417,5 +433,5 @@ fn batch_commands(
             }
         }
     });
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
 }

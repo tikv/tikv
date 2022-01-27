@@ -3,7 +3,7 @@
 use std::sync::*;
 use std::time::Duration;
 
-use crate::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use futures::SinkExt;
@@ -531,7 +531,7 @@ fn test_cdc_tso_failure() {
 fn test_region_split() {
     let cluster = new_server_cluster(1, 1);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
@@ -1522,7 +1522,7 @@ fn test_old_value_cache_hit_pessimistic() {
 fn test_region_created_replicate() {
     let cluster = new_server_cluster(0, 2);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(2, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     suite
@@ -1844,7 +1844,7 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
 fn test_term_change() {
     let cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(&[]);
     suite
         .cluster
@@ -2004,7 +2004,7 @@ fn test_resolved_ts_cluster_upgrading() {
             .reset_version("4.0.0")
             .unwrap();
     }
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.id);
