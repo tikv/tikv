@@ -67,7 +67,6 @@ use crate::store::peer::{
     ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
-use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
@@ -98,7 +97,6 @@ enum DelayReason {
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
-const RENEW_LEADER_LEASE_DURATION_MILLIS: i64 = 100;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -944,6 +942,10 @@ where
                     self.fsm.peer.send_wake_up_message(self.ctx, &leader);
                 }
             }
+            CasualMessage::RenewLease => {
+                self.try_renew_leader_lease();
+                self.reset_raft_tick(GroupState::Ordered);
+            }
             CasualMessage::RejectRaftAppend { peer_id } => {
                 let mut msg = raft::eraftpb::Message::new();
                 msg.msg_type = MessageType::MsgUnreachable;
@@ -1541,18 +1543,18 @@ where
         }
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-        let renew_bound = current_time
-            + self.ctx.cfg.check_leader_lease_interval()
-            + time::Duration::milliseconds(RENEW_LEADER_LEASE_DURATION_MILLIS);
-        if self.fsm.peer.need_renew_lease_at(self.ctx, renew_bound) {
-            let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
-            if dropped {
-                self.ctx.raft_metrics.propose.dropped_read_index += 1;
-                return;
-            }
-            self.ctx.raft_metrics.propose.read_index += 1;
-            let read_proposal = ReadIndexRequest::noop(id, current_time);
-            self.fsm.peer.push_pending_read(read_proposal, true);
+        if self.fsm.peer.need_renew_lease_at(self.ctx, current_time) {
+            let mut cmd = new_read_index_request(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                self.fsm.peer.peer.clone(),
+            );
+            cmd.mut_header().set_read_quorum(true);
+            self.propose_raft_command_internal(
+                cmd,
+                Callback::Read(Box::new(|_| ())),
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
         }
     }
 
