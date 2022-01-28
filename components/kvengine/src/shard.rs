@@ -129,7 +129,7 @@ pub struct Shard {
     pub(crate) properties: Properties,
     pub(crate) compacting: AtomicBool,
     pub(crate) initial_flushed: AtomicBool,
-    pub(crate) last_switch_time: AtomicU64,
+    pub(crate) last_switch_time: RwLock<Instant>,
     pub(crate) max_mem_table_size: AtomicU64,
 
     pub(crate) base_version: u64,
@@ -173,7 +173,7 @@ impl Shard {
             properties: Properties::new().apply_pb(props),
             compacting: Default::default(),
             initial_flushed: Default::default(),
-            last_switch_time: Default::default(),
+            last_switch_time: RwLock::new(Instant::now()),
             max_mem_table_size: AtomicU64::new(base_size / 4),
             base_version: Default::default(),
             estimated_size: Default::default(),

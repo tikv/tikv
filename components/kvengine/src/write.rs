@@ -174,11 +174,9 @@ impl Engine {
     }
 
     pub(crate) fn schedule_flush_task(&self, shard: &Shard, mut mem_tbl: memtable::CFTable) {
-        let last_switch_val = shard.last_switch_time.load(Ordering::Acquire);
-        let last_switch_instant: Instant = unsafe { transmute(last_switch_val) };
-        let now_val: u64 = unsafe { transmute(Instant::now()) };
-        shard.last_switch_time.store(now_val, Ordering::Release);
-
+        let mut guard = shard.last_switch_time.write().unwrap();
+        let last_switch_instant = *guard;
+        *guard = Instant::now();
         let props = shard.properties.to_pb(shard.id);
         mem_tbl.set_properties(props);
         let mut stage = shard.get_split_stage();
