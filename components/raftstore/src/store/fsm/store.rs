@@ -74,8 +74,8 @@ use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
-    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-    RegionRunner, RegionTask, SplitCheckTask,
+    RaftlogFetchRunner, RaftlogFetchTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate,
+    RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
 };
 use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
@@ -360,6 +360,7 @@ where
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    pub raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -859,9 +860,21 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.tag,
                 self.poll_ctx.pending_count,
                 self.poll_ctx.ready_count,
-                self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.append,
-                self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
-                self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .append
+                    .saturating_sub(self.previous_metrics.append),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .message
+                    .saturating_sub(self.previous_metrics.message),
+                self.poll_ctx
+                    .raft_metrics
+                    .ready
+                    .snapshot
+                    .saturating_sub(self.previous_metrics.snapshot),
             );
             dur
         } else {
@@ -925,6 +938,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -999,6 +1013,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
+                self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 region,
             ));
@@ -1038,6 +1053,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
+                self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 &region,
             )?;
@@ -1143,6 +1159,7 @@ where
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
+            raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
@@ -1207,6 +1224,7 @@ where
             split_check_scheduler: self.split_check_scheduler.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
+            raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -1239,6 +1257,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // engine implementations.
     purge_worker: Worker,
 
+    raftlog_fetch_worker: Worker,
+
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
@@ -1263,7 +1283,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
-        assert!(!self.workers.is_none());
+        assert!(self.workers.is_some());
         self.workers
             .as_ref()
             .unwrap()
@@ -1305,6 +1325,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
             purge_worker: Worker::new("purge-worker"),
+            raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
         };
@@ -1349,6 +1370,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 };
             },
         );
+
+        let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
+            "raftlog-fetch-worker",
+            RaftlogFetchRunner::new(self.router.clone(), engines.raft.clone()),
+        );
+
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             meta.get_id(),
@@ -1380,6 +1407,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             consistency_check_scheduler,
             cleanup_scheduler,
             raftlog_gc_scheduler,
+            raftlog_fetch_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             coprocessor_host,
@@ -1545,6 +1573,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.background_worker.stop();
         workers.purge_worker.stop();
         workers.refresh_config_worker.stop();
+        workers.raftlog_fetch_worker.stop();
     }
 }
 
@@ -1961,6 +1990,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
+            self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             region_id,
             target.clone(),
@@ -2621,6 +2651,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.store.get_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
+            self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             &region,
         ) {

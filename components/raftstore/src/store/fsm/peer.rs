@@ -35,7 +35,10 @@ use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
-use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use raft::{
+    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -64,11 +67,10 @@ use crate::store::peer::{
     ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
-use crate::store::read_queue::ReadIndexRequest;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -95,7 +97,6 @@ enum DelayReason {
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
-const RENEW_LEADER_LEASE_DURATION_MILLIS: i64 = 100;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -211,7 +212,8 @@ where
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
@@ -236,7 +238,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    region_scheduler,
+                    raftlog_fetch_scheduler,
+                    engines,
+                    region,
+                    meta_peer,
+                )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -260,7 +270,8 @@ where
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
@@ -280,7 +291,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    region_scheduler,
+                    raftlog_fetch_scheduler,
+                    engines,
+                    &region,
+                    peer,
+                )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -889,7 +908,7 @@ where
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
-                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx);
+                    self.fsm.peer.bcast_wake_up_message(self.ctx);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -920,8 +939,12 @@ where
                     .iter()
                     .any(|p| p.get_id() == self.fsm.peer_id())
                 {
-                    self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
+                    self.fsm.peer.send_wake_up_message(self.ctx, &leader);
                 }
+            }
+            CasualMessage::RenewLease => {
+                self.try_renew_leader_lease();
+                self.reset_raft_tick(GroupState::Ordered);
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
                 let mut msg = raft::eraftpb::Message::new();
@@ -930,7 +953,7 @@ where
                 msg.from = self.fsm.peer.peer_id();
 
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
-                self.fsm.peer.send_raft_messages(&mut self.ctx, raft_msg);
+                self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
         }
     }
@@ -1161,6 +1184,10 @@ where
             }
             SignificantMsg::RaftLogGcFlushed => {
                 self.on_raft_log_gc_flushed();
+            }
+            SignificantMsg::RaftlogFetched { context, .. } => {
+                self.fsm.peer.raft_group.on_entries_fetched(context);
+                self.fsm.has_ready = true;
             }
         }
     }
@@ -1516,18 +1543,18 @@ where
         }
 
         let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
-        let renew_bound = current_time
-            + self.ctx.cfg.check_leader_lease_interval()
-            + time::Duration::milliseconds(RENEW_LEADER_LEASE_DURATION_MILLIS);
-        if self.fsm.peer.need_renew_lease_at(self.ctx, renew_bound) {
-            let (id, dropped) = self.fsm.peer.propose_read_index(None, None);
-            if dropped {
-                self.ctx.raft_metrics.propose.dropped_read_index += 1;
-                return;
-            }
-            self.ctx.raft_metrics.propose.read_index += 1;
-            let read_proposal = ReadIndexRequest::noop(id, current_time);
-            self.fsm.peer.push_pending_read(read_proposal, true);
+        if self.fsm.peer.need_renew_lease_at(self.ctx, current_time) {
+            let mut cmd = new_read_index_request(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                self.fsm.peer.peer.clone(),
+            );
+            cmd.mut_header().set_read_quorum(true);
+            self.propose_raft_command_internal(
+                cmd,
+                Callback::Read(Box::new(|_| ())),
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
         }
     }
 
@@ -1695,9 +1722,7 @@ where
             }
         }
 
-        if result.is_err() {
-            return result;
-        }
+        result?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -2289,7 +2314,7 @@ where
             match self
                 .fsm
                 .peer
-                .ready_to_transfer_leader(&mut self.ctx, msg.get_index(), &from)
+                .ready_to_transfer_leader(self.ctx, msg.get_index(), &from)
             {
                 Some(reason) => {
                     info!(
@@ -2337,12 +2362,9 @@ where
                 }
             }
         } else {
-            self.fsm.peer.execute_transfer_leader(
-                &mut self.ctx,
-                msg.get_from(),
-                peer_disk_usage,
-                false,
-            );
+            self.fsm
+                .peer
+                .execute_transfer_leader(self.ctx, msg.get_from(), peer_disk_usage, false);
         }
     }
 
@@ -2970,6 +2992,7 @@ where
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
+                self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
             ) {
@@ -3215,12 +3238,13 @@ where
             let entries = if low > state.get_commit() {
                 vec![]
             } else {
-                match self
-                    .fsm
-                    .peer
-                    .get_store()
-                    .entries(low, state.get_commit() + 1, NO_LIMIT)
-                {
+                // TODO: fetch entries in async way
+                match self.fsm.peer.get_store().entries(
+                    low,
+                    state.get_commit() + 1,
+                    NO_LIMIT,
+                    GetEntriesContext::empty(false),
+                ) {
                     Ok(ents) => ents,
                     Err(e) => panic!(
                         "[region {}] {} failed to get merge entires: {:?}, low:{}, commit: {}",
@@ -3336,7 +3360,7 @@ where
                             .as_ref()
                             .unwrap()
                             .get_commit(),
-                        &mut self.ctx,
+                        self.ctx,
                     );
                 }
             }
@@ -3457,7 +3481,9 @@ where
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
-        meta.readers.remove(&source.get_id());
+        if let Some(d) = meta.readers.get_mut(&source.get_id()) {
+            d.mark_pending_remove();
+        }
 
         // After the region commit merged, the region's key range is extended and the region's `safe_ts`
         // should reset to `min(source_safe_ts, target_safe_ts)`
@@ -3695,7 +3721,9 @@ where
             let prev = meta.region_ranges.remove(&enc_end_key(r));
             assert_eq!(prev, Some(r.get_id()));
             assert!(meta.regions.remove(&r.get_id()).is_some());
-            meta.readers.remove(&r.get_id());
+            if let Some(d) = meta.readers.get_mut(&r.get_id()) {
+                d.mark_pending_remove();
+            }
         }
         // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`
         // which are added before applying snapshot
@@ -4632,7 +4660,7 @@ where
                     "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
 
-                self.fsm.peer.bcast_check_stale_peer_message(&mut self.ctx);
+                self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
 
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
@@ -4736,7 +4764,7 @@ where
         // As the leader can propose the TransferLeader request successfully, the disk of
         // the leader is probably not full.
         self.fsm.peer.execute_transfer_leader(
-            &mut self.ctx,
+            self.ctx,
             self.fsm.peer.leader_id(),
             DiskUsage::Normal,
             true,

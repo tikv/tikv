@@ -6495,6 +6495,7 @@ mod tests {
         test_pessimistic_lock_impl(true);
     }
 
+    #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
             start_ts: TimeStamp,
