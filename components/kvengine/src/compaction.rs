@@ -16,7 +16,6 @@ use crate::table::{
     sstable::{self, SSTable},
 };
 use crate::*;
-use crossbeam_epoch as epoch;
 use kvenginepb as pb;
 
 #[derive(Clone)]
@@ -304,16 +303,15 @@ impl Engine {
         let mut max_pri = CompactionPriority::default();
         max_pri.shard_id = shard.id;
         max_pri.shard_ver = shard.ver;
-        let g = &epoch::pin();
-        let l0s = shard.get_l0_tbls(g);
+        let l0s = shard.get_l0_tbls();
         let size_score = l0s.total_size() as f64 / self.opts.base_size as f64;
         let num_tbl_score = l0s.tbls.len() as f64 / 5.0;
         max_pri.score = size_score * 0.7 + num_tbl_score * 0.3;
         max_pri.cf = -1;
 
         for cf in 0..NUM_CFS {
-            let scf = shard.get_cf(cf, g);
-            for lh in &scf.levels {
+            let scf = shard.get_cf(cf);
+            for lh in scf.levels.as_ref() {
                 let score = lh.total_size as f64
                     / ((self.opts.base_size as f64) * 10f64.powf((lh.level - 1) as f64));
                 if max_pri.score < score {
@@ -354,8 +352,7 @@ impl Engine {
             "start compaction shard {}:{} leve:{} cf:{}, score:{}",
             shard.id, shard.ver, pri.level, pri.cf, pri.score
         );
-        let g = &epoch::pin();
-        let scf = shard.get_cf(pri.cf as usize, g);
+        let scf = shard.get_cf(pri.cf as usize);
         let this_level = &scf.levels[pri.level - 1];
         let next_level = &scf.levels[pri.level];
         let mut cd = CompactDef::new(pri.cf as usize, pri.level);
@@ -389,16 +386,15 @@ impl Engine {
     }
 
     pub(crate) fn build_compact_l0_request(&self, shard: &Shard) -> Result<CompactionRequest> {
-        let g = &epoch::pin();
-        let l0s = shard.get_l0_tbls(g);
+        let l0s = shard.get_l0_tbls();
         let mut req = self.new_compact_request(shard, -1, 0);
         let mut total_size = 0;
-        for l0 in &l0s.tbls {
+        for l0 in l0s.tbls.as_ref() {
             req.tops.push(l0.id());
             total_size += l0.size();
         }
         for cf in 0..NUM_CFS {
-            let lh = &shard.get_cf(cf, g).levels[0];
+            let lh = &shard.get_cf(cf).levels[0];
             let mut bottoms = vec![];
             for tbl in lh.tables.iter() {
                 bottoms.push(tbl.id());

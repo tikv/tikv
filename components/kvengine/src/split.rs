@@ -6,7 +6,6 @@ use std::{collections::HashSet, thread, time};
 use crate::{table::sstable, *};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
-use crossbeam_epoch as epoch;
 use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
 use slog_global::{info, warn};
@@ -37,7 +36,6 @@ impl Engine {
     }
 
     pub fn split_shard_files(&self, shard_id: u64, shard_ver: u64) -> Result<pb::ChangeSet> {
-        let g = &epoch::pin();
         let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
         if !shard.is_splitting() {
             return Err(Error::WrongSplitStage);
@@ -50,15 +48,10 @@ impl Engine {
 
         let dfs_opts = dfs::Options::new(shard_id, shard_ver);
         for cf in 0..NUM_CFS {
-            let scf = shard.get_cf(cf, g);
-            for lh in &scf.levels {
-                self.split_tables(
-                    dfs_opts,
-                    cf,
-                    lh,
-                    shard.get_ref_split_keys(g),
-                    cs.mut_split_files(),
-                )?;
+            let scf = shard.get_cf(cf);
+            for lh in scf.levels.as_ref() {
+                let split_keys = shard.get_split_keys();
+                self.split_tables(dfs_opts, cf, lh, &split_keys, cs.mut_split_files())?;
             }
         }
         Ok(cs)
@@ -83,14 +76,13 @@ impl Engine {
     }
 
     fn split_shard_l0_files(&self, shard: &Shard, split_files: &mut pb::SplitFiles) -> Result<()> {
-        let g = &epoch::pin();
-        let l0s = load_resource(&shard.l0_tbls, g);
-        let split_keys = shard.get_ref_split_keys(g);
-        for l0 in &l0s.tbls {
-            if !need_split_l0(split_keys, l0) {
+        let l0s = shard.get_l0_tbls();
+        let split_keys = shard.get_split_keys();
+        for l0 in l0s.tbls.as_ref() {
+            if !need_split_l0(&split_keys, l0) {
                 continue;
             }
-            let mut new_l0s = self.split_shard_l0_table(shard, l0, split_keys)?;
+            let mut new_l0s = self.split_shard_l0_table(shard, l0, &split_keys)?;
             for new_l0 in new_l0s.drain(..) {
                 split_files.mut_l0_creates().push(new_l0);
             }
@@ -288,8 +280,7 @@ impl Engine {
             return Err(Error::WrongSplitStage);
         }
         let split = cs.get_split();
-        let g = &epoch::pin();
-        let split_ctx = shard.get_split_ctx(g);
+        let split_ctx = shard.get_split_ctx();
         assert_eq!(split.get_new_shards().len(), split_ctx.mem_tbls.len());
         self.build_split_shards(&shard, split, cs.get_sequence(), initial_seq)
     }
@@ -301,8 +292,7 @@ impl Engine {
         sequence: u64,
         initial_seq: u64,
     ) -> Result<()> {
-        let g = &epoch::pin();
-        let split_ctx = old_shard.get_split_ctx(g);
+        let split_ctx = old_shard.get_split_ctx();
         let mut new_shards = vec![];
         let new_shard_props = split.get_new_shards();
         let new_ver = old_shard.ver + new_shard_props.len() as u64 - 1;
@@ -336,23 +326,21 @@ impl Engine {
                 store_u64(&new_shard.meta_seq, initial_seq);
                 store_u64(&new_shard.write_sequence, initial_seq);
             }
-            new_shard.atomic_add_mem_table(g, mem_tbl.clone());
-            new_shard.atomic_remove_mem_table(g);
+            new_shard.atomic_add_mem_table(mem_tbl.clone());
+            new_shard.atomic_remove_mem_table();
             new_shards.push(Arc::new(new_shard));
         }
-        let l0s = old_shard.get_l0_tbls(g);
+        let l0s = old_shard.get_l0_tbls();
         for l0 in l0s.tbls.iter().rev() {
             let idx = get_split_shard_index(split.get_keys(), l0.smallest());
             let new_shard = &new_shards[idx];
-            new_shard.atomic_add_l0_table(g, l0.clone());
+            new_shard.atomic_add_l0_table(l0.clone());
         }
         for cf in 0..NUM_CFS {
-            let old_scf = old_shard.get_cf(cf, g);
+            let old_scf = old_shard.get_cf(cf);
             let mut new_scfs = Vec::new();
-            new_scfs.resize_with(new_shards.len(), || {
-                ShardCFBuilder::new(self.opts.cfs[cf].max_levels)
-            });
-            for lh in &old_scf.levels {
+            new_scfs.resize_with(new_shards.len(), || ShardCFBuilder::new(cf));
+            for lh in old_scf.levels.as_ref() {
                 for tbl in lh.tables.iter() {
                     self.insert_table_to_shard(
                         tbl,

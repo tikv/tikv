@@ -14,6 +14,7 @@ pub mod options;
 pub mod read;
 pub mod shard;
 pub mod split;
+pub mod stats;
 pub mod table;
 pub mod write;
 
@@ -37,3 +38,5 @@ pub use table::table::Iterator;
 pub use write::*;
 
 const NUM_CFS: usize = 3;
+const CF_LEVELS: [usize; NUM_CFS] = [3, 2, 1];
+const CF_MANAGED: [bool; NUM_CFS] = [true, false, true];

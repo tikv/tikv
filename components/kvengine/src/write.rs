@@ -8,18 +8,16 @@ use slog_global::info;
 
 use crate::table::{self, memtable};
 use crate::*;
-use crossbeam_epoch as epoch;
 
 pub struct WriteBatch {
     shard_id: u64,
-    cf_conf: [CFConfig; NUM_CFS],
     cf_batches: [memtable::WriteBatch; NUM_CFS],
     properties: HashMap<String, BytesMut>,
     sequence: u64,
 }
 
 impl WriteBatch {
-    pub fn new(shard_id: u64, cf_conf: [CFConfig; NUM_CFS]) -> Self {
+    pub fn new(shard_id: u64) -> Self {
         let cf_batches = [
             memtable::WriteBatch::new(),
             memtable::WriteBatch::new(),
@@ -27,7 +25,6 @@ impl WriteBatch {
         ];
         Self {
             shard_id,
-            cf_conf,
             cf_batches,
             properties: HashMap::new(),
             sequence: 1,
@@ -48,7 +45,7 @@ impl WriteBatch {
     }
 
     fn validate_version(&self, cf: usize, version: u64) {
-        if self.cf_conf[cf].managed {
+        if CF_MANAGED[cf] {
             if version == 0 {
                 panic!("version is zero for managed CF")
             }
@@ -100,13 +97,12 @@ impl WriteBatch {
 
 impl Engine {
     pub(crate) fn switch_mem_table(&self, shard: &Shard, version: u64) -> memtable::CFTable {
-        let g = &epoch::pin();
-        let mut writable = shard.get_writable_mem_table(g).clone();
+        let mut writable = shard.get_writable_mem_table();
         if writable.is_empty() {
             writable = memtable::CFTable::new();
         } else {
             let new_tbl = memtable::CFTable::new();
-            shard.atomic_add_mem_table(g, new_tbl);
+            shard.atomic_add_mem_table(new_tbl);
         }
         writable.set_version(version);
         info!(
@@ -121,20 +117,19 @@ impl Engine {
     }
 
     pub fn write(&self, wb: &mut WriteBatch) {
-        let g = &epoch::pin();
         let shard = self.get_shard(wb.shard_id).unwrap();
         let version = shard.base_version + wb.sequence;
         self.update_write_batch_version(wb, version);
         if shard.is_splitting() {
             if shard.ingest_pre_split_seq == 0 || wb.sequence > shard.ingest_pre_split_seq {
-                let split_ctx = shard.get_split_ctx(g);
-                self.write_splitting(wb, &shard, split_ctx);
+                let split_ctx = shard.get_split_ctx();
+                self.write_splitting(wb, &shard, &split_ctx);
                 store_u64(&shard.write_sequence, wb.sequence);
                 return;
             }
             // Recover the shard to the pre-split stage when this shard is ingested.
         }
-        let mut mem_tbl = shard.get_writable_mem_table(g);
+        let mut mem_tbl = shard.get_writable_mem_table();
         for cf in 0..NUM_CFS {
             mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf));
         }
@@ -158,7 +153,7 @@ impl Engine {
 
     fn update_write_batch_version(&self, wb: &mut WriteBatch, version: u64) {
         for cf in 0..NUM_CFS {
-            if !self.opts.cfs[cf].managed {
+            if !CF_MANAGED[cf] {
                 wb.get_cf_mut(cf).iterate(|e, _| {
                     e.version = version;
                 });
@@ -166,12 +161,7 @@ impl Engine {
         }
     }
 
-    fn write_splitting<'a>(
-        &self,
-        wb: &mut WriteBatch,
-        shard: &'a Shard,
-        split_ctx: &'a SplitContext,
-    ) {
+    fn write_splitting(&self, wb: &mut WriteBatch, shard: &Shard, split_ctx: &SplitContext) {
         for cf in 0..NUM_CFS {
             let cf_wb = wb.get_cf_mut(cf);
             cf_wb.iterate(|entry, buf| {

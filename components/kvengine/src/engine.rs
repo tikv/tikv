@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
-use crossbeam_epoch as epoch;
 use dashmap::DashMap;
 use fslock;
 use moka::sync::SegmentedCache;
@@ -149,7 +148,7 @@ impl EngineCore {
         let mut l0_tbls = Vec::new();
         let mut scf_builders = Vec::new();
         for cf in 0..NUM_CFS {
-            let scf_builder = ShardCFBuilder::new(self.opts.cfs[cf].max_levels);
+            let scf_builder = ShardCFBuilder::new(cf);
             scf_builders.push(scf_builder);
         }
         for (fid, fm) in &meta.files {
@@ -163,15 +162,9 @@ impl EngineCore {
             scf_builders[fm.cf as usize].add_table(tbl, fm.level as usize);
         }
         l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
-        shard.l0_tbls.store(
-            epoch::Owned::new(Arc::new(L0Tables::new(l0_tbls))),
-            Ordering::Release,
-        );
+        *shard.l0_tbls.write().unwrap() = L0Tables::new(l0_tbls);
         for cf in (0..NUM_CFS).rev() {
-            shard.cfs[cf].store(
-                epoch::Owned::new(Arc::new(scf_builders[cf].build())),
-                Ordering::Release,
-            );
+            shard.set_cf(cf, scf_builders[cf].build());
         }
         info!("load shard {}:{}", shard.id, shard.ver);
         self.shards.insert(shard.id, Arc::new(shard));
@@ -210,10 +203,9 @@ impl EngineCore {
     }
 
     pub fn trigger_flush(&self, shard: &Arc<Shard>) {
-        let g = &epoch::pin();
-        let mem_tbls = shard.get_mem_tbls(g);
+        let mem_tbls = shard.get_mem_tbls();
         for i in (0..mem_tbls.tbls.len()).rev() {
-            let mem_tbl = &mem_tbls.tbls[i];
+            let mem_tbl = &mem_tbls.tbls.as_slice()[i];
             if mem_tbl.is_applying() {
                 continue;
             }

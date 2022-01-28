@@ -28,8 +28,6 @@ pub struct Options {
 
     pub remote_compaction_addr: String,
 
-    pub cfs: [CFConfig; NUM_CFS],
-
     pub recovery_concurrency: usize,
 
     pub preparation_concurrency: usize,
@@ -51,11 +49,6 @@ impl Default for Options {
             num_compactors: 3,
             table_builder_options: Default::default(),
             remote_compaction_addr: Default::default(),
-            cfs: [
-                CFConfig::new(true, 3),
-                CFConfig::new(false, 2),
-                CFConfig::new(true, 1),
-            ],
             recovery_concurrency: Default::default(),
             preparation_concurrency: Default::default(),
             max_mem_table_size_factor: 256,

@@ -79,7 +79,7 @@ impl Engine {
             }
             let mut it = skl.new_iterator(false);
             // If CF is not managed, we only need to keep the latest version.
-            let rc = !self.opts.cfs[cf].managed;
+            let rc = !CF_MANAGED[cf];
             let mut prev_key = BytesMut::new();
             it.rewind();
             while it.valid() {

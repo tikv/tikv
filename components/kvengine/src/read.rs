@@ -9,7 +9,6 @@ use bytes::{Buf, Bytes, BytesMut};
 use crate::shard::{L0Tables, MemTables};
 use crate::table::table;
 use crate::*;
-use crossbeam_epoch as epoch;
 
 pub struct Item<'a> {
     val: table::Value,
@@ -48,10 +47,10 @@ pub struct SnapAccess {
     managed_ts: u64,
     write_sequence: u64,
     splitting: Option<Arc<SplitContext>>,
-    mem_tbls: Arc<MemTables>,
-    l0_tbls: Arc<L0Tables>,
+    mem_tbls: MemTables,
+    l0_tbls: L0Tables,
 
-    scfs: Vec<Arc<ShardCF>>,
+    scfs: Vec<ShardCF>,
 }
 
 impl Debug for SnapAccess {
@@ -71,15 +70,14 @@ impl SnapAccess {
     pub fn new(shard: &Arc<Shard>) -> Self {
         let shard = shard.clone();
         let mut splitting = None;
-        let g = &epoch::pin();
         if shard.is_splitting() {
-            splitting = Some(shard.get_split_ctx(g).clone());
+            splitting = Some(shard.get_split_ctx());
         }
-        let mem_tbls = shard.get_mem_tbls(g).clone();
-        let l0_tbls = shard.get_l0_tbls(g).clone();
+        let mem_tbls = shard.get_mem_tbls();
+        let l0_tbls = shard.get_l0_tbls();
         let mut scfs = Vec::with_capacity(NUM_CFS);
         for cf in 0..NUM_CFS {
-            let scf = shard.get_cf(cf, g).clone();
+            let scf = shard.get_cf(cf);
             scfs.push(scf);
         }
         let write_sequence = shard.get_write_sequence();
@@ -96,7 +94,7 @@ impl SnapAccess {
 
     pub fn new_iterator(&self, cf: usize, reversed: bool, all_versions: bool) -> Iterator {
         let read_ts: u64;
-        if self.shard.opt.cfs[cf].managed && self.managed_ts != 0 {
+        if CF_MANAGED[cf] && self.managed_ts != 0 {
             read_ts = self.managed_ts;
         } else {
             read_ts = u64::MAX;
@@ -160,7 +158,7 @@ impl SnapAccess {
                 return v;
             }
         }
-        for l0 in &self.l0_tbls.tbls {
+        for l0 in self.l0_tbls.tbls.as_ref() {
             if let Some(tbl) = &l0.get_cf(cf) {
                 let v = tbl.get(key, version, key_hash);
                 path.l0 += 1;
@@ -169,8 +167,8 @@ impl SnapAccess {
                 }
             }
         }
-        let scf = &self.scfs[cf];
-        for lh in &scf.levels {
+        let scf = &self.scfs.as_slice()[cf];
+        for lh in scf.levels.as_ref() {
             let v = lh.get(key, version, key_hash);
             path.ln += 1;
             if v.is_valid() {
@@ -200,16 +198,16 @@ impl SnapAccess {
                 iters.push(Box::new(tbl.get_cf(cf).new_iterator(reversed)));
             }
         }
-        for mem_tbl in &self.mem_tbls.tbls {
+        for mem_tbl in self.mem_tbls.tbls.as_ref() {
             iters.push(Box::new(mem_tbl.get_cf(cf).new_iterator(reversed)));
         }
-        for l0 in &self.l0_tbls.tbls {
+        for l0 in self.l0_tbls.tbls.as_ref() {
             if let Some(tbl) = &l0.get_cf(cf) {
                 iters.push(tbl.new_iterator(reversed));
             }
         }
-        let scf = &self.scfs[cf];
-        for lh in &scf.levels {
+        let scf = &self.scfs.as_slice()[cf];
+        for lh in scf.levels.as_ref() {
             if lh.tables.len() == 0 {
                 continue;
             }

@@ -10,14 +10,14 @@ use std::sync::Arc;
 pub(crate) struct ConcatIterator {
     idx: i32,
     iter: Option<Box<TableIterator>>,
-    scf: Arc<ShardCF>,
+    scf: ShardCF,
     level_idx: usize,
     reversed: bool,
 }
 
 #[allow(dead_code)]
 impl ConcatIterator {
-    pub(crate) fn new(scf: Arc<ShardCF>, level: usize, reversed: bool) -> Self {
+    pub(crate) fn new(scf: ShardCF, level: usize, reversed: bool) -> Self {
         ConcatIterator {
             idx: -1,
             iter: None,
@@ -28,13 +28,11 @@ impl ConcatIterator {
     }
 
     pub(crate) fn new_with_tables(tables: Vec<SSTable>, reversed: bool) -> Self {
-        let scf = Arc::new(ShardCF {
-            levels: vec![LevelHandler {
-                tables,
-                level: 1,
-                total_size: 0,
-            }],
-        });
+        let scf = ShardCF::new_with_levels(vec![LevelHandler {
+            tables,
+            level: 1,
+            total_size: 0,
+        }]);
         ConcatIterator {
             idx: -1,
             iter: None,

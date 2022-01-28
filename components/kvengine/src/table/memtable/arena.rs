@@ -267,20 +267,24 @@ impl Arena {
     }
 }
 
+impl Drop for Arena {
+    fn drop(&mut self) {
+        for i in 0..32 {
+            let block = self.blocks[i].load(Ordering::Acquire);
+            if block.is_null() {
+                break;
+            }
+            unsafe {
+                ptr::drop_in_place(block);
+            }
+        }
+    }
+}
+
 struct ArenaBlock {
     len: AtomicU32,
     cap: u32,
     ptr: *mut u8,
-}
-
-impl Clone for ArenaBlock {
-    fn clone(&self) -> Self {
-        ArenaBlock {
-            len: AtomicU32::new(self.len.load(Ordering::SeqCst)),
-            cap: self.cap,
-            ptr: self.ptr,
-        }
-    }
 }
 
 impl ArenaBlock {

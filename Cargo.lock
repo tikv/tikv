@@ -2619,8 +2619,6 @@ dependencies = [
  "byteorder",
  "bytes 1.1.0",
  "crc32c",
- "crossbeam",
- "crossbeam-epoch 0.9.5",
  "dashmap",
  "dyn-clone",
  "engine_traits",

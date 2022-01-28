@@ -169,6 +169,7 @@ impl DFS for S3FS {
         if let Err(err) = std::fs::remove_file(&local_file_path) {
             error!("failed to remove local file {:?}", err);
         }
+        // TODO(x): use tag instead of delete directly.
         let key = self.file_key(file_id);
         let bucket = self.bucket.clone();
         self.s3c

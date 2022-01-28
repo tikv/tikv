@@ -52,14 +52,12 @@ impl Into<engine_traits::Engines<kvengine::Engine, rfengine::RFEngine>> for Engi
 }
 
 pub struct KVWriteBatch {
-    kv: kvengine::Engine,
     batches: HashMap<u64, kvengine::WriteBatch>,
 }
 
 impl KVWriteBatch {
-    pub(crate) fn new(kv: kvengine::Engine) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            kv,
             batches: HashMap::new(),
         }
     }
@@ -67,10 +65,7 @@ impl KVWriteBatch {
     pub(crate) fn get_engine_wb(&mut self, region_id: u64) -> &mut kvengine::WriteBatch {
         match self.batches.entry(region_id) {
             Entry::Occupied(o) => o.into_mut(),
-            Entry::Vacant(v) => v.insert(kvengine::WriteBatch::new(
-                region_id,
-                self.kv.opts.cfs.clone(),
-            )),
+            Entry::Vacant(v) => v.insert(kvengine::WriteBatch::new(region_id)),
         }
     }
 }

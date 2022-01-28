@@ -2,7 +2,6 @@
 
 use crate::table::sstable::{L0Table, SSTable};
 use crate::*;
-use crossbeam_epoch::Owned;
 use dashmap::mapref::entry::Entry;
 use std::iter::Iterator;
 use std::sync::atomic::Ordering::Relaxed;
@@ -18,9 +17,9 @@ impl Engine {
         let (l0s, mut scfs) = self.create_level_tree_level_handlers(&tree)?;
         let shard = Shard::new_for_ingest(tree.change_set, self.opts.clone());
         shard.set_active(tree.active);
-        shard.l0_tbls.store(Owned::new(Arc::new(l0s)), Relaxed);
+        *shard.l0_tbls.write().unwrap() = l0s;
         for (cf, scf) in scfs.drain(..).enumerate() {
-            store_resource(&shard.cfs[cf], Arc::new(scf));
+            shard.set_cf(cf, scf);
         }
         shard.refresh_estimated_size();
         match self.shards.entry(shard.id) {
@@ -54,25 +53,21 @@ impl Engine {
             l0_tbls.push(l0_tbl);
         }
         l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
-        let mut scfs = vec![];
-        for i in 0..NUM_CFS {
-            let num_level = self.opts.cfs[i].max_levels;
-            let scf = ShardCF::new(num_level);
-            scfs.push(scf);
+        let mut scf_builders = vec![];
+        for cf in 0..NUM_CFS {
+            let scf = ShardCFBuilder::new(cf);
+            scf_builders.push(scf);
         }
         for table_create in snap.get_table_creates() {
-            let scf = &mut scfs[table_create.cf as usize];
-            let level = &mut scf.levels[table_create.level as usize - 1];
             let file = self.fs.open(table_create.id, fs_opts)?;
             let tbl = SSTable::new(file, self.cache.clone())?;
-            level.total_size += tbl.size();
-            level.tables.push(tbl);
+            let scf = &mut scf_builders.as_mut_slice()[table_create.cf as usize];
+            scf.add_table(tbl, table_create.level as usize);
         }
+        let mut scfs = vec![];
         for cf in 0..NUM_CFS {
-            let scf = &mut scfs[cf];
-            for l in &mut scf.levels {
-                l.tables.sort_by(|x, y| x.smallest().cmp(y.smallest()))
-            }
+            let scf = &mut scf_builders.as_mut_slice()[cf];
+            scfs.push(scf.build());
         }
         Ok((L0Tables::new(l0_tbls), scfs))
     }

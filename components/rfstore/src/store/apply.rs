@@ -1529,14 +1529,14 @@ impl ApplyContext {
         router: Option<RaftRouter>,
     ) -> Self {
         Self {
-            engine: engine.clone(),
+            engine,
             region_scheduler,
             split_scheduler,
             router,
             apply_task_res_list: Default::default(),
             exec_log_index: Default::default(),
             exec_log_term: Default::default(),
-            wb: KVWriteBatch::new(engine),
+            wb: KVWriteBatch::new(),
         }
     }
 
