@@ -179,7 +179,6 @@ pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
 prost = "0.7"
-pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf", "cpp"] }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "components/raftstore", default-features = false }
@@ -227,6 +226,9 @@ walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
 seahash = "4.1.0"
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf", "cpp"] }
 
 [dev-dependencies]
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency

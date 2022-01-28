@@ -28,6 +28,7 @@ use openssl::ssl::{
 };
 use openssl::x509::X509;
 use pin_project::pin_project;
+#[cfg(target_arch = "x86_64")]
 use pprof::protos::Message;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
@@ -113,6 +114,7 @@ pub struct StatusServer<E, R> {
 }
 
 impl StatusServer<(), ()> {
+    #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
     fn extract_thread_name(thread_name: &str) -> String {
         lazy_static! {
             static ref THREAD_NAME_RE: Regex =
@@ -132,6 +134,7 @@ impl StatusServer<(), ()> {
             .unwrap_or_else(|| thread_name.to_owned())
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
         move |frames| {
             let name = Self::extract_thread_name(&frames.thread_name);
@@ -340,6 +343,7 @@ where
         })
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub async fn dump_rsprof(seconds: u64, frequency: i32) -> pprof::Result<pprof::Report> {
         let guard = pprof::ProfilerGuardBuilder::default()
             .frequency(frequency)
@@ -357,6 +361,7 @@ where
             .build()
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub async fn dump_rsperf_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let query = match req.uri().query() {
             Some(query) => query,
@@ -433,6 +438,18 @@ where
                 )),
             }
         }
+    }
+
+    /// Currently, on aarch64 architectures, the underlying libgcc/llvm-libunwind/... which pprof-rs
+    /// depends on has a segmentation fault (when backtracking happens in the signal handler).
+    /// So, for now, we only allow the x86_64 architecture to perform real profiling, other
+    /// architectures will directly return an error until we fix the seg-fault in backtrace.
+    #[cfg(not(target_arch = "x86_64"))]
+    pub async fn dump_rsperf_to_resp(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        Ok(StatusServer::err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "unsupported arch".to_string(),
+        ))
     }
 
     async fn change_log_level(req: Request<Body>) -> hyper::Result<Response<Body>> {
@@ -1550,6 +1567,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_arch = "x86_64")]
     fn test_pprof_profile_service() {
         let mut status_server = StatusServer::new(
             1,
