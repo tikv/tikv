@@ -556,7 +556,7 @@ pub fn modifies_to_requests(ctx: &Context, modifies: Vec<Modify>) -> CustomReque
         rlog::TYPE_ONE_PC => build_one_pc(builder, modifies),
         rlog::TYPE_ROLLBACK => build_rollback(builder, modifies),
         rlog::TYPE_PESSIMISTIC_ROLLBACK => build_pessimistic_rollback(builder, modifies),
-        _ => unreachable!(),
+        _ => unreachable!("modifies {:?}", modifies),
     }
     builder.build()
 }
@@ -601,13 +601,13 @@ fn detect_custom_type(modifies: &Vec<Modify>) -> rlog::CustomRaftlogType {
                             }
                         }
                     }
-                    _ => unreachable!(),
+                    _ => unreachable!("unknown cf {:?}", modifies),
                 }
             }
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) => unreachable!("delete range in modifies"),
         }
     }
-    unreachable!()
+    unreachable!("failed to detect custom type, modifies {:?}", modifies)
 }
 
 fn build_pessimistic_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
@@ -668,12 +668,12 @@ fn build_commit(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
 
 fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     let mut values = HashMap::default();
-    for m in modifies {
+    for (i, m) in modifies.iter().enumerate() {
         match m {
-            Modify::Put(cf, key, val) => match cf {
+            Modify::Put(cf, key, val) => match *cf {
                 CF_DEFAULT => {
                     let raw_key = key.to_raw().unwrap();
-                    values.insert(raw_key, val);
+                    values.insert(raw_key, val.clone());
                 }
                 CF_WRITE => {
                     let commit_ts = key.decode_ts().unwrap().into_inner();
@@ -689,10 +689,15 @@ fn build_one_pc(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                     }
                     let is_extra = write.write_type == WriteType::Lock;
                     let start_ts = write.start_ts.into_inner();
-                    builder.append_one_pc(&raw_key, &value, is_extra, start_ts, commit_ts);
+                    let del_lock = is_same_key_del_lock(&modifies, i + 1, key);
+                    builder
+                        .append_one_pc(&raw_key, &value, is_extra, del_lock, start_ts, commit_ts);
                 }
                 _ => unreachable!("cf {:?}", cf),
             },
+            Modify::Delete(cf, key) => {
+                assert_eq!(*cf, CF_LOCK);
+            }
             _ => unreachable!("{:?}", m),
         }
     }

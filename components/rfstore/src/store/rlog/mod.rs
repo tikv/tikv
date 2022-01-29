@@ -89,7 +89,7 @@ impl CustomRaftLog<'a> {
     // F: (key, val, is_extra, start_ts, commit_ts)
     pub(crate) fn iterate_one_pc<F>(&self, mut f: F)
     where
-        F: FnMut(&[u8], &[u8], bool, u64, u64),
+        F: FnMut(&[u8], &[u8], bool, bool, u64, u64),
     {
         let mut i = HEADER_SIZE;
         while i < self.data.len() {
@@ -103,11 +103,13 @@ impl CustomRaftLog<'a> {
             i += val_len;
             let is_extra = self.data[i] > 0;
             i += 1;
+            let del_lock = self.data[i] > 0;
+            i += 1;
             let start_ts = LittleEndian::read_u64(&self.data[i..]);
             i += 8;
             let commit_ts = LittleEndian::read_u64(&self.data[i..]);
             i += 8;
-            f(key, val, is_extra, start_ts, commit_ts)
+            f(key, val, is_extra, del_lock, start_ts, commit_ts)
         }
     }
 
@@ -193,6 +195,7 @@ impl CustomBuilder {
         key: &[u8],
         val: &[u8],
         is_extra: bool,
+        del_lock: bool,
         start_ts: u64,
         commit_ts: u64,
     ) {
@@ -201,6 +204,7 @@ impl CustomBuilder {
         self.buf.put_u32_le(val.len() as u32);
         self.buf.extend_from_slice(val);
         self.buf.put_u8(is_extra as u8);
+        self.buf.put_u8(del_lock as u8);
         self.buf.put_u64_le(start_ts);
         self.buf.put_u64_le(commit_ts);
         self.cnt += 1;

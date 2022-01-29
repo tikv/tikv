@@ -411,7 +411,8 @@ impl Engine {
         req: &mut CompactionRequest,
         total_size: u64,
     ) -> Result<()> {
-        let id_cnt = total_size as usize / req.max_table_size + 8; // Add 8 here just in case we run out of ID.
+        let id_cnt = total_size as usize / req.max_table_size + 16; // Add 8 here just in case we run out of ID.
+        info!("alloc id count {} for total size {}", id_cnt, total_size);
         let ids = self
             .id_allocator
             .alloc_id(id_cnt)

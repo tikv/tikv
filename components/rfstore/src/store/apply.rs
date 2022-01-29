@@ -444,13 +444,16 @@ impl Applier {
             TYPE_COMMIT => cl.iterate_commit(|k, commit_ts| {
                 self.commit_lock(engine, wb, k, commit_ts);
             }),
-            TYPE_ONE_PC => cl.iterate_one_pc(|k, v, is_extra, start_ts, commit_ts| {
+            TYPE_ONE_PC => cl.iterate_one_pc(|k, v, is_extra, del_lock, start_ts, commit_ts| {
                 let user_meta = UserMeta::new(start_ts, commit_ts).to_array();
                 if is_extra {
                     let op_lock_key = mvcc::encode_extra_txn_status_key(k, start_ts);
                     wb.put(mvcc::EXTRA_CF, &op_lock_key, &[0], 0, &user_meta, commit_ts);
                 } else {
                     wb.put(mvcc::WRITE_CF, k, v, 0, &user_meta, commit_ts);
+                }
+                if del_lock {
+                    wb.delete(mvcc::LOCK_CF, k, 0);
                 }
             }),
             TYPE_ROLLBACK => cl.iterate_rollback(|k, start_ts, delete_lock| {
