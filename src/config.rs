@@ -1392,12 +1392,21 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RaftEngineConfig {
     pub enable: bool,
     #[serde(flatten)]
     config: RawRaftEngineConfig,
+}
+
+impl Default for RaftEngineConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            config: RawRaftEngineConfig::default(),
+        }
+    }
 }
 
 impl RaftEngineConfig {
