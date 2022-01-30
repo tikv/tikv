@@ -43,6 +43,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `true`.
     #[inline]
+    #[must_use]
     pub fn multi(mut self, multi: bool) -> Self {
         self.multi = multi;
         self
@@ -52,6 +53,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `true`.
     #[inline]
+    #[must_use]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.fill_cache = fill_cache;
         self
@@ -64,6 +66,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `false`.
     #[inline]
+    #[must_use]
     pub fn omit_value(mut self, omit_value: bool) -> Self {
         self.omit_value = omit_value;
         self
@@ -73,6 +76,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `IsolationLevel::Si`.
     #[inline]
+    #[must_use]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
         self
@@ -82,6 +86,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to none.
     #[inline]
+    #[must_use]
     pub fn bypass_locks(mut self, locks: TsSet) -> Self {
         self.bypass_locks = locks;
         self
@@ -91,6 +96,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to none.
     #[inline]
+    #[must_use]
     pub fn access_locks(mut self, locks: TsSet) -> Self {
         self.access_locks = locks;
         self
@@ -101,6 +107,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Default is false.
     #[inline]
+    #[must_use]
     pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
         self.check_has_newer_ts_data = enabled;
         self

@@ -34,6 +34,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Defaults to `true`.
     #[inline]
+    #[must_use]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.0.fill_cache = fill_cache;
         self
@@ -46,6 +47,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Defaults to `false`.
     #[inline]
+    #[must_use]
     pub fn omit_value(mut self, omit_value: bool) -> Self {
         self.0.omit_value = omit_value;
         self
@@ -55,6 +57,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Defaults to `IsolationLevel::Si`.
     #[inline]
+    #[must_use]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.0.isolation_level = isolation_level;
         self
@@ -64,6 +67,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Default is 'false'.
     #[inline]
+    #[must_use]
     pub fn desc(mut self, desc: bool) -> Self {
         self.0.desc = desc;
         self
@@ -74,6 +78,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Default is `(None, None)`.
     #[inline]
+    #[must_use]
     pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.0.lower_bound = lower_bound;
         self.0.upper_bound = upper_bound;
@@ -85,6 +90,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Default is empty.
     #[inline]
+    #[must_use]
     pub fn bypass_locks(mut self, locks: TsSet) -> Self {
         self.0.bypass_locks = locks;
         self
@@ -95,6 +101,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Default is empty.
     #[inline]
+    #[must_use]
     pub fn access_locks(mut self, locks: TsSet) -> Self {
         self.0.access_locks = locks;
         self
@@ -106,6 +113,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// NOTE: user should be careful to use it with `ExtraOp::ReadOldValue`.
     #[inline]
+    #[must_use]
     pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
         self.0.hint_min_ts = min_ts;
         self
@@ -117,6 +125,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// NOTE: user should be careful to use it with `ExtraOp::ReadOldValue`.
     #[inline]
+    #[must_use]
     pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
         self.0.hint_max_ts = max_ts;
         self
@@ -127,6 +136,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Default is false.
     #[inline]
+    #[must_use]
     pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
         self.0.check_has_newer_ts_data = enabled;
         self

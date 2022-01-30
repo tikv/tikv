@@ -34,8 +34,8 @@ use kvproto::replication_modepb::{
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType};
 use raft::{
-    self, Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus,
-    StateRole, INVALID_INDEX, NO_LIMIT,
+    self, Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
+    SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
@@ -54,7 +54,8 @@ use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
-    HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
+    HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress,
+    RegionTask,
 };
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
@@ -603,7 +604,8 @@ where
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
@@ -614,7 +616,14 @@ where
 
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
-        let ps = PeerStorage::new(engines, region, sched, peer.get_id(), tag.clone())?;
+        let ps = PeerStorage::new(
+            engines,
+            region,
+            region_scheduler,
+            raftlog_fetch_scheduler,
+            peer.get_id(),
+            tag.clone(),
+        )?;
 
         let applied_index = ps.applied_index();
 
@@ -673,7 +682,10 @@ where
                 hash: vec![],
             },
             raft_log_size_hint: 0,
-            leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            leader_lease: Lease::new(
+                cfg.raft_store_max_leader_lease(),
+                cfg.renew_leader_lease_advance_duration(),
+            ),
             peer_stat: PeerStat::default(),
             catch_up_logs: None,
             bcast_wake_up_time: None,
@@ -3516,12 +3528,11 @@ where
             ));
         }
         let mut entry_size = 0;
-        for entry in self
-            .raft_group
-            .raft
-            .raft_log
-            .entries(min_committed + 1, NO_LIMIT)?
-        {
+        for entry in self.raft_group.raft.raft_log.entries(
+            min_committed + 1,
+            NO_LIMIT,
+            GetEntriesContext::empty(false),
+        )? {
             // commit merge only contains entries start from min_matched + 1
             if entry.index > min_matched {
                 entry_size += entry.get_data().len();
@@ -4487,14 +4498,12 @@ where
     pub fn need_renew_lease_at<T>(
         &self,
         ctx: &PollContext<EK, ER, T>,
-        renew_bound: Timespec,
+        current_time: Timespec,
     ) -> bool {
-        if !matches!(
-            self.leader_lease.inspect(Some(renew_bound)),
-            LeaseState::Expired
-        ) {
-            return false;
-        }
+        let renew_bound = match self.leader_lease.need_renew(current_time) {
+            Some(ts) => ts,
+            None => return false,
+        };
         let max_lease = ctx.cfg.raft_store_max_leader_lease();
         let has_overlapped_reads = self.pending_reads.back().map_or(false, |read| {
             // If there is any read index whose lease can cover till next heartbeat

@@ -328,6 +328,7 @@ impl SummaryRecord {
     }
 
     /// Gets the value and writes it to zero.
+    #[must_use]
     pub fn take_and_reset(&self) -> Self {
         Self {
             read_keys: AtomicU32::new(self.read_keys.swap(0, Relaxed)),

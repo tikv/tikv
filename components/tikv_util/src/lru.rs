@@ -139,6 +139,7 @@ pub trait SizePolicy<K, V> {
     fn on_reset(&mut self, val: usize);
 }
 
+#[derive(Default)]
 pub struct CountTracker(usize);
 
 impl<K, V> SizePolicy<K, V> for CountTracker {
@@ -156,12 +157,6 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
 
     fn on_reset(&mut self, val: usize) {
         self.0 = val;
-    }
-}
-
-impl Default for CountTracker {
-    fn default() -> Self {
-        Self(0)
     }
 }
 
