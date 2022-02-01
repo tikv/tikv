@@ -3786,7 +3786,7 @@ where
             .get_peers()
             .iter()
             .max_by_key(|c| prs.get(c.id).map_or(0, |pr| pr.matched))
-            .unwrap_or(transfer_leader.get_peer());
+            .unwrap_or_else(|| transfer_leader.get_peer());
 
         let transferred = if peer.id == self.peer.id {
             false

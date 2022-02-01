@@ -159,9 +159,7 @@ fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) 
     assert!(cluster.leader_of_region(1) == Some(new_peer(2, 2)));
     let leader_id = cluster.leader_of_region(1).unwrap().id;
     req.mut_header().set_peer(new_peer(leader_id, leader_id));
-    let resp = cluster
-        .call_command(req, Duration::from_secs(5))
-        .unwrap();
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }
