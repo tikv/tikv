@@ -925,14 +925,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
             Some(locks)
                 // If there is a leader or region change, removing the locks is unnecessary.
-                if locks.term == term && locks.version == version && !locks.map.is_empty() =>
+                if locks.term == term && locks.version == version && !locks.is_empty() =>
             {
                 to_be_write
                     .modifies
                     .iter()
                     .filter_map(|write| match write {
                         Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
-                            locks.map.get_mut(key).map(|(_, deleted)| {
+                            locks.get_mut(key).map(|(_, deleted)| {
                                 *deleted = true;
                                 key.to_owned()
                             })
@@ -968,7 +968,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     // so we needn't remove the key.
                     if pessimistic_locks.term == term && pessimistic_locks.version == version {
                         for key in removed_pessimistic_locks {
-                            pessimistic_locks.map.remove(&key);
+                            pessimistic_locks.remove(&key);
                         }
                     }
                 }
@@ -1039,16 +1039,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         {
             return false;
         }
-        // TODO: add memory limit check
-        for modify in mem::take(&mut to_be_write.modifies) {
-            match modify {
-                Modify::PessimisticLock(key, lock) => {
-                    pessimistic_locks.insert(key, lock);
-                }
-                _ => panic!("all modifies should be PessimisticLock"),
-            }
-        }
-        true
+        pessimistic_locks.insert(mem::take(&mut to_be_write.modifies))
     }
 
     /// If the task has expired, return `true` and call the callback of

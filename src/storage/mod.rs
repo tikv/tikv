@@ -6495,6 +6495,7 @@ mod tests {
         test_pessimistic_lock_impl(true);
     }
 
+    #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
             start_ts: TimeStamp,
@@ -8171,7 +8172,7 @@ mod tests {
 
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            let lock = pessimistic_locks.map.get(&k1).unwrap();
+            let lock = pessimistic_locks.get(&k1).unwrap();
             assert_eq!(
                 lock,
                 &(
@@ -8232,7 +8233,7 @@ mod tests {
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            assert!(!pessimistic_locks.map.contains_key(&k1));
+            assert!(pessimistic_locks.get(&k1).is_none());
         }
     }
 
@@ -8261,7 +8262,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // When disabling in-memory pessimistic lock, the lock map should remain unchanged.
-        assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+        assert!(txn_ext.pessimistic_locks.read().is_empty());
 
         let (tx, rx) = channel();
         storage
