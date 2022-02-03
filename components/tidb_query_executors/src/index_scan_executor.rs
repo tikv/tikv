@@ -66,11 +66,25 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // Note 4: When process global indexes, an extra partition ID column with column ID
         // `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton
         // handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
-        let pid_column_cnt = columns_info.last().map_or(0, |ci| {
-            (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize
+        //
+        // Note 5: When process a partitioned table's index under tidb_partition_prune_mode = 'dynamic'
+        // and with either an active transaction buffer or with a SelectLock/pessimistic lock, we
+        // need to return the physical table id since several partitions may be included in the
+        // range.
+        //
+        // Note 6: Also int_handle (-1), EXTRA_PARTITION_ID_COL_ID (-2) and
+        // EXTRA_PHYSICAL_TABLE_ID_COL_ID (-3) must be requested in this order in columns_info!
+        // since current implementation looks for them backards for -3, -2, -1.
+        let physical_table_id_column_cnt = columns_info.last().map_or(0, |ci| {
+            (ci.get_column_id() == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID) as usize
         });
+        let pid_column_cnt = columns_info
+            .get(columns_info.len() - 1 - physical_table_id_column_cnt)
+            .map_or(0, |ci| {
+                (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize
+            });
         let is_int_handle = columns_info
-            .get(columns_info.len() - 1 - pid_column_cnt)
+            .get(columns_info.len() - 1 - pid_column_cnt - physical_table_id_column_cnt)
             .map_or(false, |ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
         let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
@@ -116,6 +130,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             columns_id_for_common_handle,
             decode_handle_strategy,
             pid_column_cnt,
+            physical_table_id_column_cnt,
             index_version: -1,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -189,7 +204,12 @@ struct IndexScanExecutorImpl {
     decode_handle_strategy: DecodeHandleStrategy,
 
     /// Number of partition ID columns, now it can only be 0 or 1.
+    /// Must be after all normal columns and handle, but before physical_table_id_column
     pid_column_cnt: usize,
+
+    /// Number of Physical Table ID columns, can only be 0 or 1.
+    /// Must be last, after pid_column
+    physical_table_id_column_cnt: usize,
 
     index_version: i64,
 }
@@ -226,13 +246,20 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 ));
             }
             DecodeCommonHandle => {
-                for _ in self.columns_id_without_handle.len()..columns_len - self.pid_column_cnt {
+                for _ in self.columns_id_without_handle.len()..columns_len - self.pid_column_cnt - self.physical_table_id_column_cnt {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
             }
         }
 
         if self.pid_column_cnt > 0 {
+            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                scan_rows,
+                EvalType::Int,
+            ));
+        }
+
+        if self.physical_table_id_column_cnt > 0 {
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
@@ -299,6 +326,9 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
+        if self.physical_table_id_column_cnt > 0 {
+            self.process_physical_table_id_column(key, columns)?;
+        }
         key = &key[table::PREFIX_LEN + table::ID_LEN..];
         if self.index_version == -1 {
             self.index_version = Self::get_index_version(value)?
@@ -728,6 +758,21 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
+    fn process_physical_table_id_column(
+        &mut self,
+        mut key: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        key = &key[table::PREFIX_LEN..table::ID_LEN];
+        let table_id = key
+            .read_i64()
+            .map_err(|_| other_err!("Failed to read physical table id from key"))?;
+        let col_index = columns.columns_len() - 1;
+        columns[col_index].mut_decoded().push_int(Some(table_id));
+        Ok(())
+    }
+
+    #[inline]
     fn decode_pid_columns(
         &mut self,
         columns: &mut LazyBatchColumnVec,
@@ -738,7 +783,7 @@ impl IndexScanExecutorImpl {
             DecodePartitionIdOp::PID(pid) => {
                 // If need partition id, append partition id to the last column.
                 let pid = NumberCodec::decode_i64(pid);
-                let idx = columns.columns_len() - 1;
+                let idx = columns.columns_len() - 1 - self.physical_table_id_column_cnt;
                 columns[idx].mut_decoded().push_int(Some(pid))
             }
         }
