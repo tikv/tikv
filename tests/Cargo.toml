@@ -14,11 +14,6 @@ name = "integrations"
 path = "integrations/mod.rs"
 required-features = ["testexport"]
 
-[[test]]
-name = "testvalue"
-path = "testvalue/mod.rs"
-required-features = ["testvalue-hook"]
-
 [[bench]]
 name = "raftstore"
 harness = false
@@ -56,7 +51,6 @@ cloud-aws = [ "external_storage_export/cloud-aws" ]
 cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 cloud-azure = [ "external_storage_export/cloud-azure" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
-testvalue-hook = ["testvalue/testvalue-hook", "tikv/testvalue-hook"]
 profiling = ["profiler/profiling"]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
@@ -112,6 +106,10 @@ txn_types = { path = "../components/txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 time = "0.1"
 libc = "0.2"
+<<<<<<< HEAD
+=======
+arc-swap = "1.5.0"
+>>>>>>> Use failpoints instead of testvalue
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

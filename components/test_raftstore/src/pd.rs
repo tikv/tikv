@@ -716,7 +716,7 @@ impl PdCluster {
         self.gc_safe_point
     }
 
-    fn handle_store_heartbeat(&mut self, store_id: u64) -> Result<pdpb::StoreHeartbeatResponse> {
+    fn handle_store_heartbeat(&mut self) -> Result<pdpb::StoreHeartbeatResponse> {
         let mut resp = pdpb::StoreHeartbeatResponse::default();
         resp.set_require_detailed_report(self.unsafe_recovery_require_report);
         self.unsafe_recovery_require_report = false;
@@ -1577,7 +1577,7 @@ impl PdClient for TestPdClient {
             cluster.store_reported_inc();
         }
 
-        let mut resp = cluster.handle_store_heartbeat(store_id).unwrap();
+        let mut resp = cluster.handle_store_heartbeat().unwrap();
 
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());

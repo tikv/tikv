@@ -3754,7 +3754,6 @@ dependencies = [
  "sst_importer",
  "tempfile",
  "test_sst_importer",
- "testvalue",
  "thiserror",
  "tidb_query_datatype",
  "tikv_alloc",
@@ -5246,7 +5245,6 @@ dependencies = [
  "test_sst_importer",
  "test_storage",
  "test_util",
- "testvalue",
  "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
@@ -5261,14 +5259,6 @@ dependencies = [
  "toml",
  "txn_types",
  "uuid",
-]
-
-[[package]]
-name = "testvalue"
-version = "0.1.0"
-source = "git+https://github.com/v01dstar/testvalue-rs.git#979c9ff9533ed952eee339f75d901ccc8d97f889"
-dependencies = [
- "lazy_static",
 ]
 
 [[package]]
@@ -5562,7 +5552,6 @@ dependencies = [
  "tempfile",
  "test_sst_importer",
  "test_util",
- "testvalue",
  "thiserror",
  "tidb_query_aggr",
  "tidb_query_common",

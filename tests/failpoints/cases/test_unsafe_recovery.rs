@@ -6,7 +6,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raftstore::store::util::find_peer;
-use testvalue::ScopedCallback;
 use test_raftstore::*;
 
 #[test]
@@ -29,25 +28,21 @@ fn test_unsafe_recover_send_report() {
     let apply_triggered_pair2 = Arc::clone(&apply_triggered_pair);
     let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let apply_released_pair2 = Arc::clone(&apply_released_pair);
-    let store_id = nodes[0].clone();
-    let _raii = ScopedCallback::new("handle_apply_context", move |store: &mut u64| {
-	if *store == store_id {
-	    {
-		let (lock, cvar) = &*apply_triggered_pair2;
-	    	let mut triggered = lock.lock().unwrap();
-	    	*triggered = true;
-	    	cvar.notify_one();
-	    }
-	    {
-	        let (lock2, cvar2) = &*apply_released_pair2;
-	        let mut released = lock2.lock().unwrap();
-	        while !*released {
-	           released = cvar2.wait(released).unwrap();
-	        }
+    fail::cfg_callback("on_handle_apply_store_1", move || {
+	{
+	    let (lock, cvar) = &*apply_triggered_pair2;
+		let mut triggered = lock.lock().unwrap();
+		*triggered = true;
+		cvar.notify_one();
+	}
+	{
+	    let (lock2, cvar2) = &*apply_released_pair2;
+	    let mut released = lock2.lock().unwrap();
+	    while !*released {
+	       released = cvar2.wait(released).unwrap();
 	    }
 	}
-
-    });
+    }).unwrap();
     cluster.put(b"random_key2", b"random_val2").unwrap();
     {
 	let (lock, cvar) = &*apply_triggered_pair;
@@ -81,4 +76,5 @@ fn test_unsafe_recover_send_report() {
 	sleep_ms(100);
     }
     assert_eq!(reported, true);
+    fail::remove("on_handle_apply_store_1");
 }

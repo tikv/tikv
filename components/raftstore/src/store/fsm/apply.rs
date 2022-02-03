@@ -48,7 +48,6 @@ use raft::eraftpb::{
 use raft_proto::ConfChangeI;
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SSTImporter;
-use testvalue::adjust;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::memory::HeapSize;
@@ -3266,7 +3265,7 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
-        adjust!("handle_apply_context", &mut apply_ctx.get_store_id());
+        fail_point!("on_handle_apply_store_1", apply_ctx.get_store_id() == 1, |_| {});
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;

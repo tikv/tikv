@@ -16,7 +16,6 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
-testvalue-hook = ["testvalue/testvalue-hook"]
 
 cloud-aws = [ "sst_importer/cloud-aws" ]
 cloud-gcp = [ "sst_importer/cloud-gcp" ]
@@ -67,7 +66,6 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 smallvec = "1.4"
 sst_importer = { path = "../sst_importer", default-features = false }
 tempfile = "3.0"
-testvalue = { git = "https://github.com/v01dstar/testvalue-rs.git" }
 thiserror = "1.0"
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
