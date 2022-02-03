@@ -29,27 +29,28 @@ fn test_unsafe_recover_send_report() {
     let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let apply_released_pair2 = Arc::clone(&apply_released_pair);
     fail::cfg_callback("on_handle_apply_store_1", move || {
-	{
-	    let (lock, cvar) = &*apply_triggered_pair2;
-		let mut triggered = lock.lock().unwrap();
-		*triggered = true;
-		cvar.notify_one();
-	}
-	{
-	    let (lock2, cvar2) = &*apply_released_pair2;
-	    let mut released = lock2.lock().unwrap();
-	    while !*released {
-	       released = cvar2.wait(released).unwrap();
-	    }
-	}
-    }).unwrap();
+        {
+            let (lock, cvar) = &*apply_triggered_pair2;
+            let mut triggered = lock.lock().unwrap();
+            *triggered = true;
+            cvar.notify_one();
+        }
+        {
+            let (lock2, cvar2) = &*apply_released_pair2;
+            let mut released = lock2.lock().unwrap();
+            while !*released {
+                released = cvar2.wait(released).unwrap();
+            }
+        }
+    })
+    .unwrap();
     cluster.put(b"random_key2", b"random_val2").unwrap();
     {
-	let (lock, cvar) = &*apply_triggered_pair;
-    	let mut triggered = lock.lock().unwrap();
-    	while !*triggered {
-    	    triggered = cvar.wait(triggered).unwrap();
-    	}
+        let (lock, cvar) = &*apply_triggered_pair;
+        let mut triggered = lock.lock().unwrap();
+        while !*triggered {
+            triggered = cvar.wait(triggered).unwrap();
+        }
     }
 
     cluster.stop_node(nodes[1]);
@@ -58,22 +59,22 @@ fn test_unsafe_recover_send_report() {
     pd_client.must_set_require_report(true);
     cluster.must_send_store_heartbeat(nodes[0]);
     for _ in 0..20 {
-	assert_eq!(pd_client.must_get_store_reported(), 0);
-	sleep_ms(100);
+        assert_eq!(pd_client.must_get_store_reported(), 0);
+        sleep_ms(100);
     }
     {
-	let (lock2, cvar2) = &*apply_released_pair;
-    	let mut released = lock2.lock().unwrap();
-    	*released = true;
-    	cvar2.notify_one();
+        let (lock2, cvar2) = &*apply_released_pair;
+        let mut released = lock2.lock().unwrap();
+        *released = true;
+        cvar2.notify_one();
     }
     let mut reported = false;
     for _ in 0..20 {
-	if pd_client.must_get_store_reported() > 0 {
-	    reported = true;
-	    break;
-	}
-	sleep_ms(100);
+        if pd_client.must_get_store_reported() > 0 {
+            reported = true;
+            break;
+        }
+        sleep_ms(100);
     }
     assert_eq!(reported, true);
     fail::remove("on_handle_apply_store_1");
