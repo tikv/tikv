@@ -36,6 +36,7 @@ use crate::store::{
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
     SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
+use crate::Error as RaftStoreError;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
@@ -974,16 +975,8 @@ where
         };
         stats.set_capacity(capacity);
 
-        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info
-                .kv_engine
-                .get_engine_used_size()
-                .expect("kv engine used size")
-            + store_info
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
-        stats.set_used_size(used_size);
+        stats = collect_used_size(&self.snap_mgr, &store_info, stats);
+        let used_size = stats.used_size;
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
@@ -1942,6 +1935,39 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
 
+fn collect_used_size<EK, ER>(
+    snap_mgr: &SnapManager,
+    store_info: &StoreInfo<EK, ER>,
+    mut stats: pdpb::StoreStats,
+) -> pdpb::StoreStats
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    let used_size = snap_mgr
+        .get_total_snap_size()
+        .map_err(|e| RaftStoreError::from(e))
+        .and_then(|s| {
+            store_info
+                .kv_engine
+                .get_engine_used_size()
+                .map(|kv| s + kv)
+                .map_err(Into::into)
+        })
+        .and_then(|s| {
+            store_info
+                .raft_engine
+                .get_engine_size()
+                .map(|raft| s + raft)
+                .map_err(Into::into)
+        });
+    match used_size {
+        Ok(s) => stats.set_used_size(s),
+        Err(e) => error!("collect used size"; "error" => ?e),
+    };
+    stats
+}
+
 #[cfg(test)]
 mod tests {
     use kvproto::{kvrpcpb, pdpb::QueryKind};
@@ -2161,5 +2187,40 @@ mod tests {
         for region_id in 1..region_num + 1 {
             assert!(*region_cpu_records.get(&region_id).unwrap_or(&0) > 0)
         }
+    }
+
+    #[test]
+    fn test_collect_used_size() {
+        let tmp_path = tempfile::Builder::new()
+            .prefix("test_cluster")
+            .tempdir()
+            .unwrap();
+        let engines = engine_test::new_temp_engine(&tmp_path);
+        let store_info = StoreInfo {
+            kv_engine: engines.kv,
+            raft_engine: engines.raft,
+            capacity: 0,
+        };
+
+        let tmp_mgr_path = tmp_path.path().join(std::path::Path::new("snap"));
+        let snap_mgr = SnapManager::new(tmp_mgr_path.to_str().unwrap());
+        let mut stats = pdpb::StoreStats::default();
+
+        let fp = "get_total_snap_size";
+
+        fail::cfg(fp, "return(0)").unwrap();
+        stats = collect_used_size(&snap_mgr, &store_info, stats);
+        let used_size0 = stats.used_size;
+
+        fail::cfg(fp, "return(1024)").unwrap();
+        stats = collect_used_size(&snap_mgr, &store_info, stats);
+        let used_size1 = stats.used_size;
+        assert_eq!(used_size1, used_size0 + 1024);
+
+        fail::cfg(fp, "return").unwrap();
+        stats = collect_used_size(&snap_mgr, &store_info, stats);
+        assert_eq!(stats.used_size, used_size1);
+
+        fail::remove(fp);
     }
 }

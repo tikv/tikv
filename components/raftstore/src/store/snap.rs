@@ -1411,6 +1411,11 @@ impl SnapManager {
 
 impl SnapManagerCore {
     fn get_total_snap_size(&self) -> Result<u64> {
+        fail::fail_point!("get_total_snap_size", |s| s.map_or(
+            Err(Error::from(io::Error::from(io::ErrorKind::Other))),
+            |s| Ok(s.parse().unwrap())
+        ));
+
         let mut total_size = 0;
         for entry in file_system::read_dir(&self.base)? {
             let (entry, metadata) = match entry.and_then(|e| e.metadata().map(|m| (e, m))) {
