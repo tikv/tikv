@@ -100,7 +100,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             }
         };
 
-        if handle_column_cnt + pid_column_cnt > columns_info.len() {
+        if handle_column_cnt + pid_column_cnt + physical_table_id_column_cnt > columns_info.len() {
             return Err(other_err!(
                 "The number of handle columns exceeds the length of `columns_info`"
             ));
@@ -112,13 +112,13 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             .collect();
 
         let columns_id_without_handle: Vec<_> = columns_info
-            [..columns_info.len() - handle_column_cnt - pid_column_cnt]
+            [..columns_info.len() - handle_column_cnt - pid_column_cnt - physical_table_id_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
 
         let columns_id_for_common_handle = columns_info
-            [columns_id_without_handle.len()..columns_info.len() - pid_column_cnt]
+            [columns_id_without_handle.len()..columns_info.len() - pid_column_cnt - physical_table_id_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
@@ -728,7 +728,7 @@ impl IndexScanExecutorImpl {
                     .push_int(Some(handle));
             }
             DecodeHandleOp::CommonHandle(mut handle) => {
-                let end_index = columns.columns_len() - self.pid_column_cnt;
+                let end_index = columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut handle,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -743,7 +743,7 @@ impl IndexScanExecutorImpl {
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
             let skip = self.columns_id_without_handle.len();
-            let end_index = columns.columns_len() - self.pid_column_cnt;
+            let end_index = columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
             self.restore_original_data(
                 restore_data_bytes,
                 izip!(
@@ -760,13 +760,10 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn process_physical_table_id_column(
         &mut self,
-        mut key: &[u8],
+        key: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        key = &key[table::PREFIX_LEN..table::ID_LEN];
-        let table_id = key
-            .read_i64()
-            .map_err(|_| other_err!("Failed to read physical table id from key"))?;
+        let table_id = table::decode_table_id(key)?;
         let col_index = columns.columns_len() - 1;
         columns[col_index].mut_decoded().push_int(Some(table_id));
         Ok(())
@@ -899,12 +896,19 @@ mod tests {
                 ci.set_pk_handle(true);
                 ci
             },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(table::EXTRA_PARTITION_ID_COL_ID);
+                ci
+            },
         ];
 
         // The schema of these columns. Used to check executor output.
         let schema = vec![
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::Double.into(),
+            FieldTypeTp::LongLong.into(),
             FieldTypeTp::LongLong.into(),
         ];
 
@@ -943,7 +947,7 @@ mod tests {
             let mut executor = BatchIndexScanExecutor::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
-                vec![columns_info[0].clone(), columns_info[1].clone()],
+                vec![columns_info[0].clone(), columns_info[1].clone(), columns_info[3].clone()],
                 key_ranges,
                 0,
                 true,
@@ -954,7 +958,7 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 3);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
@@ -975,6 +979,13 @@ mod tests {
                     Real::new(5.1).ok(),
                     Real::new(0.3).ok()
                 ]
+            );
+            result.physical_columns[2]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[2])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[2].decoded().to_int_vec(),
+                &[Some(TABLE_ID), Some(TABLE_ID), Some(TABLE_ID)]
             );
         }
 
@@ -1855,6 +1866,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -1904,6 +1916,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -1953,6 +1966,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2010,6 +2024,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2087,6 +2102,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2136,6 +2152,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2190,6 +2207,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2249,6 +2267,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2368,6 +2387,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2483,6 +2503,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2598,6 +2619,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2713,6 +2735,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2828,6 +2851,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2956,6 +2980,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -3098,6 +3123,7 @@ mod tests {
             columns_id_for_common_handle: vec![1],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(1);

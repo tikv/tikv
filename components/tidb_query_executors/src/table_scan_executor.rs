@@ -225,6 +225,7 @@ impl TableScanExecutorImpl {
 
         let row = RowSlice::from_bytes(value)?;
         for (col_id, idx) in &self.column_id_index {
+            if self.is_column_filled[*idx] { continue; }
             if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
                 let mut buffer_to_write = columns[*idx].mut_raw().begin_concat_extend();
                 buffer_to_write
@@ -268,14 +269,27 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // 1st turn: [non-pk, non-pk, non-pk, pk]
         // 2nd turn: [non-pk, non-pk, pk]
         // 3rd turn: [pk]
+        //let some_physical_table_id_column_index = self.column_id_index.get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
+        let some_physical_table_id_column_index = self.column_id_index.get(&-3);
+        let physical_table_id_column_idx = match some_physical_table_id_column_index {
+            Some(idx) => Some(*idx),
+            None => None,
+        };
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
             assert!(*handle_index >= last_index);
 
             // Fill last `handle_index - 1` columns.
-            for _ in last_index..*handle_index {
-                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+            for i in last_index..*handle_index {
+                if Some(i) == physical_table_id_column_idx {
+                    columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                        scan_rows,
+                        EvalType::Int,
+                    ));
+                } else {
+                    columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+                }
             }
 
             // For PK handles, we construct a decoded `VectorValue` because it is directly
@@ -291,8 +305,15 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // Then fill remaining columns after the last handle column. If there are no PK columns,
         // the previous loop will be skipped and this loop will be run on 0..columns_len.
         // For the example above, this loop will push: [non-pk, non-pk]
-        for _ in last_index..columns_len {
-            columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+        for i in last_index..columns_len {
+            if Some(i) == physical_table_id_column_idx {
+                columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                    scan_rows,
+                    EvalType::Int,
+                ));
+            } else {
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
+            }
         }
 
         assert_eq!(columns.len(), columns_len);
@@ -340,7 +361,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 let (datum, remain) = datum::split_datum(handle, false)?;
                 handle = remain;
 
-                // If the column info of the coresponding primary column id is missing, we ignore this slice of the datum.
+                // If the column info of the corresponding primary column id is missing, we ignore this slice of the datum.
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
                         columns[index].mut_raw().push(datum);
@@ -351,6 +372,17 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             }
         } else {
             table::check_record_key(key)?;
+        }
+
+        let some_physical_table_id_column_index = self.column_id_index.get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
+        match some_physical_table_id_column_index {
+            Some(idx) => {
+                let table_id = table::decode_table_id(key)?;
+                columns[*idx].mut_decoded().push_int(Some(table_id));
+                // decoded_columns += 1; // Not used afterwards!
+                self.is_column_filled[*idx] = true;
+            }
+            None => {}, // nothing to do
         }
 
         // Some fields may be missing in the row, we push corresponding default value to make all
@@ -937,8 +969,14 @@ mod tests {
                 ci.set_column_id(2);
                 ci
             },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
+                ci
+            },
         ];
-        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let mut ctx = EvalContext::default();
         let mut kv = vec![];
@@ -1000,7 +1038,7 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
@@ -1014,6 +1052,11 @@ mod tests {
             assert_eq!(
                 result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
+            );
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().to_int_vec(),
+                &[Some(TABLE_ID)]
             );
         }
 
@@ -1037,7 +1080,7 @@ mod tests {
 
             let mut result = executor.next_batch(1);
             assert!(result.is_drained.is_ok());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
@@ -1052,10 +1095,15 @@ mod tests {
                 result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().to_int_vec(),
+                &[Some(TABLE_ID)]
+            );
 
             let result = executor.next_batch(1);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
 
@@ -1076,7 +1124,7 @@ mod tests {
 
             let result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
 
@@ -1097,7 +1145,7 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.is_ok());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
@@ -1111,6 +1159,11 @@ mod tests {
             assert_eq!(
                 result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), Some(7)]
+            );
+            assert!(result.physical_columns[2].is_decoded());
+            assert_eq!(
+                result.physical_columns[2].decoded().to_int_vec(),
+                &[Some(TABLE_ID), Some(TABLE_ID)]
             );
         }
 
@@ -1131,7 +1184,7 @@ mod tests {
 
             let result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
     }
