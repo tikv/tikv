@@ -351,6 +351,7 @@ where
             }
         }
 
+        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(no_ts_keys.len() as _);
         self.gc_keys(no_ts_keys, safe_point, reader_builder)
     }
 
@@ -375,7 +376,6 @@ where
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
-            GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc();
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.

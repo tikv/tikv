@@ -347,18 +347,13 @@ impl WriteCompactionFilter {
     fn gc_mvcc_deletions(&mut self) {
         if !self.mvcc_deletions.is_empty() {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
-            let mut keys = mem::replace(&mut self.mvcc_deletions, empty);
-            // Avoid too many continuous tombstones after handled by GC worker.
-            self.mvcc_deletions.push(keys.pop().unwrap());
-            if !keys.is_empty() {
-                let task = GcTask::GcKeys {
-                    keys,
-                    safe_point: self.safe_point.into(),
-                    store_id: self.regions_provider.0,
-                    region_info_provider: self.regions_provider.1.clone(),
-                };
-                self.schedule_gc_task(task, false);
-            }
+            let task = GcTask::GcKeys {
+                keys: mem::replace(&mut self.mvcc_deletions, empty),
+                safe_point: self.safe_point.into(),
+                store_id: self.regions_provider.0,
+                region_info_provider: self.regions_provider.1.clone(),
+            };
+            self.schedule_gc_task(task, false);
         }
     }
 
