@@ -1025,6 +1025,7 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::must_get_none;
+    use crate::storage::mvcc::MAX_TXN_WRITE_SIZE;
     use crate::storage::txn::tests::{
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
@@ -1642,10 +1643,41 @@ mod tests {
             .gc_keys(
                 vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
                 TimeStamp::new(200),
-                Some((1, ri_provider)),
+                Some((1, ri_provider.clone())),
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
+
+        // Test rebuilding snapshot when GC write batch limit reached (gc_info.is_completed == false).
+        // Build a key with versions that will just reach the limit `MAX_TXN_WRITE_SIZE`.
+        let key_size = Modify::Delete(CF_WRITE, Key::from_raw(b"k2").append_ts(1.into())).size();
+        // versions = ceil(MAX_TXN_WRITE_SIZE/write_size) + 3
+        // Write CF: Put@N, Put@N-2,    Put@N-4, ... Put@5,   Put@3
+        //                 ^            ^^^^^^^^^^^^^^^^^^^
+        //           safepoint=N-1      Deleted in the first batch, `ceil(MAX_TXN_WRITE_SIZE/write_size)` versions.
+        let versions = (MAX_TXN_WRITE_SIZE - 1) / key_size + 4;
+        for start_ts in (1..versions).map(|x| x as u64 * 2) {
+            let commit_ts = start_ts + 1;
+            must_prewrite_put(&prefixed_engine, b"k2", b"v2", b"k2", start_ts);
+            must_commit(&prefixed_engine, b"k2", start_ts, commit_ts);
+        }
+        db.flush_cf(cf, true).unwrap();
+        let safepoint = versions as u64 * 2;
+
+        runner.stats.write.seek_tombstone = 0;
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k2")],
+                safepoint.into(),
+                Some((1, ri_provider)),
+            )
+            .unwrap();
+        // The first batch will leave tombstones that will be seen while processing the second
+        // batch, but it will be seen in `next` after seeking the latest unexpired version,
+        // therefore `seek_tombstone` is not affected.
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        // ... and next_tombstone indicates there's indeed more than one batches.
+        assert_eq!(runner.stats.write.next_tombstone, versions - 3);
     }
 
     #[test]
