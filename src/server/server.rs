@@ -67,7 +67,7 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
-    grpc_thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoadPool>,
     yatp_read_pool: Option<ReadPool>,
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
@@ -106,8 +106,9 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         } else {
             None
         };
-        let grpc_thread_load =
-            Arc::new(ThreadLoad::with_threshold(cfg.value().heavy_load_threshold));
+        let grpc_thread_load = Arc::new(ThreadLoadPool::with_threshold(
+            cfg.value().heavy_load_threshold,
+        ));
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
@@ -159,6 +160,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             resolver,
             raft_router.clone(),
             lazy_worker.scheduler(),
+            grpc_thread_load.clone(),
         );
         let raft_client = RaftClient::new(conn_builder);
 
@@ -249,6 +251,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
 
+        // Note this should be called only after grpc server is started.
         let mut grpc_load_stats = {
             let tl = Arc::clone(&self.grpc_thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
@@ -371,18 +374,20 @@ pub mod test_router {
         }
     }
 
-    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
-            Ok(())
-        }
-
+    impl SignificantRouter<RocksEngine> for TestRaftStoreRouter {
         fn significant_send(
             &self,
             _: u64,
             msg: SignificantMsg<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             let _ = self.significant_msg_sender.send(msg);
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+            let _ = self.tx.send(1);
             Ok(())
         }
 
@@ -407,12 +412,14 @@ mod tests {
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
     use grpcio::EnvBuilder;
+    use kvproto::kvrpcpb::ApiVersion;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
 
     use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::{PerfLevel, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
+    use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
 
@@ -460,7 +467,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
             .build()
             .unwrap();
 
@@ -474,9 +481,11 @@ mod tests {
                 .build(),
         );
 
+        let (tx, _rx) = mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
             router.clone(),
+            tx,
             Default::default(),
             Default::default(),
         );
@@ -495,6 +504,7 @@ mod tests {
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
+            ResourceTagFactory::new_for_test(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(

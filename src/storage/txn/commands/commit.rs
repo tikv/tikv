@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use txn_types::Key;
 
 use crate::storage::kv::WriteData;
@@ -38,7 +39,7 @@ impl CommandExt for Commit {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
-    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.commit_ts <= self.lock_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
                 start_ts: self.lock_ts,
@@ -47,8 +48,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         }
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache()),
-            &mut context.statistics,
+            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx),
+            context.statistics,
         );
 
         let rows = self.keys.len();

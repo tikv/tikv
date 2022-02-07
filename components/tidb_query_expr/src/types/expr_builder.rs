@@ -116,6 +116,7 @@ impl RpnExpressionBuilder {
     }
 
     /// Pushes a `FnCall` node.
+    #[must_use]
     pub fn push_fn_call_for_test(
         mut self,
         func_meta: RpnFnMeta,
@@ -133,6 +134,7 @@ impl RpnExpressionBuilder {
     }
 
     #[cfg(test)]
+    #[must_use]
     pub fn push_fn_call_with_metadata(
         mut self,
         func_meta: RpnFnMeta,
@@ -152,6 +154,7 @@ impl RpnExpressionBuilder {
 
     /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
     /// field type that matches the field type of the given value.
+    #[must_use]
     pub fn push_constant_for_test(mut self, value: impl Into<ScalarValue>) -> Self {
         let value = value.into();
         let field_type = value
@@ -165,6 +168,7 @@ impl RpnExpressionBuilder {
 
     /// Pushes a `Constant` node.
     #[cfg(test)]
+    #[must_use]
     pub fn push_constant_with_field_type(
         mut self,
         value: impl Into<ScalarValue>,
@@ -179,6 +183,7 @@ impl RpnExpressionBuilder {
     }
 
     /// Pushes a `ColumnRef` node.
+    #[must_use]
     pub fn push_column_ref_for_test(mut self, offset: usize) -> Self {
         let node = RpnExpressionNode::ColumnRef { offset };
         self.0.push(node);

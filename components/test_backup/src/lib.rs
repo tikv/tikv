@@ -83,8 +83,10 @@ impl TestSuite {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize(sst_max_size),
+                    ..Default::default()
                 },
                 sim.get_concurrency_manager(*id),
+                ApiVersion::V1,
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
             worker.start(backup_endpoint);
@@ -297,6 +299,7 @@ impl TestSuite {
             backup_ts,
             IsolationLevel::Si,
             false,
+            Default::default(),
             Default::default(),
             false,
         );

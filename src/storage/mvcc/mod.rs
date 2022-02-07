@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 //! Multi-version concurrency control functionality.
 
 mod consistency_check;
@@ -20,6 +21,7 @@ use std::error;
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::kvrpcpb::Assertion;
 use thiserror::Error;
 
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -28,7 +30,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 #[derive(Debug, Error)]
 pub enum ErrorInner {
     #[error("{0}")]
-    Engine(#[from] crate::storage::kv::Error),
+    Kv(#[from] crate::storage::kv::Error),
 
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -145,6 +147,18 @@ pub enum ErrorInner {
         max_commit_ts: TimeStamp,
     },
 
+    #[error(
+        "assertion on data failed, start_ts:{}, key:{}, assertion:{:?}, existing_start_ts:{}, existing_commit_ts:{}",
+        .start_ts, log_wrappers::Value::key(.key), .assertion, .existing_start_ts, .existing_commit_ts
+    )]
+    AssertionFailed {
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+        assertion: Assertion,
+        existing_start_ts: TimeStamp,
+        existing_commit_ts: TimeStamp,
+    },
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -152,7 +166,7 @@ pub enum ErrorInner {
 impl ErrorInner {
     pub fn maybe_clone(&self) -> Option<ErrorInner> {
         match self {
-            ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
+            ErrorInner::Kv(e) => e.maybe_clone().map(ErrorInner::Kv),
             ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
             ErrorInner::KeyIsLocked(info) => Some(ErrorInner::KeyIsLocked(info.clone())),
             ErrorInner::BadFormat(e) => e.maybe_clone().map(ErrorInner::BadFormat),
@@ -250,6 +264,19 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
                 max_commit_ts: *max_commit_ts,
             }),
+            ErrorInner::AssertionFailed {
+                start_ts,
+                key,
+                assertion,
+                existing_start_ts,
+                existing_commit_ts,
+            } => Some(ErrorInner::AssertionFailed {
+                start_ts: *start_ts,
+                key: key.clone(),
+                assertion: *assertion,
+                existing_start_ts: *existing_start_ts,
+                existing_commit_ts: *existing_commit_ts,
+            }),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -313,7 +340,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self.0.as_ref() {
-            ErrorInner::Engine(e) => e.error_code(),
+            ErrorInner::Kv(e) => e.error_code(),
             ErrorInner::Io(_) => error_code::storage::IO,
             ErrorInner::Codec(e) => e.error_code(),
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
@@ -335,6 +362,7 @@ impl ErrorCodeExt for Error {
                 error_code::storage::PESSIMISTIC_LOCK_NOT_FOUND
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
+            ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }

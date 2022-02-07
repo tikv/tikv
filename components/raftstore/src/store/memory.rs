@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use fail::fail_point;
 use lazy_static::lazy_static;
 use std::sync::Arc;
@@ -57,7 +58,7 @@ lazy_static! {
 
 pub fn needs_evict_entry_cache(evict_cache_on_memory_ratio: f64) -> bool {
     fail_point!("needs_evict_entry_cache", |_| true);
-    if evict_cache_on_memory_ratio - 0.0 < std::f64::EPSILON {
+    if evict_cache_on_memory_ratio < f64::EPSILON {
         return false;
     }
 

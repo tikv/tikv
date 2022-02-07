@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crate::mailbox::{BasicMailbox, Mailbox};
 use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
@@ -51,7 +52,7 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
     pub(crate) normal_scheduler: Ns,
-    control_scheduler: Cs,
+    pub(crate) control_scheduler: Cs,
 
     // Count of Mailboxes that is not destroyed.
     // Added when a Mailbox created, and subtracted it when a Mailbox destroyed.

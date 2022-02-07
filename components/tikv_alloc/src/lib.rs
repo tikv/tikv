@@ -82,10 +82,6 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
-#[cfg(feature = "mem-profiling")]
-#[macro_use]
-extern crate log;
-
 #[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;

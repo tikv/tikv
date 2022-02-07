@@ -9,6 +9,7 @@ use crate::storage::txn::flow_controller::FlowController;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_traits::{ColumnFamilyOptions, KvEngine, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use std::error::Error;
@@ -20,7 +21,7 @@ use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
-const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
+const DEFAULT_MAX_KEY_SIZE: usize = 8 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 
@@ -55,6 +56,8 @@ pub struct Config {
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
+    pub api_version: u8,
+    #[online_config(skip)]
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
@@ -78,6 +81,7 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
+            api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
             flow_control: FlowControlConfig::default(),
@@ -100,7 +104,44 @@ impl Config {
             );
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
-        self.io_rate_limit.validate()
+        if !matches!(self.api_version, 1 | 2) {
+            return Err("storage.api_version can only be set to 1 or 2.".into());
+        }
+        if self.api_version == 2 && !self.enable_ttl {
+            return Err(
+                "storage.enable_ttl must be true in API V2 because API V2 forces to enable TTL."
+                    .into(),
+            );
+        };
+        self.io_rate_limit.validate()?;
+
+        Ok(())
+    }
+
+    pub fn api_version(&self) -> ApiVersion {
+        match self.api_version {
+            1 if self.enable_ttl => ApiVersion::V1ttl,
+            1 => ApiVersion::V1,
+            2 => ApiVersion::V2,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn set_api_version(&mut self, api_version: ApiVersion) {
+        match api_version {
+            ApiVersion::V1 => {
+                self.api_version = 1;
+                self.enable_ttl = false;
+            }
+            ApiVersion::V1ttl => {
+                self.api_version = 1;
+                self.enable_ttl = true;
+            }
+            ApiVersion::V2 => {
+                self.api_version = 2;
+                self.enable_ttl = true;
+            }
+        }
     }
 }
 
@@ -217,7 +258,7 @@ impl Default for FlowControlConfig {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(1024),
             memtables_threshold: 5,
-            l0_files_threshold: 9,
+            l0_files_threshold: 20,
         }
     }
 }

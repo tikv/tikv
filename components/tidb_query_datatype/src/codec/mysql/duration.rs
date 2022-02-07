@@ -307,6 +307,7 @@ impl Duration {
     }
 
     #[inline]
+    #[must_use]
     pub fn minimize_fsp(self) -> Self {
         Duration {
             fsp: MIN_FSP as u8,
@@ -315,6 +316,7 @@ impl Duration {
     }
 
     #[inline]
+    #[must_use]
     pub fn maximize_fsp(self) -> Self {
         Duration {
             fsp: MAX_FSP as u8,
@@ -366,6 +368,7 @@ impl Duration {
 
     /// Returns the absolute value of `Duration`
     #[inline]
+    #[must_use]
     pub fn abs(self) -> Self {
         Duration {
             nanos: self.nanos.abs(),
@@ -676,7 +679,6 @@ mod tests {
     use crate::codec::data_type::DateTime;
     use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
-    use std::f64::EPSILON;
     use std::sync::Arc;
 
     #[test]
@@ -952,7 +954,7 @@ mod tests {
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: f64 = du.convert(&mut ctx).unwrap();
             assert!(
-                (expect - get).abs() < EPSILON,
+                (expect - get).abs() < f64::EPSILON,
                 "expect: {}, got: {}",
                 expect,
                 get

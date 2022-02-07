@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -200,7 +201,7 @@ impl Latches {
     }
 
     #[inline]
-    fn lock_latch(&self, hash: u64) -> MutexGuard<Latch> {
+    fn lock_latch(&self, hash: u64) -> MutexGuard<'_, Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
     }
 }

@@ -5,6 +5,13 @@ use prometheus::*;
 use prometheus_static_metric::*;
 use std::cell::RefCell;
 use tikv::storage::kv::PerfStatisticsDelta;
+use tikv::storage::Statistics;
+
+/// Installing a new capture contains 2 phases, one for incremental scanning and one for
+/// fetching delta changes from raftstore. They can share some similar metrics, in which
+/// case we can use this tag to distinct them.
+pub const TAG_DELTA_CHANGE: &str = "delta_change";
+pub const TAG_INCREMENTAL_SCAN: &str = "incremental_scan";
 
 make_auto_flush_static_metric! {
     pub label_enum PerfMetric {
@@ -78,7 +85,7 @@ lazy_static! {
     .unwrap();
     pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
         "tikv_cdc_scan_bytes_total",
-        "Total bytes of CDC incremental scan"
+        "Total fetched bytes of CDC incremental scan"
     )
     .unwrap();
     pub static ref CDC_SCAN_TASKS: IntGaugeVec = register_int_gauge_vec!(
@@ -87,6 +94,10 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref CDC_SCAN_DISK_READ_BYTES: IntCounter = register_int_counter!(
+        "tikv_cdc_scan_disk_read_bytes_total",
+        "Total disk read bytes of CDC incremental scan"
+    ).unwrap();
     pub static ref CDC_MIN_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
         "tikv_cdc_min_resolved_ts_region",
         "The region which has minimal resolved ts"
@@ -155,7 +166,8 @@ lazy_static! {
     pub static ref CDC_OLD_VALUE_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_cdc_old_value_scan_details",
         "Bucketed counter of scan details for old value",
-        &["cf", "tag"]
+        // Two types: `incremental_scan` and `delta_change`.
+        &["cf", "tag", "type"]
     )
     .unwrap();
     pub static ref CDC_OLD_VALUE_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
@@ -252,4 +264,14 @@ pub fn tls_flush_perf_stats() {
         tls_flush_perf_stat!(perf_stats, encrypt_data_nanos);
         tls_flush_perf_stat!(perf_stats, decrypt_data_nanos);
     });
+}
+
+pub fn flush_oldvalue_stats(stats: &Statistics, typ: &'static str) {
+    for (cf, cf_details) in stats.details().iter() {
+        for (tag, count) in cf_details.iter() {
+            CDC_OLD_VALUE_SCAN_DETAILS
+                .with_label_values(&[*cf, *tag, typ])
+                .inc_by(*count as u64);
+        }
+    }
 }

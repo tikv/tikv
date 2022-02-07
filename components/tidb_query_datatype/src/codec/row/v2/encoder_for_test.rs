@@ -62,6 +62,7 @@ impl Column {
         &self.ft
     }
 
+    #[must_use]
     pub fn with_tp(mut self, tp: FieldTypeTp) -> Self {
         self.ft.as_mut_accessor().set_tp(tp);
         self
@@ -71,11 +72,13 @@ impl Column {
         self.ft.is_unsigned()
     }
 
+    #[must_use]
     pub fn with_unsigned(mut self) -> Self {
         self.ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
         self
     }
 
+    #[must_use]
     pub fn with_decimal(mut self, decimal: isize) -> Self {
         self.ft.as_mut_accessor().set_decimal(decimal);
         self
@@ -228,7 +231,7 @@ mod tests {
     #[test]
     fn test_encode_unsigned() {
         let cols = vec![
-            Column::new(1, std::u64::MAX as i64).with_unsigned(),
+            Column::new(1, u64::MAX as i64).with_unsigned(),
             Column::new(2, -1),
         ];
         let exp: Vec<u8> = vec![

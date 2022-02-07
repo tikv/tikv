@@ -220,7 +220,7 @@ mod tests {
                     json,
                     "#{} expect modified json {:?} == {:?}",
                     i,
-                    json.to_string(),
+                    json,
                     expected.to_string()
                 );
             } else {

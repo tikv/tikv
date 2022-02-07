@@ -64,13 +64,14 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(region_heartbeat(0, Region::default(), Peer::default(), RegionStat::default(), None))),
         request!(client => block_on(ask_split(Region::default()))),
         request!(client => block_on(ask_batch_split(Region::default(), 1))),
-        request!(client => block_on(store_heartbeat(Default::default()))),
+        request!(client => block_on(store_heartbeat(Default::default(), None))),
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
         request!(client => block_on(get_gc_safe_point())),
         request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
+        request!(client => load_global_config(vec![])),
     ];
 
     for (name, func) in test_funcs {
@@ -100,6 +101,69 @@ fn test_pd_client_deadlock() {
 
     drop(client);
     fail::remove(pd_client_reconnect_fp);
+}
+
+#[test]
+fn test_load_global_config() {
+    let (mut _server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+    let res = futures::executor::block_on(async move {
+        client
+            .load_global_config(
+                ["abc", "123", "xyz"]
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+    });
+    assert!(res.is_ok());
+    for (k, v) in res.unwrap() {
+        assert_eq!(k, format!("/global/config/{}", v))
+    }
+}
+
+#[test]
+fn test_watch_global_config_on_closed_server() {
+    let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+    let client = Arc::new(client);
+    use futures::StreamExt;
+    let j = std::thread::spawn(move || {
+        let _ = futures::executor::block_on(async move {
+            let mut r = client.watch_global_config().unwrap();
+            let mut i: usize = 0;
+            while let Some(r) = r.next().await {
+                match r {
+                    Ok(res) => {
+                        let change = &res.get_changes()[0];
+                        assert_eq!(
+                            change
+                                .get_name()
+                                .split('/')
+                                .collect::<Vec<_>>()
+                                .last()
+                                .unwrap()
+                                .to_owned(),
+                            format!("{:?}", i)
+                        );
+                        assert_eq!(change.get_value().to_owned(), format!("{:?}", i));
+                        i += 1;
+                    }
+                    Err(e) => {
+                        if let grpcio::Error::RpcFailure(e) = e {
+                            // 14-UNAVAILABLE
+                            assert_eq!(e.code(), grpcio::RpcStatusCode::from(14));
+                            break;
+                        } else {
+                            panic!("other error occur {:?}", e)
+                        }
+                    }
+                }
+            }
+        });
+    });
+    thread::sleep(Duration::from_millis(200));
+    server.stop();
+    j.join().unwrap();
 }
 
 // Updating pd leader may be slow, we need to make sure it does not block other

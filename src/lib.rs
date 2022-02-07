@@ -23,10 +23,10 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(shrink_to)]
 #![feature(drain_filter)]
 #![feature(negative_impls)]
 #![feature(deadline_api)]
+#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;

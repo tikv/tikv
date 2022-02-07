@@ -36,4 +36,26 @@ lazy_static! {
         &["error"]
     )
     .unwrap();
+    pub static ref BACKUP_SOFTLIMIT_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_backup_softlimit",
+        "Soft limit applied to the backup thread pool."
+    )
+    .unwrap();
+    pub static ref BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM : Histogram = register_histogram!(
+        "tikv_backup_scan_wait_for_writer_seconds",
+        "The time backup scanner wait for available writer."
+    )
+    .unwrap();
+    pub static ref BACKUP_SCAN_KV_COUNT : IntCounterVec = register_int_counter_vec!(
+        "tikv_backup_scan_kv_count",
+        "Total number of kvs backed up",
+        &["cf"],
+    )
+    .unwrap();
+    pub static ref BACKUP_SCAN_KV_SIZE : IntCounterVec = register_int_counter_vec!(
+        "tikv_backup_scan_kv_size_bytes",
+        "Total size of kvs backed up",
+        &["cf"],
+    )
+    .unwrap();
 }

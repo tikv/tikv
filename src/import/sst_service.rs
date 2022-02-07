@@ -4,9 +4,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use collections::HashSet;
-
 use super::make_rpc_error;
+use collections::HashSet;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
@@ -16,13 +15,10 @@ use futures::TryFutureExt;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::{errorpb, kvrpcpb::Context};
 
-#[cfg(feature = "prost-codec")]
-use kvproto::import_sstpb::write_request::*;
-#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
-#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
@@ -170,6 +166,11 @@ where
         let router = self.router.clone();
         let importer = self.importer.clone();
         async move {
+            // check api version
+            if !importer.as_ref().check_api_version(&ssts)? {
+                return Err(Error::IncompatibleApiVersion);
+            }
+
             let mut resp = IngestResponse::default();
             let res = match snapshot_res.await {
                 Ok(snap) => snap,
@@ -276,11 +277,11 @@ macro_rules! impl_write {
                         })
                         .await?;
 
-                    writer.finish().map(|metas| {
-                        let mut resp = $resp_ty::default();
-                        resp.set_metas(metas.into());
-                        resp
-                    })
+                    let metas = writer.finish()?;
+                    import.verify_checksum(&metas)?;
+                    let mut resp = $resp_ty::default();
+                    resp.set_metas(metas.into());
+                    Ok(resp)
                 }
                 .await;
                 crate::send_rpc_response!(res, sink, label, timer);
@@ -396,11 +397,18 @@ where
             // a download task.
             // Unfortunately, this currently can't happen because the S3Storage
             // is not Send + Sync. See the documentation of S3Storage for reason.
+            let cipher = req
+                .cipher_info
+                .to_owned()
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+
             let res = importer.download::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
+                cipher,
                 limiter,
                 engine,
             );

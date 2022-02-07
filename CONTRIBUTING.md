@@ -21,7 +21,7 @@ To build TiKV you'll need to at least have the following installed:
 * `awk` - Pattern scanning/processing language
 * C++ compiler - gcc 4.9+ (required for gRPC)
 
-If you are targeting platforms other than x86_64 linux, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 linux, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 
@@ -60,13 +60,6 @@ During interactive development, you may prefer using `cargo check`, which will p
 cargo check --all
 ```
 
-It is particularly handy alongside `cargo-watch`, which runs a command each time you change a file.
-
-```bash
-cargo install cargo-watch
-cargo watch -s "cargo check --all"
-```
-
 When you're ready to test out your changes, use the `dev` task. It will format your codebase, build with `clippy` enabled, and run tests. This should run without failure before you create a PR. Unfortunately, some tests will fail intermittently and others don't pass on all platforms. If you're unsure, just ask!
 
 ```bash
@@ -80,13 +73,15 @@ You can run the test suite alone, or just run a specific test:
 make test
 # Run a specific test
 ./scripts/test $TESTNAME -- --nocapture
+# Or using make
+env EXTRA_CARGO_ARGS=$TESTNAME make test
 ```
 
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
 
 ```bash
 # Run Rustfmt
-cargo fmt
+make format
 # Run Clippy (note that some lints are ignored, so `cargo clippy` will give many false positives)
 make clippy
 ```
@@ -120,14 +115,17 @@ Read our configuration guide to learn about various [configuration options](http
 
 This is a rough outline of what a contributor's workflow looks like:
 
+- Make sure what you want to contribute is already traced as an issue (see below for linking issue).
+  * We may discuss the problem and solution in the issue.
 - Create a Git branch from where you want to base your work. This is usually master.
 - Write code, add test cases, and commit your work (see below for message format).
 - Run tests and make sure all tests pass.
 - Push your changes to a branch in your fork of the repository and submit a pull request.
-- Your PR will be reviewed by two maintainers, who may request some changes.
+  * Make sure mention the issue, which is created at step 1, in the commit meesage.
+- Your PR will be reviewed and may be requested some changes.
   * Once you've made changes, your PR must be re-reviewed and approved.
   * If the PR becomes out of date, you can use GitHub's 'update branch' button.
-  * If there are conflicts, you can rebase (or merge) and resolve them locally. Then force push to your PR branch.
+  * If there are conflicts, you can merge and resolve them locally. Then push to your PR branch.
     You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
 - Our CI system automatically tests all pull requests.
 - Our [bot](https://github.com/ti-chi-bot) will merge your PR. It can be summoned by commenting `/merge` (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
@@ -152,29 +150,57 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 
 See more in [TiKV Community](https://github.com/tikv/community).
 
+### Linking issues
+
+Code repositories in TiKV community require **ALL** the pull requests referring to its corresponding issues. In the pull request body, there **MUST** be one line starting with `Issue Number: ` and linking the relevant issues via the [keyword](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword), for example:
+
+If the pull request resolves the relevant issues, and you want GitHub to close these issues automatically after it merged into the default branch, you can use the syntax (`KEYWORD #ISSUE-NUMBER`) like this:
+
+```
+Issue Number: close #123
+```
+
+If the pull request links an issue but does not close it, you can use the keyword `ref` like this:
+
+```
+Issue Number: ref #456
+```
+
+Multiple issues should use full syntax for each issue and separate by a comma, like:
+
+```
+Issue Number: close #123, ref #456
+```
+
+For pull requests trying to close issues in a different repository, contributors need to first create an issue in the same repository and use this issue to track.
+
+If the pull request body does not provide the required content, the bot will add the `do-not-merge/needs-linked-issue` label to the pull request to prevent it from being merged.
+
 ### Format of the commit message
 
-We follow a rough convention for commit messages that is designed to answer two
-questions: what changed and why. The subject line should feature the what and
-the body of the commit should describe the why.
+The bot we use will extract the pull request title as the one-line subject and messages inside the `commit-message` code block as commit message body. For example, a pull request with title `pkg: what's changed in this one package` and body containing:
+
+    ```commit-message
+    any multiple line commit messages that go into
+    the final commit message body
+
+    * fix something 1
+    * fix something 2
+    ```
+
+will get a final commit message:
 
 ```
-engine/raftkv: add comment for variable declaration.
+pkg: what's changed in this one package (#12345)
 
-Improve documentation.
+any multiple line commit messages that go into
+the final commit message body
+
+* fix something 1
+* fix something 2
 ```
 
-The format can be described more formally as follows:
-
-```
-<subsystem>: <what changed>
-<BLANK LINE>
-<why this change was made>
-<BLANK LINE>
-Signed-off-by: <Name> <email address>
-```
-
-The first line is the subject and should be no longer than 50 characters, the other lines should be wrapped at 72 characters (see [this blog post](https://preslav.me/2015/02/21/what-s-with-the-50-72-rule/) for why).
+The first line is the subject (the pull request title) and should be no longer than 50 characters, the other lines should be wrapped at 72 characters (see [this blog post](https://preslav.me/2015/02/21/what-s-with-the-50-72-rule/) for why).
 
 If the change affects more than one subsystem, you can use comma to separate them like `util/codec,util/types:`.
 
@@ -186,7 +212,7 @@ The body of the commit message should describe why the change was made and at a 
 
 The project uses [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/).
 
-Use option `git commit -s` to sign off your commits.
+Use option `git commit -s` to sign off your commits. The bot will group and distinguish the signatures from all your commits in the pull request and append them to the final commit message body. 
 
 
 ### Testing AWS
