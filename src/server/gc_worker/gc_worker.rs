@@ -358,7 +358,7 @@ where
                 .unwrap()
                 .to_raw()
                 .map_err(|e| EngineError::Codec(e))?;
-            k.push(b'0');
+            k.push(0);
             Key::from_raw(&k).into_encoded()
         };
         let snapshot = self
@@ -1607,16 +1607,16 @@ mod tests {
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         // Generate some tombstone
         for i in 10u64..30 {
-            must_rollback(&prefixed_engine, b"k3", i, true);
+            must_rollback(&prefixed_engine, b"k2\x00", i, true);
         }
         db.flush_cf(cf, true).unwrap();
-        must_gc(&prefixed_engine, b"k3", 30);
+        must_gc(&prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
-                vec![Key::from_raw(b"k3")],
+                vec![Key::from_raw(b"k2\x00")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
             )
