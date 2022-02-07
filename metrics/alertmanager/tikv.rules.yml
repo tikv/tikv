@@ -14,7 +14,7 @@ groups:
       summary: TiKV memory used too fast
 
   - alert: TiKV_GC_can_not_work
-    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1 and sum(increase(tikv_gc_compaction_filter_perform[1d])) < 1
+    expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1 and (sum(increase(tikv_gc_compaction_filter_perform[1d])) < 1 and sum(increase(tikv_engine_event_total{db="kv", cf="write", type="compaction"}[1d])) >= 1)
     for: 1m
     labels:
       env: ENV_LABELS_ENV
@@ -241,30 +241,6 @@ groups:
       value: '{{ $value }}'
       summary: TiKV scheduler command duration seconds more than 1s
 
-  - alert: TiKV_coprocessor_request_error
-    expr: increase(tikv_coprocessor_request_error{reason!="lock"}[10m]) > 100
-    for: 1m
-    labels:
-      env: ENV_LABELS_ENV
-      level: warning
-      expr:  increase(tikv_coprocessor_request_error{reason!="lock"}[10m]) > 100
-    annotations:
-      description: 'cluster: ENV_LABELS_ENV, reason: {{ $labels.reason }}, instance: {{ $labels.instance }}, values: {{ $value }}'
-      value: '{{ $value }}'
-      summary: TiKV coprocessor request error
-
-  - alert: TiKV_coprocessor_request_lock_error
-    expr: increase(tikv_coprocessor_request_error{reason="lock"}[10m]) > 10000
-    for: 1m
-    labels:
-      env: ENV_LABELS_ENV
-      level: warning
-      expr:  increase(tikv_coprocessor_request_error{reason="lock"}[10m]) > 10000
-    annotations:
-      description: 'cluster: ENV_LABELS_ENV, reason: {{ $labels.reason }}, instance: {{ $labels.instance }}, values: {{ $value }}'
-      value: '{{ $value }}'
-      summary: TiKV coprocessor request lock error
-
   - alert: TiKV_coprocessor_pending_request
     expr: delta( tikv_coprocessor_pending_request[10m]) > 5000
     for: 1m
@@ -301,17 +277,17 @@ groups:
       value: '{{ $value }}'
       summary: TiKV pending task too much
 
-  - alert: TiKV_low_space_and_add_region
-    expr: count( (sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2) and (sum(tikv_raftstore_snapshot_traffic_total{type="applying"}) by (instance) > 0 ) ) > 0
+  - alert: TiKV_low_space
+    expr: sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: warning
-      expr:  count( (sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2) and (sum(tikv_raftstore_snapshot_traffic_total{type="applying"}) by (instance) > 0 ) ) > 0
+      expr:  sum(tikv_store_size_bytes{type="available"}) by (instance) / sum(tikv_store_size_bytes{type="capacity"}) by (instance) < 0.2
     annotations:
       description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
       value: '{{ $value }}'
-      summary: TiKV low_space and add_region
+      summary: TiKV available disk space too low
 
   - alert: TiKV_approximate_region_size
     expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_region_size_bucket[1m])) by (le)) > 1073741824
