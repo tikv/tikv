@@ -396,6 +396,7 @@ impl<T> MustConsumeVec<T> {
         }
     }
 
+    #[must_use]
     pub fn take(&mut self) -> Self {
         MustConsumeVec {
             tag: self.tag,

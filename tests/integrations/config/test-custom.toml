@@ -5,7 +5,6 @@ slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-enable-io-snoop = false
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
@@ -213,6 +212,7 @@ io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
 check-leader-lease-interval = "123ms"
+renew-leader-lease-advance-duration = "456ms"
 
 [coprocessor]
 split-region-on-table = false
