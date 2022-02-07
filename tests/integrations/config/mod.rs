@@ -615,7 +615,7 @@ fn test_serde_custom_tikv_config() {
         },
         titan: titan_db_config,
     };
-    value.raft_engine.enable = true;
+    value.raft_engine.enable = false;
     let raft_engine_config = value.raft_engine.mut_config();
     raft_engine_config.dir = "test-dir".to_owned();
     raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
