@@ -245,7 +245,7 @@ struct WriteCompactionFilter {
     write_batch: RocksWriteBatch,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
-    mvcc_deletions: Vec<Key>,
+    mvcc_deletions: Vec<(Key, TimeStamp)>,
     // The count of records covered the current mvcc-deletion mark. The mvcc-deletion
     // mark will be sent to the GC worker only if `mvcc_deletion_overlaps` is 0. It's
     // a little optimization to reduce modifications on write CF.
@@ -253,6 +253,7 @@ struct WriteCompactionFilter {
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
+    mvcc_key_latest_ts: u64,
     remove_older: bool,
 
     // Some metrics about implementation detail.
@@ -295,6 +296,7 @@ impl WriteCompactionFilter {
             regions_provider,
 
             mvcc_key_prefix: vec![],
+            mvcc_key_latest_ts: 0,
             remove_older: false,
 
             versions: 0,
@@ -338,19 +340,25 @@ impl WriteCompactionFilter {
         // Valid MVCC records should begin with `DATA_PREFIX`.
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
-        self.mvcc_deletions.push(key);
+        let ts = TimeStamp::from(self.mvcc_key_latest_ts);
+        self.mvcc_deletions.push((key, ts));
     }
 
     fn gc_mvcc_deletions(&mut self) {
         if !self.mvcc_deletions.is_empty() {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
-            let task = GcTask::GcKeys {
-                keys: mem::replace(&mut self.mvcc_deletions, empty),
-                safe_point: self.safe_point.into(),
-                store_id: self.regions_provider.0,
-                region_info_provider: self.regions_provider.1.clone(),
-            };
-            self.schedule_gc_task(task, false);
+            let mut keys = mem::replace(&mut self.mvcc_deletions, empty);
+            // Avoid too many continuous tombstones after handled by GC worker.
+            self.mvcc_deletions.push(keys.pop().unwrap());
+            if !keys.is_empty() {
+                let task = GcTask::GcKeys {
+                    keys,
+                    safe_point: self.safe_point.into(),
+                    store_id: self.regions_provider.0,
+                    region_info_provider: self.regions_provider.1.clone(),
+                };
+                self.schedule_gc_task(task, false);
+            }
         }
     }
 
@@ -378,6 +386,7 @@ impl WriteCompactionFilter {
             self.switch_key_metrics();
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
+            self.mvcc_key_latest_ts = commit_ts;
             self.remove_older = false;
         } else if let Some(ref mut overlaps) = self.mvcc_deletion_overlaps {
             *overlaps += 1;
@@ -904,7 +913,7 @@ pub mod tests {
                 match task {
                     GcTask::GcKeys { keys, .. } => {
                         assert_eq!(keys.len(), 1);
-                        let got = keys[0].as_encoded();
+                        let got = keys[0].0.as_encoded();
                         let expect = Key::from_raw(prefix);
                         assert_eq!(got, &expect.as_encoded()[1..]);
                     }

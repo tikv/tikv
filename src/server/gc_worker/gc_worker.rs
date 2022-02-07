@@ -30,7 +30,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
+use crate::storage::mvcc::{GcInfo, MvccReader, MvccReaderBuilder, MvccTxn};
 use crate::storage::txn::Error as TxnError;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
@@ -80,7 +80,7 @@ where
         callback: Callback<()>,
     },
     GcKeys {
-        keys: Vec<Key>,
+        keys: Vec<(Key, TimeStamp)>,
         safe_point: TimeStamp,
         store_id: u64,
         region_info_provider: Arc<dyn RegionInfoProvider>,
@@ -278,6 +278,7 @@ where
             false,
         );
 
+        let reader_builder = MvccReaderBuilder::default().hint_max_commit_ts(safe_point);
         let mut next_key = Some(Key::from_encoded_slice(start_key));
         while next_key.is_some() {
             // Scans at most `GcConfig.batch_keys` keys.
@@ -290,7 +291,7 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(keys, safe_point, None)?;
+            self.gc_keys(keys, safe_point, reader_builder)?;
         }
 
         self.stats.add(&reader.statistics);
@@ -303,22 +304,23 @@ where
         Ok(())
     }
 
-    fn gc_keys(
+    fn gc_mvcc_deletions(
         &mut self,
-        keys: Vec<Key>,
+        keys: Vec<(Key, TimeStamp)>,
         safe_point: TimeStamp,
-        regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+        store_id: u64,
+        regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<()> {
         struct KeysInRegions<R: Iterator<Item = Region>> {
-            keys: Peekable<IntoIter<Key>>,
+            keys: Peekable<IntoIter<(Key, TimeStamp)>>,
             regions: Peekable<R>,
         }
         impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-            type Item = Key;
-            fn next(&mut self) -> Option<Key> {
+            type Item = (Key, TimeStamp);
+            fn next(&mut self) -> Option<Self::Item> {
                 loop {
                     let region = self.regions.peek()?;
-                    let key = self.keys.peek()?.as_encoded().as_slice();
+                    let key = self.keys.peek()?.0.as_encoded().as_slice();
                     if key < region.get_start_key() {
                         self.keys.next();
                     } else if region.get_end_key().is_empty() || key < region.get_end_key() {
@@ -330,38 +332,46 @@ where
             }
         }
 
-        fn get_keys_in_regions(
-            keys: Vec<Key>,
-            regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-        ) -> Result<Box<dyn Iterator<Item = Key>>> {
-            if keys.len() >= 2 {
-                if let Some((store_id, region_info_provider)) = regions_provider {
-                    let start = keys.first().unwrap().as_encoded();
-                    let end = keys.last().unwrap().as_encoded();
-                    let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
-                        .into_iter()
-                        .filter(move |r| find_peer(r, store_id).is_some())
-                        .peekable();
+        let mut reader_builder = MvccReaderBuilder::default().hint_max_commit_ts(safe_point);
+        let mut no_ts_keys = Vec::with_capacity(keys.len());
 
-                    let keys = keys.into_iter().peekable();
-                    return Ok(Box::new(KeysInRegions { keys, regions }));
-                }
+        if keys.len() >= 2 {
+            let start = keys.first().unwrap().0.as_encoded();
+            let end = keys.last().unwrap().0.as_encoded();
+            let regions = box_try!(regions_provider.get_regions_in_range(start, end))
+                .into_iter()
+                .filter(move |r| find_peer(r, store_id).is_some())
+                .peekable();
+
+            let keys = keys.into_iter().peekable();
+            for (key, ts) in (KeysInRegions { keys, regions }) {
+                no_ts_keys.push(key);
+                let cur_max = reader_builder.hint_max_commit_ts.unwrap();
+                reader_builder.hint_max_commit_ts = Some(std::cmp::max(cur_max, ts));
             }
-            Ok(Box::new(keys.into_iter()))
         }
 
-        let count = keys.len();
-        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        self.gc_keys(no_ts_keys, safe_point, reader_builder)
+    }
 
-        let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
-        let mut txn = Self::new_txn();
-        let mut reader = if count <= 1 {
-            MvccReader::new(snapshot, None, false)
-        } else {
+    fn gc_keys(
+        &mut self,
+        keys: Vec<Key>,
+        safe_point: TimeStamp,
+        mut reader_builder: MvccReaderBuilder,
+    ) -> Result<()> {
+        debug_assert!(reader_builder.scan_mode.is_none());
+        if keys.len() > 1 {
             // keys are closing to each other in one batch of gc keys, so do not use
             // prefix seek here to avoid too many seeks
-            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
-        };
+            reader_builder.scan_mode = Some(ScanMode::Forward);
+        }
+
+        let mut keys = keys.into_iter();
+        let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
+        let mut reader = reader_builder.build(snapshot);
+        let mut txn = Self::new_txn();
+
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
@@ -392,8 +402,8 @@ where
             } else {
                 Self::flush_txn(txn, &self.limiter, &self.engine)?;
                 let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
+                reader = reader_builder.build(snapshot);
                 txn = Self::new_txn();
-                reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
@@ -597,7 +607,7 @@ where
                 region_info_provider,
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
-                let res = self.gc_keys(keys, safe_point, Some((store_id, region_info_provider)));
+                let res = self.gc_mvcc_deletions(keys, safe_point, store_id, region_info_provider);
                 let new_seek_tombstone = self.stats.write.seek_tombstone;
                 let seek_tombstone = new_seek_tombstone - old_seek_tombstone;
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
@@ -1490,7 +1500,7 @@ mod tests {
         }
 
         db.compact_range_cf(cf, None, None);
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(300));
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
             let mut raw_k = vec![b'z'];
@@ -1545,14 +1555,14 @@ mod tests {
             must_commit(&prefixed_engine, &k, 101, 102);
             must_prewrite_delete(&prefixed_engine, &k, &k, 151);
             must_commit(&prefixed_engine, &k, 151, 152);
-            keys.push(Key::from_raw(&k));
+            keys.push((Key::from_raw(&k), 152.into()));
         }
         db.flush_cf(cf, true).unwrap();
 
         assert_eq!(runner.stats.write.seek, 0);
         assert_eq!(runner.stats.write.next, 0);
         runner
-            .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
+            .gc_mvcc_deletions(keys, TimeStamp::new(200), 1, Arc::new(ri_provider))
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);

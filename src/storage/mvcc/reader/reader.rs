@@ -110,6 +110,42 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 }
 
+#[derive(Clone, Copy, Default, Debug)]
+pub struct MvccReaderBuilder {
+    pub scan_mode: Option<ScanMode>,
+    pub fill_cache: bool,
+    pub max_skippable_internal_keys: u64,
+    pub hint_max_commit_ts: Option<TimeStamp>,
+}
+
+impl MvccReaderBuilder {
+    pub fn new(scan_mode: Option<ScanMode>, fill_cache: bool) -> Self {
+        let mut builder = MvccReaderBuilder::default();
+        builder.scan_mode = scan_mode;
+        builder.fill_cache = fill_cache;
+        builder
+    }
+
+    #[must_use]
+    pub fn max_skippable_internal_keys(mut self, max_skippable_internal_keys: u64) -> Self {
+        self.max_skippable_internal_keys = max_skippable_internal_keys;
+        self
+    }
+
+    #[must_use]
+    pub fn hint_max_commit_ts(mut self, hint_max_commit_ts: TimeStamp) -> Self {
+        self.hint_max_commit_ts = Some(hint_max_commit_ts);
+        self
+    }
+
+    pub fn build<S: EngineSnapshot>(&self, snapshot: S) -> MvccReader<S> {
+        let mut reader = MvccReader::new(snapshot, self.scan_mode, self.fill_cache);
+        reader.max_skippable_internal_keys = self.max_skippable_internal_keys;
+        reader.hint_max_commit_ts = self.hint_max_commit_ts;
+        reader
+    }
+}
+
 pub struct MvccReader<S: EngineSnapshot> {
     snapshot: S,
     pub statistics: Statistics,
@@ -126,6 +162,9 @@ pub struct MvccReader<S: EngineSnapshot> {
     current_key: Option<Key>,
 
     fill_cache: bool,
+    max_skippable_internal_keys: u64,
+    // Filter out SSTs whose property `tikv.min_ts` is greater than `hint_max_commit_ts`.
+    hint_max_commit_ts: Option<TimeStamp>,
 
     // The term and the epoch version when the snapshot is created. They will be zero
     // if the two properties are not available.
@@ -145,6 +184,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache,
+            max_skippable_internal_keys: 0,
+            hint_max_commit_ts: None,
             term: 0,
             version: 0,
         }
@@ -160,6 +201,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
+            max_skippable_internal_keys: 0,
+            hint_max_commit_ts: None,
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
         }
@@ -407,6 +450,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .max_skippable_internal_keys(self.max_skippable_internal_keys)
                 .build()?;
             self.data_cursor = Some(cursor);
         }
@@ -420,6 +464,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 // Only use prefix seek in non-scan mode.
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
+                .max_skippable_internal_keys(self.max_skippable_internal_keys)
+                .hint_max_ts(self.hint_max_commit_ts)
                 .build()?;
             self.write_cursor = Some(cursor);
         }
@@ -1990,5 +2036,13 @@ pub mod tests {
             reader.seek_write(&k, ts).unwrap();
             assert_eq!(reader.statistics.write.seek_tombstone, tombstones);
         }
+
+        // Test `max_skippable_internal_keys` works as expected.
+        let mut reader = MvccReaderBuilder::new(Some(ScanMode::Forward), false)
+            .max_skippable_internal_keys(32)
+            .build(engine.snapshot());
+        let (k, ts) = (Key::from_raw(b"k1"), 199.into());
+        let err = reader.seek_write(&k, ts).unwrap_err().to_string();
+        assert!(err.contains("Too many internal keys skipped"));
     }
 }
