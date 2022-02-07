@@ -246,7 +246,9 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 ));
             }
             DecodeCommonHandle => {
-                for _ in self.columns_id_without_handle.len()..columns_len - self.pid_column_cnt - self.physical_table_id_column_cnt {
+                for _ in self.columns_id_without_handle.len()
+                    ..columns_len - self.pid_column_cnt - self.physical_table_id_column_cnt
+                {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
             }
