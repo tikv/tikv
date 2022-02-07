@@ -2829,17 +2829,17 @@ impl TiKvConfig {
         let default_tikv_cfg = TiKvConfig::default();
         let default_log_cfg = LogConfig::default();
         if self.log_level != default_tikv_cfg.log_level {
-            println!("deprecated configuration, log-level has been moved to log.level");
+            eprintln!("deprecated configuration, log-level has been moved to log.level");
             if self.log.level == default_log_cfg.level {
-                println!("override log.level with log-level, {:?}", self.log_level);
+                eprintln!("override log.level with log-level, {:?}", self.log_level);
                 self.log.level = self.log_level;
             }
             self.log_level = default_tikv_cfg.log_level;
         }
         if self.log_file != default_tikv_cfg.log_file {
-            println!("deprecated configuration, log-file has been moved to log.file.filename");
+            eprintln!("deprecated configuration, log-file has been moved to log.file.filename");
             if self.log.file.filename == default_log_cfg.file.filename {
-                println!(
+                eprintln!(
                     "override log.file.filename with log-file, {:?}",
                     self.log_file
                 );
@@ -2848,25 +2848,25 @@ impl TiKvConfig {
             self.log_file = default_tikv_cfg.log_file;
         }
         if self.log_format != default_tikv_cfg.log_format {
-            println!("deprecated configuration, log-format has been moved to log.format");
+            eprintln!("deprecated configuration, log-format has been moved to log.format");
             if self.log.format == default_log_cfg.format {
-                println!("override log.format with log-format, {:?}", self.log_format);
+                eprintln!("override log.format with log-format, {:?}", self.log_format);
                 self.log.format = self.log_format;
             }
             self.log_format = default_tikv_cfg.log_format;
         }
         if self.log_rotation_timespan.as_secs() > 0 {
-            println!(
+            eprintln!(
                 "deprecated configuration, log-rotation-timespan is no longer used and ignored."
             );
         }
         if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
-            println!(
+            eprintln!(
                 "deprecated configuration, \
                  log-ratation-size has been moved to log.file.max-size"
             );
             if self.log.file.max_size == default_log_cfg.file.max_size {
-                println!(
+                eprintln!(
                     "override log.file.max_size with log-rotation-size, {:?}",
                     self.log_rotation_size
                 );
@@ -2964,12 +2964,12 @@ impl TiKvConfig {
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
         if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
-            cache_cfg.capacity.0 = Some(ReadableSize {
-                0: self.rocksdb.defaultcf.block_cache_size.0
+            cache_cfg.capacity.0 = Some(ReadableSize(
+                self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
-            });
+            ));
         }
         if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
             warn!(
@@ -3240,7 +3240,7 @@ fn serde_to_online_config(name: String) -> String {
             "raftstore.apply_pool_size",
             "raft_store.apply_batch_system.pool_size",
         ),
-        _ => name.replace("raftstore", "raft_store").replace("-", "_"),
+        _ => name.replace("raftstore", "raft_store").replace('-', "_"),
     }
 }
 
@@ -3363,9 +3363,9 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
             .rev()
             .collect();
         if helper(fields, &TIKVCONFIG_TYPED)? {
-            dst.insert(name.replace("_", "-"), format!("\"{}\"", value));
+            dst.insert(name.replace('_', "-"), format!("\"{}\"", value));
         } else {
-            dst.insert(name.replace("_", "-"), value);
+            dst.insert(name.replace('_', "-"), value);
         }
     }
     Ok(dst)
@@ -4365,7 +4365,7 @@ mod tests {
             let mut cfg = TiKvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {
@@ -4374,7 +4374,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {
@@ -4383,14 +4383,14 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {
             let mut cfg = TiKvConfig::default();
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
-            assert!(!cfg.validate().is_ok());
+            assert!(cfg.validate().is_err());
         }
 
         {

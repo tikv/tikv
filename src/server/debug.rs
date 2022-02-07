@@ -486,8 +486,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
-        let fake_worker = Worker::new("fake-snap-worker");
-        let fake_snap_worker = fake_worker.lazy_build("fake-snap");
+        let fake_snap_worker = Worker::new("fake-snap-worker").lazy_build("fake-snap");
+        let fake_raftlog_fetch_worker =
+            Worker::new("fake-raftlog-fetch-worker").lazy_build("fake-raftlog-fetch");
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
@@ -512,6 +513,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                fake_raftlog_fetch_worker.scheduler(),
                 peer_id,
                 tag,
             ));
