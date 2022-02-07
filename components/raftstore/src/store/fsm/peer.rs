@@ -1072,11 +1072,9 @@ where
                 self.register_pd_heartbeat_tick();
             }
 
-            if self.fsm.peer.force_leader {
-                if ss.raft_state == StateRole::Follower {
-                    // for some reason, it's not leader anymore
-                    warn!("step to follower in force leader state");
-                }
+            if self.fsm.peer.force_leader && ss.raft_state == StateRole::Follower {
+                // for some reason, it's not leader anymore
+                warn!("step to follower in force leader state");
             }
         }
     }
