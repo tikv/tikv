@@ -27,13 +27,12 @@ fn test_force_leader() {
 
     let put = new_put_cmd(b"k2", b"v2");
     let mut region = cluster.get_region(b"k2");
-    let req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![put],
-        true,
+    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .is_err()
     );
-    assert!(cluster.call_command_on_leader(req, Duration::from_millis(10)).is_err());
 
     cluster.enter_force_leader(1, 1);
     cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
@@ -41,13 +40,10 @@ fn test_force_leader() {
     cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
     let put = new_put_cmd(b"k3", b"v3");
     let mut region = cluster.get_region(b"k2");
-    let req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![put],
-        true,
-    );
-    let resp = cluster.call_command_on_leader(req, Duration::from_millis(10)).unwrap();
+    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap();
     assert!(resp.get_header().has_error());
     cluster.exit_force_leader(1, 1);
 

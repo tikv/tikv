@@ -978,7 +978,7 @@ where
             } => self.on_capture_change(cmd, region_epoch, callback),
             SignificantMsg::LeaderCallback(cb) => {
                 self.on_leader_callback(cb);
-            },
+            }
             SignificantMsg::EnterForceLeaderState => self.on_enter_force_leader(),
             SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
         }
@@ -1000,13 +1000,18 @@ where
         assert!(self.fsm.peer.is_leader());
 
         // forward commit index
-        self.fsm.peer.raft_group.raft.raft_log.committed = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        self.fsm.peer.raft_group.raft.raft_log.committed =
+            self.fsm.peer.raft_group.raft.raft_log.last_index();
         self.fsm.has_ready = true;
     }
 
     fn on_exit_force_leader(&mut self) {
         self.fsm.peer.force_leader = false;
-        self.fsm.peer.raft_group.raft.become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+        self.fsm
+            .peer
+            .raft_group
+            .raft
+            .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
         self.fsm.has_ready = true;
     }
 
@@ -3450,7 +3455,9 @@ where
 
         if self.fsm.peer.force_leader {
             // in force leader state, forbid requests to make the recovery progress less error-prone
-            if !(msg.has_admin_request() && msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer) {
+            if !(msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer)
+            {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
         }
