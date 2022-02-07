@@ -111,14 +111,16 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             .map(|ci| field_type_from_column_info(ci))
             .collect();
 
-        let columns_id_without_handle: Vec<_> = columns_info
-            [..columns_info.len() - handle_column_cnt - pid_column_cnt - physical_table_id_column_cnt]
+        let columns_id_without_handle: Vec<_> = columns_info[..columns_info.len()
+            - handle_column_cnt
+            - pid_column_cnt
+            - physical_table_id_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
 
-        let columns_id_for_common_handle = columns_info
-            [columns_id_without_handle.len()..columns_info.len() - pid_column_cnt - physical_table_id_column_cnt]
+        let columns_id_for_common_handle = columns_info[columns_id_without_handle.len()
+            ..columns_info.len() - pid_column_cnt - physical_table_id_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
@@ -730,7 +732,8 @@ impl IndexScanExecutorImpl {
                     .push_int(Some(handle));
             }
             DecodeHandleOp::CommonHandle(mut handle) => {
-                let end_index = columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+                let end_index =
+                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut handle,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -745,7 +748,8 @@ impl IndexScanExecutorImpl {
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
             let skip = self.columns_id_without_handle.len();
-            let end_index = columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
+            let end_index =
+                columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
             self.restore_original_data(
                 restore_data_bytes,
                 izip!(
@@ -949,7 +953,11 @@ mod tests {
             let mut executor = BatchIndexScanExecutor::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
-                vec![columns_info[0].clone(), columns_info[1].clone(), columns_info[3].clone()],
+                vec![
+                    columns_info[0].clone(),
+                    columns_info[1].clone(),
+                    columns_info[3].clone(),
+                ],
                 key_ranges,
                 0,
                 true,

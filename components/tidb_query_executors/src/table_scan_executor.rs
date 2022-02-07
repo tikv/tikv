@@ -225,7 +225,9 @@ impl TableScanExecutorImpl {
 
         let row = RowSlice::from_bytes(value)?;
         for (col_id, idx) in &self.column_id_index {
-            if self.is_column_filled[*idx] { continue; }
+            if self.is_column_filled[*idx] {
+                continue;
+            }
             if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
                 let mut buffer_to_write = columns[*idx].mut_raw().begin_concat_extend();
                 buffer_to_write
@@ -374,7 +376,9 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             table::check_record_key(key)?;
         }
 
-        let some_physical_table_id_column_index = self.column_id_index.get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
+        let some_physical_table_id_column_index = self
+            .column_id_index
+            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
         match some_physical_table_id_column_index {
             Some(idx) => {
                 let table_id = table::decode_table_id(key)?;
@@ -382,7 +386,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 // decoded_columns += 1; // Not used afterwards!
                 self.is_column_filled[*idx] = true;
             }
-            None => {}, // nothing to do
+            None => {} // nothing to do
         }
 
         // Some fields may be missing in the row, we push corresponding default value to make all
@@ -976,7 +980,11 @@ mod tests {
                 ci
             },
         ];
-        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+        let schema = vec![
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+        ];
 
         let mut ctx = EvalContext::default();
         let mut kv = vec![];
