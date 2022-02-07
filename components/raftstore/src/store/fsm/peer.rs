@@ -1313,7 +1313,7 @@ where
                 self.register_check_leader_lease_tick();
             }
 
-            if self.fsm.peer.force_leader && ss.raft_state == StateRole::Follower {
+            if self.fsm.peer.force_leader && r == StateRole::Follower {
                 // for some reason, it's not leader anymore
                 warn!("step to follower in force leader state");
             }
