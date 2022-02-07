@@ -2500,7 +2500,7 @@ where
 
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-            || promoted_commit_index >= self.get_store().truncated_index()
+            || promoted_commit_index >= self.get_store().truncated_index() || self.force_leader
         {
             return Ok(());
         }
@@ -3268,6 +3268,9 @@ where
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
+        } else if self.force_leader {
+            // forward the commit index
+            self.raft_group.raft.raft_log.committed = self.raft_group.raft.raft_log.last_index();
         }
 
         Ok(propose_index)

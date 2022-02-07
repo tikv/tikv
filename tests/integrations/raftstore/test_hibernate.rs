@@ -14,11 +14,12 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_force_leader() {
+    test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_transfer_leader(1, new_peer(5, 5));
 
     cluster.stop_node(3);
     cluster.stop_node(4);
@@ -46,7 +47,8 @@ fn test_force_leader() {
         vec![put],
         true,
     );
-    assert!(cluster.call_command_on_leader(req, Duration::from_millis(10)).is_err());
+    let resp = cluster.call_command_on_leader(req, Duration::from_millis(10)).unwrap();
+    assert!(resp.get_header().has_error());
     cluster.exit_force_leader(1, 1);
 
     cluster.must_put(b"k4", b"v4");

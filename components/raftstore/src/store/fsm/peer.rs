@@ -985,6 +985,11 @@ where
     }
 
     fn on_enter_force_leader(&mut self) {
+        info!(
+            "enter force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.peer.force_leader = true;
 
         // become candidate first to increase term
@@ -992,17 +997,17 @@ where
             self.fsm.peer.raft_group.raft.become_candidate();
             self.fsm.peer.raft_group.raft.become_leader();
         }
+        assert!(self.fsm.peer.is_leader());
 
-        // append an empty entry to truncate logs that are not committed
-        let mut entry = raft::eraftpb::Entry::default();
-        entry.term = self.fsm.peer.term();
-        entry.index = self.fsm.peer.raft_group.raft.raft_log.committed + 1;
-        self.fsm.peer.raft_group.raft.raft_log.append(&[entry]);
+        // forward commit index
+        self.fsm.peer.raft_group.raft.raft_log.committed = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        self.fsm.has_ready = true;
     }
 
     fn on_exit_force_leader(&mut self) {
         self.fsm.peer.force_leader = false;
         self.fsm.peer.raft_group.raft.become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+        self.fsm.has_ready = true;
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64, _send_time: TiInstant) {
@@ -1065,7 +1070,7 @@ where
             if self.fsm.peer.force_leader {
                 if ss.raft_state == StateRole::Follower {
                     // for some reason, it's not leader anymore
-                    self.on_enter_force_leader();
+                    warn!("step to follower in force leader state");
                 }
             }
         }
