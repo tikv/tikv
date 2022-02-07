@@ -43,13 +43,10 @@ impl CloudReader {
     ) -> Result<TxnCommitRecord> {
         let mut raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, 0);
-        if item.user_meta_len() == 0 {
-            return Ok(TxnCommitRecord::None {
-                overlapped_write: None,
-            });
-        }
-        if let Some(record) = Self::get_commit_by_item(&item, start_ts) {
-            return Ok(record);
+        if item.user_meta_len() > 0 {
+            if let Some(record) = Self::get_commit_by_item(&item, start_ts) {
+                return Ok(record);
+            }
         }
         let mut data_iter = self.snapshot.new_iterator(WRITE_CF, false, true);
         data_iter.seek(&raw_key);
