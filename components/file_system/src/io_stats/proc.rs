@@ -135,16 +135,13 @@ impl AtomicIOBytes {
     }
 }
 
-/// Flushes the local I/O stats to global I/O stats, and updates the local I/O type.
+/// Flushes the local I/O stats to global I/O stats.
 #[inline]
-fn flush_thread_io(sentinel: &mut LocalIOStats, new_io_type: Option<IOType>) {
+fn flush_thread_io(sentinel: &mut LocalIOStats) {
     if let Some(io_bytes) = sentinel.id.fetch_io_bytes() {
         GLOBAL_IO_STATS[sentinel.io_type as usize]
             .fetch_add(io_bytes - sentinel.last_flushed, Ordering::Relaxed);
         sentinel.last_flushed = io_bytes;
-    }
-    if let Some(new_io_type) = new_io_type {
-        sentinel.io_type = new_io_type;
     }
 }
 
@@ -155,12 +152,11 @@ pub fn init() -> Result<(), String> {
 pub fn set_io_type(new_io_type: IOType) {
     IO_TYPE.with(|io_type| {
         if io_type.get() != new_io_type {
-            flush_thread_io(
-                &mut LOCAL_IO_STATS
-                    .get_or(|| CachePadded::new(Mutex::new(LocalIOStats::current())))
-                    .lock(),
-                Some(new_io_type),
-            );
+            let mut sentinel = LOCAL_IO_STATS
+                .get_or(|| CachePadded::new(Mutex::new(LocalIOStats::current())))
+                .lock();
+            flush_thread_io(&mut sentinel);
+            sentinel.io_type = new_io_type;
             io_type.set(new_io_type);
         }
     });
@@ -173,7 +169,7 @@ pub fn get_io_type() -> IOType {
 pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
     let mut bytes: [IOBytes; IOType::COUNT] = Default::default();
     LOCAL_IO_STATS.iter().for_each(|sentinel| {
-        flush_thread_io(&mut sentinel.lock(), None);
+        flush_thread_io(&mut sentinel.lock());
     });
     for i in 0..IOType::COUNT {
         bytes[i] = GLOBAL_IO_STATS[i].load(Ordering::Relaxed);
