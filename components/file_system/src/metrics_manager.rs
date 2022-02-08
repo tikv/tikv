@@ -8,8 +8,7 @@ use crate::{IOOp, IOType};
 
 use std::sync::Arc;
 
-use strum::EnumCount;
-use strum::IntoEnumIterator;
+use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::time::Instant;
 
 pub enum BytesFetcher {
@@ -20,17 +19,17 @@ pub enum BytesFetcher {
 }
 
 impl BytesFetcher {
-    fn fetch(&self, bytes_vec: &mut [IOBytes]) {
+    fn fetch(&self) -> [IOBytes; IOType::COUNT] {
         match *self {
             BytesFetcher::FromRateLimiter(ref stats) => {
+                let mut bytes: [IOBytes; IOType::COUNT] = Default::default();
                 for t in IOType::iter() {
-                    bytes_vec[t as usize].read = stats.fetch(t, IOOp::Read) as u64;
-                    bytes_vec[t as usize].write = stats.fetch(t, IOOp::Write) as u64;
+                    bytes[t as usize].read = stats.fetch(t, IOOp::Read) as u64;
+                    bytes[t as usize].write = stats.fetch(t, IOOp::Write) as u64;
                 }
+                bytes
             }
-            BytesFetcher::FromIOStatsCollector() => {
-                fetch_io_bytes(bytes_vec, false /*allow_cache*/)
-            }
+            BytesFetcher::FromIOStatsCollector() => fetch_io_bytes(),
         }
     }
 }
@@ -50,8 +49,7 @@ impl MetricsManager {
 
     pub fn flush(&mut self, _now: Instant) {
         tls_flush();
-        let mut latest: [IOBytes; IOType::COUNT] = Default::default();
-        self.fetcher.fetch(&mut latest);
+        let latest = self.fetcher.fetch();
         for t in IOType::iter() {
             let delta_bytes = latest[t as usize] - self.last_fetch[t as usize];
             IO_BYTES_VEC

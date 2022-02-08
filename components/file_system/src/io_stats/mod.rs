@@ -25,8 +25,8 @@ mod stub {
         IO_TYPE.with(|io_type| io_type.get())
     }
 
-    pub fn fetch_io_bytes(_io_type: IOType, _allow_cache: bool) -> IOBytes {
-        IOBytes::default()
+    pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+        Default::default()
     }
 }
 #[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
@@ -61,8 +61,7 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let mut bytes_vec = vec![IOBytes::default(); IOType::COUNT];
-        b.iter(|| fetch_io_bytes(&mut bytes_vec, false /*allow_cache*/));
+        b.iter(|| fetch_io_bytes());
         for _ in 0..8 {
             rx.recv().unwrap();
         }

@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
+use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::sys::thread;
 
 /// Biosnoop leverages BCC to make use of eBPF to get disk IO of TiKV requests.
@@ -146,19 +147,23 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-pub fn fetch_io_bytes(mut io_type: IOType, _allow_cache: bool) -> IOBytes {
+pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+    let mut bytes = Default::default();
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
-            let mut io_type_buf =
-                std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
-            if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
-                assert!(e.len() == std::mem::size_of::<IOBytes>());
-                return std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
+            for io_type in IOType::iter() {
+                let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
+                let mut io_type_buf =
+                    std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
+                if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
+                    assert!(e.len() == std::mem::size_of::<IOBytes>());
+                    bytes[io_type as usize] =
+                        std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
+                }
             }
         }
     }
-    IOBytes::default()
+    bytes
 }
 
 pub fn init() -> Result<(), String> {
@@ -306,16 +311,16 @@ mod tests {
             .unwrap();
         let mut w = vec![A512::default(); 2];
         w.as_bytes_mut()[512] = 42;
-        let mut compaction_bytes_before = fetch_io_bytes(IOType::Compaction);
+        let mut compaction_bytes_before = fetch_io_bytes()[IOType::Compaction as usize];
         f.write(w.as_bytes()).unwrap();
         f.sync_all().unwrap();
-        let compaction_bytes = fetch_io_bytes(IOType::Compaction);
+        let compaction_bytes = fetch_io_bytes()[IOType::Compaction as usize];
         assert_ne!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         compaction_bytes_before = compaction_bytes;
         drop(f);
 
-        let other_bytes_before = fetch_io_bytes(IOType::Other);
+        let other_bytes_before = fetch_io_bytes()[IOType::Other as usize];
         std::thread::spawn(move || {
             set_io_type(IOType::Other);
             let mut f = OpenOptions::new()
@@ -330,8 +335,8 @@ mod tests {
         .join()
         .unwrap();
 
-        let compaction_bytes = fetch_io_bytes(IOType::Compaction);
-        let other_bytes = fetch_io_bytes(IOType::Other);
+        let compaction_bytes = fetch_io_bytes()[IOType::Compaction as usize];
+        let other_bytes = fetch_io_bytes()[IOType::Other as usize];
         assert_eq!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         assert_eq!((other_bytes - other_bytes_before).write, 0);

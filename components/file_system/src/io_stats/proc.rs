@@ -170,16 +170,15 @@ pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
 
-pub fn fetch_io_bytes(bytes_vec: &mut [IOBytes], allow_cache: bool) {
-    debug_assert!(bytes_vec.len() >= IOType::COUNT);
-    if !allow_cache {
-        LOCAL_IO_STATS.iter().for_each(|sentinel| {
-            flush_thread_io(&mut sentinel.lock(), None);
-        });
-    }
+pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+    let mut bytes: [IOBytes; IOType::COUNT] = Default::default();
+    LOCAL_IO_STATS.iter().for_each(|sentinel| {
+        flush_thread_io(&mut sentinel.lock(), None);
+    });
     for i in 0..IOType::COUNT {
-        bytes_vec[i] = GLOBAL_IO_STATS[i].load(Ordering::Relaxed);
+        bytes[i] = GLOBAL_IO_STATS[i].load(Ordering::Relaxed);
     }
+    bytes
 }
 
 #[cfg(test)]
