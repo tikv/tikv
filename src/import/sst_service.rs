@@ -199,71 +199,6 @@ where
     }
 }
 
-<<<<<<< HEAD
-=======
-#[macro_export]
-macro_rules! impl_write {
-    ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
-        fn $fn(
-            &mut self,
-            _ctx: RpcContext<'_>,
-            stream: RequestStream<$req_ty>,
-            sink: ClientStreamingSink<$resp_ty>,
-        ) {
-            let import = self.importer.clone();
-            let engine = self.engine.clone();
-            let (rx, buf_driver) =
-                create_stream_with_buffer(stream, self.cfg.stream_channel_window);
-            let mut rx = rx.map_err(Error::from);
-
-            let timer = Instant::now_coarse();
-            let label = stringify!($fn);
-            let handle_task = async move {
-                let res = async move {
-                    let first_req = rx.try_next().await?;
-                    let meta = match first_req {
-                        Some(r) => match r.chunk {
-                            Some($chunk_ty::Meta(m)) => m,
-                            _ => return Err(Error::InvalidChunk),
-                        },
-                        _ => return Err(Error::InvalidChunk),
-                    };
-
-                    let writer = match import.$writer_fn(&engine, meta) {
-                        Ok(w) => w,
-                        Err(e) => {
-                            error!("build writer failed {:?}", e);
-                            return Err(Error::InvalidChunk);
-                        }
-                    };
-                    let writer = rx
-                        .try_fold(writer, |mut writer, req| async move {
-                            let batch = match req.chunk {
-                                Some($chunk_ty::Batch(b)) => b,
-                                _ => return Err(Error::InvalidChunk),
-                            };
-                            writer.write(batch)?;
-                            Ok(writer)
-                        })
-                        .await?;
-
-                    let metas = writer.finish()?;
-                    import.verify_checksum(&metas)?;
-                    let mut resp = $resp_ty::default();
-                    resp.set_metas(metas.into());
-                    Ok(resp)
-                }
-                .await;
-                crate::send_rpc_response!(res, sink, label, timer);
-            };
-
-            self.threads.spawn_ok(buf_driver);
-            self.threads.spawn_ok(handle_task);
-        }
-    };
-}
-
->>>>>>> 2c742a1b8... import: remove verify checksum in apply thread (#10950)
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
 where
     E: KvEngine,
@@ -606,11 +541,11 @@ where
                     })
                     .await?;
 
-                writer.finish().map(|metas| {
-                    let mut resp = WriteResponse::default();
-                    resp.set_metas(metas.into());
-                    resp
-                })
+                let metas = writer.finish()?;
+                import.verify_checksum(&metas)?;
+                let mut resp = WriteResponse::default();
+                resp.set_metas(metas.into());
+                Ok(resp)
             }
             .await;
             send_rpc_response!(res, sink, label, timer);
