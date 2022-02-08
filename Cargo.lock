@@ -2371,7 +2371,7 @@ dependencies = [
  "grpcio",
  "protobuf",
  "protobuf-build",
- "raft-proto",
+ "raft-proto 0.6.0",
 ]
 
 [[package]]
@@ -3669,14 +3669,14 @@ dependencies = [
 
 [[package]]
 name = "raft"
-version = "0.6.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
+version = "0.7.0"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f1f95f86d1ef6ca103ddb522ffa093a31e5af632"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
  "getset",
  "protobuf",
- "raft-proto",
+ "raft-proto 0.7.0",
  "rand 0.8.3",
  "slog",
  "thiserror",
@@ -3685,7 +3685,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#7842aad23f36ffe836b47762f85fc752b5d7ad48"
+source = "git+https://github.com/tikv/raft-engine?branch=master#e478e070aa7e9a1d0a9053a92abd632bf15a986d"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3706,6 +3706,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "rayon",
+ "scopeguard",
  "serde",
  "thiserror",
 ]
@@ -3713,7 +3714,18 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#e6d28ef0f509c072e13288409835d5764a3b175e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b74f65f886af112d6046c131def44849404757d22f835a0b7ef1aa473e4c96f"
+dependencies = [
+ "bytes 1.0.1",
+ "protobuf",
+ "protobuf-build",
+]
+
+[[package]]
+name = "raft-proto"
+version = "0.7.0"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f1f95f86d1ef6ca103ddb522ffa093a31e5af632"
 dependencies = [
  "bytes 1.0.1",
  "protobuf",
@@ -3785,7 +3797,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "raft-proto",
+ "raft-proto 0.7.0",
  "rand 0.8.3",
  "resource_metering",
  "serde",

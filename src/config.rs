@@ -1393,12 +1393,21 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RaftEngineConfig {
     pub enable: bool,
     #[serde(flatten)]
     config: RawRaftEngineConfig,
+}
+
+impl Default for RaftEngineConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            config: RawRaftEngineConfig::default(),
+        }
+    }
 }
 
 impl RaftEngineConfig {
@@ -2834,17 +2843,17 @@ impl TiKvConfig {
         let default_tikv_cfg = TiKvConfig::default();
         let default_log_cfg = LogConfig::default();
         if self.log_level != default_tikv_cfg.log_level {
-            println!("deprecated configuration, log-level has been moved to log.level");
+            eprintln!("deprecated configuration, log-level has been moved to log.level");
             if self.log.level == default_log_cfg.level {
-                println!("override log.level with log-level, {:?}", self.log_level);
+                eprintln!("override log.level with log-level, {:?}", self.log_level);
                 self.log.level = self.log_level;
             }
             self.log_level = default_tikv_cfg.log_level;
         }
         if self.log_file != default_tikv_cfg.log_file {
-            println!("deprecated configuration, log-file has been moved to log.file.filename");
+            eprintln!("deprecated configuration, log-file has been moved to log.file.filename");
             if self.log.file.filename == default_log_cfg.file.filename {
-                println!(
+                eprintln!(
                     "override log.file.filename with log-file, {:?}",
                     self.log_file
                 );
@@ -2853,25 +2862,25 @@ impl TiKvConfig {
             self.log_file = default_tikv_cfg.log_file;
         }
         if self.log_format != default_tikv_cfg.log_format {
-            println!("deprecated configuration, log-format has been moved to log.format");
+            eprintln!("deprecated configuration, log-format has been moved to log.format");
             if self.log.format == default_log_cfg.format {
-                println!("override log.format with log-format, {:?}", self.log_format);
+                eprintln!("override log.format with log-format, {:?}", self.log_format);
                 self.log.format = self.log_format;
             }
             self.log_format = default_tikv_cfg.log_format;
         }
         if self.log_rotation_timespan.as_secs() > 0 {
-            println!(
+            eprintln!(
                 "deprecated configuration, log-rotation-timespan is no longer used and ignored."
             );
         }
         if self.log_rotation_size != default_tikv_cfg.log_rotation_size {
-            println!(
+            eprintln!(
                 "deprecated configuration, \
                  log-ratation-size has been moved to log.file.max-size"
             );
             if self.log.file.max_size == default_log_cfg.file.max_size {
-                println!(
+                eprintln!(
                     "override log.file.max_size with log-rotation-size, {:?}",
                     self.log_rotation_size
                 );
@@ -3583,16 +3592,30 @@ mod tests {
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
-        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
-
-        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
-
         tikv_cfg.storage.data_dir = "/data1".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        // Enable Raft Engine.
+        tikv_cfg.raft_engine.enable = true;
+        last_cfg.raft_engine.enable = true;
+
+        tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        // Disable Raft Engine and uses RocksDB.
+        tikv_cfg.raft_engine.enable = false;
+        last_cfg.raft_engine.enable = false;
+
+        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
