@@ -74,7 +74,7 @@ impl super::Engine {
                 let shard_cf_stat = &shard.cfs[cf];
                 for (i, level_stat) in shard_cf_stat.levels.iter().enumerate() {
                     engine_stats.level_num_files[i] += level_stat.tables.len();
-                    engine_stats.cf_total_sizes[cf] += level_stat.tables.len();
+                    engine_stats.cfs_num_files[cf] += level_stat.tables.len();
                     for (_, tbl_size) in &level_stat.tables {
                         engine_stats.level_total_sizes[i] += *tbl_size;
                         engine_stats.cf_total_sizes[cf] += *tbl_size;

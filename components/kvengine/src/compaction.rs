@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, mpsc, Arc};
+use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -30,7 +30,6 @@ impl CompactionClient {
     }
 
     pub(crate) fn compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
-        info!("on compaction request {:?}", &req);
         let mut comp = pb::Compaction::new();
         comp.set_top_deletes(req.tops.clone());
         comp.set_cf(req.cf as i32);
@@ -43,11 +42,16 @@ impl CompactionClient {
                 bot_dels.extend_from_slice(cf_bot_dels.as_slice());
             }
             comp.set_bottom_deletes(bot_dels);
+            info!("finish compact L0 for {}:{}", req.shard_id, req.shard_ver);
             return Ok(comp);
         }
         let tbls = compact_tables(&req, self.dfs.clone())?;
         comp.set_table_creates(RepeatedField::from_vec(tbls));
         comp.set_bottom_deletes(req.bottoms.clone());
+        info!(
+            "finish compact L{} CF{} for {}:{}",
+            req.level, req.cf, req.shard_id, req.shard_ver
+        );
         return Ok(comp);
     }
 }
@@ -205,7 +209,7 @@ impl CompactDef {
             if new_ratio > candidate_ratio {
                 self.top_right_idx += 1;
                 self.bot_right_idx = right;
-                self.top_size = new_bot_size;
+                self.top_size = new_top_size;
                 self.bot_size = new_bot_size;
             } else {
                 break;
@@ -266,17 +270,23 @@ impl Engine {
         loop {
             self.get_compaction_priorities(&mut results);
             let cnt = results.len().min(self.opts.num_compactors);
+            let (tx, rx) = tikv_util::mpsc::bounded(cnt);
             for i in 0..cnt {
                 let pri = results[i].clone();
                 if let Ok(shard) = self.get_shard_with_ver(pri.shard_id, pri.shard_ver) {
                     store_bool(&shard.compacting, true);
                 }
-                let res = self.compact(&pri);
+                let engine = self.clone();
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let res = engine.compact(&pri);
+                    tx.send(res).unwrap();
+                });
+            }
+            for i in 0..cnt {
+                let res = rx.recv().unwrap();
                 if let Err(err) = res {
-                    error!(
-                        "compact shard {}:{} failed, {:?}",
-                        pri.shard_id, pri.shard_ver, err
-                    );
+                    error!("compact failed, {:?}", err);
                 }
             }
             if results.len() == 0 {
@@ -336,22 +346,14 @@ impl Engine {
         }
         if pri.cf == -1 {
             info!(
-                "compaction shard multi-cf shard {}:{} score:{}",
+                "start compact L0 for {}:{} score:{}",
                 shard.id, shard.ver, pri.score
             );
             let req = self.build_compact_l0_request(&shard)?;
             let comp = self.comp_client.compact(req)?;
-            info!(
-                "compact shard {}:{} level {}, cf {} done",
-                shard.id, shard.ver, 0, -1
-            );
             self.handle_compact_response(comp, &shard);
             return Ok(());
         }
-        info!(
-            "start compaction shard {}:{} leve:{} cf:{}, score:{}",
-            shard.id, shard.ver, pri.level, pri.cf, pri.score
-        );
         let scf = shard.get_cf(pri.cf as usize);
         let this_level = &scf.levels[pri.level - 1];
         let next_level = &scf.levels[pri.level];
@@ -361,6 +363,10 @@ impl Engine {
         scf.set_has_overlapping(&mut cd);
         let req = self.build_compact_ln_request(&shard, &cd)?;
         if req.bottoms.len() == 0 && req.cf as usize == WRITE_CF {
+            info!(
+                "move down L{} CF{} for {}:{}, score:{}",
+                pri.level, pri.cf, shard.id, shard.ver, pri.score
+            );
             // Move down. only write CF benefits from this optimization.
             let mut comp = pb::Compaction::new();
             comp.set_cf(req.cf as i32);
@@ -380,6 +386,16 @@ impl Engine {
             self.handle_compact_response(comp, &shard);
             return Ok(());
         }
+        info!(
+            "start compact L{} CF{} for {}:{}, score:{}, num_ids: {}, input_size: {}",
+            pri.level,
+            pri.cf,
+            shard.id,
+            shard.ver,
+            pri.score,
+            req.file_ids.len(),
+            cd.top_size + cd.bot_size,
+        );
         let comp = self.comp_client.compact(req)?;
         self.handle_compact_response(comp, &shard);
         Ok(())
@@ -411,7 +427,7 @@ impl Engine {
         req: &mut CompactionRequest,
         total_size: u64,
     ) -> Result<()> {
-        let id_cnt = total_size as usize / req.max_table_size + 16; // Add 8 here just in case we run out of ID.
+        let id_cnt = total_size as usize / req.max_table_size + 8; // Add 8 here just in case we run out of ID.
         info!("alloc id count {} for total size {}", id_cnt, total_size);
         let ids = self
             .id_allocator
@@ -530,7 +546,7 @@ pub(crate) fn compact_l0(
     }
 
     let channel_cap = req.file_ids.len();
-    let (tx, rx) = mpsc::sync_channel(channel_cap as usize);
+    let (tx, rx) = tikv_util::mpsc::bounded(channel_cap as usize);
     let mut id_idx = 0;
     for cf in 0..NUM_CFS {
         let mut iter = build_compact_l0_iterator(
@@ -752,7 +768,7 @@ pub(crate) fn compact_tables(
     let mut skip_key = BytesMut::new();
     let mut builder = sstable::Builder::new(0, req.get_table_builder_options());
     let mut id_idx = 0;
-    let (tx, rx) = mpsc::sync_channel(req.file_ids.len());
+    let (tx, rx) = tikv_util::mpsc::bounded(req.file_ids.len());
     while iter.valid() {
         let id = req.file_ids[id_idx];
         builder.reset(id);
@@ -764,6 +780,7 @@ pub(crate) fn compact_tables(
             // See if we need to skip this key.
             if skip_key.len() > 0 {
                 if key == skip_key {
+                    iter.next_all_version();
                     continue;
                 } else {
                     skip_key.truncate(0);
@@ -789,17 +806,22 @@ pub(crate) fn compact_tables(
                     // marker with the latest version, discarding the rest. We have set skipKey,
                     // so the following key versions would be skipped. Otherwise discard the deletion marker.
                     if !req.overlap {
+                        iter.next_all_version();
                         continue;
                     }
                 } else {
                     match filter(req.safe_ts, req.cf as usize, val) {
                         Decision::Keep => {}
-                        Decision::Drop => continue,
+                        Decision::Drop => {
+                            iter.next_all_version();
+                            continue;
+                        }
                         Decision::MarkTombStone => {
                             if req.overlap {
                                 // There may have old versions for this key, so convert to delete tombstone.
                                 builder.add(key, table::Value::new_tombstone(val.version));
                             }
+                            iter.next_all_version();
                             continue;
                         }
                     }
