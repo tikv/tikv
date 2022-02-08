@@ -2624,7 +2624,7 @@ mod tests {
             if async_res.low != lo {
                 store.clean_async_fetch_res(lo);
             } else {
-                store.update_async_fetch_res(lo, Some(async_res));
+                store.update_async_fetch_res(lo, Some(Box::new(async_res)));
             }
             let mut ents = vec![];
             store.raft_state.mut_hard_state().set_term(term);
