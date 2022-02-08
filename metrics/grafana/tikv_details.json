@@ -14,7 +14,7 @@
       "type": "grafana",
       "id": "grafana",
       "name": "Grafana",
-      "version": "7.5.11"
+      "version": "7.5.7"
     },
     {
       "type": "panel",
@@ -64,7 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1644303054700,
+  "iteration": 1637648133817,
   "links": [],
   "panels": [
     {
@@ -352,7 +352,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 1
+        "y": 0
       },
       "id": 2742,
       "panels": [
@@ -1695,7 +1695,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 2
+        "y": 1
       },
       "id": 2743,
       "panels": [
@@ -2806,7 +2806,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 3
+        "y": 2
       },
       "id": 2744,
       "panels": [
@@ -4234,7 +4234,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 4
+        "y": 3
       },
       "id": 2745,
       "panels": [
@@ -4921,7 +4921,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 4
       },
       "id": 2746,
       "panels": [
@@ -7136,7 +7136,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 5
       },
       "id": 6946,
       "panels": [
@@ -7548,7 +7548,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 6
       },
       "id": 2747,
       "panels": [
@@ -8519,7 +8519,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 7
       },
       "id": 5265,
       "panels": [
@@ -9607,7 +9607,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 8
       },
       "id": 13117,
       "panels": [
@@ -11302,7 +11302,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 9
       },
       "id": 2748,
       "panels": [
@@ -12449,7 +12449,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 10
       },
       "id": 2751,
       "panels": [
@@ -13638,7 +13638,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 11
       },
       "id": 2749,
       "panels": [
@@ -13955,7 +13955,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 12
       },
       "id": 2750,
       "panels": [
@@ -14610,7 +14610,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 13
       },
       "id": 2752,
       "panels": [
@@ -15289,7 +15289,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15418,7 +15418,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15548,7 +15548,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15658,7 +15658,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15768,7 +15768,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -15877,7 +15877,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -16006,7 +16006,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -16136,7 +16136,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -16246,7 +16246,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -16356,7 +16356,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -16466,7 +16466,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -16540,7 +16540,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 15
       },
       "id": 2753,
       "panels": [
@@ -16946,7 +16946,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 17
       },
       "id": 2754,
       "panels": [
@@ -17293,7 +17293,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 18
       },
       "id": 9160,
       "panels": [
@@ -18217,7 +18217,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 19
       },
       "id": 2756,
       "panels": [
@@ -19422,7 +19422,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 30
       },
       "id": 2755,
       "panels": [
@@ -19878,7 +19878,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 31
       },
       "id": 2758,
       "panels": [
@@ -21204,7 +21204,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 32
       },
       "id": 2759,
       "panels": [
@@ -21821,7 +21821,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 33
       },
       "id": 2760,
       "panels": [
@@ -22233,7 +22233,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 34
       },
       "id": 2757,
       "panels": [
@@ -23033,7 +23033,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 35
       },
       "id": 3197,
       "panels": [
@@ -24127,7 +24127,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 36
       },
       "id": 2761,
       "panels": [
@@ -24524,7 +24524,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 38
+        "y": 37
       },
       "id": 2762,
       "panels": [
@@ -29264,7 +29264,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 39
       },
       "id": 12802,
       "panels": [
@@ -30300,7 +30300,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 40
       },
       "id": 3301,
       "panels": [
@@ -33309,7 +33309,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 41
       },
       "id": 2820,
       "panels": [
@@ -34038,7 +34038,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 37
       },
       "id": 8389,
       "panels": [
@@ -34063,7 +34063,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 49
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 8385,
@@ -34089,7 +34089,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34171,7 +34171,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 49
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 9162,
@@ -34197,7 +34197,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34279,7 +34279,7 @@
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 49
+            "y": 38
           },
           "hiddenSeries": false,
           "id": 9164,
@@ -34305,7 +34305,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34386,7 +34386,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 57
+            "y": 46
           },
           "hiddenSeries": false,
           "id": 8387,
@@ -34412,7 +34412,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34492,7 +34492,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 57
+            "y": 46
           },
           "hiddenSeries": false,
           "id": 23763572077,
@@ -34518,7 +34518,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34601,7 +34601,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 65
+            "y": 54
           },
           "hiddenSeries": false,
           "id": 23763572078,
@@ -34627,7 +34627,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34674,6 +34674,7 @@
           },
           "yaxes": [
             {
+              "$$hashKey": "object:143",
               "format": "none",
               "label": null,
               "logBase": 1,
@@ -34682,6 +34683,7 @@
               "show": true
             },
             {
+              "$$hashKey": "object:144",
               "format": "none",
               "label": null,
               "logBase": 1,
@@ -34716,7 +34718,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 65
+            "y": 54
           },
           "hiddenSeries": false,
           "id": 23763572079,
@@ -34742,7 +34744,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -34789,6 +34791,7 @@
           },
           "yaxes": [
             {
+              "$$hashKey": "object:143",
               "format": "none",
               "label": null,
               "logBase": 1,
@@ -34797,6 +34800,7 @@
               "show": true
             },
             {
+              "$$hashKey": "object:144",
               "format": "none",
               "label": null,
               "logBase": 1,
@@ -34833,7 +34837,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 73
+            "y": 62
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -34902,7 +34906,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 73
+            "y": 62
           },
           "hiddenSeries": false,
           "id": 8377,
@@ -34928,7 +34932,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -35014,7 +35018,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 81
+            "y": 70
           },
           "hiddenSeries": false,
           "id": 12308,
@@ -35040,7 +35044,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -35123,7 +35127,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 81
+            "y": 70
           },
           "hiddenSeries": false,
           "id": 9166,
@@ -35150,7 +35154,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -35237,7 +35241,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 89
+            "y": 78
           },
           "hiddenSeries": false,
           "id": 8379,
@@ -35263,7 +35267,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -35343,7 +35347,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 89
+            "y": 78
           },
           "hiddenSeries": false,
           "id": 8383,
@@ -35369,7 +35373,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -35460,7 +35464,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 97
+            "y": 86
           },
           "hiddenSeries": false,
           "id": 8381,
@@ -35486,7 +35490,7 @@
             "alertThreshold": true
           },
           "percentage": false,
-          "pluginVersion": "7.5.11",
+          "pluginVersion": "7.5.7",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -35557,7 +35561,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 43
       },
       "id": 2763,
       "panels": [
@@ -35662,7 +35666,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 44
       },
       "id": 3922,
       "panels": [
@@ -35719,10 +35723,11 @@
           "renderer": "flot",
           "seriesOverrides": [
             {
+              "$$hashKey": "object:2663",
               "alias": "/backup-auto-throttle/",
               "fill": 5,
-              "fillGradient": 2,
-              "linewidth": 0
+              "linewidth": 0,
+              "fillGradient": 2
             }
           ],
           "spaceLength": 10,
@@ -35739,24 +35744,24 @@
               "step": 4
             },
             {
-              "exemplar": true,
               "expr": "sum(rate(tikv_thread_cpu_seconds_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"backup_io\"}[1m])) by (instance)",
+              "legendFormat": "backup-io-{{instance}}",
+              "interval": "",
+              "exemplar": true,
               "format": "time_series",
               "hide": true,
-              "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "backup-io-{{instance}}",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "B",
               "step": 4
             },
             {
-              "exemplar": true,
               "expr": "tikv_backup_softlimit{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
-              "hide": false,
-              "interval": "",
               "legendFormat": "backup-auto-throttle-{{instance}}",
-              "refId": "C"
+              "interval": "",
+              "exemplar": true,
+              "refId": "C",
+              "hide": false
             }
           ],
           "thresholds": [],
@@ -35870,99 +35875,101 @@
           "type": "table-old"
         },
         {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
+          "type": "graph",
+          "title": "cloud request",
+          "gridPos": {
+            "x": 0,
+            "y": 32,
+            "w": 12,
+            "h": 8
+          },
+          "id": 23763571993,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_cloud_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (cloud, req)",
+              "legendFormat": "{{cloud}}-{{req}}",
+              "interval": "",
+              "exemplar": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "alertThreshold": true
+          },
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 32
-          },
-          "hiddenSeries": false,
-          "id": 23763571993,
-          "legend": {
-            "avg": false,
-            "current": false,
-            "max": false,
-            "min": false,
-            "show": true,
-            "total": false,
-            "values": false
-          },
-          "lines": true,
-          "linewidth": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
           "pluginVersion": "7.5.7",
-          "pointradius": 2,
-          "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "sum(rate(tikv_cloud_request_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (cloud, req)",
-              "interval": "",
-              "legendFormat": "{{cloud}}-{{req}}",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "cloud request",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
           "yaxes": [
             {
-              "format": "short",
               "label": null,
+              "show": true,
               "logBase": 1,
-              "max": null,
               "min": null,
-              "show": true
+              "max": null,
+              "format": "short",
+              "$$hashKey": "object:682"
             },
             {
-              "format": "short",
               "label": null,
+              "show": true,
               "logBase": 1,
-              "max": null,
               "min": null,
-              "show": true
+              "max": null,
+              "format": "short",
+              "$$hashKey": "object:683"
             }
           ],
+          "xaxis": {
+            "show": true,
+            "mode": "time",
+            "name": null,
+            "values": [],
+            "buckets": null
+          },
           "yaxis": {
             "align": false,
             "alignLevel": null
-          }
+          },
+          "lines": true,
+          "fill": 1,
+          "linewidth": 1,
+          "dashLength": 10,
+          "spaceLength": 10,
+          "pointradius": 2,
+          "legend": {
+            "show": true,
+            "values": false,
+            "min": false,
+            "max": false,
+            "current": false,
+            "total": false,
+            "avg": false
+          },
+          "nullPointMode": "null",
+          "tooltip": {
+            "value_type": "individual",
+            "shared": true,
+            "sort": 0
+          },
+          "aliasColors": {},
+          "seriesOverrides": [],
+          "thresholds": [],
+          "timeRegions": [],
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fillGradient": 0,
+          "dashes": false,
+          "hiddenSeries": false,
+          "points": false,
+          "bars": false,
+          "stack": false,
+          "percentage": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null,
+          "description": ""
         },
         {
           "aliasColors": {},
@@ -38495,7 +38502,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 45
       },
       "id": 4466,
       "panels": [
@@ -39236,6 +39243,6 @@
   },
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
-  "uid": "RDVQiEzZz1",
+  "uid": "RDVQiEzZz",
   "version": 1
 }
