@@ -12,8 +12,8 @@ use std::vec::IntoIter;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
+    CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -352,9 +352,21 @@ where
         }
 
         let count = keys.len();
+        let range_start_key = keys.first().unwrap().clone().into_encoded();
+        let range_end_key = {
+            let mut k = keys
+                .last()
+                .unwrap()
+                .to_raw()
+                .map_err(|e| EngineError::Codec(e))?;
+            k.push(0);
+            Key::from_raw(&k).into_encoded()
+        };
+        let snapshot = self
+            .engine
+            .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
-        let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
         let mut txn = Self::new_txn();
         let mut reader = if count <= 1 {
             MvccReader::new(snapshot, None, false)
@@ -392,7 +404,9 @@ where
                 gc_info = GcInfo::default();
             } else {
                 Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                let snapshot = self.engine.snapshot_on_kv_engine(b"", b"")?;
+                let snapshot = self
+                    .engine
+                    .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
                 txn = Self::new_txn();
                 reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
@@ -1014,7 +1028,10 @@ mod tests {
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::mvcc::tests::must_get_none;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::mvcc::MAX_TXN_WRITE_SIZE;
+    use crate::storage::txn::tests::{
+        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
@@ -1552,4 +1569,186 @@ mod tests {
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_gc_keys_scan_range_limit() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        // Generate some tombstone
+        for i in 10u64..30 {
+            must_rollback(&prefixed_engine, b"k2\x00", i, true);
+        }
+        db.flush_cf(cf, true).unwrap();
+        must_gc(&prefixed_engine, b"k2\x00", 30);
+
+        // Test tombstone counter works
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k2\x00")],
+                TimeStamp::new(200),
+                Some((1, ri_provider.clone())),
+            )
+            .unwrap();
+        assert_eq!(runner.stats.write.seek_tombstone, 20);
+
+        // gc_keys with single key
+        runner.stats.write.seek_tombstone = 0;
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k2")],
+                TimeStamp::new(200),
+                Some((1, ri_provider.clone())),
+            )
+            .unwrap();
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+
+        // gc_keys with multiple key
+        runner.stats.write.seek_tombstone = 0;
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+                TimeStamp::new(200),
+                Some((1, ri_provider.clone())),
+            )
+            .unwrap();
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+
+        // Test rebuilding snapshot when GC write batch limit reached (gc_info.is_completed == false).
+        // Build a key with versions that will just reach the limit `MAX_TXN_WRITE_SIZE`.
+        let key_size = Modify::Delete(CF_WRITE, Key::from_raw(b"k2").append_ts(1.into())).size();
+        // versions = ceil(MAX_TXN_WRITE_SIZE/write_size) + 3
+        // Write CF: Put@N, Put@N-2,    Put@N-4, ... Put@5,   Put@3
+        //                 ^            ^^^^^^^^^^^^^^^^^^^
+        //           safepoint=N-1      Deleted in the first batch, `ceil(MAX_TXN_WRITE_SIZE/write_size)` versions.
+        let versions = (MAX_TXN_WRITE_SIZE - 1) / key_size + 4;
+        for start_ts in (1..versions).map(|x| x as u64 * 2) {
+            let commit_ts = start_ts + 1;
+            must_prewrite_put(&prefixed_engine, b"k2", b"v2", b"k2", start_ts);
+            must_commit(&prefixed_engine, b"k2", start_ts, commit_ts);
+        }
+        db.flush_cf(cf, true).unwrap();
+        let safepoint = versions as u64 * 2;
+
+        runner.stats.write.seek_tombstone = 0;
+        runner
+            .gc_keys(
+                vec![Key::from_raw(b"k2")],
+                safepoint.into(),
+                Some((1, ri_provider)),
+            )
+            .unwrap();
+        // The first batch will leave tombstones that will be seen while processing the second
+        // batch, but it will be seen in `next` after seeking the latest unexpired version,
+        // therefore `seek_tombstone` is not affected.
+        assert_eq!(runner.stats.write.seek_tombstone, 0);
+        // ... and next_tombstone indicates there's indeed more than one batches.
+        assert_eq!(runner.stats.write.next_tombstone, versions - 3);
+    }
+
+    #[test]
+    fn delete_range_when_worker_is_full() {
+        let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
+        must_commit(&engine, b"key", 10, 20);
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        db.flush_cf(cf, true).unwrap();
+
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let (tx, _rx) = mpsc::channel();
+
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcConfig::default(),
+            gate,
+        );
+
+        // Before starting gc_worker, fill the scheduler to full.
+        for _ in 0..GC_MAX_PENDING_TASKS {
+            assert!(
+                gc_worker
+                    .scheduler()
+                    .schedule(GcTask::Gc {
+                        region_id: 0,
+                        start_key: vec![],
+                        end_key: vec![],
+                        safe_point: TimeStamp::from(100),
+                        callback: Box::new(|_res| {})
+                    })
+                    .is_ok()
+            );
+        }
+        // Then, it will fail to schedule another gc command.
+        let (tx, rx) = mpsc::channel();
+        assert!(
+            gc_worker
+                .gc(
+                    TimeStamp::from(1),
+                    Box::new(move |res| {
+                        tx.send(res).unwrap();
+                    })
+                )
+                .is_err()
+        );
+        assert!(rx.recv().unwrap().is_err());
+
+        let (tx, rx) = mpsc::channel();
+        // When the gc_worker is full, scheduling an unsafe destroy range task should be
+        // still allowed.
+        assert!(
+            gc_worker
+                .unsafe_destroy_range(
+                    Context::default(),
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"z"),
+                    Box::new(move |res| {
+                        tx.send(res).unwrap();
+                    })
+                )
+                .is_ok()
+        );
+
+        gc_worker.start().unwrap();
+
+        // After the worker starts running, the destroy range task should run,
+        // and the key in the range will be deleted.
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_ok());
+        must_get_none(&engine, b"key", 30);
+    }
+>>>>>>> ddec01865... gc_worker: Limit the key range to scan for GcKeys tasks (#11922)
 }
