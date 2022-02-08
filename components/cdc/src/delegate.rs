@@ -74,7 +74,6 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
-    enable_old_value: bool,
 }
 
 impl Downstream {
@@ -87,7 +86,6 @@ impl Downstream {
         region_epoch: RegionEpoch,
         req_id: u64,
         conn_id: ConnID,
-        enable_old_value: bool,
     ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
@@ -97,7 +95,6 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
-            enable_old_value,
         }
     }
 
@@ -186,7 +183,6 @@ pub struct Delegate {
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
-    old_value_requirers: usize,
 }
 
 impl Delegate {
@@ -201,7 +197,6 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
-            old_value_requirers: 0,
         }
     }
 
@@ -234,23 +229,23 @@ impl Delegate {
             .unwrap_or(&mut self.downstreams)
     }
 
-    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) {
+    /// Let downstream unsubscribe the delegate.
+    /// Return whether the delegate is empty or not.
+    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
         let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
         if let Some(d) = self.remove_downstream(id) {
             if let Some(error_event) = error_event {
                 if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
                     warn!("cdc send unsubscribe failed";
-                          "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
-                          "downstream_id" => ?d.id, "downstream" => ?d.peer,
-                          "request_id" => d.req_id, "conn_id" => ?d.conn_id);
+                        "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
+                        "downstream_id" => ?d.id, "downstream" => ?d.peer,
+                        "request_id" => d.req_id, "conn_id" => ?d.conn_id);
                 }
             }
             d.state.store(DownstreamState::Stopped);
         }
-        if self.downstreams().is_empty() {
-            self.handle.stop_observing();
-        }
+        self.downstreams().is_empty()
     }
 
     pub fn mark_failed(&mut self) {
@@ -266,10 +261,10 @@ impl Delegate {
     /// This means the region has met an unrecoverable error for CDC.
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
+        self.handle.stop_observing();
         self.txn_extra_op.store(TxnExtraOp::Noop);
         self.mark_failed();
         // Stop observe further events.
-        self.handle.stop_observing();
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
@@ -304,7 +299,7 @@ impl Delegate {
         assert!(
             !downstreams.is_empty(),
             "region {} miss downstream",
-            self.region_id,
+            self.region_id
         );
         for downstream in downstreams {
             send(downstream)?;
@@ -503,13 +498,11 @@ impl Delegate {
         statistics: &mut Statistics,
         is_one_pc: bool,
     ) -> Result<()> {
-        let txn_extra_op = self.txn_extra_op.load();
+        debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
-            if txn_extra_op == TxnExtraOp::ReadOldValue {
-                let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
-                row.old_value = old_value.unwrap_or_default();
-            }
+            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+            let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
+            row.old_value = old_value.unwrap_or_default();
             Ok(())
         };
 
@@ -547,19 +540,11 @@ impl Delegate {
             event: Some(Event_oneof_event::Entries(event_entries)),
             ..Default::default()
         };
-        let txn_extra_op = self.txn_extra_op.load();
         let send = move |downstream: &Downstream| {
             if downstream.state.load() != DownstreamState::Normal {
                 return Ok(());
             }
-            let mut event = change_data_event.clone();
-            if !downstream.enable_old_value && txn_extra_op == TxnExtraOp::ReadOldValue {
-                if let Some(Event_oneof_event::Entries(ref mut entries)) = event.event {
-                    for entry in entries.mut_entries().iter_mut() {
-                        entry.mut_old_value().clear();
-                    }
-                }
-            }
+            let event = change_data_event.clone();
             // Do not force send for real time change data events.
             let force_send = false;
             downstream.sink_event(event, force_send)
@@ -719,21 +704,16 @@ impl Delegate {
     }
 
     fn add_downstream(&mut self, downstream: Downstream) {
-        if downstream.enable_old_value {
-            self.old_value_requirers += 1;
-            self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
-        }
         self.downstreams_mut().push(downstream);
+        self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
     }
 
     fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {
         let downstreams = self.downstreams_mut();
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
-            if downstream.enable_old_value {
-                self.old_value_requirers -= 1;
-            }
-            if self.old_value_requirers == 0 {
+            if self.downstreams.is_empty() {
+                self.handle.stop_observing();
                 self.txn_extra_op.store(TxnExtraOp::Noop);
             }
             return Some(downstream);
@@ -879,7 +859,7 @@ mod tests {
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();

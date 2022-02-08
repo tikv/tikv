@@ -412,8 +412,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // The downstream wants to deregister
                 let mut is_last = false;
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                    delegate.unsubscribe(downstream_id, err);
-                    is_last = delegate.downstreams().is_empty();
+                    is_last = delegate.unsubscribe(downstream_id, err);
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
                     if let Some(id) = conn.downstream_id(region_id) {
@@ -2091,7 +2090,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -2131,7 +2130,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         suite.run(Task::Register {
@@ -2147,7 +2146,7 @@ mod tests {
             .unwrap_err();
 
         // duplicate request error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2177,7 +2176,7 @@ mod tests {
             .unwrap_err();
 
         // Compatibility error.
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -2215,7 +2214,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(100);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
         suite.add_local_reader(100);
         suite.run(Task::Register {
             request: req.clone(),
@@ -2240,7 +2239,7 @@ mod tests {
         // Test errors on CaptureChange message.
         req.set_region_id(101);
         suite.add_region(101, 100);
-        let downstream = Downstream::new("".to_string(), region_epoch, 1, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch, 1, conn_id);
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -2283,7 +2282,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
@@ -2312,7 +2311,7 @@ mod tests {
 
         // Register region 2 to the conn.
         req.set_region_id(2);
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(2, 100);
         suite.run(Task::Register {
@@ -2350,7 +2349,7 @@ mod tests {
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         req.set_region_id(3);
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
         downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(3, 100);
         suite.run(Task::Register {
@@ -2413,7 +2412,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         let downstream_id = downstream.get_id();
         suite.run(Task::Register {
             request: req.clone(),
@@ -2449,7 +2448,7 @@ mod tests {
         }
         assert_eq!(suite.endpoint.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
         let new_downstream_id = downstream.get_id();
         suite.run(Task::Register {
             request: req.clone(),
@@ -2494,7 +2493,7 @@ mod tests {
         assert_eq!(suite.endpoint.capture_regions.len(), 0);
 
         // Stale deregister should be filtered.
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
         suite.run(Task::Register {
             request: req,
             downstream,
@@ -2542,8 +2541,7 @@ mod tests {
                 let mut req = ChangeDataRequest::default();
                 req.set_region_id(region_id);
                 let region_epoch = req.get_region_epoch().clone();
-                let downstream =
-                    Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
+                let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
                 downstream.get_state().store(DownstreamState::Normal);
                 suite.run(Task::Register {
                     request: req.clone(),
@@ -2650,8 +2648,7 @@ mod tests {
         req.set_region_id(1);
         req.mut_region_epoch().set_version(2);
         let region_epoch_2 = req.get_region_epoch().clone();
-        let downstream =
-            Downstream::new("".to_string(), region_epoch_2.clone(), 0, conn_id_a, true);
+        let downstream = Downstream::new("".to_string(), region_epoch_2.clone(), 0, conn_id_a);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2668,7 +2665,7 @@ mod tests {
         req.set_region_id(1);
         req.mut_region_epoch().set_version(1);
         let region_epoch_1 = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch_1, 0, conn_id_b, true);
+        let downstream = Downstream::new("".to_string(), region_epoch_1, 0, conn_id_b);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
