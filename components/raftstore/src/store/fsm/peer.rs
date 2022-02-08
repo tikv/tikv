@@ -3507,6 +3507,7 @@ where
             .peer
             .read_progress
             .merge_safe_ts(source_read_progress.safe_ts(), merge_index);
+
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
         // a region merge.

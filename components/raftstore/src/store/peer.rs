@@ -3653,7 +3653,7 @@ where
             return Ok(());
         }
         // The proposed pessimistic locks here will also be carried in CommitMerge. Check the size
-        // to avoid CommitMerge exceeding the size limit of a raft entry,
+        // to avoid CommitMerge exceeding the size limit of a raft entry.
         if pessimistic_locks.memory_size > size_limit {
             return Err(box_err!(
                 "pessimistic locks size {} exceed size limit {}, skip merging.",
@@ -3760,6 +3760,7 @@ where
         let ctx = match self.pre_propose(poll_ctx, &mut req) {
             Ok(ctx) => ctx,
             Err(e) => {
+                // Skipping PrepareMerge is logged when the PendingPrepareMerge error is generated.
                 if !matches!(e, Error::PendingPrepareMerge) {
                     warn!(
                         "skip proposal";
