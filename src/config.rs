@@ -1392,12 +1392,21 @@ impl RaftDbConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RaftEngineConfig {
     pub enable: bool,
     #[serde(flatten)]
     config: RawRaftEngineConfig,
+}
+
+impl Default for RaftEngineConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            config: RawRaftEngineConfig::default(),
+        }
+    }
 }
 
 impl RaftEngineConfig {
@@ -3576,16 +3585,30 @@ mod tests {
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
-        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
-
-        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
-
         tikv_cfg.storage.data_dir = "/data1".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.storage.data_dir = "/data1".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        // Enable Raft Engine.
+        tikv_cfg.raft_engine.enable = true;
+        last_cfg.raft_engine.enable = true;
+
+        tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+
+        // Disable Raft Engine and uses RocksDB.
+        tikv_cfg.raft_engine.enable = false;
+        last_cfg.raft_engine.enable = false;
+
+        tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+
+        last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
