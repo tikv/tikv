@@ -9,7 +9,7 @@ use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
-use futures::{Future, Sink};
+use futures::{ready, Future, Sink};
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -331,20 +331,17 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B, E> {
+struct AsyncRaftSender<R, M, B, E> {
     sender: ClientCStreamSender<M>,
-    receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
     buffer: B,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
-    lifetime: Option<oneshot::Sender<()>>,
-    store_id: u64,
     addr: String,
-    engine: PhantomData<E>,
+    _engine: PhantomData<E>,
 }
 
-impl<R, M, B, E> RaftCall<R, M, B, E>
+impl<R, M, B, E> AsyncRaftSender<R, M, B, E>
 where
     R: RaftStoreRouter<E> + 'static,
     B: Buffer<OutputMessage = M>,
@@ -402,9 +399,52 @@ where
             }
         }
     }
+}
 
-    fn clean_up(&mut self, sink_err: &Option<grpcio::Error>, recv_err: &Option<grpcio::Error>) {
-        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.addr);
+impl<R, M, B, E> Future for AsyncRaftSender<R, M, B, E>
+where
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
+{
+    type Output = grpcio::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<grpcio::Result<()>> {
+        let s = &mut *self;
+        loop {
+            s.fill_msg(ctx);
+            if !s.buffer.empty() {
+                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
+                if let Poll::Ready(Ok(())) = res {
+                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                }
+                ready!(res)?;
+                continue;
+            }
+
+            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
+                return Poll::Ready(Err(e));
+            }
+            return Poll::Pending;
+        }
+    }
+}
+
+struct RaftCall<R, M, B, E> {
+    sender: AsyncRaftSender<R, M, B, E>,
+    receiver: ClientCStreamReceiver<Done>,
+    lifetime: Option<oneshot::Sender<()>>,
+    store_id: u64,
+}
+
+impl<R, M, B, E> RaftCall<R, M, B, E>
+where
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
+{
+    fn clean_up(&mut self, sink_err: Option<grpcio::Error>, recv_err: Option<grpcio::Error>) {
+        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
 
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
@@ -416,62 +456,16 @@ where
                 return;
             }
         }
-        let router = &self.router;
-        router.broadcast_unreachable(self.store_id);
+        self.sender.router.broadcast_unreachable(self.store_id);
     }
-}
 
-impl<R, M, B, E> Future for RaftCall<R, M, B, E>
-where
-    R: RaftStoreRouter<E> + Unpin + 'static,
-    B: Buffer<OutputMessage = M> + Unpin,
-    E: KvEngine,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<()> {
-        let s = &mut *self;
-        loop {
-            s.fill_msg(ctx);
-            if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
-                }
-                match res {
-                    Poll::Ready(Ok(())) => continue,
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(e)) => {
-                        let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                            Poll::Ready(Err(e)) => Some(e),
-                            _ => None,
-                        };
-                        s.clean_up(&Some(e), &re);
-                        return Poll::Ready(());
-                    }
-                }
-            }
-
-            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
-                let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                    Poll::Ready(Err(e)) => Some(e),
-                    _ => None,
-                };
-                s.clean_up(&Some(e), &re);
-                return Poll::Ready(());
-            }
-            match Pin::new(&mut s.receiver).poll(ctx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(_)) => {
-                    info!("connection close"; "store_id" => s.store_id, "addr" => %s.addr);
-                    return Poll::Ready(());
-                }
-                Poll::Ready(Err(e)) => {
-                    s.clean_up(&None, &Some(e));
-                    return Poll::Ready(());
-                }
-            }
+    async fn poll(&mut self) {
+        let res = futures::join!(&mut self.sender, &mut self.receiver);
+        if let (Ok(()), Ok(Done { .. })) = res {
+            info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
+            return;
         }
+        self.clean_up(res.0.err(), res.1.err());
     }
 }
 
@@ -587,39 +581,47 @@ where
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (batch_sink, batch_stream) = client.batch_raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: batch_sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: batch_sink,
+                queue: self.queue.clone(),
+                buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
+                router: self.builder.router.clone(),
+                snap_scheduler: self.builder.snap_scheduler.clone(),
+                addr,
+                _engine: PhantomData::<E>,
+            },
             receiver: batch_stream,
-            queue: self.queue.clone(),
-            buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
-            router: self.builder.router.clone(),
-            snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
-            engine: PhantomData::<E>,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 
     fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (sink, stream) = client.raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: sink,
+                queue: self.queue.clone(),
+                buffer: MessageBuffer::new(),
+                router: self.builder.router.clone(),
+                snap_scheduler: self.builder.snap_scheduler.clone(),
+                addr,
+                _engine: PhantomData::<E>,
+            },
             receiver: stream,
-            queue: self.queue.clone(),
-            buffer: MessageBuffer::new(),
-            router: self.builder.router.clone(),
-            snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
-            engine: PhantomData::<E>,
         };
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 }
