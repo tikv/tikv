@@ -68,7 +68,7 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 page_size = "0.4"
-procfs = "0.7"
+procfs = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
