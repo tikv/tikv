@@ -662,6 +662,7 @@ impl TiKVServer {
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
                 self.store_path.clone(),
+                self.engines.as_ref().unwrap().engine.kv_engine(),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {

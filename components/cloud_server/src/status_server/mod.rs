@@ -68,6 +68,7 @@ pub struct StatusServer {
     router: RaftRouter,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
+    engine: kvengine::Engine,
 }
 
 impl StatusServer {
@@ -77,6 +78,7 @@ impl StatusServer {
         security_config: Arc<SecurityConfig>,
         router: RaftRouter,
         store_path: PathBuf,
+        engine: kvengine::Engine,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -96,6 +98,7 @@ impl StatusServer {
             router,
             security_config,
             store_path,
+            engine,
         })
     }
 
@@ -340,6 +343,29 @@ impl StatusServer {
         }
     }
 
+    async fn dump_engine_stats(
+        req: Request<Body>,
+        engine: kvengine::Engine,
+    ) -> hyper::Result<Response<Body>> {
+        let mut shard_stats = engine.get_shard_stats();
+        shard_stats.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+        let path = req.uri().path();
+        let res;
+        if path.starts_with("/kvengine/sum") {
+            let engine_stats = kvengine::Engine::get_engine_stats(shard_stats);
+            res = serde_json::to_string_pretty(&engine_stats);
+        } else {
+            res = serde_json::to_string_pretty(&shard_stats);
+        }
+        Ok(match res {
+            Ok(json) => Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json))
+                .unwrap(),
+            Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+        })
+    }
+
     pub fn stop(self) {
         let _ = self.tx.send(());
         self.thread_pool.shutdown_timeout(Duration::from_secs(3));
@@ -373,6 +399,7 @@ impl StatusServer {
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
+        let engine = self.engine.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -380,6 +407,7 @@ impl StatusServer {
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
+            let engine = engine.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -388,6 +416,7 @@ impl StatusServer {
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
+                    let engine = engine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -450,6 +479,9 @@ impl StatusServer {
                             }
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
+                            }
+                            (Method::GET, path) if path.starts_with("/kvengine") => {
+                                Self::dump_engine_stats(req, engine).await
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }

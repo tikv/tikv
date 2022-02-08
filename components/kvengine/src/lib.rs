@@ -19,7 +19,11 @@ pub mod table;
 pub mod write;
 
 #[macro_use]
+extern crate serde_derive;
+#[macro_use]
 extern crate slog_global;
+extern crate core;
+
 #[cfg(test)]
 mod tests;
 
@@ -34,6 +38,7 @@ pub use options::*;
 pub use read::*;
 pub use shard::*;
 pub use split::*;
+pub use stats::*;
 pub use table::table::Iterator;
 pub use write::*;
 

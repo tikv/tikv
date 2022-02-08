@@ -2630,6 +2630,8 @@ dependencies = [
  "moka",
  "protobuf",
  "rand 0.8.3",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "slog-term",
