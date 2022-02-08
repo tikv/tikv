@@ -88,17 +88,6 @@ const POLLING: u8 = 1;
 /// The future is woken when being polled.
 const NOTIFIED: u8 = 2;
 
-<<<<<<< HEAD
-impl ArcWake for BatchCommandsWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        let mut future_slot = arc_self.0.lock().unwrap();
-        if let Some(mut future) = future_slot.take() {
-            let waker = task::waker_ref(&arc_self);
-            let cx = &mut Context::from_waker(&*waker);
-            match future.as_mut().poll(cx) {
-                Poll::Pending => {
-                    *future_slot = Some(future);
-=======
 /// A waker that will poll the future immediately when waking up.
 struct PollAtWake {
     f: UnsafeCell<Option<BoxFuture<'static, ()>>>,
@@ -183,7 +172,6 @@ impl PollAtWake {
                     } else {
                         panic!("unexpcted state {}", s);
                     }
->>>>>>> e613c816a... tikv_util: reimplement poll_future_notify (#11550)
                 }
             }
         }
