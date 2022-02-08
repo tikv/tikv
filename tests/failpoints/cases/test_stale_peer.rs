@@ -5,14 +5,10 @@ use std::time::Duration;
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-<<<<<<< HEAD
-use kvproto::raft_serverpb::RaftLocalState;
-=======
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
->>>>>>> a83b0f781... raftstore: destroy uninitialized peer can make it possible to recreate old peer (#11457)
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 use tikv_util::time::Instant;
@@ -137,8 +133,6 @@ fn test_stale_learner_restart() {
     cluster.run_node(2).unwrap();
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
-<<<<<<< HEAD
-=======
 
 /// Test if a peer can be destroyed through tombstone msg when applying snapshot.
 #[test]
@@ -292,4 +286,3 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
     must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
 }
->>>>>>> a83b0f781... raftstore: destroy uninitialized peer can make it possible to recreate old peer (#11457)
