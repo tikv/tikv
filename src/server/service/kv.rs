@@ -72,7 +72,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     // For handling `CheckLeader` request.
-    check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
+    check_leader_scheduler: Scheduler<CheckLeaderTask>,
 
     enable_req_batch: bool,
 
@@ -115,7 +115,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         copr_v2: coprocessor_v2::Endpoint,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        check_leader_scheduler: Option<Scheduler<CheckLeaderTask>>,
+        check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
         proxy: Proxy,
@@ -1077,14 +1077,10 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
-            let regions = match check_leader_scheduler {
-                Some(s) => {
-                    s.schedule(CheckLeaderTask::CheckLeader { leaders, cb })
-                        .map_err(|e| Error::Other(format!("{}", e).into()))?;
-                    resp.await?
-                }
-                None => vec![],
-            };
+            check_leader_scheduler
+                .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
+                .map_err(|e| Error::Other(format!("{}", e).into()))?;
+            let regions = resp.await?;
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);
             resp.set_regions(regions);
@@ -1109,14 +1105,10 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
-            let store_safe_ts = match check_leader_scheduler {
-                Some(s) => {
-                    s.schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
-                        .map_err(|e| Error::Other(format!("{}", e).into()))?;
-                    resp.await?
-                }
-                None => 0,
-            };
+            check_leader_scheduler
+                .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
+                .map_err(|e| Error::Other(format!("{}", e).into()))?;
+            let store_safe_ts = resp.await?;
             let mut resp = StoreSafeTsResponse::default();
             resp.set_safe_ts(store_safe_ts);
             sink.success(resp).await?;
