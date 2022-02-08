@@ -35,6 +35,7 @@ use engine_rocks::{
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use file_system::IOPriority;
 use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
@@ -2201,19 +2202,23 @@ impl Default for BackupConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
+    // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
+    #[config(skip)]
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
     // Deprecated! preserved for compatibility check.
+    #[config(skip)]
     #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
 }
 
@@ -2240,7 +2245,7 @@ impl Default for CdcConfig {
 }
 
 impl CdcConfig {
-    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.min_ts_interval == ReadableDuration::secs(0) {
             return Err("cdc.min-ts-interval can't be 0s".into());
         }
@@ -2390,7 +2395,7 @@ pub struct TiKvConfig {
     #[config(submodule)]
     pub split: SplitConfig,
 
-    #[config(skip)]
+    #[config(submodule)]
     pub cdc: CdcConfig,
 
     #[config(submodule)]
@@ -2441,6 +2446,29 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
+    pub fn infer_raft_db_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        if self.raft_store.raftdb_path.is_empty() {
+            let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+            config::canonicalize_sub_path(data_dir, "raft")
+        } else {
+            config::canonicalize_path(&self.raft_store.raftdb_path)
+        }
+    }
+
+    pub fn infer_raft_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        if self.raft_engine.config.dir.is_empty() {
+            let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+            config::canonicalize_sub_path(data_dir, "raft-engine")
+        } else {
+            config::canonicalize_path(&self.raft_engine.config.dir)
+        }
+    }
+
+    pub fn infer_kv_engine_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
+        let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
+        config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
+    }
+
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
@@ -2454,26 +2482,14 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-        if self.raft_store.raftdb_path.is_empty() {
-            self.raft_store.raftdb_path = default_raftdb_path;
-        } else {
-            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
-        }
+        self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
+        self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
 
-        let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
-        if self.raft_engine.config.dir.is_empty() {
-            self.raft_engine.config.dir = default_er_path;
-        } else {
-            self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
-        }
         if self.raft_engine.config.dir == self.raft_store.raftdb_path {
             return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
         }
 
-        let kv_db_path =
-            config::canonicalize_sub_path(&self.storage.data_dir, DEFAULT_ROCKSDB_SUB_DIR)?;
-
+        let kv_db_path = self.infer_kv_engine_path(None)?;
         if kv_db_path == self.raft_store.raftdb_path {
             return Err("raft_store.raftdb_path can't be same as storage.data_dir/db".into());
         }
@@ -3003,6 +3019,7 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
         ConfigValue::BlobRunMode(_) => ConfigValue::from(v.parse::<BlobRunMode>()?),
+        ConfigValue::IOPriority(_) => ConfigValue::from(v.parse::<IOPriority>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
         _ => unreachable!(),
     };
@@ -3031,7 +3048,8 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                         | ConfigValue::Size(_)
                         | ConfigValue::OptionSize(_)
                         | ConfigValue::String(_)
-                        | ConfigValue::BlobRunMode(_) => Ok(true),
+                        | ConfigValue::BlobRunMode(_)
+                        | ConfigValue::IOPriority(_) => Ok(true),
                         _ => Ok(false),
                     }
                 }
@@ -3389,6 +3407,7 @@ mod tests {
         incoming.coprocessor.region_split_keys = 10000;
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
+        incoming.storage.io_rate_limit.import_priority = file_system::IOPriority::High;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -3399,6 +3418,10 @@ mod tests {
         change.insert(
             "rocksdb.defaultcf.block-cache-size".to_owned(),
             "500MB".to_owned(),
+        );
+        change.insert(
+            "storage.io-rate-limit.import-priority".to_owned(),
+            "high".to_owned(),
         );
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);

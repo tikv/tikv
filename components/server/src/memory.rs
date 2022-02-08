@@ -1,9 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use tikv::server::MEM_TRACE_SUM_GAUGE;
 use tikv_alloc::trace::{MemoryTrace, MemoryTraceNode};
+use tikv_util::time::Instant;
 
 #[derive(Default)]
 pub struct MemoryTraceManager {

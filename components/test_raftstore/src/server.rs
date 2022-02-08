@@ -35,7 +35,7 @@ use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManager;
 use raftstore::store::{
     AutoSplitController, Callback, CheckLeaderRunner, LocalReader, SnapManagerBuilder,
-    SplitCheckRunner,
+    SplitCheckRunner, SplitConfigManager,
 };
 use raftstore::Result;
 use security::SecurityManager;
@@ -442,7 +442,8 @@ impl Simulator for ServerCluster {
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-
+        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.split)));
+        let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -452,7 +453,7 @@ impl Simulator for ServerCluster {
             coprocessor_host,
             importer.clone(),
             split_check_scheduler,
-            AutoSplitController::default(),
+            auto_split_controller,
             concurrency_manager.clone(),
         )?;
         assert!(node_id == 0 || node_id == node.id());
@@ -628,7 +629,6 @@ fn must_new_and_configure_cluster_mul(
     let mut cluster = new_server_cluster(0, count);
     configure(&mut cluster);
     cluster.run();
-
     let region_id = 1;
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);

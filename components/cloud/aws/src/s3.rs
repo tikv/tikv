@@ -503,7 +503,6 @@ impl BlobStorage for S3Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::io::AsyncReadExt;
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::MockRequestDispatcher;
 

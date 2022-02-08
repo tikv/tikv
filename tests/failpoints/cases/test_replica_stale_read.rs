@@ -52,6 +52,14 @@ impl PeerClient {
         must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
     }
 
+    fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, true, false)
+    }
+
+    fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, false, true)
+    }
+
     fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
         must_kv_commit(
             &self.cli,
@@ -650,4 +658,54 @@ fn test_stale_read_on_learner() {
 
     // We can read on the learner with the newst ts
     learner_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+}
+
+// Testing that stale read request with a future ts should not update the `concurency_manager`'s `max_ts`
+#[test]
+fn test_stale_read_future_ts_not_update_max_ts() {
+    let (_cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
+    leader_client.ctx.set_stale_read(true);
+
+    // Write `(key1, value1)`
+    leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // Perform stale read with a future ts should return error
+    let read_ts = get_tso(&pd_client) + 10000000;
+    let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+
+    // The `max_ts` should not updated by the stale read request, so we can prewrite and commit
+    // `async_commit` transaction with a ts that smaller than the `read_ts`
+    let prewrite_ts = get_tso(&pd_client);
+    assert!(prewrite_ts < read_ts);
+    leader_client.must_kv_prewrite_async_commit(
+        vec![new_mutation(Op::Put, &b"key2"[..], &b"value1"[..])],
+        b"key2".to_vec(),
+        prewrite_ts,
+    );
+    let commit_ts = get_tso(&pd_client);
+    assert!(commit_ts < read_ts);
+    leader_client.must_kv_commit(vec![b"key2".to_vec()], prewrite_ts, commit_ts);
+    leader_client.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+
+    // Perform stale read with a future ts should return error
+    let read_ts = get_tso(&pd_client) + 10000000;
+    let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
+    assert!(resp.get_region_error().has_data_is_not_ready());
+
+    // The `max_ts` should not updated by the stale read request, so 1pc transaction with a ts that smaller
+    // than the `read_ts` should not be fallbacked to 2pc
+    let prewrite_ts = get_tso(&pd_client);
+    assert!(prewrite_ts < read_ts);
+    leader_client.must_kv_prewrite_one_pc(
+        vec![new_mutation(Op::Put, &b"key3"[..], &b"value1"[..])],
+        b"key3".to_vec(),
+        prewrite_ts,
+    );
+    // `key3` is write as 1pc transaction so we can read `key3` without commit
+    leader_client.must_kv_read_equal(b"key3".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }

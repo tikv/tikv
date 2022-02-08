@@ -736,7 +736,9 @@ impl Default for ReadMetrics {
 
 impl ReadMetrics {
     pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+        if self.last_flush_time.saturating_elapsed()
+            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
+        {
             self.flush();
             self.last_flush_time = Instant::now();
         }

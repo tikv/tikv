@@ -4,6 +4,7 @@
 #![feature(assert_matches)]
 
 mod channel;
+mod config;
 mod delegate;
 mod endpoint;
 mod errors;
@@ -12,8 +13,9 @@ mod observer;
 mod old_value;
 mod service;
 
-pub use channel::MemoryQuota;
+pub use channel::{recv_timeout, CdcEvent, MemoryQuota};
+pub use config::CdcConfigManager;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
-pub use service::Service;
+pub use service::{FeatureGate, Service};

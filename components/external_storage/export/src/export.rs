@@ -6,7 +6,6 @@
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
@@ -38,7 +37,7 @@ pub use external_storage::{
 use futures_io::AsyncRead;
 use kvproto::backup::{Noop, StorageBackend};
 use tikv_util::stream::block_on_external_io;
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 

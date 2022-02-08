@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::time::Instant;
 
 use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -21,7 +20,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
 

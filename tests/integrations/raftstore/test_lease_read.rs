@@ -4,7 +4,7 @@
 
 use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::*;
+use std::time::Duration;
 use std::{mem, thread};
 
 use kvproto::metapb;

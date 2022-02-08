@@ -7,7 +7,6 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use std::{cmp, error, mem, u64};
 
 use engine_traits::CF_RAFT;
@@ -29,6 +28,7 @@ use crate::{bytes_capacity, Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_alloc::trace::TraceEvent;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, box_try, debug, defer, error, info, warn};
 
@@ -1615,6 +1615,16 @@ where
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);
+        if self.truncated_index() == self.applied_index() {
+            self.applied_index_term = self.truncated_term();
+        } else {
+            panic!(
+                "{} applied index should be equal to truncated index after snapshot: {} != {}",
+                self.tag,
+                self.applied_index(),
+                self.truncated_index()
+            );
+        }
 
         Some(ApplySnapResult {
             prev_region,
@@ -1670,7 +1680,7 @@ where
         "meta_key" => 1,
         "apply_key" => 1,
         "raft_key" => 1,
-        "takes" => ?t.elapsed(),
+        "takes" => ?t.saturating_elapsed(),
     );
     Ok(())
 }

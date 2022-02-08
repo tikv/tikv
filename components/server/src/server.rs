@@ -21,10 +21,10 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use cdc::MemoryQuota;
+use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -91,7 +91,7 @@ use tikv_util::{
     math::MovingAvgU32,
     sys::{register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
-    time::Monitor,
+    time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -417,6 +417,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 )
             },
         )
+        .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
         .unwrap();
     }
 
@@ -636,10 +637,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register cdc
+        // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // TODO: register a cdc config manager here to support dynamically change cdc config
+        // Register cdc config.
+        cfg_controller.register(
+            tikv::config::Module::CDC,
+            Box::new(CdcConfigManager(cdc_worker.scheduler())),
+        );
 
         // Create resolved ts worker
         let rts_worker = if self.config.resolved_ts.enable {
@@ -837,7 +842,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start resource metering.
-        let resource_metering_cpu_recorder = resource_metering::cpu::recorder::init_recorder();
+        let resource_metering_cpu_recorder =
+            resource_metering::cpu::recorder::init_recorder(self.config.resource_metering.enabled);
         let mut resource_metering_reporter_worker = Box::new(
             WorkerBuilder::new("resource-metering-reporter")
                 .pending_capacity(30)
@@ -1353,7 +1359,7 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
             self.last_reset = now;

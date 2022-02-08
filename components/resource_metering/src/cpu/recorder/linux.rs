@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -21,17 +21,19 @@ use libc::pid_t;
 use procinfo::pid;
 use procinfo::pid::Stat;
 
+use tikv_util::time::Instant;
+
 use super::RecorderHandle;
 
 const RECORD_FREQUENCY: f64 = 99.0;
 const GC_INTERVAL_SECS: u64 = 15 * 60;
 
-pub fn init_recorder() -> RecorderHandle {
+pub fn init_recorder(enabled: bool) -> RecorderHandle {
     lazy_static! {
         static ref HANDLE: RecorderHandle = {
             let config = crate::Config::default();
 
-            let pause = Arc::new(AtomicBool::new(config.enabled));
+            let pause = Arc::new(AtomicBool::new(!config.enabled));
             let pause0 = pause.clone();
             let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
             let precision_ms0 = precision_ms.clone();
@@ -57,6 +59,11 @@ pub fn init_recorder() -> RecorderHandle {
                 .expect("Failed to create recorder thread");
             RecorderHandle::new(join_handle, pause0, precision_ms0)
         };
+    }
+    if enabled {
+        HANDLE.resume();
+    } else {
+        HANDLE.pause();
     }
     HANDLE.clone()
 }
@@ -283,7 +290,7 @@ impl CpuRecorder {
         const THREAD_STAT_LEN_THRESHOLD: usize = 500;
         const RECORD_LEN_THRESHOLD: usize = 20_000;
 
-        let duration_secs = self.last_gc_instant.elapsed().as_secs();
+        let duration_secs = self.last_gc_instant.saturating_elapsed().as_secs();
         let need_gc = duration_secs >= GC_INTERVAL_SECS;
 
         if need_gc {
@@ -314,7 +321,7 @@ impl CpuRecorder {
     }
 
     pub fn may_advance_window(&mut self) -> bool {
-        let duration = self.last_collect_instant.elapsed();
+        let duration = self.last_collect_instant.saturating_elapsed();
         let need_advance = duration.as_millis() >= self.precision_ms.load(Relaxed) as _;
 
         if need_advance {
@@ -519,8 +526,7 @@ mod tests {
 
     #[test]
     fn test_cpu_record() {
-        let handle = init_recorder();
-        handle.resume();
+        let handle = init_recorder(true);
 
         // Heavy CPU only with 1 thread
         {

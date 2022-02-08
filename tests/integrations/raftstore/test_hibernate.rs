@@ -3,12 +3,13 @@
 use std::sync::atomic::*;
 use std::sync::*;
 use std::thread;
-use std::time::*;
+use std::time::Duration;
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -184,7 +185,8 @@ fn test_transfer_leader_delay() {
 
     cluster.transfer_leader(1, new_peer(3, 3));
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty() {
+    while timer.saturating_elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty()
+    {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(messages.lock().unwrap().len(), 1);
@@ -206,7 +208,7 @@ fn test_transfer_leader_delay() {
         .unwrap();
 
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) {
+    while timer.saturating_elapsed() < Duration::from_secs(3) {
         let resp = cluster.request(
             b"k2",
             vec![new_put_cmd(b"k2", b"v2")],
@@ -464,7 +466,7 @@ fn test_leader_demoted_when_hibernated() {
                 break;
             }
         }
-        if timer.elapsed() > Duration::from_secs(5) {
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
             panic!("peer 3 is still not leader after 5 seconds.");
         }
         let region = cluster.get_region(b"k1");

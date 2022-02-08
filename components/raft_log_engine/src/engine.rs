@@ -74,6 +74,14 @@ impl RaftLogBatchTrait for RaftLogBatch {
         Ok(())
     }
 
+    #[inline]
+    fn size(&self) -> usize {
+        // TODO: This is not data size, but sufficient for current usage.
+        // Data size is useful when controlling bytes per sync, so it's better
+        // to implement it correctly.
+        self.0.items.len()
+    }
+
     fn is_empty(&self) -> bool {
         self.0.items.is_empty()
     }

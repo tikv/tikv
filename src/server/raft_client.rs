@@ -9,7 +9,7 @@ use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
-use futures::{Future, Sink};
+use futures::{ready, Future, Sink};
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -34,12 +34,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
-
-// When merge raft messages into a batch message, leave a buffer.
-const GRPC_SEND_MSG_BUF: usize = 64 * 1024;
-const QUEUE_CAPACITY: usize = 4096;
-
-const RAFT_MSG_MAX_BATCH_SIZE: usize = 128;
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
@@ -184,8 +178,9 @@ impl Buffer for BatchMessageBuffer {
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
-            && (self.size + msg_size + GRPC_SEND_MSG_BUF >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= RAFT_MSG_MAX_BATCH_SIZE)
+            && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
+                >= self.cfg.max_grpc_send_msg_len as usize
+                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
         {
             self.overflowing = Some(msg);
             return;
@@ -336,20 +331,17 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B, E> {
+struct AsyncRaftSender<R, M, B, E> {
     sender: ClientCStreamSender<M>,
-    receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
     buffer: B,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
-    lifetime: Option<oneshot::Sender<()>>,
-    store_id: u64,
     addr: String,
-    engine: PhantomData<E>,
+    _engine: PhantomData<E>,
 }
 
-impl<R, M, B, E> RaftCall<R, M, B, E>
+impl<R, M, B, E> AsyncRaftSender<R, M, B, E>
 where
     R: RaftStoreRouter<E> + 'static,
     B: Buffer<OutputMessage = M>,
@@ -407,9 +399,52 @@ where
             }
         }
     }
+}
 
-    fn clean_up(&mut self, sink_err: &Option<grpcio::Error>, recv_err: &Option<grpcio::Error>) {
-        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.addr);
+impl<R, M, B, E> Future for AsyncRaftSender<R, M, B, E>
+where
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
+{
+    type Output = grpcio::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<grpcio::Result<()>> {
+        let s = &mut *self;
+        loop {
+            s.fill_msg(ctx);
+            if !s.buffer.empty() {
+                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
+                if let Poll::Ready(Ok(())) = res {
+                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                }
+                ready!(res)?;
+                continue;
+            }
+
+            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
+                return Poll::Ready(Err(e));
+            }
+            return Poll::Pending;
+        }
+    }
+}
+
+struct RaftCall<R, M, B, E> {
+    sender: AsyncRaftSender<R, M, B, E>,
+    receiver: ClientCStreamReceiver<Done>,
+    lifetime: Option<oneshot::Sender<()>>,
+    store_id: u64,
+}
+
+impl<R, M, B, E> RaftCall<R, M, B, E>
+where
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
+{
+    fn clean_up(&mut self, sink_err: Option<grpcio::Error>, recv_err: Option<grpcio::Error>) {
+        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
 
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
@@ -421,62 +456,16 @@ where
                 return;
             }
         }
-        let router = &self.router;
-        router.broadcast_unreachable(self.store_id);
+        self.sender.router.broadcast_unreachable(self.store_id);
     }
-}
 
-impl<R, M, B, E> Future for RaftCall<R, M, B, E>
-where
-    R: RaftStoreRouter<E> + Unpin + 'static,
-    B: Buffer<OutputMessage = M> + Unpin,
-    E: KvEngine,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<()> {
-        let s = &mut *self;
-        loop {
-            s.fill_msg(ctx);
-            if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
-                }
-                match res {
-                    Poll::Ready(Ok(())) => continue,
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(e)) => {
-                        let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                            Poll::Ready(Err(e)) => Some(e),
-                            _ => None,
-                        };
-                        s.clean_up(&Some(e), &re);
-                        return Poll::Ready(());
-                    }
-                }
-            }
-
-            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
-                let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                    Poll::Ready(Err(e)) => Some(e),
-                    _ => None,
-                };
-                s.clean_up(&Some(e), &re);
-                return Poll::Ready(());
-            }
-            match Pin::new(&mut s.receiver).poll(ctx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(_)) => {
-                    info!("connection close"; "store_id" => s.store_id, "addr" => %s.addr);
-                    return Poll::Ready(());
-                }
-                Poll::Ready(Err(e)) => {
-                    s.clean_up(&None, &Some(e));
-                    return Poll::Ready(());
-                }
-            }
+    async fn poll(&mut self) {
+        let res = futures::join!(&mut self.sender, &mut self.receiver);
+        if let (Ok(()), Ok(Done { .. })) = res {
+            info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
+            return;
         }
+        self.clean_up(res.0.err(), res.1.err());
     }
 }
 
@@ -592,39 +581,47 @@ where
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (batch_sink, batch_stream) = client.batch_raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: batch_sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: batch_sink,
+                queue: self.queue.clone(),
+                buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
+                router: self.builder.router.clone(),
+                snap_scheduler: self.builder.snap_scheduler.clone(),
+                addr,
+                _engine: PhantomData::<E>,
+            },
             receiver: batch_stream,
-            queue: self.queue.clone(),
-            buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
-            router: self.builder.router.clone(),
-            snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
-            engine: PhantomData::<E>,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 
     fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (sink, stream) = client.raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: sink,
+                queue: self.queue.clone(),
+                buffer: MessageBuffer::new(),
+                router: self.builder.router.clone(),
+                snap_scheduler: self.builder.snap_scheduler.clone(),
+                addr,
+                _engine: PhantomData::<E>,
+            },
             receiver: stream,
-            queue: self.queue.clone(),
-            buffer: MessageBuffer::new(),
-            router: self.builder.router.clone(),
-            snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
-            engine: PhantomData::<E>,
         };
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 }
@@ -769,6 +766,7 @@ pub struct RaftClient<S, R, E> {
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     engine: PhantomData<E>,
+    last_hash: (u64, u64),
 }
 
 impl<S, R, E> RaftClient<S, R, E>
@@ -791,6 +789,7 @@ where
             future_pool,
             builder,
             engine: PhantomData::<E>,
+            last_hash: (0, 0),
         }
     }
 
@@ -811,7 +810,9 @@ where
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
-                    let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
+                    let queue = Arc::new(Queue::with_capacity(
+                        self.builder.cfg.raft_client_queue_size,
+                    ));
                     let back_end = StreamBackEnd {
                         store_id,
                         queue: queue.clone(),
@@ -844,7 +845,18 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+            0
+        } else {
+            if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
+                self.last_hash = (
+                    msg.region_id,
+                    seahash::hash(msg.region_id.as_ne_bytes())
+                        % self.builder.cfg.grpc_raft_conn_num as u64,
+                );
+            };
+            self.last_hash.1 as usize
+        };
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -960,6 +972,7 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
+            last_hash: (0, 0),
         }
     }
 }

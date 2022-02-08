@@ -2,14 +2,20 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::*;
+use std::time::Duration;
 use std::{fs, io, thread};
 
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
+use std::fs::File;
+use std::io::prelude::*;
+use std::path::PathBuf;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
+
+use kvproto::raft_serverpb::RaftMessage;
 
 #[test]
 fn test_overlap_cleanup() {
@@ -169,7 +175,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
             return;
         }
 
-        if timer.elapsed() < Duration::from_secs(6) {
+        if timer.saturating_elapsed() < Duration::from_secs(6) {
             thread::sleep(Duration::from_millis(20));
         } else {
             panic!(
@@ -526,4 +532,116 @@ fn test_cancel_snapshot_generating() {
         let snap_index = parts[3].parse::<u64>().unwrap();
         assert!(snap_index > truncated_idx);
     }
+}
+
+#[test]
+fn test_snapshot_gc_after_failed() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let snap_dir = cluster.get_snap_dir(3);
+    fail::cfg("get_snapshot_for_gc", "return(0)").unwrap();
+    for idx in 1..3 {
+        // idx 1 will fail in fail_point("get_snapshot_for_gc"), but idx 2 will succeed
+        for suffix in &[".meta", "_default.sst"] {
+            let f = format!("gen_{}_{}_{}{}", 2, 6, idx, suffix);
+            let mut snap_file_path = PathBuf::from(&snap_dir);
+            snap_file_path.push(&f);
+            let snap_file_path = snap_file_path.as_path();
+            let mut file = match File::create(&snap_file_path) {
+                Err(why) => panic!("couldn't create {:?}: {}", snap_file_path, why),
+                Ok(file) => file,
+            };
+
+            // write any data, in fact we don't check snapshot file corrupted or not in GC;
+            if let Err(why) = file.write_all(b"some bytes") {
+                panic!("couldn't write to {:?}: {}", snap_file_path, why)
+            }
+        }
+    }
+    let now = Instant::now();
+    loop {
+        let snap_keys = cluster.get_snap_mgr(3).list_idle_snap().unwrap();
+        if snap_keys.is_empty() {
+            panic!("no snapshot file is found");
+        }
+
+        let mut found_unexpected_file = false;
+        let mut found_expected_file = false;
+        for (snap_key, _is_sending) in snap_keys {
+            if snap_key.region_id == 2 && snap_key.idx == 1 {
+                found_expected_file = true;
+            }
+            if snap_key.idx == 2 && snap_key.region_id == 2 {
+                if now.saturating_elapsed() > Duration::from_secs(10) {
+                    panic!("unexpected snapshot file found. {:?}", snap_key);
+                }
+                found_unexpected_file = true;
+                break;
+            }
+        }
+
+        if !found_expected_file {
+            panic!("The expected snapshot file is not found");
+        }
+
+        if !found_unexpected_file {
+            break;
+        }
+
+        sleep_ms(400);
+    }
+    fail::cfg("get_snapshot_for_gc", "off").unwrap();
+    cluster.sim.wl().clear_recv_filters(3);
+}
+#[test]
+fn test_sending_fail_with_net_error() {
+    let mut cluster = new_server_cluster(1, 2);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    let (send_tx, send_rx) = mpsc::sync_channel(1);
+    // only send one MessageType::MsgSnapshot message
+    cluster.sim.wl().add_send_filter(
+        1,
+        Box::new(
+            RegionPacketFilter::new(r1, 1)
+                .allow(1)
+                .direction(Direction::Send)
+                .msg_type(MessageType::MsgSnapshot)
+                .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                    if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                        let _ = send_tx.send(());
+                    }
+                })),
+        ),
+    );
+
+    // peer2 will interrupt in receiving snapshot
+    fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // ready to send notify.
+    send_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // need to wait receiver handle the snapshot request
+    sleep_ms(100);
+
+    // peer2 will not become learner so ti will has k1 key and receiving count will zero
+    let engine2 = cluster.get_engine(2);
+    must_get_none(&engine2, b"k1");
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
 }

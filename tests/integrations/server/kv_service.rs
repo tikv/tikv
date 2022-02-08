@@ -242,12 +242,18 @@ fn test_rawkv_ttl() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx);
+    get_req.set_context(ctx.clone());
     get_req.key = k;
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
     assert!(get_resp.value.is_empty());
+
+    // Can't run transaction commands with TTL enabled.
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!prewrite_resp.get_errors().is_empty());
 }
 
 #[test]
@@ -1651,10 +1657,10 @@ fn test_forwarding_reconnect() {
     let mut req = RawGetRequest::default();
     req.set_context(ctx);
     // Large timeout value to ensure the error is from proxy instead of client.
-    let timer = std::time::Instant::now();
+    let timer = tikv_util::time::Instant::now();
     let timeout = Duration::from_secs(5);
     let res = client.raw_get_opt(&req, call_opt.clone().timeout(timeout));
-    let elapsed = timer.elapsed();
+    let elapsed = timer.saturating_elapsed();
     assert!(elapsed < timeout, "{:?}", elapsed);
     // Because leader server is shutdown, reconnecting has to be timeout.
     match res {
