@@ -865,10 +865,10 @@ pub fn duration_string_time_diff(
     duration_duration_time_diff(ctx, arg1, &arg2)
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn]
 #[inline]
-pub fn quarter(t: Option<&DateTime>) -> Result<Option<Int>> {
-    t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month() + 2) / 3)))
+pub fn quarter(t: &DateTime) -> Result<Option<Int>> {
+    Ok(Some(Int::from(t.month() + 2) / 3))
 }
 
 /// Cast Duration into string representation and drop subsec if possible.
