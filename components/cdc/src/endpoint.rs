@@ -287,6 +287,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .thread_name("tso")
             .enable_time()
             .core_threads(1)
+            .enable_time()
             .build()
             .unwrap();
         // Initialized for the first time, subsequent adjustments will be made based on configuration updates.
