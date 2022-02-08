@@ -2560,7 +2560,7 @@ mod tests {
         let downstream =
             Downstream::new("".to_string(), region_epoch_2.clone(), 0, conn_id_a, true);
         ep.run(Task::Register {
-            request: req.clone(),
+            request: req,
             downstream,
             conn_id: conn_id_a,
             version: semver::Version::new(0, 0, 0),
@@ -2577,7 +2577,7 @@ mod tests {
         let region_epoch_1 = req.get_region_epoch().clone();
         let downstream = Downstream::new("".to_string(), region_epoch_1, 0, conn_id_b, true);
         ep.run(Task::Register {
-            request: req.clone(),
+            request: req,
             downstream,
             conn_id: conn_id_b,
             version: semver::Version::new(0, 0, 0),
