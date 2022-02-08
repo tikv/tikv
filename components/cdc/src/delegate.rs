@@ -19,7 +19,6 @@ use kvproto::cdcpb::{
     Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
     Event_oneof_event,
 };
-use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -34,13 +33,12 @@ use tikv_util::time::Instant;
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
-use crate::channel::{SendError, Sink};
+use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
-use crate::service::{CdcEvent, ConnID};
+use crate::service::ConnID;
 use crate::{Error, Result};
 
-const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
@@ -53,7 +51,13 @@ impl DownstreamID {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+impl Default for DownstreamID {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
     Uninitialized,
     Normal,
@@ -192,9 +196,12 @@ enum PendingLock {
 pub struct Delegate {
     pub handle: ObserveHandle,
     pub region_id: u64,
+
+    // None if the delegate is not initialized.
     region: Option<Region>,
-    pub downstreams: Vec<Downstream>,
     pub resolver: Option<Resolver>,
+
+    pub downstreams: Vec<Downstream>,
     pending: Option<Pending>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
@@ -215,11 +222,21 @@ impl Delegate {
         }
     }
 
-    /// Return false if subscribe failed.
-    pub fn subscribe(&mut self, downstream: Downstream) -> bool {
+    /// Let downstream subscribe the delegate.
+    /// Return error if subscribe fails, caller must deregister the downstream.
+    pub fn subscribe(&mut self, downstream: Downstream) -> Result<()> {
         if let Some(region) = self.region.as_ref() {
+            let req_id = downstream.req_id;
+            let downstream_epoch = downstream.region_epoch.clone();
+            let downstream_id = downstream.get_id();
+            let conn_id = downstream.get_conn_id();
+
+            // The delegate is initialized, push to normal downstreams.
+            self.downstreams.push(downstream);
+
+            // Check if the downstream is out dated.
             if let Err(e) = compare_region_epoch(
-                &downstream.region_epoch,
+                &downstream_epoch,
                 region,
                 false, /* check_conf_ver */
                 true,  /* check_ver */
@@ -227,25 +244,20 @@ impl Delegate {
             ) {
                 info!("cdc fail to subscribe downstream";
                     "region_id" => region.get_id(),
-                    "downstream_id" => ?downstream.get_id(),
-                    "conn_id" => ?downstream.get_conn_id(),
-                    "req_id" => downstream.req_id,
+                    "downstream_id" => ?downstream_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => req_id,
                     "err" => ?e);
-                let err = Error::request(e.into());
-                let error_event = self.error_event(err);
-                if let Err(err) = downstream.sink_error_event(self.region_id, error_event.clone()) {
-                    warn!("cdc send subscribe error failed";
-                        "region_id" => self.region_id, "error" => ?err, "origin_error" => ?error_event,
-                        "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                        "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
-                }
-                return false;
+
+                // Downstream is outdated, mark stop.
+                let downstream = self.downstreams.last_mut().unwrap();
+                downstream.state.store(DownstreamState::Stopped);
+                return Err(Error::request(e.into()));
             }
-            self.downstreams.push(downstream);
         } else {
             self.pending.as_mut().unwrap().downstreams.push(downstream);
         }
-        true
+        Ok(())
     }
 
     pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
@@ -269,7 +281,7 @@ impl Delegate {
     }
 
     pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
-        let error_event = err.map(|err| self.error_event(err));
+        let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
         let downstreams = self.downstreams_mut();
         downstreams.retain(|d| {
@@ -293,24 +305,6 @@ impl Delegate {
         is_last
     }
 
-    fn error_event(&self, err: Error) -> EventError {
-        let mut err_event = EventError::default();
-        let mut err = err.extract_region_error();
-        if err.has_not_leader() {
-            let not_leader = err.take_not_leader();
-            err_event.set_not_leader(not_leader);
-        } else if err.has_epoch_not_match() {
-            let epoch_not_match = err.take_epoch_not_match();
-            err_event.set_epoch_not_match(epoch_not_match);
-        } else {
-            // TODO: Add more errors to the cdc protocol
-            let mut region_not_found = errorpb::RegionNotFound::default();
-            region_not_found.set_region_id(self.region_id);
-            err_event.set_region_not_found(region_not_found);
-        }
-        err_event
-    }
-
     pub fn mark_failed(&mut self) {
         self.failed = true;
     }
@@ -331,7 +325,7 @@ impl Delegate {
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
         let region_id = self.region_id;
-        let error = self.error_event(err);
+        let error = err.into_error_event(self.region_id);
         let send = move |downstream: &Downstream| {
             downstream.state.store(DownstreamState::Stopped);
             let error_event = error.clone();
@@ -463,7 +457,7 @@ impl Delegate {
                     }
                     decode_default(default.1, &mut row);
                     let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
@@ -497,7 +491,7 @@ impl Delegate {
                     set_event_row_type(&mut row, EventLogType::Committed);
                     row.old_value = old_value.unwrap_or_default();
                     let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= EVENT_MAX_SIZE {
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
                         current_rows_size = 0;
                     }
@@ -891,11 +885,11 @@ mod tests {
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
-        delegate.subscribe(downstream);
+        delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
         for downstream in delegate.on_region_ready(resolver, region) {
-            delegate.subscribe(downstream);
+            delegate.subscribe(downstream).unwrap();
         }
 
         let rx_wrap = Cell::new(Some(rx));

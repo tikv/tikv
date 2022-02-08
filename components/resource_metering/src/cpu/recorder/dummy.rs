@@ -17,6 +17,6 @@ pub struct Guard {
     _p: PhantomData<*const ()>,
 }
 
-pub fn init_recorder() -> RecorderHandle {
+pub fn init_recorder(_: bool) -> RecorderHandle {
     RecorderHandle::default()
 }
