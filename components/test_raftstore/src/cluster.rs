@@ -30,7 +30,6 @@ use engine_traits::{
 };
 use file_system::IORateLimiter;
 use pd_client::PdClient;
-use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
