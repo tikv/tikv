@@ -143,8 +143,8 @@ where
     max_inflight_msgs: usize,
 
     trace: PeerMemoryTrace,
-    /// Destroy is delayed because of some unpersisted readies in Peer.
-    /// Should call `destroy_peer` again after persisting all readies.
+    /// Destroy is delayed because logs clean is flushed asynchronously in Peer.
+    /// Should call `destroy_peer` again after flush is done.
     delayed_destroy: Option<DelayDestroy>,
     /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
     /// can start destroying without seeking.
