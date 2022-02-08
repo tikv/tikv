@@ -612,7 +612,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
-            txn_extra_op: delegate.txn_extra_op().load(),
             speed_limiter: self.scan_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
@@ -976,7 +975,6 @@ struct Initializer<E> {
     conn_id: ConnID,
     request_id: u64,
     checkpoint_ts: TimeStamp,
-    txn_extra_op: TxnExtraOp,
 
     speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
@@ -1102,9 +1100,7 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
-        if self.txn_extra_op == TxnExtraOp::Noop {
-            hint_min_ts = Some(self.checkpoint_ts);
-        } else if self.ts_filter_is_helpful(&snap) {
+        if self.ts_filter_is_helpful(&snap) {
             hint_min_ts = Some(self.checkpoint_ts);
             let wc = new_old_value_cursor(&snap, CF_WRITE);
             let dc = new_old_value_cursor(&snap, CF_DEFAULT);
@@ -1116,7 +1112,7 @@ impl<E: KvEngine> Initializer<E> {
             .fill_cache(false)
             .range(None, None)
             .hint_min_ts(hint_min_ts)
-            .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
+            .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
             .unwrap();
 
         fail_point!("cdc_incremental_scan_start");
@@ -1603,7 +1599,6 @@ mod tests {
             speed_limiter: Limiter::new(speed_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
-            txn_extra_op: TxnExtraOp::Noop,
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
         };
@@ -1809,7 +1804,6 @@ mod tests {
             for checkpoint_ts in [200, 100, 150] {
                 let (mut worker, pool, mut initializer, _rx, mut drain) =
                     mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()));
-                initializer.txn_extra_op = TxnExtraOp::ReadOldValue;
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
 
