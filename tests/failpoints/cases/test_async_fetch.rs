@@ -33,7 +33,11 @@ fn test_node_cache_compact_with_one_node_down() {
 
     for (&id, engines) in &cluster.engines {
         must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
-        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
         let state = state.take_truncated_state();
         // compact should not start
         assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
@@ -95,55 +99,4 @@ fn test_node_cache_compact_with_one_node_down() {
         }
     }
     panic!("cluster is not compacted after inserting 200 entries.");
-}
-
-fn check_compacted(
-    all_engines: &HashMap<u64, Engines<RocksEngine, RocksEngine>>,
-    before_states: &HashMap<u64, RaftTruncatedState>,
-    compact_count: u64,
-) -> bool {
-    // Every peer must have compacted logs, so the truncate log state index/term must > than before.
-    let mut compacted_idx = HashMap::default();
-
-    for (&id, engines) in all_engines {
-        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
-        let after_state = state.take_truncated_state();
-
-        let before_state = &before_states[&id];
-        let idx = after_state.get_index();
-        let term = after_state.get_term();
-        if idx == before_state.get_index() || term == before_state.get_term() {
-            return false;
-        }
-        if idx - before_state.get_index() < compact_count {
-            return false;
-        }
-        assert!(term > before_state.get_term());
-        compacted_idx.insert(id, idx);
-    }
-
-    // wait for actual deletion.
-    sleep_ms(100);
-
-    for (id, engines) in all_engines {
-        for i in 0..compacted_idx[id] {
-            let key = keys::raft_log_key(1, i);
-            if engines.raft.get_value(&key).unwrap().is_none() {
-                break;
-            }
-            assert!(engines.raft.get_value(&key).unwrap().is_none());
-        }
-    }
-    true
-}
-
-fn get_raft_msg_or_default<M: protobuf::Message + Default>(
-    engines: &Engines<RocksEngine, RocksEngine>,
-    key: &[u8],
-) -> M {
-    engines
-        .kv
-        .get_msg_cf(CF_RAFT, key)
-        .unwrap()
-        .unwrap_or_default()
 }
