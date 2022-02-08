@@ -3528,14 +3528,20 @@ where
     ) -> Result<()> {
         let mut passed_merge_fence = false;
         if self.prepare_merge_fence > 0 {
-            if self.get_store().applied_index() >= self.prepare_merge_fence {
+            let applied_index = self.get_store().applied_index();
+            if applied_index >= self.prepare_merge_fence {
                 // Check passed, clear fence and start proposing pessimistic locks and PrepareMerge.
                 self.prepare_merge_fence = 0;
                 self.pending_prepare_merge = None;
                 passed_merge_fence = true;
             } else {
                 self.pending_prepare_merge = Some(mem::take(req));
-                info!("start rejecting new proposals before prepare merge"; "region_id" => self.region_id);
+                info!(
+                    "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
+                    "region_id" => self.region_id,
+                    "applied_index" => applied_index,
+                    "prepare_merge_fence" => self.prepare_merge_fence
+                );
                 return Err(Error::PendingPrepareMerge);
             }
         }
@@ -3616,7 +3622,11 @@ where
                 if self.get_store().applied_index() < last_index {
                     self.prepare_merge_fence = last_index;
                     self.pending_prepare_merge = Some(mem::take(req));
-                    info!("start rejecting new proposals before prepare merge"; "region_id" => self.region_id);
+                    info!(
+                        "start rejecting new proposals before prepare merge";
+                        "region_id" => self.region_id,
+                        "prepare_merge_fence" => last_index
+                    );
                     return Err(Error::PendingPrepareMerge);
                 }
             }
