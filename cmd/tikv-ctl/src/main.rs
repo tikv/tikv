@@ -10,13 +10,8 @@ use encryption_export::{
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
 };
-<<<<<<< HEAD
 use engine_rocks::encryption::get_env;
-use engine_rocks::raw_util::new_engine_opt;
-=======
-use engine_rocks::get_env;
 use engine_rocks::raw_util::{db_exist, new_engine_opt};
->>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
 use engine_rocks::RocksEngine;
 use engine_traits::{
     EncryptionKeyManager, Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK,
@@ -51,17 +46,9 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{process, str, thread, u64};
-<<<<<<< HEAD
-use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::config::canonicalize_sub_path;
-use tikv_util::{escape, unescape};
-=======
-use structopt::StructOpt;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, run_and_wait_child_process, unescape};
->>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
+use tikv_util::{escape, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -158,17 +145,12 @@ fn new_debug_executor(
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
-<<<<<<< HEAD
-        config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
-        let raft_db = RaftLogEngine::new(config);
-=======
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
         if !RaftLogEngine::exists(&config.dir) {
             error!("raft engine not exists: {}", config.dir);
             process::exit(-1);
         }
-        let raft_db = RaftLogEngine::new(config).unwrap();
->>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
+        let raft_db = RaftLogEngine::new(config);
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }
