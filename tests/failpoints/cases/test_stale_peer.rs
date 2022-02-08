@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -12,6 +14,7 @@ use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 use tikv_util::time::Instant;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_one_node_leader_missing() {
@@ -281,7 +284,7 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     cluster.sim.wl().clear_recv_filters(3);
     cluster.partition(vec![1, 3], vec![2, 4]);
 
-    sleep_until_election_triggered(&cluster.cfg);
+    sleep_until_election_triggered(&cluster.cfg.raft_store);
 
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
     must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
