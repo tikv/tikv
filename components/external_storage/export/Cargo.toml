@@ -6,6 +6,7 @@ publish = false
 
 [[bin]]
 name = "tikv-cloud-storage"
+path = "src/bin/tikv-cloud-storage.rs"
 required-features = ["cloud-storage-grpc"]
 
 [lib]
@@ -100,6 +101,7 @@ tokio = { version = "0.2.24", features = ["time"] }
 
 [[example]]
 name = "scli"
+path = "examples/scli.rs"
 
 [target.'cfg(unix)'.dependencies]
 nix = { optional = true, version = "0.11" }
