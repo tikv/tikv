@@ -56,12 +56,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
         let worker = Builder::new()
             .threaded_scheduler()
             .thread_name("advance-ts")
-<<<<<<< HEAD
             .core_threads(1)
-=======
-            .worker_threads(1)
             .enable_time()
->>>>>>> ad2846652... resolved_ts: fix coroutine leaking (#10976)
             .build()
             .unwrap();
         Self {
