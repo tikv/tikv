@@ -541,11 +541,11 @@ where
                     })
                     .await?;
 
-                writer.finish().map(|metas| {
-                    let mut resp = WriteResponse::default();
-                    resp.set_metas(metas.into());
-                    resp
-                })
+                let metas = writer.finish()?;
+                import.verify_checksum(&metas)?;
+                let mut resp = WriteResponse::default();
+                resp.set_metas(metas.into());
+                Ok(resp)
             }
             .await;
             send_rpc_response!(res, sink, label, timer);
