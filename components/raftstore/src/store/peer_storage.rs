@@ -898,6 +898,7 @@ where
                 }
                 let count = ents.len();
                 buf.append(&mut ents);
+                fail_point!("on_async_fetch_return");
                 return Ok(count);
             } else if res.hit_size_limit && max_size <= res.max_size {
                 // async fetch res doesn't cover [low, high) due to hit size limit
