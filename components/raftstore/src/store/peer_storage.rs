@@ -829,7 +829,9 @@ where
         self.async_fetch_results.borrow_mut().remove(&low);
     }
 
-    pub fn set_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
+    // Update the async fetch result.
+    // None indicates cleanning the fetched result.
+    pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
         // If it's in fetching, don't clean the async fetch result.
         if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
             && res.is_none()
@@ -909,7 +911,7 @@ where
                 && res.tried_cnt + 1 == MAX_ASYNC_FETCH_TRY_CNT
             {
                 let mut fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size() as u64);
-                if max_size < fetched_size {
+                if max_size <= fetched_size {
                     limit_size(&mut ents, Some(max_size));
                     let count = ents.len();
                     buf.append(&mut ents);
@@ -2377,7 +2379,7 @@ mod tests {
                 let res = rx.recv().unwrap();
                 match res {
                     SignificantMsg::RaftlogFetched { res, context } => {
-                        store.set_async_fetch_res(lo, Some(res));
+                        store.update_async_fetch_res(lo, Some(res));
                         count += 1;
                         e = store.entries(lo, hi, maxsize, context);
                     }
@@ -2622,7 +2624,7 @@ mod tests {
             if async_res.low != lo {
                 store.clean_async_fetch_res(lo);
             } else {
-                store.set_async_fetch_res(lo, Some(async_res));
+                store.update_async_fetch_res(lo, Some(async_res));
             }
             let mut ents = vec![];
             store.raft_state.mut_hard_state().set_term(term);

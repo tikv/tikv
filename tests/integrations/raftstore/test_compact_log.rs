@@ -84,6 +84,9 @@ fn check_compacted(
     true
 }
 
+// Test the case where cache is compacted when one node down to check
+// if it goes well after the node is back online.
+// It's mainly aimmed to test the async fetch raft log mechanism.
 #[test]
 fn test_node_cache_compact_with_one_node_down() {
     let count = 3;
@@ -136,8 +139,9 @@ fn test_node_cache_compact_with_one_node_down() {
 
     // logs should be replicated to node 1 successfully.
     for i in 1..60 {
-        let key = keys::raft_log_key(1, RAFT_INIT_LOG_INDEX + i);
-        assert!(cluster.engines[&1].raft.get_value(&key).unwrap().is_none());
+        let k = i.to_string().into_bytes();
+        let v = k.clone();
+        must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
     }
 
     for i in 60..200 {
