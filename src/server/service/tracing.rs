@@ -169,7 +169,6 @@ impl RequestTracer {
     }
 }
 
-
 /// Clone the tracer with necessary information for metrics but not the information for
 /// tracing, because the tracing collector is not cloneable.
 impl Clone for RequestTracer {

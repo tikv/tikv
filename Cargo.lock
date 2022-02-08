@@ -2365,13 +2365,13 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/andylokandy/kvproto?branch=duration#a71876501791df68d509ac78906e44bbe675ae01"
+source = "git+https://github.com/pingcap/kvproto.git#58f2ac94aa38f49676dd628fbcc1d669a77a62ac"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
  "protobuf-build",
- "raft-proto 0.6.0",
+ "raft-proto",
 ]
 
 [[package]]
@@ -2618,9 +2618,9 @@ checksum = "dd1d63acd1b78403cc0c325605908475dd9b9a3acbf65ed8bcab97e27014afcf"
 
 [[package]]
 name = "minitrace"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0313823e46be8dde523fac897334b82c28aecda1c376a1855daf7e680d3343b"
+checksum = "8a07fdf302cc0591c97eb45939550ddaddd9962e400c20b319aa16c244cb1f16"
 dependencies = [
  "crossbeam",
  "futures 0.3.15",
@@ -2634,9 +2634,9 @@ dependencies = [
 
 [[package]]
 name = "minitrace-macro"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c055100e79c2048078546d451e635d82ba60f4d74aa4e9d3d6e29aba5857777"
+checksum = "4132dfe6097f4a90c0bbb34be0687c38d14303dd2e74f8442ae80e9bc5a34c47"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -3676,7 +3676,7 @@ dependencies = [
  "fxhash",
  "getset",
  "protobuf",
- "raft-proto 0.7.0",
+ "raft-proto",
  "rand 0.8.3",
  "slog",
  "thiserror",
@@ -3709,17 +3709,6 @@ dependencies = [
  "scopeguard",
  "serde",
  "thiserror",
-]
-
-[[package]]
-name = "raft-proto"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b74f65f886af112d6046c131def44849404757d22f835a0b7ef1aa473e4c96f"
-dependencies = [
- "bytes 1.0.1",
- "protobuf",
- "protobuf-build",
 ]
 
 [[package]]
@@ -3797,7 +3786,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "raft-proto 0.7.0",
+ "raft-proto",
  "rand 0.8.3",
  "resource_metering",
  "serde",
