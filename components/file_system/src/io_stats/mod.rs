@@ -45,9 +45,7 @@ pub use proc::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IOBytes, IOType};
-
-    use strum::EnumCount;
+    use crate::IOType;
 
     #[bench]
     fn bench_fetch_io_bytes(b: &mut test::Bencher) {
