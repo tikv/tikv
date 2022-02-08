@@ -95,6 +95,7 @@ fn test_node_cache_compact_with_one_node_down() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
     cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::millis(100);
     cluster.run();
@@ -124,6 +125,9 @@ fn test_node_cache_compact_with_one_node_down() {
     // wait log gc.
     sleep_ms(500);
 
+    let before = RAFT_ENTRY_FETCHES_VEC
+        .with_label_values(&["async_fetch"])
+        .get();
     cluster.run_node(1).unwrap();
 
     // limit has not reached, should not gc.
@@ -142,6 +146,13 @@ fn test_node_cache_compact_with_one_node_down() {
         let v = k.clone();
         must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
     }
+
+    // sleep a while to make sure the metrics has been flushed.
+    sleep_ms(2000);
+    let after = RAFT_ENTRY_FETCHES_VEC
+        .with_label_values(&["async_fetch"])
+        .get();
+    assert_ne!(before, after);
 
     for i in 60..200 {
         let k = i.to_string().into_bytes();
