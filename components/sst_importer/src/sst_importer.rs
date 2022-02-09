@@ -108,6 +108,10 @@ impl SSTImporter {
         }
     }
 
+    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
+        self.dir.verify_checksum(metas, self.key_manager.clone())
+    }
+
     pub fn exist(&self, meta: &SstMeta) -> bool {
         self.dir.exist(meta).unwrap_or(false)
     }
@@ -644,10 +648,25 @@ impl ImportDir {
         let env = get_encrypted_env(key_manager, None /*base_env*/)?;
         let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
         let sst_reader = RocksSstReader::open_with_env(&path_str, Some(env))?;
-        sst_reader.verify_checksum()?;
         // TODO: check the length and crc32 of ingested file.
         let meta_info = sst_reader.sst_meta_info(meta.to_owned());
         Ok(meta_info)
+    }
+
+    pub fn verify_checksum(
+        &self,
+        metas: &[SstMeta],
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Result<()> {
+        for meta in metas {
+            let path = self.join(meta)?;
+            let path_str = path.save.to_str().unwrap();
+            let env = get_encrypted_env(key_manager.clone(), None /*base_env*/)?;
+            let env = get_inspected_env(Some(env), get_io_rate_limiter())?;
+            let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+            sst_reader.verify_checksum()?;
+        }
+        Ok(())
     }
 
     fn ingest<E: KvEngine>(
@@ -998,7 +1017,6 @@ mod tests {
             let mut f = dir.create(&meta, key_manager.clone()).unwrap();
             f.append(&data).unwrap();
             f.finish().unwrap();
-
             dir.ingest(&[meta.to_owned()], &db, key_manager.clone())
                 .unwrap();
             check_db_range(&db, range);
