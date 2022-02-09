@@ -38,6 +38,7 @@ use raft::{
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
+use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
@@ -3782,11 +3783,28 @@ where
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group.raft.prs();
 
-        let peer = transfer_leader
-            .get_peers()
-            .iter()
-            .max_by_key(|c| prs.get(c.id).map_or(0, |pr| pr.matched))
-            .unwrap_or_else(|| transfer_leader.get_peer());
+        let (_, peers) = transfer_leader.get_peers().iter().fold(
+            (0, vec![]),
+            |(max_matched, mut chosen), peer| {
+                if let Some(pr) = prs.get(peer.id) {
+                    if pr.matched > max_matched {
+                        (pr.matched, vec![peer])
+                    } else if pr.matched == max_matched {
+                        chosen.push(peer);
+                        (max_matched, chosen)
+                    } else {
+                        (max_matched, chosen)
+                    }
+                } else {
+                    (max_matched, chosen)
+                }
+            },
+        );
+        let peer = match peers.len() {
+            0 => transfer_leader.get_peer(),
+            1 => peers.get(0).unwrap(),
+            _ => peers.choose(&mut rand::thread_rng()).unwrap(),
+        };
 
         let transferred = if peer.id == self.peer.id {
             false
