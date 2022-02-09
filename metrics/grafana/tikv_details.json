@@ -20852,6 +20852,14 @@
               "intervalFactor": 1,
               "legendFormat": "failure-{{type}}",
               "refId": "G"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "mvcc-deletion-wasted",
+              "refId": "H"
             }
           ],
           "thresholds": [],
