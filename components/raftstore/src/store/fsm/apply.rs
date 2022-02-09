@@ -1492,11 +1492,7 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put(
-        &mut self,
-        ctx: &mut ApplyContext<EK>,
-        req: &Request,
-    ) -> Result<()> {
+    fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
@@ -1539,11 +1535,7 @@ where
         Ok(())
     }
 
-    fn handle_delete(
-        &mut self,
-        ctx: &mut ApplyContext<EK>,
-        req: &Request,
-    ) -> Result<()> {
+    fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
