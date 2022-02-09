@@ -94,6 +94,12 @@ lazy_static! {
         &["tag"]
     ).unwrap();
 
+    /// Counter of mvcc deletions met in compaction filter.
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_MET: IntCounter: register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_met",
+        "MVCC deletion from compaction filter met"
+    ).unwrap();
+
     /// Counter of mvcc deletions handled in gc worker.
     pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_mvcc_deletion_handled",
@@ -404,6 +410,7 @@ impl WriteCompactionFilter {
                     self.remove_older = true;
                     if self.is_bottommost_level {
                         self.mvcc_deletion_overlaps = Some(0);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_MET.inc();
                     }
                 }
             }
