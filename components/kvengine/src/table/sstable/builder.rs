@@ -1,16 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{mem, slice};
+use std::convert::TryFrom;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
 
 use super::super::table::Value;
 use farmhash;
+use xorf::BinaryFuse8;
 
 pub const CRC32_CASTAGNOLI: u8 = 1;
 pub const PROP_KEY_SMALLEST: &str = "smallest";
 pub const PROP_KEY_BIGGEST: &str = "biggest";
+pub const EXTRA_END: u8 = 255;
+pub const EXTRA_FILTER: u8 = 1;
+pub const EXTRA_FILTER_TYPE_BINARY_FUSE_8: u8 = 1;
 const NO_COMPRESSION: u8 = 0;
 const TABLE_FORMAT: u16 = 1;
 pub const MAGIC_NUMBER: u32 = 2940551257;
@@ -178,11 +183,11 @@ impl Builder {
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_data_section_size = self.old_builder.buf.len() as u32;
 
-        self.block_builder.build_index(base_off, self.checksum_tp);
+        self.block_builder.build_index(base_off, self.checksum_tp, &self.key_hashes);
         data_buf.extend_from_slice(self.block_builder.buf.as_slice());
         let index_section_size = self.block_builder.buf.len() as u32;
         self.old_builder
-            .build_index(base_off + data_section_size, self.checksum_tp);
+            .build_index(base_off + data_section_size, self.checksum_tp, &[]);
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_index_section_size = self.old_builder.buf.len() as u32;
 
@@ -403,7 +408,7 @@ impl BlockBuilder {
         self.block_addrs.truncate(0);
     }
 
-    fn build_index(&mut self, base_off: u32, checksum_tp: u8) {
+    fn build_index(&mut self, base_off: u32, checksum_tp: u8, key_hashes: &[u64]) {
         self.buf.truncate(0);
         let num_blocks = self.block_addrs.len();
         // checksum place holder.
@@ -436,9 +441,25 @@ impl BlockBuilder {
             let block_key = self.block_keys.get_entry(i);
             self.buf.extend_from_slice(&block_key[common_prefix_len..]);
         }
+        if key_hashes.len() > 0 {
+            self.build_filter(key_hashes);
+        }
+        self.buf.push(EXTRA_END);
         if checksum_tp == CRC32_CASTAGNOLI {
             let slice = self.buf.as_mut_slice();
             LittleEndian::write_u32(slice, crc32c::crc32c(&slice[4..]))
+        }
+    }
+
+    fn build_filter(&mut self, key_hashes: &[u64]) {
+        if let Ok(filter) = BinaryFuse8::try_from(key_hashes) {
+            let bin = bincode::serialize(&filter).unwrap();
+            self.buf.push(EXTRA_FILTER);
+            self.buf.push(EXTRA_FILTER_TYPE_BINARY_FUSE_8);
+            self.buf.put_u32_le(bin.len() as u32);
+            self.buf.extend_from_slice(&bin);
+        } else {
+            warn!("failed to build binary fuse 8 filter");
         }
     }
 }

@@ -16,6 +16,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::slice;
 use std::sync::Arc;
+use xorf::{BinaryFuse8, Filter};
 
 #[derive(Clone)]
 pub struct SSTable {
@@ -58,7 +59,12 @@ impl SSTable {
         Box::new(it)
     }
 
-    pub fn get(&self, key: &[u8], version: u64, _key_hash: u64) -> table::Value {
+    pub fn get(&self, key: &[u8], version: u64, key_hash: u64) -> table::Value {
+        if let Some(filter) = self.idx.filter.as_ref() {
+            if !filter.contains(&key_hash) {
+                return table::Value::new();
+            }
+        }
         let mut it = self.new_iterator(false);
         it.seek(key);
         if !it.valid() || key != it.key() {
@@ -233,6 +239,7 @@ pub struct Index {
     block_key_offs: &'static [u32],
     block_addrs: &'static [BlockAddress],
     block_keys: Bytes,
+    filter: Option<Arc<BinaryFuse8>>,
 }
 
 impl Index {
@@ -260,12 +267,34 @@ impl Index {
         let block_key_len = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
         let block_keys = bin.slice(offset..offset + block_key_len);
+        offset += block_key_len;
+        let mut filter = None;
+        while data[offset] != EXTRA_END {
+            let extra_type = data[offset];
+            let extra_sub_type = data[offset+1];
+            offset += 2;
+            let extra_len = LittleEndian::read_u32(&data[offset..]) as usize;
+            offset += 4;
+            let extra_data = &data[offset..offset + extra_len];
+            offset += extra_len;
+            if extra_type == EXTRA_FILTER && extra_sub_type == EXTRA_FILTER_TYPE_BINARY_FUSE_8 {
+                match bincode::deserialize::<BinaryFuse8>(extra_data) {
+                    Ok(binary_fuse) => {
+                        filter = Some(Arc::new(binary_fuse));
+                    }
+                    Err(err) => {
+                        warn!("failed to deserialize BinaryFuse8 {:?}", err);
+                    }
+                }
+            }
+        }
         Ok(Self {
             bin,
             common_prefix,
             block_key_offs,
             block_addrs,
             block_keys,
+            filter,
         })
     }
 
