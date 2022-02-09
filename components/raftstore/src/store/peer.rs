@@ -527,7 +527,7 @@ where
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
-    /// The write fence index .
+    /// The write fence index.
     /// If there are pessimistic locks, PrepareMerge can be proposed after applying to
     /// this index. When a pending PrepareMerge exists, no more write commands should be proposed.
     /// This avoids proposing pessimistic locks that are already deleted before PrepareMerge.
@@ -3526,6 +3526,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
+        // Check existing prepare_merge_fence.
         let mut passed_merge_fence = false;
         if self.prepare_merge_fence > 0 {
             let applied_index = self.get_store().applied_index();
