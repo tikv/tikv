@@ -132,6 +132,12 @@ impl Downstream {
         self.sink_event(change_data_event, force_send)
     }
 
+    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
+        let mut err_event = EventError::default();
+        err_event.mut_region_not_found().region_id = region_id;
+        self.sink_error_event(region_id, err_event)
+    }
+
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
@@ -261,10 +267,8 @@ impl Delegate {
     /// This means the region has met an unrecoverable error for CDC.
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
-        self.handle.stop_observing();
-        self.txn_extra_op.store(TxnExtraOp::Noop);
+        self.stop_observing();
         self.mark_failed();
-        // Stop observe further events.
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
@@ -287,6 +291,11 @@ impl Delegate {
         let _ = self.broadcast(send);
     }
 
+    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's transaction layer to
+    /// determine whether to capture modifications' old value or not. Unsubsribing all downstreams
+    /// or calling `Delegate::stop` will store it with `TxnExtraOp::Noop`.
+    ///
+    /// NOTE: Dropping a `Delegate` won't update this flag.
     pub fn txn_extra_op(&self) -> &AtomicCell<TxnExtraOp> {
         self.txn_extra_op.as_ref()
     }
@@ -713,8 +722,7 @@ impl Delegate {
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
             if self.downstreams.is_empty() {
-                self.handle.stop_observing();
-                self.txn_extra_op.store(TxnExtraOp::Noop);
+                self.stop_observing();
             }
             return Some(downstream);
         }
@@ -743,6 +751,13 @@ impl Delegate {
             return Err(Error::request(e.into()));
         }
         Ok(())
+    }
+
+    fn stop_observing(&self) {
+        // Stop observe further events.
+        self.handle.stop_observing();
+        // To inform transaction layer no more old values are required for the region.
+        self.txn_extra_op.store(TxnExtraOp::Noop);
     }
 }
 

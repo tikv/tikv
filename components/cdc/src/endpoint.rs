@@ -502,30 +502,24 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
 
-        let txn_extra_op = match self.get_txn_extra_op(region_id) {
-            Some(txn_extra_op) => txn_extra_op,
+        // Register must follow OpenConn, so the connection must be available.
+        let conn = self.connections.get_mut(&conn_id).unwrap();
+        downstream.set_sink(conn.get_sink().clone());
+
+        let txn_extra_op = match self.store_meta.lock().unwrap().readers.get(&region_id) {
+            Some(reader) => reader.txn_extra_op.clone(),
             None => {
                 error!("cdc register for a not found region"; "region_id" => region_id);
+                let _ = downstream.sink_region_not_found(region_id);
                 return;
             }
         };
-
-        let conn = match self.connections.get_mut(&conn_id) {
-            Some(conn) => conn,
-            None => {
-                error!("cdc register for a nonexistent connection";
-                    "region_id" => region_id, "conn_id" => ?conn_id);
-                return;
-            }
-        };
-        downstream.set_sink(conn.get_sink().clone());
 
         // Check if the cluster id matches.
         let request_cluster_id = request.get_header().get_cluster_id();
         if version >= FeatureGate::validate_cluster_id() && self.cluster_id != request_cluster_id {
             let mut err_event = EventError::default();
             let mut err = ErrorClusterIdMismatch::default();
-
             err.set_current(self.cluster_id);
             err.set_request(request_cluster_id);
             err_event.set_cluster_id_mismatch(err);
@@ -542,6 +536,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let _ = downstream.sink_error_event(region_id, err_event);
             return;
         }
+
         if !conn.subscribe(region_id, downstream_id, downstream_state) {
             let mut err_event = EventError::default();
             let mut err = ErrorDuplicateRequest::default();
@@ -951,14 +946,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
-    }
-
-    fn get_txn_extra_op(&self, region_id: u64) -> Option<Arc<AtomicCell<TxnExtraOp>>> {
-        let store_meta = self.store_meta.lock().unwrap();
-        if let Some(reader) = store_meta.readers.get(&region_id) {
-            return Some(reader.txn_extra_op.clone());
-        }
-        None
     }
 }
 
