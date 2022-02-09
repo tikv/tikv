@@ -2689,7 +2689,6 @@ where
                 }
             }
         }
-        meta.leaders.remove(&region_id);
 
         true
     }

@@ -1675,7 +1675,7 @@ where
                 }
                 _ => {}
             }
-            self.on_leader_changed(ctx, ss.leader_id, self.term());
+            self.on_leader_changed(ss.leader_id, self.term());
             // TODO: it may possible that only the `leader_id` change and the role
             // didn't change
             ctx.coprocessor_host
@@ -1683,7 +1683,7 @@ where
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
-                self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
+                self.on_leader_changed(self.leader_id(), hs.get_term());
             }
         }
     }
@@ -1746,14 +1746,9 @@ where
         }
     }
 
-    fn on_leader_changed<T>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-        leader_id: u64,
-        term: u64,
-    ) {
+    fn on_leader_changed(&mut self, leader_id: u64, term: u64) {
         debug!(
-            "insert leader info to meta";
+            "update leader info";
             "region_id" => self.region_id,
             "leader_id" => leader_id,
             "term" => term,
@@ -1762,9 +1757,6 @@ where
 
         self.read_progress
             .update_leader_info(leader_id, term, self.region());
-
-        let mut meta = ctx.store_meta.lock().unwrap();
-        meta.leaders.insert(self.region_id, (term, leader_id));
     }
 
     #[inline]
