@@ -94,11 +94,19 @@ lazy_static! {
         &["tag"]
     ).unwrap();
 
+    /// Counter of mvcc deletions handled in gc worker.
     pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_mvcc_deletion_handled",
         "MVCC deletion from compaction filter handled"
     )
     .unwrap();
+
+    /// Mvcc deletions sent to gc worker can have already been cleared, in which case resources are
+    /// wasted to seek them.
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_WASTED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_wasted",
+        "MVCC deletion from compaction filter wasted"
+    ).unwrap();
 }
 
 pub trait CompactionFilterInitializer<EK>

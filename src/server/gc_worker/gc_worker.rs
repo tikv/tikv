@@ -36,7 +36,7 @@ use crate::storage::txn::Error as TxnError;
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::compaction_filter::{
     CompactionFilterInitializer, GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED,
-    GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+    GC_COMPACTION_FILTER_MVCC_DELETION_WASTED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
@@ -308,7 +308,7 @@ where
         keys: Vec<Key>,
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         struct KeysInRegions<R: Iterator<Item = Region>> {
             keys: Peekable<IntoIter<Key>>,
             regions: Peekable<R>,
@@ -362,18 +362,19 @@ where
             // prefix seek here to avoid too many seeks
             MvccReader::new(snapshot, Some(ScanMode::Forward), false)
         };
+
+        let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
-        let mut handled_keys = 0;
         while let Some(ref key) = next_gc_key {
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
+                GC_KEY_FAILURES.inc();
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;
             }
 
             if gc_info.is_completed {
-                handled_keys += 1;
                 if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                     debug!(
                         "GC found plenty versions for a key";
@@ -388,6 +389,12 @@ where
                         "versions" => gc_info.deleted_versions,
                     );
                 }
+
+                if gc_info.found_versions > 0 {
+                    handled_keys += 1;
+                } else {
+                    wasted_keys += 1;
+                }
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
             } else {
@@ -398,7 +405,7 @@ where
             }
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
-        Ok(handled_keys)
+        Ok((handled_keys, wasted_keys))
     }
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
@@ -599,8 +606,9 @@ where
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
                 match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
-                    Ok(c) => {
-                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(c as _);
+                    Ok((handled, wasted)) => {
+                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
                         update_metrics(false);
                     }
                     Err(e) => {
