@@ -132,12 +132,14 @@ impl Lock {
         }
     }
 
+    #[must_use]
     pub fn use_async_commit(mut self, secondaries: Vec<Vec<u8>>) -> Self {
         self.use_async_commit = true;
         self.secondaries = secondaries;
         self
     }
 
+    #[must_use]
     pub fn with_rollback_ts(mut self, rollback_ts: Vec<TimeStamp>) -> Self {
         self.rollback_ts = rollback_ts;
         self
@@ -325,7 +327,7 @@ impl Lock {
 
     /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
     pub fn check_ts_conflict(
-        lock: Cow<Self>,
+        lock: Cow<'_, Self>,
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,
@@ -408,6 +410,10 @@ impl PessimisticLock {
             0,
             self.min_commit_ts,
         )
+    }
+
+    pub fn memory_size(&self) -> usize {
+        self.primary.len() + size_of::<Self>()
     }
 }
 
@@ -846,5 +852,18 @@ mod tests {
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
             for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20) }"
         );
+    }
+
+    #[test]
+    fn test_pessimistic_lock_memory_size() {
+        let lock = PessimisticLock {
+            primary: b"primary".to_vec().into_boxed_slice(),
+            start_ts: 5.into(),
+            ttl: 1000,
+            for_update_ts: 10.into(),
+            min_commit_ts: 20.into(),
+        };
+        // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 4 8-byte integers.
+        assert_eq!(lock.memory_size(), 7 + 16 + 4 * 8);
     }
 }

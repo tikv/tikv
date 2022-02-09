@@ -14,8 +14,8 @@ use crate::storage::kv::FlowStatsReporter;
 use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
+use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::key_prefix::TIDB_RANGES_COMPLEMENT;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
@@ -28,7 +28,7 @@ use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
 use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
+use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
@@ -223,6 +223,11 @@ where
     /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
+        self.system.refresh_config_scheduler()
     }
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the

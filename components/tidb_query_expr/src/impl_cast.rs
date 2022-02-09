@@ -351,7 +351,7 @@ fn cast_string_as_int(
                 match parse_res {
                     Ok(x) => {
                         if !is_str_neg {
-                            if !is_unsigned && x as u64 > std::i64::MAX as u64 {
+                            if !is_unsigned && x as u64 > i64::MAX as u64 {
                                 ctx.warnings
                                     .append_warning(Error::cast_as_signed_overflow())
                             }
@@ -371,9 +371,9 @@ fn cast_string_as_int(
                             let warn_err = Error::truncated_wrong_val("INTEGER", val);
                             ctx.handle_overflow_err(warn_err).map_err(|_| err)?;
                             let val = if is_str_neg {
-                                std::i64::MIN
+                                i64::MIN
                             } else {
-                                std::u64::MAX as i64
+                                u64::MAX as i64
                             };
                             Ok(Some(val))
                         }
@@ -516,12 +516,11 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64;
-            if val.is_empty() {
-                r = 0.0;
+            let r = if val.is_empty() {
+                0.0
             } else {
-                r = val.convert(ctx)?;
-            }
+                val.convert(ctx)?
+            };
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -1558,24 +1557,13 @@ mod tests {
         assert!(r.is_none());
     }
 
+    #[derive(Default)]
     struct CtxConfig {
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
         in_insert_stmt: bool,
         in_update_or_delete_stmt: bool,
-    }
-
-    impl Default for CtxConfig {
-        fn default() -> Self {
-            CtxConfig {
-                overflow_as_warning: false,
-                truncate_as_warning: false,
-                should_clip_to_zero: false,
-                in_insert_stmt: false,
-                in_update_or_delete_stmt: false,
-            }
-        }
     }
 
     impl From<CtxConfig> for EvalContext {
@@ -3254,7 +3242,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input={:?}",
                 input
             );
@@ -3437,7 +3425,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}",
                 input,
                 expected,
@@ -3563,7 +3551,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input={:?}",
                 input
             );
@@ -3610,7 +3598,7 @@ mod tests {
             if let Some(exp) = expected {
                 assert!(output.is_ok(), "input: {:?}", input);
                 assert!(
-                    (output.unwrap().unwrap().into_inner() - exp).abs() < std::f64::EPSILON,
+                    (output.unwrap().unwrap().into_inner() - exp).abs() < f64::EPSILON,
                     "input={:?}",
                     input
                 );
@@ -4936,7 +4924,7 @@ mod tests {
                         overflow_as_warning,
                         truncate_as_warning,
                         warning_err_code,
-                        expect.to_string(),
+                        expect,
                         pd_res_log,
                         cast_func_res_log
                     );
@@ -6168,12 +6156,11 @@ mod tests {
                     Ok(v) => match v {
                         Some(dur) => {
                             if expect_max {
-                                let max_val_str: &str;
-                                if dur.is_neg() {
-                                    max_val_str = "-838:59:59";
+                                let max_val_str = if dur.is_neg() {
+                                    "-838:59:59"
                                 } else {
-                                    max_val_str = "838:59:59";
-                                }
+                                    "838:59:59"
+                                };
                                 let max_expect = Duration::parse(&mut ctx, max_val_str, fsp);
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",

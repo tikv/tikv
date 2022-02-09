@@ -154,6 +154,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
+                req.get_assertion_level(),
                 req.take_context(),
             )
         } else {
@@ -175,6 +176,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.get_max_commit_ts().into(),
                 secondary_keys,
                 req.get_try_one_pc(),
+                req.get_assertion_level(),
                 req.take_context(),
             )
         }

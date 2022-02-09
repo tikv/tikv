@@ -34,7 +34,7 @@ pub fn to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
             "BINARY",
             BinaryLiteral(bytes.to_owned()).to_string(),
         ))?;
-        return Ok(std::u64::MAX);
+        return Ok(u64::MAX);
     }
     let val = bytes.iter().fold(0, |acc, x| acc << 8 | (u64::from(*x)));
     Ok(val)

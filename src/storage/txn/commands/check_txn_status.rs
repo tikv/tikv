@@ -64,7 +64,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
     /// the `current_ts` is literally the timestamp when this function is invoked; it may not be
     /// accurate.
-    fn process_write(self, snapshot: S, mut context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut new_max_ts = self.lock_ts;
         if !self.current_ts.is_max() && self.current_ts > new_max_ts {
             new_max_ts = self.current_ts;
@@ -76,8 +76,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(self.lock_ts, snapshot, !self.ctx.get_not_fill_cache()),
-            &mut context.statistics,
+            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx),
+            context.statistics,
         );
 
         fail_point!("check_txn_status", |err| Err(
@@ -928,6 +928,8 @@ pub mod tests {
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
             false,
+            kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         must_success(
             &engine,
@@ -1050,6 +1052,8 @@ pub mod tests {
             /* min_commit_ts */ TimeStamp::zero(),
             /* max_commit_ts */ TimeStamp::zero(),
             false,
+            kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         must_success(
             &engine,

@@ -43,6 +43,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `true`.
     #[inline]
+    #[must_use]
     pub fn multi(mut self, multi: bool) -> Self {
         self.multi = multi;
         self
@@ -52,6 +53,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `true`.
     #[inline]
+    #[must_use]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.fill_cache = fill_cache;
         self
@@ -64,6 +66,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `false`.
     #[inline]
+    #[must_use]
     pub fn omit_value(mut self, omit_value: bool) -> Self {
         self.omit_value = omit_value;
         self
@@ -73,6 +76,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to `IsolationLevel::Si`.
     #[inline]
+    #[must_use]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
         self
@@ -82,6 +86,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to none.
     #[inline]
+    #[must_use]
     pub fn bypass_locks(mut self, locks: TsSet) -> Self {
         self.bypass_locks = locks;
         self
@@ -91,6 +96,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to none.
     #[inline]
+    #[must_use]
     pub fn access_locks(mut self, locks: TsSet) -> Self {
         self.access_locks = locks;
         self
@@ -101,6 +107,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Default is false.
     #[inline]
+    #[must_use]
     pub fn check_has_newer_ts_data(mut self, enabled: bool) -> Self {
         self.check_has_newer_ts_data = enabled;
         self
@@ -294,6 +301,7 @@ impl<S: Snapshot> PointGetter<S> {
             match write.write_type {
                 WriteType::Put => {
                     self.statistics.write.processed_keys += 1;
+                    resource_metering::record_read_keys(1);
 
                     if self.omit_value {
                         return Ok(Some(vec![]));
@@ -400,6 +408,7 @@ mod tests {
         must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
         must_prewrite_put, must_prewrite_put_impl, must_rollback,
     };
+    use kvproto::kvrpcpb::{Assertion, AssertionLevel};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1082,6 +1091,8 @@ mod tests {
             100.into(), /* min_commit_ts */
             TimeStamp::default(),
             false,
+            Assertion::None,
+            AssertionLevel::Off,
         );
         must_get_value(&mut build_getter(85, vec![], vec![80]), key, val);
         must_rollback(&engine, key, 80, false);

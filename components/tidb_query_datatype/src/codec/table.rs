@@ -658,8 +658,7 @@ mod tests {
         let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
-        let mut datums: HashMap<_, _>;
-        datums = cut_row_as_owned(&bs, &col_id_set);
+        let mut datums: HashMap<_, _> = cut_row_as_owned(&bs, &col_id_set);
         assert_eq!(col_encoded, datums);
 
         cols.insert(4, FieldTypeTp::Float.into());

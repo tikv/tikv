@@ -14,7 +14,6 @@ use tokio::time::Instant;
 #[test]
 pub fn test_enable() {
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: false,
         receiver_address: "".to_string(),
         report_receiver_interval: ReadableDuration::millis(2500),
         max_resource_groups: 5000,
@@ -28,46 +27,37 @@ pub fn test_enable() {
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
-    // | Address | Enabled |
-    // |   x     |    o    |
-    test_suite.cfg_enabled(true);
+    // | Address |
+    // |   x     |
     sleep(Duration::from_millis(3000));
     assert!(test_suite.nonblock_receiver_all().is_empty());
 
-    // | Address | Enabled |
-    // |   o     |    o    |
+    // | Address |
+    // |   o     |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
     let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
 
-    // | Address | Enabled |
-    // |   x     |    o    |
+    // | Address |
+    // |   x     |
     test_suite.cfg_receiver_address("");
     test_suite.flush_receiver();
     sleep(Duration::from_millis(3000));
     assert!(test_suite.nonblock_receiver_all().is_empty());
 
-    // | Address | Enabled |
-    // |   o     |    o    |
+    // | Address |
+    // |   o     |
     test_suite.cfg_receiver_address(format!("127.0.0.1:{}", port));
     let res = test_suite.block_receive_one();
     assert!(res.contains_key("req-1"));
     assert!(res.contains_key("req-2"));
-
-    // | Address | Enabled |
-    // |   o     |    x    |
-    test_suite.cfg_enabled(false);
-    test_suite.flush_receiver();
-    sleep(Duration::from_millis(3000));
-    assert!(test_suite.nonblock_receiver_all().is_empty());
 }
 
 #[test]
 pub fn test_report_interval() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
@@ -103,11 +93,10 @@ pub fn test_report_interval() {
 pub fn test_max_resource_groups() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
-        report_receiver_interval: ReadableDuration::secs(3),
+        report_receiver_interval: ReadableDuration::secs(4),
         max_resource_groups: 5000,
-        precision: ReadableDuration::secs(1),
+        precision: ReadableDuration::secs(2),
     });
     test_suite.start_receiver_at(port);
 
@@ -147,7 +136,6 @@ pub fn test_max_resource_groups() {
 pub fn test_precision() {
     let port = alloc_port();
     let mut test_suite = TestSuite::new(resource_metering::Config {
-        enabled: true,
         receiver_address: format!("127.0.0.1:{}", port),
         report_receiver_interval: ReadableDuration::secs(3),
         max_resource_groups: 5000,
@@ -185,6 +173,6 @@ pub fn test_precision() {
         next_secs
     }) {
         let diff = r - l;
-        assert!(2 <= diff && diff <= 4);
+        assert!((2..=4).contains(&diff));
     }
 }

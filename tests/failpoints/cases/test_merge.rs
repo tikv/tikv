@@ -1302,3 +1302,52 @@ fn test_merge_election_and_restart() {
     // If logs from different term are process correctly, store 2 should have latest updates.
     must_get_equal(&cluster.get_engine(2), b"k14", b"v14");
 }
+
+/// Testing that the source peer's read delegate should not be removed by the target peer
+/// and only removed when the peer is destroyed
+#[test]
+fn test_source_peer_read_delegate_after_apply() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_split(&cluster.get_region(b""), b"k2");
+    let target = cluster.get_region(b"k1");
+    let source = cluster.get_region(b"k3");
+
+    cluster.must_transfer_leader(target.get_id(), find_peer(&target, 1).unwrap().to_owned());
+
+    let on_destroy_peer_fp = "destroy_peer";
+    fail::cfg(on_destroy_peer_fp, "pause").unwrap();
+
+    // Merge finish means the leader of the target region have call `on_ready_commit_merge`
+    pd_client.must_merge(source.get_id(), target.get_id());
+
+    // The source peer's `ReadDelegate` should not be removed yet and mark as `pending_remove`
+    assert!(
+        cluster.store_metas[&1]
+            .lock()
+            .unwrap()
+            .readers
+            .get(&source.get_id())
+            .unwrap()
+            .pending_remove
+    );
+
+    fail::remove(on_destroy_peer_fp);
+    // Wait for source peer is destroyed
+    sleep_ms(100);
+
+    assert!(
+        cluster.store_metas[&1]
+            .lock()
+            .unwrap()
+            .readers
+            .get(&source.get_id())
+            .is_none()
+    );
+}

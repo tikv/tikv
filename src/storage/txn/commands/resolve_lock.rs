@@ -63,17 +63,13 @@ impl CommandExt for ResolveLock {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
-    fn process_write(
-        mut self,
-        snapshot: S,
-        mut context: WriteContext<'_, L>,
-    ) -> Result<WriteResult> {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(TimeStamp::zero(), snapshot, !ctx.get_not_fill_cache()),
-            &mut context.statistics,
+            SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx),
+            context.statistics,
         );
 
         let mut scan_key = self.scan_key.take();

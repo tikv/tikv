@@ -59,11 +59,13 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         }
     }
 
+    #[must_use]
     pub fn config(mut self, config: Config) -> Self {
         self.config = Some(config);
         self
     }
 
+    #[must_use]
     pub fn gc_config(mut self, gc_config: GcConfig) -> Self {
         self.gc_config = Some(gc_config);
         self
@@ -129,17 +131,17 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn get(
         &self,
         ctx: Context,
-        key: Vec<u8>,
+        key: &Key,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Option<Value>, KvGetStatistics)> {
-        block_on(self.store.get(ctx, key, start_ts.into()))
+        block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
     }
 
     #[allow(dead_code)]
     pub fn batch_get(
         &self,
         ctx: Context,
-        keys: &[Vec<u8>],
+        keys: &[Key],
         start_ts: impl Into<TimeStamp>,
     ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
@@ -154,8 +156,8 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<Vec<Option<Vec<u8>>>> {
         let mut ids = vec![];
         let requests: Vec<GetRequest> = keys
-            .to_owned()
-            .into_iter()
+            .iter()
+            .copied()
             .map(|key| {
                 let mut req = GetRequest::default();
                 req.set_context(ctx.clone());
@@ -180,8 +182,8 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn scan(
         &self,
         ctx: Context,
-        start_key: Vec<u8>,
-        end_key: Option<Vec<u8>>,
+        start_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         key_only: bool,
         start_ts: impl Into<TimeStamp>,
@@ -201,8 +203,8 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn reverse_scan(
         &self,
         ctx: Context,
-        start_key: Vec<u8>,
-        end_key: Option<Vec<u8>>,
+        start_key: Key,
+        end_key: Option<Key>,
         limit: usize,
         key_only: bool,
         start_ts: impl Into<TimeStamp>,
@@ -277,8 +279,8 @@ impl<E: Engine> SyncTestStorage<E> {
         &self,
         ctx: Context,
         max_ts: impl Into<TimeStamp>,
-        start_key: Option<Vec<u8>>,
-        end_key: Option<Vec<u8>>,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
         block_on(
@@ -325,8 +327,8 @@ impl<E: Engine> SyncTestStorage<E> {
     pub fn delete_range(
         &self,
         ctx: Context,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
+        start_key: Key,
+        end_key: Key,
         notify_only: bool,
     ) -> Result<()> {
         wait_op!(|cb| self

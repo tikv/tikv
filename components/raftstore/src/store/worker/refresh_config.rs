@@ -21,7 +21,6 @@ where
     C: Fsm,
     H: HandlerBuilder<N, C>,
 {
-    #[allow(dead_code)]
     pub fn new(router: BatchRouter<N, C>, state: PoolState<N, C, H>) -> Self {
         PoolController { router, state }
     }
@@ -57,7 +56,6 @@ where
                 handler,
                 max_batch_size: self.state.max_batch_size,
                 reschedule_duration: self.state.reschedule_duration,
-                before_pause_wait: self.state.before_pause_wait,
                 joinable_workers: Some(Arc::clone(&self.state.joinable_workers)),
             };
             let props = tikv_util::thread_group::current_properties();
@@ -106,20 +104,18 @@ where
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ThreadPool {
     Store,
     Apply,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum Task {
     ScalePool(ThreadPool, usize),
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self {
             Task::ScalePool(pool, size) => {
                 write!(f, "Scale pool ")?;
@@ -150,7 +146,6 @@ where
     AH: HandlerBuilder<ApplyFsm<EK>, ControlFsm>,
     RH: HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>>,
 {
-    #[allow(dead_code)]
     pub fn new(
         apply_router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,

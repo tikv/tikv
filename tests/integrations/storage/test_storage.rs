@@ -11,7 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
-use engine_traits::{key_prefix, CF_DEFAULT, CF_LOCK};
+use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
@@ -151,11 +151,18 @@ fn test_txn_store_scan() {
     store.put_ok(b"E", b"E10", 5, 10);
 
     let check_v10 = || {
-        store.scan_ok(b"", 0, 10, vec![]);
-        store.scan_ok(b"", 1, 10, vec![Some((b"A", b"A10"))]);
-        store.scan_ok(b"", 2, 10, vec![Some((b"A", b"A10")), Some((b"C", b"C10"))]);
+        store.scan_ok(b"", None, 0, 10, vec![]);
+        store.scan_ok(b"", None, 1, 10, vec![Some((b"A", b"A10"))]);
         store.scan_ok(
             b"",
+            None,
+            2,
+            10,
+            vec![Some((b"A", b"A10")), Some((b"C", b"C10"))],
+        );
+        store.scan_ok(
+            b"",
+            None,
             3,
             10,
             vec![
@@ -166,6 +173,7 @@ fn test_txn_store_scan() {
         );
         store.scan_ok(
             b"",
+            None,
             4,
             10,
             vec![
@@ -176,6 +184,7 @@ fn test_txn_store_scan() {
         );
         store.scan_ok(
             b"A",
+            None,
             3,
             10,
             vec![
@@ -186,17 +195,19 @@ fn test_txn_store_scan() {
         );
         store.scan_ok(
             b"A\x00",
+            None,
             3,
             10,
             vec![Some((b"C", b"C10")), Some((b"E", b"E10"))],
         );
         store.scan_ok(
             b"C",
+            None,
             4,
             10,
             vec![Some((b"C", b"C10")), Some((b"E", b"E10"))],
         );
-        store.scan_ok(b"F", 1, 10, vec![]);
+        store.scan_ok(b"F", None, 1, 10, vec![]);
     };
     check_v10();
 
@@ -207,6 +218,7 @@ fn test_txn_store_scan() {
     let check_v20 = || {
         store.scan_ok(
             b"",
+            None,
             5,
             20,
             vec![
@@ -219,6 +231,7 @@ fn test_txn_store_scan() {
         );
         store.scan_ok(
             b"C",
+            None,
             5,
             20,
             vec![
@@ -227,7 +240,7 @@ fn test_txn_store_scan() {
                 Some((b"E", b"E10")),
             ],
         );
-        store.scan_ok(b"D\x00", 1, 20, vec![Some((b"E", b"E10"))]);
+        store.scan_ok(b"D\x00", None, 1, 20, vec![Some((b"E", b"E10"))]);
     };
     check_v10();
     check_v20();
@@ -239,6 +252,7 @@ fn test_txn_store_scan() {
     let check_v30 = || {
         store.scan_ok(
             b"",
+            None,
             5,
             30,
             vec![
@@ -247,8 +261,8 @@ fn test_txn_store_scan() {
                 Some((b"E", b"E10")),
             ],
         );
-        store.scan_ok(b"A", 1, 30, vec![Some((b"B", b"B20"))]);
-        store.scan_ok(b"C\x00", 5, 30, vec![Some((b"E", b"E10"))]);
+        store.scan_ok(b"A", None, 1, 30, vec![Some((b"B", b"B20"))]);
+        store.scan_ok(b"C\x00", None, 5, 30, vec![Some((b"E", b"E10"))]);
     };
     check_v10();
     check_v20();
@@ -262,6 +276,7 @@ fn test_txn_store_scan() {
     let check_v40 = || {
         store.scan_ok(
             b"",
+            None,
             5,
             40,
             vec![
@@ -272,6 +287,7 @@ fn test_txn_store_scan() {
         );
         store.scan_ok(
             b"",
+            None,
             5,
             100,
             vec![
@@ -297,16 +313,18 @@ fn test_txn_store_reverse_scan() {
     store.put_ok(b"E", b"E10", 5, 10);
 
     let check_v10 = || {
-        store.reverse_scan_ok(b"Z", 0, 10, vec![]);
-        store.reverse_scan_ok(b"Z", 1, 10, vec![Some((b"E", b"E10"))]);
+        store.reverse_scan_ok(b"Z", None, 0, 10, vec![]);
+        store.reverse_scan_ok(b"Z", None, 1, 10, vec![Some((b"E", b"E10"))]);
         store.reverse_scan_ok(
             b"Z",
+            None,
             2,
             10,
             vec![Some((b"E", b"E10")), Some((b"C", b"C10"))],
         );
         store.reverse_scan_ok(
             b"Z",
+            None,
             3,
             10,
             vec![
@@ -317,6 +335,7 @@ fn test_txn_store_reverse_scan() {
         );
         store.reverse_scan_ok(
             b"Z",
+            None,
             4,
             10,
             vec![
@@ -327,6 +346,7 @@ fn test_txn_store_reverse_scan() {
         );
         store.reverse_scan_ok(
             b"E\x00",
+            None,
             3,
             10,
             vec![
@@ -337,11 +357,12 @@ fn test_txn_store_reverse_scan() {
         );
         store.reverse_scan_ok(
             b"E",
+            None,
             3,
             10,
             vec![Some((b"C", b"C10")), Some((b"A", b"A10"))],
         );
-        store.reverse_scan_ok(b"", 1, 10, vec![]);
+        store.reverse_scan_ok(b"", None, 1, 10, vec![]);
     };
     check_v10();
 
@@ -352,6 +373,7 @@ fn test_txn_store_reverse_scan() {
     let check_v20 = || {
         store.reverse_scan_ok(
             b"Z",
+            None,
             5,
             20,
             vec![
@@ -364,11 +386,12 @@ fn test_txn_store_reverse_scan() {
         );
         store.reverse_scan_ok(
             b"C",
+            None,
             5,
             20,
             vec![Some((b"B", b"B20")), Some((b"A", b"A10"))],
         );
-        store.reverse_scan_ok(b"D\x00", 1, 20, vec![Some((b"D", b"D20"))]);
+        store.reverse_scan_ok(b"D\x00", None, 1, 20, vec![Some((b"D", b"D20"))]);
     };
     check_v10();
     check_v20();
@@ -380,6 +403,7 @@ fn test_txn_store_reverse_scan() {
     let check_v30 = || {
         store.reverse_scan_ok(
             b"Z",
+            None,
             5,
             30,
             vec![
@@ -388,8 +412,8 @@ fn test_txn_store_reverse_scan() {
                 Some((b"B", b"B20")),
             ],
         );
-        store.reverse_scan_ok(b"E", 1, 30, vec![Some((b"C", b"C10"))]);
-        store.reverse_scan_ok(b"B\x00", 5, 30, vec![Some((b"B", b"B20"))]);
+        store.reverse_scan_ok(b"E", None, 1, 30, vec![Some((b"C", b"C10"))]);
+        store.reverse_scan_ok(b"B\x00", None, 5, 30, vec![Some((b"B", b"B20"))]);
     };
     check_v10();
     check_v20();
@@ -403,6 +427,7 @@ fn test_txn_store_reverse_scan() {
     let check_v40 = || {
         store.reverse_scan_ok(
             b"Z",
+            None,
             5,
             40,
             vec![
@@ -413,6 +438,7 @@ fn test_txn_store_reverse_scan() {
         );
         store.reverse_scan_ok(
             b"E",
+            None,
             5,
             100,
             vec![Some((b"D", b"D40")), Some((b"C", b"C40"))],
@@ -430,7 +456,7 @@ fn test_txn_store_scan_key_only() {
     store.put_ok(b"A", b"A", 5, 10);
     store.put_ok(b"B", b"B", 5, 10);
     store.put_ok(b"C", b"C", 5, 10);
-    store.scan_key_only_ok(b"AA", 2, 10, vec![Some(b"B"), Some(b"C")]);
+    store.scan_key_only_ok(b"AA", None, 2, 10, vec![Some(b"B"), Some(b"C")]);
 }
 
 fn lock(key: &[u8], primary: &[u8], ts: u64) -> LockInfo {
@@ -473,6 +499,7 @@ fn test_txn_store_scan_lock() {
     // scan should return locks.
     store.scan_ok(
         b"",
+        None,
         10,
         15,
         vec![Some((b"k1", b"v1")), None, None, None, None],
@@ -875,16 +902,20 @@ fn test_txn_store_write_conflict() {
 }
 
 const TIDB_KEY_CASE: &[u8] = b"t_a";
-const TXN_KEY_CASE: &[u8] = &[key_prefix::TXN_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'a'];
-const RAW_KEY_CASE_Z: &[u8] = &[key_prefix::RAW_KEY_PREFIX, 0, b'z'];
+const TXN_KEY_CASE: &[u8] = b"x\0_a";
+const RAW_KEY_CASE: &[u8] = b"r\0_a";
 
+// Test API version verification for txnkv requests.
+// See the following for detail:
+//   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
         // storage api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
         // storage api_version = V1ttl, allow RawKV request only.
         (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
         // storage api_version = V1, reject V2 request.
@@ -893,6 +924,7 @@ fn test_txn_store_txnkv_api_version() {
         // backward compatible for TiDB request, and TiDB request only.
         (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
         // V2 api validation.
         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, true),
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, false),
@@ -903,6 +935,11 @@ fn test_txn_store_txnkv_api_version() {
         let mut store = AssertionStorage::new(storage_api_version);
         store.ctx.set_api_version(req_api_version);
 
+        let mut end_key = key.to_vec();
+        if let Some(end_key) = end_key.last_mut() {
+            *end_key = 0xff;
+        }
+
         if is_legal {
             store.get_none(key, 10);
             store.put_ok(key, b"x", 5, 10);
@@ -912,8 +949,8 @@ fn test_txn_store_txnkv_api_version() {
             store.batch_get_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
             store.batch_get_command_ok(&[key, key, key], 10, vec![b"x", b"x", b"x"]);
 
-            store.scan_ok(key, 100, 10, vec![Some((key, b"x"))]);
-            store.scan_locks_ok(20, key, b"", 10, vec![]);
+            store.scan_ok(key, Some(&end_key), 100, 10, vec![Some((key, b"x"))]);
+            store.scan_locks_ok(20, key, &end_key, 10, vec![]);
 
             store.delete_range_ok(key, key);
         } else {
@@ -922,28 +959,37 @@ fn test_txn_store_txnkv_api_version() {
             store.batch_get_err(&[key, key, key], 10);
             store.batch_get_command_err(&[key, key, key], 10);
 
-            store.scan_err(key, 100, 10);
-            store.scan_locks_err(20, key, b"", 10);
+            store.scan_err(key, None, 100, 10);
+            store.scan_locks_err(20, key, &end_key, 10);
 
             store.delete_range_err(key, key);
         }
     }
 }
 
+// Test API version verification for rawkv requests.
+// See the following for detail:
+//   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![
         // storage api_version = V1|V1ttl, for backward compatible.
+        (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
+        (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, RAW_KEY_CASE, true),
         (ApiVersion::V1ttl, ApiVersion::V1, RAW_KEY_CASE, true),
         // storage api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, RAW_KEY_CASE, false),
         // storage api_version = V2.
-        // backward compatible for TiDB request, and TiDB request only.
+        // backward compatible for TiDB request, and TiDB (txnkv) request only.
+        (ApiVersion::V2, ApiVersion::V1, TIDB_KEY_CASE, false),
+        (ApiVersion::V2, ApiVersion::V1, TXN_KEY_CASE, false),
         (ApiVersion::V2, ApiVersion::V1, RAW_KEY_CASE, false),
         // V2 api validation.
         (ApiVersion::V2, ApiVersion::V2, TXN_KEY_CASE, false),
         (ApiVersion::V2, ApiVersion::V2, RAW_KEY_CASE, true),
+        (ApiVersion::V2, ApiVersion::V2, TIDB_KEY_CASE, false),
     ];
 
     let cf = "";
@@ -952,12 +998,17 @@ fn test_txn_store_rawkv_api_version() {
         let mut store = AssertionStorage::new(storage_api_version);
         store.ctx.set_api_version(req_api_version);
 
+        let mut end_key = key.to_vec();
+        if let Some(end_key) = end_key.last_mut() {
+            *end_key = 0xff;
+        }
+
         let mut range = KeyRange::default();
         range.set_start_key(key.to_vec());
 
-        let mut range_raw_z = KeyRange::default();
-        range_raw_z.set_start_key(key.to_vec());
-        range_raw_z.set_end_key(RAW_KEY_CASE_Z.to_vec());
+        let mut range_bounded = KeyRange::default();
+        range_bounded.set_start_key(key.to_vec());
+        range_bounded.set_end_key(end_key.clone());
 
         if is_legal {
             store.raw_get_ok(cf.to_owned(), key.to_vec(), None);
@@ -987,13 +1038,13 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_scan_ok(
                 cf.to_owned(),
                 key.to_vec(),
-                Some(RAW_KEY_CASE_Z.to_vec()),
+                Some(end_key.clone()),
                 100,
                 vec![(key, b"value")],
             );
             store.raw_batch_scan_ok(
                 cf.to_owned(),
-                vec![range_raw_z.clone()],
+                vec![range_bounded.clone()],
                 100,
                 vec![(key, b"value")],
             );
@@ -1034,9 +1085,13 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_batch_delete_atomic_ok(cf.to_owned(), vec![key.to_vec()]);
             store.raw_batch_put_atomic_ok(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            if let ApiVersion::V2 = storage_api_version {
-                store.raw_checksum_ok(vec![range_raw_z.clone()], (0x2D6EE02DA4C9FDA, 1, 8));
-            }
+            let mut digest = crc64fast::Digest::new();
+            digest.write(key);
+            digest.write(b"value");
+            store.raw_checksum_ok(
+                vec![range_bounded.clone()],
+                (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
+            );
         } else {
             store.raw_get_err(cf.to_owned(), key.to_vec());
             if !matches!(storage_api_version, ApiVersion::V1) {
@@ -1053,13 +1108,8 @@ fn test_txn_store_rawkv_api_version() {
 
             store.raw_batch_put_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            store.raw_scan_err(
-                cf.to_owned(),
-                key.to_vec(),
-                Some(RAW_KEY_CASE_Z.to_vec()),
-                100,
-            );
-            store.raw_batch_scan_err(cf.to_owned(), vec![range_raw_z.clone()], 100);
+            store.raw_scan_err(cf.to_owned(), key.to_vec(), Some(end_key.clone()), 100);
+            store.raw_batch_scan_err(cf.to_owned(), vec![range_bounded.clone()], 100);
 
             store.raw_compare_and_swap_atomic_err(
                 cf.to_owned(),
@@ -1071,9 +1121,7 @@ fn test_txn_store_rawkv_api_version() {
             store.raw_batch_delete_atomic_err(cf.to_owned(), vec![key.to_vec()]);
             store.raw_batch_put_atomic_err(cf.to_owned(), vec![(key.to_vec(), b"value".to_vec())]);
 
-            if let ApiVersion::V2 = storage_api_version {
-                store.raw_checksum_err(vec![range_raw_z.clone()]);
-            }
+            store.raw_checksum_err(vec![range_bounded.clone()]);
         }
     }
 }
@@ -1100,7 +1148,7 @@ fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Re
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let number: i32 = match store.get(Context::default(), key.to_vec(), start_ts) {
+        let number: i32 = match store.get(Context::default(), &key_address, start_ts) {
             Ok((Some(x), ..)) => String::from_utf8(x).unwrap().parse().unwrap(),
             Ok((None, ..)) => 0,
             Err(_) => {
@@ -1180,11 +1228,10 @@ fn format_key(x: usize) -> Vec<u8> {
 fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
-        let raw_keys: Vec<Vec<u8>> = (0..n).map(format_key).collect();
-        let keys: Vec<Key> = raw_keys.iter().map(|x| Key::from_raw(&x)).collect();
+        let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();
         let mut mutations = vec![];
-        for (k, raw_key) in raw_keys.into_iter().take(n).enumerate() {
-            let number = match store.get(Context::default(), raw_key, start_ts) {
+        for key in keys.iter().take(n) {
+            let number = match store.get(Context::default(), key, start_ts) {
                 Ok((Some(n), ..)) => String::from_utf8(n).unwrap().parse().unwrap(),
                 Ok((None, ..)) => 0,
                 Err(_) => {
@@ -1194,7 +1241,7 @@ fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -
             };
             let next = number + 1;
             mutations.push(Mutation::make_put(
-                keys[k].clone(),
+                key.clone(),
                 next.to_string().into_bytes(),
             ));
         }
