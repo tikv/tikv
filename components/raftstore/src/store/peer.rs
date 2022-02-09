@@ -3783,23 +3783,24 @@ where
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group.raft.prs();
 
-        let (_, peers) = transfer_leader.get_peers().iter().fold(
-            (0, vec![]),
-            |(max_matched, mut chosen), peer| {
+        let (_, peers) = transfer_leader
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.id != self.peer.id)
+            .fold((0, vec![]), |(max_matched, mut chosen), peer| {
                 if let Some(pr) = prs.get(peer.id) {
-                    if pr.matched > max_matched {
-                        (pr.matched, vec![peer])
-                    } else if pr.matched == max_matched {
-                        chosen.push(peer);
-                        (max_matched, chosen)
-                    } else {
-                        (max_matched, chosen)
+                    match pr.matched.cmp(&max_matched) {
+                        cmp::Ordering::Greater => (pr.matched, vec![peer]),
+                        cmp::Ordering::Equal => {
+                            chosen.push(peer);
+                            (max_matched, chosen)
+                        }
+                        cmp::Ordering::Less => (max_matched, chosen),
                     }
                 } else {
                     (max_matched, chosen)
                 }
-            },
-        );
+            });
         let peer = match peers.len() {
             0 => transfer_leader.get_peer(),
             1 => peers.get(0).unwrap(),
