@@ -256,6 +256,9 @@ impl Recorder {
             if sample.key.is_empty() {
                 continue;
             }
+            LOAD_BASE_SPLIT_EVENT
+                .with_label_values(&["sample_key"])
+                .inc();
             let sampled = sample.contained + sample.left + sample.right;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
                 LOAD_BASE_SPLIT_EVENT
@@ -294,6 +297,9 @@ impl Recorder {
             }
         }
         if best_index >= 0 {
+            LOAD_BASE_SPLIT_EVENT
+                .with_label_values(&["prepare_to_split"])
+                .inc();
             return samples[best_index as usize].key.clone();
         }
         return vec![];
@@ -436,8 +442,6 @@ impl AutoSplitController {
                 continue;
             }
 
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
-
             let num = self.cfg.detect_times;
             let recorder = self
                 .recorders
@@ -462,9 +466,6 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
-                    LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&["prepare_to_split"])
-                        .inc();
                     info!(
                         "load base split region";
                         "region_id"=>region_id,
@@ -472,12 +473,7 @@ impl AutoSplitController {
                     );
                 }
                 self.recorders.remove(&region_id);
-            } else {
-                LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_fit_key"])
-                    .inc();
             }
-
             top.push(qps);
         }
 
