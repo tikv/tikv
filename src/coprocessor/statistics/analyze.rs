@@ -499,7 +499,7 @@ impl BaseRowSampleCollector {
                     continue;
                 }
                 has_null = false;
-                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64
+                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
             // We only maintain the null count for single column case.
             if has_null && offsets.len() == 1 {
@@ -535,7 +535,7 @@ impl BaseRowSampleCollector {
             } else {
                 self.fm_sketches[i].insert(&columns_val[i]);
             }
-            self.total_sizes[i] += columns_val[i].len() as i64;
+            self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
     }
 
@@ -1043,7 +1043,7 @@ impl SampleCollector {
         if let Some(c) = self.cm_sketch.as_mut() {
             c.insert(&data);
         }
-        self.total_size += data.len() as u64;
+        self.total_size += data.len() as u64 - 1;
         if self.samples.len() < self.max_sample_size {
             self.samples.push(data);
             return;
@@ -1188,7 +1188,7 @@ mod tests {
         assert_eq!(sample.null_count, 1);
         assert_eq!(sample.count, 3);
         assert_eq!(sample.cm_sketch.unwrap().count(), 3);
-        assert_eq!(sample.total_size, 6)
+        assert_eq!(sample.total_size, 3)
     }
 
     #[test]

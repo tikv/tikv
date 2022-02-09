@@ -1492,7 +1492,12 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_put(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+    ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1534,7 +1539,12 @@ where
         Ok(())
     }
 
-    fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_delete(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+    ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1584,6 +1594,7 @@ where
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
@@ -1655,6 +1666,7 @@ where
         req: &Request,
         ssts: &mut Vec<SSTMetaInfo>,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {

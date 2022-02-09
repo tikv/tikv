@@ -11,10 +11,28 @@ PR Title Format:
 -->
 
 ### What is changed and how it works?
+<!--
 
-Close #xxx <!-- Associate issue that describes the problem the PR tries to solve. -->
+Please create an issue first to describe the problem.
+
+There MUST be one line starting with "Issue Number:  " and 
+linking the relevant issues via the "close" or "ref".
+
+For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#linking-issues.
+
+-->
+Issue Number: Close #xxx
 
 What's Changed:
+
+<!--
+
+You could use "commit message" code block to add more description to the final commit message.
+For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#format-of-the-commit-message.
+
+-->
+```commit-message
+```
 
 ### Related changes
 

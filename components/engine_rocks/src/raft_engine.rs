@@ -59,7 +59,7 @@ impl RaftEngineReadOnly for RocksEngine {
             return Ok(count);
         }
 
-        let (mut check_compacted, mut next_index) = (true, low);
+        let (mut check_compacted, mut compacted, mut next_index) = (true, false, low);
         let start_key = keys::raft_log_key(region_id, low);
         let end_key = keys::raft_log_key(region_id, high);
         self.scan(
@@ -72,6 +72,7 @@ impl RaftEngineReadOnly for RocksEngine {
 
                 if check_compacted {
                     if entry.get_index() != low {
+                        compacted = true;
                         // May meet gap or has been compacted.
                         return Ok(false);
                     }
@@ -92,6 +93,10 @@ impl RaftEngineReadOnly for RocksEngine {
         // Or the total size almost exceeds max_size, returns.
         if count == (high - low) as usize || total_size >= max_size {
             return Ok(count);
+        }
+
+        if compacted {
+            return Err(Error::EntriesCompacted);
         }
 
         // Here means we don't fetch enough entries.
