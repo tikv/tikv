@@ -177,6 +177,8 @@ where
     }
 
     /// Initialize the region: register it to the raftstore and the observer.
+    /// At the same time, perform the initial scanning, (an incremental scanning from `start_ts`)
+    /// and generate the corresponding ApplyEvent to the sink directly.
     pub fn initialize_region(
         &self,
         region: &Region,
@@ -184,6 +186,7 @@ where
         cmd: ChangeObserver,
     ) -> Result<Statistics> {
         let snap = self.observe_over(region, cmd)?;
+        // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let mut event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let mut stats = StatisticsSummary::default();
         loop {
@@ -207,6 +210,7 @@ where
         Ok(stats.stat)
     }
 
+    /// initialize a range: it simply scan the regions with leader role and send them to [`initialize_region`].
     pub fn initialize_range(
         &self,
         start_key: Vec<u8>,

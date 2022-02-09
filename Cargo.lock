@@ -434,6 +434,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.3",
  "regex",
+ "resolved_ts",
  "slog",
  "slog-global",
  "thiserror",

@@ -12,6 +12,7 @@ use std::{
 };
 
 use crate::{
+    annotate,
     codec::Encoder,
     endpoint::Task,
     errors::Error,
@@ -22,7 +23,7 @@ use crate::{
 
 use super::errors::Result;
 
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -35,6 +36,7 @@ use kvproto::{
 use openssl::hash::{Hasher, MessageDigest};
 use protobuf::Message;
 use raftstore::coprocessor::CmdBatch;
+use resolved_ts::Resolver;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
@@ -48,7 +50,7 @@ use tikv_util::{
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::{fs::remove_file, fs::File};
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Lock, TimeStamp};
 
 const FLUSH_STORAGE_INTERVAL: u64 = 300;
 
@@ -67,7 +69,7 @@ impl ApplyEvent {
     /// Assuming the resolved ts of the region is `resolved_ts`.
     /// Note: the resolved ts cannot be advanced if there is no command,
     ///       maybe we also need to update resolved_ts when flushing?
-    pub fn from_cmd_batch(cmd: CmdBatch, resolved_ts: u64) -> Vec<Self> {
+    pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut Resolver) -> Vec<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
         for req in cmd
@@ -90,6 +92,7 @@ impl ApplyEvent {
             .flat_map(|mut cmd| cmd.request.take_requests().into_iter())
         {
             let cmd_type = req.get_cmd_type();
+
             let (key, value, cf) = match utils::request_to_triple(req) {
                 Either::Left(t) => t,
                 Either::Right(req) => {
@@ -98,12 +101,41 @@ impl ApplyEvent {
                     continue;
                 }
             };
+            if cf == CF_LOCK {
+                match cmd_type {
+                    CmdType::Put => {
+                        match Lock::parse(&value).map_err(|err| {
+                            annotate!(
+                                err,
+                                "failed to parse lock (value = {})",
+                                utils::redact(&value)
+                            )
+                        }) {
+                            Ok(lock) => resolver.track_lock(lock.ts, key, None),
+                            Err(err) => err.report(format!("region id = {}", region_id)),
+                        }
+                    }
+                    CmdType::Delete => resolver.untrack_lock(&key, None),
+                    _ => {}
+                }
+                continue;
+            }
+            // use the key ts as min_ts would be safe.
+            // - if it is uncommitted, the lock would be tracked, preventing resolved ts
+            //   advanced incorrectly.
+            // - if it is committed, it is safe(hopefully) to advance resolved ts to it.
+            //   (Will something like one PC break this?)
+            // note: maybe get this ts from PD? The current implement cannot advance the resolved ts
+            //       if there is no write.
+            let region_resolved_ts = resolver
+                .resolve(Key::decode_ts_from(&key).unwrap_or_default())
+                .into_inner();
             let item = Self {
                 key,
                 value,
                 cf,
                 region_id,
-                region_resolved_ts: resolved_ts,
+                region_resolved_ts,
                 cmd_type,
             };
             if item.should_record() {
@@ -349,15 +381,23 @@ impl RouterInner {
         Ok(())
     }
 
-    pub async fn do_flush(&self, task_name: &str, store_id: u64) {
+    /// flush the specified task, once once success, return the min resolved ts of this flush.
+    /// returns `None` if failed.
+    pub async fn do_flush(&self, task_name: &str, store_id: u64) -> Option<u64> {
         debug!("backup stream do flush"; "task" => task_name);
-        if let Some(task_info) = self.tasks.lock().await.get(task_name) {
-            if let Err(e) = task_info.do_flush(store_id).await {
-                warn!("backup steam do flush fail"; "err" => ?e);
+        match self.tasks.lock().await.get(task_name) {
+            Some(task_info) => {
+                let result = task_info.do_flush(store_id).await;
+                if let Err(ref e) = result {
+                    warn!("backup steam do flush fail"; "err" => ?e);
+                }
+
+                // set false to flushing whether success or fail
+                task_info.set_flushing_status(false);
+                task_info.update_flush_time();
+                result.ok().flatten()
             }
-            // set false to flushing whether success or fail
-            task_info.set_flushing_status(false);
-            task_info.update_flush_time();
+            _ => None,
         }
     }
 }
@@ -472,8 +512,6 @@ pub struct StreamTaskInfo {
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
     total_size: AtomicUsize,
-    /// Whether those files are already requested to be flushed.
-    ///
     /// This should only be set to `true` by `compare_and_set(current=false, value=ture)`.
     /// The thread who setting it to `true` takes the responsibility of sending the request to the
     /// scheduler for flushing the files then.
@@ -514,7 +552,6 @@ impl StreamTaskInfo {
         })
     }
 
-    // TODO: make a file-level lock for getting rid of the &mut.
     /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
     pub async fn on_event(&self, kv: ApplyEvent) -> Result<()> {
@@ -669,10 +706,12 @@ impl StreamTaskInfo {
         Ok(())
     }
 
-    pub async fn do_flush(&self, store_id: u64) -> Result<()> {
+    /// execute the flush: copy local files to external storage.
+    /// if success, return the last resolved ts of this flush.
+    pub async fn do_flush(&self, store_id: u64) -> Result<Option<u64>> {
         // do nothing if not flushing status.
         if !self.is_flushing() {
-            return Ok(());
+            return Ok(None);
         }
 
         // generage meta data and prepare to flush to storage
@@ -681,6 +720,7 @@ impl StreamTaskInfo {
             .await
             .generate_metadata(store_id)
             .await?;
+        let rts = metadata_info.min_resolved_ts;
 
         // flush log file to storage.
         self.flush_log().await?;
@@ -690,7 +730,7 @@ impl StreamTaskInfo {
 
         // clear flushing files
         self.clear_flushing_files().await;
-        Ok(())
+        Ok(Some(rts))
     }
 }
 

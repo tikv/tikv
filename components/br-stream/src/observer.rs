@@ -2,6 +2,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::errors::Error;
+use crate::try_send;
 use crate::utils::SegmentTree;
 use dashmap::DashMap;
 use engine_traits::KvEngine;
@@ -12,7 +13,7 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{debug, warn};
 use tikv_util::{info, HandyRwLock};
 
-use crate::endpoint::Task;
+use crate::endpoint::{ObserveOp, Task};
 
 /// An Observer for Backup Stream.
 ///
@@ -52,9 +53,12 @@ impl BackupStreamObserver {
     /// The internal way to register a region.
     /// It delegate the initial scanning and modify of the subs to the endpoint.
     fn register_region(&self, region: &Region) {
-        if let Err(err) = self.scheduler.schedule(Task::ObserverRegion {
-            region: region.clone(),
-        }) {
+        if let Err(err) = self
+            .scheduler
+            .schedule(Task::ModifyObserve(ObserveOp::Start {
+                region: region.clone(),
+            }))
+        {
             Error::from(err).report(format_args!(
                 "failed to schedule role change for region {}",
                 region.get_id()
@@ -150,9 +154,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         if cmd_batches.is_empty() {
             return;
         }
-        if let Err(e) = self.scheduler.schedule(Task::BatchEvent(cmd_batches)) {
-            warn!("backup stream schedule task failed"; "error" => ?e);
-        }
+        try_send!(self.scheduler, Task::BatchEvent(cmd_batches));
     }
 
     fn on_applied_current_term(&self, role: StateRole, region: &Region) {
@@ -165,8 +167,12 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
 impl RoleObserver for BackupStreamObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, r: StateRole) {
         if r != StateRole::Leader {
-            let region = ctx.region();
-            self.subs.deregister_region(region.get_id());
+            try_send!(
+                self.scheduler,
+                Task::ModifyObserve(ObserveOp::Stop {
+                    region: ctx.region().clone(),
+                })
+            );
         }
     }
 }
@@ -178,14 +184,26 @@ impl RegionChangeObserver for BackupStreamObserver {
         event: RegionChangeEvent,
         _role: StateRole,
     ) {
-        // No need for handling `Create` -- once it becomes leader, it would start by
-        // `on_applied_current_term`.
-        // But should we deregister and register again when the region is `Update`d?
-
-        if matches!(event, RegionChangeEvent::Destroy)
-            && self.subs.should_observe(ctx.region().get_id())
-        {
-            self.subs.deregister_region(ctx.region().get_id())
+        match event {
+            RegionChangeEvent::Destroy if self.subs.should_observe(ctx.region().get_id()) => {
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::Stop {
+                        region: ctx.region().clone(),
+                    })
+                );
+            }
+            RegionChangeEvent::Update => {
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::RefreshResolver {
+                        region: ctx.region().clone(),
+                    })
+                );
+            }
+            // No need for handling `Create` -- once it becomes leader, it would start by
+            // `on_applied_current_term`.
+            _ => {}
         }
     }
 }
@@ -207,7 +225,7 @@ mod tests {
     use tikv_util::worker::dummy_scheduler;
     use tikv_util::HandyRwLock;
 
-    use crate::endpoint::Task;
+    use crate::endpoint::{ObserveOp, Task};
 
     use super::BackupStreamObserver;
 
@@ -232,7 +250,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ObserverRegion { region } = task {
+        if let Task::ModifyObserve(ObserveOp::Start { region }) = task {
             o.subs.register_region(region.get_id(), handle.clone())
         } else {
             panic!("unexpected message received: it is {}", task);
@@ -256,7 +274,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ObserverRegion { region } = task {
+        if let Task::ModifyObserve(ObserveOp::Start { region }) = task {
             o.subs.register_region(region.get_id(), handle.clone())
         } else {
             panic!("unexpected message received: it is {}", task);

@@ -47,4 +47,10 @@ lazy_static! {
         exponential_buckets(0.001, 2.0, 16).unwrap()
     )
     .unwrap();
+    pub static ref STORE_CHECKPOINT_TS: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_stream_store_checkpoint_ts",
+        "The checkpoint ts (next backup ts) of task",
+        &["task"],
+    )
+    .unwrap();
 }

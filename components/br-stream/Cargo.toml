@@ -49,6 +49,7 @@ raft = { version = "0.6.0-alpha", default-features = false, features = ["protobu
 raftstore = { path = "../raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
 online_config = { path = "../online_config" }
+resolved_ts = { path = "../resolved_ts"}
 
 [dev-dependencies]
 rand = "0.8.0"

@@ -4,13 +4,16 @@ use std::convert::AsRef;
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use dashmap::DashMap;
 use engine_traits::KvEngine;
 
 use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
+use resolved_ts::Resolver;
 use tikv_util::time::Instant;
 
 use crossbeam_channel::tick;
@@ -53,6 +56,7 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
     regions: R,
     engine: PhantomData<E>,
     router: RT,
+    resolvers: Arc<DashMap<u64, Resolver>>,
 }
 
 impl<R, E, RT> Endpoint<EtcdStore, R, E, RT>
@@ -111,6 +115,7 @@ where
             ));
         }
 
+        info!("the endpoint of stream backup started"; "path" => %config.streaming_path);
         Endpoint {
             config,
             meta_client,
@@ -122,6 +127,7 @@ where
             regions: accessor,
             engine: PhantomData,
             router,
+            resolvers: Default::default(),
         }
     }
 }
@@ -198,7 +204,17 @@ where
     fn backup_batch(&self, batch: CmdBatch) {
         let mut sw = StopWatch::new();
         let region_id = batch.region_id;
-        let kvs = ApplyEvent::from_cmd_batch(batch, /* TODO */ 0);
+        let mut resolver = match self.resolvers.as_ref().get_mut(&region_id) {
+            Some(rts) => rts,
+            None => {
+                warn!("BUG: the region isn't registered (no resolver found) but sent to backup_batch."; "region_id" => %region_id);
+                return;
+            }
+        };
+
+        let kvs = ApplyEvent::from_cmd_batch(batch, resolver.value_mut());
+        drop(resolver);
+
         HANDLE_EVENT_DURATION_HISTOGRAM
             .with_label_values(&["to_stream_event"])
             .observe(sw.lap().as_secs_f64());
@@ -287,6 +303,7 @@ where
                             let start = Instant::now_coarse();
                             let start_ts = task.info.get_start_ts();
                             let ob = self.observer.clone();
+                            let rs = self.resolvers.clone();
                             let success = self
                                 .observer
                                 .ranges
@@ -305,7 +322,11 @@ where
                                     start_key.clone(),
                                     end_key.clone(),
                                     TimeStamp::new(start_ts),
-                                    |region_id, handle| ob.subs.register_region(region_id, handle),
+                                    |region_id, handle| {
+                                        // Note: maybe we'd better schedule a "register region" here?
+                                        ob.subs.register_region(region_id, handle);
+                                        rs.insert(region_id, Resolver::new(region_id));
+                                    },
                                 );
                                 match range_init_result {
                                     Ok(stat) => {
@@ -339,26 +360,69 @@ where
 
     pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
+        let cli = self
+            .meta_client
+            .as_ref()
+            .expect("on_flush: executed from an endpoint without cli")
+            .clone();
         self.pool.spawn(async move {
-            router.do_flush(&task, store_id).await;
+            if let Some(rts) = router.do_flush(&task, store_id).await {
+                if let Err(err) = cli.step_task(&task, rts).await {
+                    err.report(format!("on flushing task {}", task));
+                    // we can advance the progress at next time.
+                    // return early so we won't be mislead by the metrics.
+                    return;
+                }
+                metrics::STORE_CHECKPOINT_TS
+                    // Currently, we only support one task at the same time,
+                    // so use the task as label would be ok.
+                    .with_label_values(&[task.as_str()])
+                    .set(rts as _)
+            }
         });
     }
 
     /// Start observe over some region.
-    /// This would register the region to the RaftStore.
-    ///
-    /// > Note: This won't trigger a incremental scanning.
-    /// >      When the follower progress faster than leader and then be elected,
-    /// >      there is a risk of losing data.
-    pub fn on_observe_region(&self, region: Region) {
+    /// This would modify some internal state, and delegate the task to InitialLoader::observe_over.
+    fn observe_over(&self, region: &Region) -> Result<()> {
         let init = self.make_initial_loader();
         let handle = ObserveHandle::new();
         let region_id = region.get_id();
         let ob = ChangeObserver::from_cdc(region_id, handle.clone());
-        if let Err(e) = init.observe_over(&region, ob) {
-            e.report(format!("register region {} to raftstore", region.get_id()));
-        }
+        init.observe_over(region, ob)?;
         self.observer.subs.register_region(region_id, handle);
+        self.resolvers.insert(region.id, Resolver::new(region.id));
+        Ok(())
+    }
+
+    /// Modify observe over some region.
+    /// This would register the region to the RaftStore.
+    ///
+    /// > Note: If using this to start observe, this won't trigger a incremental scanning.
+    /// >      When the follower progress faster than leader and then be elected,
+    /// >      there is a risk of losing data.
+    pub fn on_modify_observe(&self, op: ObserveOp) {
+        match op {
+            ObserveOp::Start { region } => {
+                if let Err(e) = self.observe_over(&region) {
+                    e.report(format!("register region {} to raftstore", region.get_id()));
+                }
+            }
+            ObserveOp::Stop { region } => {
+                self.observer.subs.deregister_region(region.id);
+                self.resolvers.as_ref().remove(&region.id);
+            }
+            ObserveOp::RefreshResolver { region } => {
+                self.observer.subs.deregister_region(region.id);
+                self.resolvers.as_ref().remove(&region.id);
+                if let Err(e) = self.observe_over(&region) {
+                    e.report(format!(
+                        "register region {} to raftstore when refreshing",
+                        region.get_id()
+                    ));
+                }
+            }
+        }
     }
 
     pub fn do_backup(&mut self, events: Vec<CmdBatch>) {
@@ -394,11 +458,22 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     /// Flush the task with name.
     Flush(String),
-    /// Start observe over the region.
-    ObserverRegion {
+    /// Change the observe status of some region.
+    ModifyObserve(ObserveOp),
+}
+
+#[derive(Debug)]
+pub enum ObserveOp {
+    Start {
         region: Region,
         // Note: Maybe add the request for initial scanning too.
         // needs_initial_scanning: bool
+    },
+    Stop {
+        region: Region,
+    },
+    RefreshResolver {
+        region: Region,
     },
 }
 
@@ -412,10 +487,7 @@ impl fmt::Debug for Task {
                 .finish(),
             Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
-            Self::ObserverRegion { region } => f
-                .debug_struct("ObserverRegion")
-                .field("region", region)
-                .finish(),
+            Self::ModifyObserve(op) => f.debug_tuple("ModifyObserve").field(op).finish(),
         }
     }
 }
@@ -440,8 +512,8 @@ where
         match task {
             Task::WatchTask(task) => self.on_register(task),
             Task::BatchEvent(events) => self.do_backup(events),
-            Task::ObserverRegion { region } => self.on_observe_region(region),
             Task::Flush(task) => self.on_flush(task, self.store_id),
+            Task::ModifyObserve(op) => self.on_modify_observe(op),
             _ => (),
         }
     }

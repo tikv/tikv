@@ -6,7 +6,10 @@ use std::{
     time::Duration,
 };
 
-use crate::errors::{Error, Result};
+use crate::{
+    annotate,
+    errors::{Error, Result},
+};
 
 use engine_traits::CF_DEFAULT;
 use futures::{channel::mpsc, executor::block_on, StreamExt};
@@ -28,11 +31,11 @@ pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {
 /// decode ts from a key, and transform the error to the crate error.
 pub fn get_ts(key: &Key) -> Result<TimeStamp> {
     key.decode_ts().map_err(|err| {
-        Error::Other(box_err!(
-            "failed to get ts from key '{}': {}",
-            log_wrappers::Value::key(key.as_encoded().as_slice()),
-            err
-        ))
+        annotate!(
+            err,
+            "failed to get ts from key '{}'",
+            redact(&key.as_encoded())
+        )
     })
 }
 
@@ -202,6 +205,29 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, String),
         cf = CF_DEFAULT.to_owned();
     }
     Either::Left((key, value, cf))
+}
+
+/// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
+/// once meet an error, would report it, with the current file and line (so it is made as a macro).    
+/// returns whether it success.
+#[macro_export(crate)]
+macro_rules! try_send {
+    ($s: expr, $task: expr) => {
+        match $s.schedule($task) {
+            Err(err) => {
+                $crate::errors::Error::from(err).report(concat!(
+                    "[",
+                    file!(),
+                    ":",
+                    line!(),
+                    "]",
+                    "failed to schedule task"
+                ));
+                false
+            }
+            Ok(_) => true,
+        }
+    };
 }
 
 #[cfg(test)]
