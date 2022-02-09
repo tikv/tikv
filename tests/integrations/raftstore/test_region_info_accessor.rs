@@ -121,7 +121,11 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
     assert!(find_peer(&region2, 2).is_some());
 
     // Change leader
-    pd_client.transfer_leader(region2.get_id(), find_peer(&region2, 2).unwrap().clone());
+    pd_client.transfer_leader(
+        region2.get_id(),
+        find_peer(&region2, 2).unwrap().clone(),
+        vec![],
+    );
     let mut region3 = Region::default();
     let mut role3 = StateRole::default();
     // Wait for transfer leader finish

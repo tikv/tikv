@@ -123,6 +123,7 @@ make_auto_flush_static_metric! {
         sync_fetch,
         fallback_fetch,
         fetch_invalid,
+        fetch_unused,
     }
 
     pub label_enum RaftInvalidProposal {
