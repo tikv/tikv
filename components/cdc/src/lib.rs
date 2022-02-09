@@ -19,4 +19,5 @@ pub use delegate::Delegate;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
+pub use old_value::OldValueCache;
 pub use service::{FeatureGate, Service};

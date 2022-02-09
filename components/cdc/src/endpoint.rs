@@ -1425,7 +1425,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
             }
             Task::TxnExtra(txn_extra) => {
                 for (k, v) in txn_extra.old_values {
-                    self.old_value_cache.cache.insert(k, v);
+                    self.old_value_cache.insert(k, v);
                 }
             }
             Task::Validate(validate) => match validate {
@@ -1457,15 +1457,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoin
         self.min_resolved_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
-        let cache_size = self.old_value_cache.cache.size();
-        CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
-        CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
-        CDC_OLD_VALUE_CACHE_MISS.add(self.old_value_cache.miss_count as i64);
-        CDC_OLD_VALUE_CACHE_MISS_NONE.add(self.old_value_cache.miss_none_count as i64);
-        CDC_OLD_VALUE_CACHE_LEN.set(self.old_value_cache.cache.len() as i64);
-        self.old_value_cache.access_count = 0;
-        self.old_value_cache.miss_count = 0;
-        self.old_value_cache.miss_none_count = 0;
+        self.old_value_cache.flush_metrics();
         CDC_SINK_BYTES.set(self.sink_memory_quota.in_use() as i64);
     }
 

@@ -3,7 +3,6 @@
 use std::sync::*;
 use std::time::Duration;
 
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use futures::SinkExt;
@@ -16,8 +15,9 @@ use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, OldValueCache, Task, Validate};
 
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
