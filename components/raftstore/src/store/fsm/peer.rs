@@ -68,6 +68,18 @@ use crate::store::{
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
+#[derive(Clone, Copy, Debug)]
+pub struct DelayDestroy {
+    merged_by_target: bool,
+    reason: DelayReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DelayReason {
+    UnFlushLogGc,
+    Shutdown,
+}
+
 /// Limits the maximum number of regions returned by error.
 ///
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
@@ -131,6 +143,12 @@ where
     max_inflight_msgs: usize,
 
     trace: PeerMemoryTrace,
+    /// Destroy is delayed because logs clean is flushed asynchronously in Peer.
+    /// Should call `destroy_peer` again after flush is done.
+    delayed_destroy: Option<DelayDestroy>,
+    /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
+    /// can start destroying without seeking.
+    logs_gc_flushed: bool,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -231,6 +249,8 @@ where
                 ),
                 max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
+                delayed_destroy: None,
+                logs_gc_flushed: false,
             }),
         ))
     }
@@ -276,6 +296,8 @@ where
                 ),
                 max_inflight_msgs: cfg.raft_max_inflight_msgs,
                 trace: PeerMemoryTrace::default(),
+                delayed_destroy: None,
+                logs_gc_flushed: false,
             }),
         ))
     }
@@ -916,6 +938,9 @@ where
             } => self.on_capture_change(cmd, region_epoch, callback),
             SignificantMsg::LeaderCallback(cb) => {
                 self.on_leader_callback(cb);
+            }
+            SignificantMsg::RaftLogGcFlushed => {
+                self.on_raft_log_gc_flushed();
             }
         }
     }
@@ -1924,13 +1949,109 @@ where
             false
         } else {
             // Destroy the peer fsm directly
-            self.destroy_peer(false);
-            true
+            self.destroy_peer(false)
         }
     }
 
-    fn destroy_peer(&mut self, merged_by_target: bool) {
+    /// Check if destroy can be executed immediately. If it can't, the reason is returned.
+    fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
+        if self.fsm.logs_gc_flushed {
+            return None;
+        }
+
+        let start_index = self.fsm.peer.last_compacted_idx;
+        let mut end_index = start_index;
+        if end_index == 0 {
+            // Technically, all logs between first index and last index should be accessible
+            // before being destroyed.
+            end_index = self.fsm.peer.get_store().first_index();
+            self.fsm.peer.last_compacted_idx = end_index;
+        }
+        let region_id = self.region_id();
+        let peer_id = self.fsm.peer.peer_id();
+        let mb = match self.ctx.router.mailbox(region_id) {
+            Some(mb) => mb,
+            None => {
+                if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                    // It's shutting down, nothing we can do.
+                    return Some(DelayReason::Shutdown);
+                }
+                panic!("{} failed to get mailbox", self.fsm.peer.tag);
+            }
+        };
+        let task = RaftlogGcTask::gc(
+            self.fsm.peer.get_store().get_region_id(),
+            start_index,
+            end_index,
+        )
+        .flush()
+        .when_done(move || {
+            if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
+            {
+                if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                    return;
+                }
+                panic!(
+                    "[region {}] {} failed to respond flush message {:?}",
+                    region_id, peer_id, e
+                );
+            }
+        });
+        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
+            if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                // It's shutting down, nothing we can do.
+                return Some(DelayReason::Shutdown);
+            }
+            panic!(
+                "{} failed to schedule raft log task {:?}",
+                self.fsm.peer.tag, e
+            );
+        }
+        // We need to delete all logs entries to avoid introducing race between
+        // new peers and old peers. Flushing gc logs allow last_compact_index be
+        // used directly without seeking.
+        Some(DelayReason::UnFlushLogGc)
+    }
+
+    fn on_raft_log_gc_flushed(&mut self) {
+        self.fsm.logs_gc_flushed = true;
+        let delay = match self.fsm.delayed_destroy {
+            Some(delay) => delay,
+            None => panic!("{} a delayed destroy should not recover", self.fsm.peer.tag),
+        };
+        self.destroy_peer(delay.merged_by_target);
+    }
+
+    fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         fail_point!("destroy_peer");
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+
+        if let Some(reason) = self.maybe_delay_destroy() {
+            if self
+                .fsm
+                .delayed_destroy
+                .map_or(false, |delay| delay.reason == reason)
+            {
+                panic!(
+                    "{} destroy peer twice with same delay reason, original {:?}, now {}",
+                    self.fsm.peer.tag, self.fsm.delayed_destroy, merged_by_target
+                );
+            }
+            self.fsm.delayed_destroy = Some(DelayDestroy {
+                merged_by_target,
+                reason,
+            });
+            info!(
+                "delays destroy";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+                "reason" => ?reason,
+            );
+            return false;
+        }
+
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -2059,6 +2180,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        true
     }
 
     // Update some region infos
@@ -2215,21 +2337,9 @@ where
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
-        let task = RaftlogGcTask::gc(
-            self.fsm.peer.get_store().get_region_id(),
-            self.fsm.peer.last_compacted_idx,
-            compact_to,
-        );
+        self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().compact_to(compact_to);
-        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
-            error!(
-                "failed to schedule compact task";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
     }
 
     fn on_ready_split_region(
@@ -2990,7 +3100,7 @@ where
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
-                // `merge_by_target` is true because this region's range already belongs to
+                // `merged_by_target` is true because this region's range already belongs to
                 // its target region so we must not clear data otherwise its target region's
                 // data will corrupt.
                 self.destroy_peer(true);

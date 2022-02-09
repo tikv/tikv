@@ -171,6 +171,9 @@ pub struct Config {
     pub dev_assert: bool,
     #[config(hidden)]
     pub apply_yield_duration: ReadableDuration,
+    // Only for tests in v5.0.0.
+    #[serde(skip)]
+    pub raft_log_compact_sync_interval: ReadableDuration,
 
     // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
@@ -254,6 +257,7 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            raft_log_compact_sync_interval: ReadableDuration::secs(60),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
