@@ -741,7 +741,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             None
         };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
+        let check_leader_runner =
+            CheckLeaderRunner::new(engines.store_meta.clone(), self.config.resolved_ts.enable);
         let check_leader_scheduler = self
             .background_worker
             .start("check-leader", check_leader_runner);
