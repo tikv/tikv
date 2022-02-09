@@ -11,6 +11,8 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
+use aws_sdk_s3::presigning::config::PresigningConfig;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]
@@ -154,11 +156,13 @@ impl DFS for S3FS {
         std::fs::rename(tmp_file_path, self.local_file_path(file_id))?;
 
         let key = self.file_key(file_id);
+        let hyper_body = hyper::Body::from(data);
+        let sdk_body = aws_smithy_http::body::SdkBody::from(hyper_body);
         self.s3c
             .put_object()
             .bucket(&self.bucket)
             .key(&key)
-            .body(ByteStream::from(data))
+            .body(ByteStream::new(sdk_body))
             .send()
             .await?;
         Ok(())
