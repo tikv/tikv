@@ -2,6 +2,7 @@
 
 use crate::store::fsm::store::StoreMeta;
 use crate::store::util::RegionReadProgressRegistry;
+use fail::fail_point;
 use keys::{data_end_key, data_key, enc_start_key};
 use kvproto::kvrpcpb::{KeyRange, LeaderInfo};
 use std::collections::Bound::{Excluded, Unbounded};
@@ -97,6 +98,11 @@ impl Runnable for Runner {
     fn run(&mut self, task: Task) {
         match task {
             Task::CheckLeader { leaders, cb } => {
+                fail_point!(
+                    "before_check_leader_store_3",
+                    self.store_meta.lock().unwrap().store_id == Some(3),
+                    |_| {}
+                );
                 let regions = self.region_read_progress.handle_check_leaders(leaders);
                 cb(regions);
             }
