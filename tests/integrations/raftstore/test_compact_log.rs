@@ -1,10 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
-
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, Peekable, CF_RAFT};
+use kvproto::raft_serverpb::RaftApplyState;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;

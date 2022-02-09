@@ -4,9 +4,8 @@ use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, CF_RAFT};
-use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
+use engine_traits::{Peekable, CF_RAFT};
+use kvproto::raft_serverpb::RaftApplyState;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -67,7 +66,11 @@ fn test_node_cache_compact_with_one_node_down() {
 
     // limit has not reached, should not gc.
     for (&id, engines) in &cluster.engines {
-        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        let mut state: RaftApplyState = engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
         let after_state = state.take_truncated_state();
 
         let before_state = &before_states[&id];
