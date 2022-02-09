@@ -1185,8 +1185,19 @@ where
             SignificantMsg::RaftLogGcFlushed => {
                 self.on_raft_log_gc_flushed();
             }
-            SignificantMsg::RaftlogFetched { context, .. } => {
+            SignificantMsg::RaftlogFetched { context, res } => {
+                let low = res.low;
+                if self.fsm.peer.term() != res.term {
+                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
+                } else {
+                    self.fsm
+                        .peer
+                        .mut_store()
+                        .update_async_fetch_res(low, Some(res));
+                }
                 self.fsm.peer.raft_group.on_entries_fetched(context);
+                // clean the async fetch result immediately if not used to free memory
+                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
                 self.fsm.has_ready = true;
             }
         }
@@ -2678,7 +2689,6 @@ where
                 }
             }
         }
-        meta.leaders.remove(&region_id);
 
         true
     }
