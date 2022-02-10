@@ -898,7 +898,7 @@ impl Peer {
             return pending_peers;
         }
 
-        /// TODO: add metrics
+        // TODO: add metrics
         let progresses = status.progress.unwrap().iter();
         for (&id, progress) in progresses {
             if id == self.peer.get_id() {
@@ -943,6 +943,7 @@ impl Peer {
         pending_peers
     }
 
+    #[allow(dead_code)]
     pub fn check_stale_state(&mut self, cfg: &Config) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
@@ -2442,7 +2443,7 @@ impl Peer {
 
     pub(crate) fn execute_transfer_leader(
         &mut self,
-        ctx: &mut RaftContext,
+        _ctx: &mut RaftContext,
         msg: &eraftpb::Message,
     ) {
         let pending_snapshot =
@@ -2632,10 +2633,13 @@ impl Peer {
         self.send_raft_messages(ctx, raft_messages);
         let mut light_ready = self.raft_group.advance_append(task.ready);
         if light_ready.committed_entries().len() > 0 {
-            ctx.global.router.send(
-                self.region_id,
-                PeerMsg::CommittedEntries(light_ready.take_committed_entries()),
-            );
+            ctx.global
+                .router
+                .send(
+                    self.region_id,
+                    PeerMsg::CommittedEntries(light_ready.take_committed_entries()),
+                )
+                .unwrap();
         }
     }
 

@@ -341,50 +341,6 @@ where
         }
     }
 
-    // Deprecate
-    fn handle_ask_split(
-        &self,
-        mut region: metapb::Region,
-        split_key: Vec<u8>,
-        peer: metapb::Peer,
-        right_derive: bool,
-        callback: Callback,
-        task: String,
-    ) {
-        let router = self.router.clone();
-        let resp = self.pd_client.ask_split(region.clone());
-        let f = async move {
-            match resp.await {
-                Ok(mut resp) => {
-                    info!(
-                        "try to split region";
-                        "region_id" => region.get_id(),
-                        "new_region_id" => resp.get_new_region_id(),
-                        "region" => ?region,
-                        "task"=>task,
-                    );
-
-                    let req = new_split_region_request(
-                        split_key,
-                        resp.get_new_region_id(),
-                        resp.take_new_peer_ids(),
-                        right_derive,
-                    );
-                    let region_id = region.get_id();
-                    let epoch = region.take_region_epoch();
-                    send_admin_request(&router, region_id, epoch, peer, req, callback)
-                }
-                Err(e) => {
-                    warn!("failed to ask split";
-                    "region_id" => region.get_id(),
-                    "err" => ?e,
-                    "task"=>task);
-                }
-            }
-        };
-        self.remote.spawn(f);
-    }
-
     // Note: The parameter doesn't contain `self` because this function may
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
@@ -392,7 +348,7 @@ where
         scheduler: Scheduler<Task>,
         pd_client: Arc<dyn PdClient>,
         mut region: metapb::Region,
-        mut split_keys: Vec<Vec<u8>>,
+        split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
         callback: Callback,

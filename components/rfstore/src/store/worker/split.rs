@@ -2,23 +2,19 @@
 
 use bytes::Bytes;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader};
-use online_config::ConfigChange;
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use protobuf::ProtobufEnum;
 use std::fmt::{self, Display, Formatter};
 use std::thread::sleep;
 use yatp::Remote;
 
-use crate::store::cmd_resp::{err_resp, new_error};
+use crate::store::cmd_resp::new_error;
 use crate::store::{
-    cmd_resp, Callback, CasualMessage, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask, PeerMsg,
-    RegionIDVer, WriteResponse, PENDING_CONF_CHANGE_ERR_MSG,
+    Callback, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask, PeerMsg, RegionIDVer,
 };
 use crate::{RaftRouter, RaftStoreRouter};
-use tikv_util::codec::bytes::encode_bytes;
-use tikv_util::mpsc::Receiver;
 use tikv_util::time::Duration;
-use tikv_util::worker::{Runnable, ScheduleError, Scheduler};
+use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{box_err, debug, error, info, warn};
 use txn_types::Key;
 
@@ -185,7 +181,7 @@ impl SplitRunner {
                     split_keys,
                     callback,
                 });
-                cb_router.send(id_ver.id(), msg);
+                cb_router.send(id_ver.id(), msg).unwrap();
             }
         }));
         self.router.send_command(request, cmd_cb).unwrap();

@@ -1,13 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use collections::HashMap;
-use engine_traits::KvEngine;
-use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use rfstore::router::RaftStoreRouter;
 use tikv::server::resolve::Callback;
@@ -176,7 +173,6 @@ impl tikv::server::StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::marker::PhantomData;
     use std::net::SocketAddr;
     use std::ops::Sub;
     use std::str::FromStr;

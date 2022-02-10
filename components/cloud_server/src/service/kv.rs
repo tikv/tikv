@@ -30,8 +30,8 @@ use tikv::server::metrics::*;
 use tikv::server::Proxy;
 use tikv::storage::{
     errors::{
-        extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error, map_kv_pairs,
+        extract_committed, extract_key_error, extract_key_errors, extract_region_error,
+        map_kv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -40,7 +40,6 @@ use tikv::storage::{
 use tikv::{forward_duplex, forward_unary};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
-use tikv_util::worker::Scheduler;
 use txn_types::{self, Key};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
@@ -765,7 +764,7 @@ fn handle_batch_commands_request<L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<RaftKv, L>,
     copr: &Endpoint<RaftKv>,
-    copr_v2: &coprocessor_v2::Endpoint,
+    _copr_v2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,

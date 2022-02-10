@@ -3,7 +3,6 @@
 use crate::storage::mvcc::{Result, TxnCommitRecord};
 use rfstore::{UserMeta, EXTRA_CF, LOCK_CF, WRITE_CF};
 use std::sync::Arc;
-use tikv_util::codec::number::NumberEncoder;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub struct CloudReader {
@@ -41,7 +40,7 @@ impl CloudReader {
         key: &Key,
         start_ts: TimeStamp,
     ) -> Result<TxnCommitRecord> {
-        let mut raw_key = key.to_raw()?;
+        let raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, 0);
         if item.user_meta_len() > 0 {
             if let Some(record) = Self::get_commit_by_item(&item, start_ts) {

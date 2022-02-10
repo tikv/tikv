@@ -20,7 +20,6 @@ use raft_proto::eraftpb::{ConfState, HardState};
 use raftstore::store::util;
 use raftstore::store::util::conf_state_from_region;
 use rfengine;
-use rfengine::WriteBatch;
 use tikv_util::{box_err, debug, info};
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -429,10 +428,6 @@ impl PeerStorage {
         let last_entry = entries.last().unwrap();
         self.raft_state.last_index = last_entry.get_index();
         self.last_term = last_entry.get_term();
-    }
-
-    pub(crate) fn get_engine_meta(&self) -> &ShardMeta {
-        self.shard_meta.as_ref().unwrap()
     }
 
     pub(crate) fn mut_engine_meta(&mut self) -> &mut ShardMeta {

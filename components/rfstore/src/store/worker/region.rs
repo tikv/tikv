@@ -1,20 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::cmd_resp::err_resp;
-use crate::store::{
-    Callback, MsgApplyChangeSetResult, MsgWaitFollowerSplitFiles, PeerMsg, RegionIDVer,
-};
+use crate::store::{MsgApplyChangeSetResult, PeerMsg, RegionIDVer};
 use crate::RaftRouter;
-use bytes::Bytes;
-use kvenginepb::SplitStage;
-use kvproto::{metapb, raft_cmdpb};
-use protobuf::{ProtobufEnum, RepeatedField};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use tikv_util::mpsc::Receiver;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{error, info, warn};
-use yatp::Remote;
 
 /// Region related task
 #[derive(Debug)]
@@ -99,7 +91,8 @@ impl Runner {
                 }
                 change_set.mut_compaction().set_conflicted(true);
                 let (tx, rx) = tikv_util::mpsc::bounded(1);
-                tx.send(Ok(Task::ApplyChangeSet { change: change_set }));
+                tx.send(Ok(Task::ApplyChangeSet { change: change_set }))
+                    .unwrap();
                 return Some(rx);
             }
             warn!("shard not found for prepare change set resource";
@@ -111,7 +104,8 @@ impl Runner {
         let res = kv
             .pre_load_files(&change_set)
             .map_err(|err| crate::Error::KVEngineError(err));
-        tx.send(res.map(|_| Task::ApplyChangeSet { change: change_set }));
+        tx.send(res.map(|_| Task::ApplyChangeSet { change: change_set }))
+            .unwrap();
         Some(rx)
     }
 }
@@ -149,7 +143,9 @@ impl Runnable for Runner {
         match task {
             Task::ApplyChangeSet { change } => {
                 if let Some(receiver) = self.prepare_region_resource(change) {
-                    self.apply_scheduler.schedule(ApplyTask { desc, receiver });
+                    self.apply_scheduler
+                        .schedule(ApplyTask { desc, receiver })
+                        .unwrap();
                 }
             }
             Task::RejectChangeSet { change } => {
@@ -218,7 +214,12 @@ impl Runnable for ApplyRunner {
                     err: err_str,
                 };
                 let apply_result = PeerMsg::ApplyChangeSetResult(msg_result);
-                self.router.send(id_ver.id(), apply_result);
+                if let Err(err) = self.router.send(id_ver.id(), apply_result) {
+                    warn!(
+                        "failed to send apply change set result for {}, error {:?}",
+                        id_ver, err
+                    );
+                }
             }
             Task::RejectChangeSet { .. } => unreachable!(),
         };

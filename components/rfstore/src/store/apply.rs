@@ -284,7 +284,7 @@ impl Applier {
         commit_ts: u64,
     ) {
         let lock_val = self.get_lock_for_commit(kv, key, commit_ts);
-        let mut lock = txn_types::Lock::parse(&lock_val).unwrap();
+        let lock = txn_types::Lock::parse(&lock_val).unwrap();
         let start_ts = lock.ts.into_inner();
         let user_meta = &mvcc::UserMeta::new(start_ts, commit_ts).to_array()[..];
         match lock.lock_type {
@@ -1128,7 +1128,6 @@ impl Applier {
             ctx.exec_log_term,
         );
         let mut resp = AdminResponse::default();
-        let mut result: ApplyResult;
         if let Err(kvengine::Error::WrongSplitStage) =
             ctx.engine.finish_split(cs, RAFT_INIT_LOG_INDEX)
         {
@@ -1136,7 +1135,7 @@ impl Applier {
             // in the background worker.
             warn!("region is not in split file done stage for finish split, pause apply";
                 "region" => self.tag());
-            result = ApplyResult::Yield;
+            let result = ApplyResult::Yield;
             return Ok((resp, result));
         }
         self.snap.take(); // snapshot is outdated.
@@ -1145,7 +1144,7 @@ impl Applier {
         let mut splits = BatchSplitResponse::default();
         splits.set_regions(RepeatedField::from(regions.clone()));
         resp.set_splits(splits);
-        result = ApplyResult::Res(ExecResult::SplitRegion { regions });
+        let result = ApplyResult::Res(ExecResult::SplitRegion { regions });
         Ok((resp, result))
     }
 
@@ -1205,7 +1204,7 @@ impl Applier {
                     entry.get_index()
                 );
             }
-            let mut result: ApplyResult = ApplyResult::None;
+            let result;
             ctx.exec_log_index = entry.index;
             ctx.exec_log_term = entry.term;
             match entry.get_entry_type() {
@@ -1354,7 +1353,7 @@ impl Applier {
 
     pub(crate) fn handle_msg(&mut self, ctx: &mut ApplyContext, msg: ApplyMsg) {
         if let ApplyMsg::Resume { region_id } = &msg {
-            if let Some(mut yield_state) = self.yield_state.take() {
+            if let Some(yield_state) = self.yield_state.take() {
                 for msg in yield_state.pending_msgs {
                     self.handle_msg(ctx, msg);
                 }

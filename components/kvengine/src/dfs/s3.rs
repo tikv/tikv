@@ -2,7 +2,6 @@
 
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
-use aws_sdk_s3::presigning::config::PresigningConfig;
 use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Bytes;
@@ -12,7 +11,6 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]

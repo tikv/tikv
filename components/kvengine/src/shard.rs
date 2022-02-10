@@ -154,7 +154,7 @@ impl Shard {
         opt: Arc<Options>,
     ) -> Self {
         let base_size = opt.base_size;
-        let mut shard = Self {
+        let shard = Self {
             id: props.shard_id,
             ver,
             start: Bytes::copy_from_slice(start),
@@ -268,7 +268,7 @@ impl Shard {
         for l0 in l0s.tbls.as_ref() {
             size += l0.size();
         }
-        self.for_each_level(|cf, l| {
+        self.for_each_level(|_, l| {
             size += l.total_size;
             false
         });

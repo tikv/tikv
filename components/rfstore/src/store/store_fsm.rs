@@ -11,7 +11,6 @@ use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLoc
 use pd_client::PdClient;
 use protobuf::Message;
 use raft::StateRole;
-use raft_proto::eraftpb;
 use raftstore::coprocessor::split_observer::SplitObserver;
 use raftstore::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use raftstore::store::local_metrics::RaftMetrics;
@@ -32,7 +31,6 @@ use crate::{Error, Result};
 
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
-const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
 struct Workers {
     pd_worker: LazyWorker<PdTask>,
@@ -78,7 +76,7 @@ impl RaftBatchSystem {
         &mut self,
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
-        mut engines: Engines,
+        engines: Engines,
         trans: Box<dyn Transport>,
         pd_client: Arc<C>,
         pd_worker: LazyWorker<PdTask>,
@@ -180,13 +178,13 @@ impl RaftBatchSystem {
             self.router.clone(),
             apply_recevier,
         );
-        let peer_handle = std::thread::spawn(move || {
+        let _peer_handle = std::thread::spawn(move || {
             aw.run();
         });
 
         let store_fsm = self.store_fsm.take().unwrap();
         let mut sw = StoreWorker::new(store_fsm, self.ctx.clone().unwrap());
-        let store_handle = std::thread::spawn(move || {
+        let _store_handle = std::thread::spawn(move || {
             sw.run();
         });
 
@@ -806,7 +804,12 @@ impl StoreMsgHandler {
         let peer_msg = PeerMsg::GenerateEngineChangeSet(change_set);
         // If the region is not found, there is no need to handle the engine meta change, so
         // we can ignore not found error.
-        self.ctx.global.router.send(id, peer_msg).unwrap();
+        if let Err(e) = self.ctx.global.router.send(id, peer_msg) {
+            warn!(
+                "failed to send engine meta change for region {} {:?}",
+                id, e
+            );
+        }
     }
 
     /// If target peer doesn't exist, create it.
@@ -856,7 +859,7 @@ impl StoreMsgHandler {
         // TODO(x) handle overlap exisitng region.
 
         // New created peers should know it's learner or not.
-        let mut peer = PeerFsm::replicate(
+        let peer = PeerFsm::replicate(
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.global.engines.clone(),

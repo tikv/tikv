@@ -3,7 +3,6 @@
 use crate::table::sstable::{SSTable, TableIterator};
 use crate::table::{search, Iterator, Value};
 use crate::{LevelHandler, ShardCF};
-use std::sync::Arc;
 
 // ConcatIterator concatenates the sequences defined by several iterators.  (It only works with
 // TableIterators, probably just because it's faster to not be so generic.)

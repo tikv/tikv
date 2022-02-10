@@ -17,6 +17,7 @@ struct SimpleIterator {
     ver_idx: usize,
 }
 
+#[allow(dead_code)]
 impl SimpleIterator {
     fn new(keys: Vec<&'static str>, vals: Vec<&'static str>, reversed: bool) -> Self {
         let length = keys.len();
@@ -130,6 +131,7 @@ impl Iterator for SimpleIterator {
     }
 }
 
+#[allow(dead_code)]
 fn get_all<'a>(mut it: Box<dyn Iterator>) -> (Vec<Bytes>, Vec<Bytes>) {
     let mut keys = vec![];
     let mut vals = vec![];

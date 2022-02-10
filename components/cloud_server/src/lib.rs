@@ -32,7 +32,6 @@ pub use tikv_server::run_tikv;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::tikv_server::run_tikv;
     use tikv::config::TiKvConfig;
 

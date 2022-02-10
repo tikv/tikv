@@ -10,83 +10,61 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKVServer` struct.
 
-use crossbeam::channel;
+use std::sync::atomic::AtomicU64;
 use std::{
-    cmp,
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     u64,
 };
 
 use crate::server::Server;
 use crate::setup::{initial_logger, initial_metric, validate_and_persist_config};
 use crate::status_server::StatusServer;
-use crate::{node::*, raft_client::*, raftkv::*, resolve, signal_handler};
-use cdc::MemoryQuota;
+use crate::{node::*, raftkv::*, resolve, signal_handler};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
-use engine_rocks::FlowInfo;
-use engine_traits::{
-    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, KvEngine, MiscExt,
-    RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, IOBudgetAdjustor, IORateLimiter,
-    MetricsManager as IOMetricsManager,
+    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use kvproto::{
-    deadlock::create_deadlock, debugpb::create_debug, diagnosticspb::create_diagnostics,
-    import_sstpb::create_import_sst,
-};
+use kvproto::deadlock::create_deadlock;
 use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::{
     BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
-    RawConsistencyCheckObserver, Registry,
+    RawConsistencyCheckObserver,
 };
 use raftstore::RegionInfoAccessor;
 use rfengine::RFEngine;
 use rfstore::store::PENDING_MSG_CAP;
-use rfstore::store::{
-    Engines, LocalReader, MetaChangeListener, PdTask, RaftBatchSystem, StoreMeta,
-};
+use rfstore::store::{Engines, LocalReader, MetaChangeListener, RaftBatchSystem, StoreMeta};
 use rfstore::{RaftRouter, ServerRaftStoreRouter};
 use security::SecurityManager;
 use tikv::storage::txn::flow_controller::FlowController;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    config::{ConfigController, TiKvConfig},
     coprocessor, coprocessor_v2,
-    import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
     server::raftkv::ReplicaReadLockChecker,
     server::{
-        config::Config as ServerConfig,
-        config::ServerConfigManager,
-        gc_worker::{AutoGcConfig, GcWorker},
-        lock_manager::LockManager,
-        ttl::TTLChecker,
-        CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        config::Config as ServerConfig, lock_manager::LockManager, CPU_CORES_QUOTA_GAUGE,
+        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
+    storage::{self, mvcc::MvccConsistencyCheckObserver, Engine},
 };
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
-    math::MovingAvgU32,
-    sys::{disk, register_memory_usage_high_water, SysQuota},
+    sys::{register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Duration, Instant, Monitor},
-    worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
 
@@ -418,8 +396,6 @@ impl TiKVServer {
 
     fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         info!("init servers");
-        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
-        let ttl_scheduler = ttl_checker.scheduler();
 
         let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
@@ -566,14 +542,6 @@ impl TiKVServer {
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
         initial_metric(&self.config.metric);
-        if self.config.storage.enable_ttl {
-            ttl_checker.start_with_timer(TTLChecker::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
-                self.region_info_accessor.clone(),
-                self.config.storage.ttl_check_poll_interval.into(),
-            ));
-            self.to_stop.push(ttl_checker);
-        }
 
         self.servers = Some(Servers {
             lock_mgr,
@@ -702,7 +670,7 @@ impl TiKVServer {
         let raft_db_path = Path::new(&conf.raft_store.raftdb_path);
         let kv_engine_path = PathBuf::from(&conf.storage.data_dir).join(Path::new("db"));
         let wal_size = 1024 * 1024 * 1024;
-        let mut rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
+        let rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
         let dfs = Arc::new(kvengine::dfs::S3FS::new(
             dfs_conf.tenant_id,
@@ -751,7 +719,7 @@ struct PdIDAllocator {
 impl kvengine::IDAllocator for PdIDAllocator {
     fn alloc_id(&self, count: usize) -> std::result::Result<Vec<u64>, String> {
         let mut futs = vec![];
-        for i in 0..count {
+        for _ in 0..count {
             futs.push(self.pd.get_tso());
         }
         let mut timestamps = vec![];
@@ -761,7 +729,7 @@ impl kvengine::IDAllocator for PdIDAllocator {
                     timestamps.push(val.into_inner());
                     futs = remaining;
                 }
-                (Err(_e), _index, remaining) => {
+                (Err(_e), _index, _remaining) => {
                     return Err(_e.to_string());
                 }
             }

@@ -14,7 +14,6 @@ use pd_client::{Error as PdError, PdClient, INVALID_ID};
 use protobuf::Message;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{initial_region, FlowStatsReporter};
-use rfstore::router::RaftRouter;
 use rfstore::store::store_fsm::StoreMeta;
 use rfstore::store::{self, Config as StoreConfig, Engines};
 use rfstore::store::{PdTask, RaftBatchSystem, Transport};

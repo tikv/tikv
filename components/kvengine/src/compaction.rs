@@ -4,12 +4,10 @@ use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, Bytes, BytesMut};
-use moka::sync::SegmentedCache;
+use bytes::{Bytes, BytesMut};
 use protobuf::RepeatedField;
 use slog_global::error;
 
-use crate::apply::check_tables_order;
 use crate::dfs;
 use crate::table::{
     search,
@@ -126,20 +124,6 @@ impl CompactDef {
             bot_left_idx: 0,
             bot_right_idx: 0,
         }
-    }
-
-    pub(crate) fn smallest(&self) -> &[u8] {
-        if self.bot.len() > 0 && self.next_range.left < self.this_range.left {
-            return self.next_range.left.chunk();
-        }
-        self.this_range.left.chunk()
-    }
-
-    pub(crate) fn biggest(&self) -> &[u8] {
-        if self.bot.len() > 0 && self.next_range.right > self.this_range.right {
-            return self.next_range.right.chunk();
-        }
-        self.this_range.right.chunk()
     }
 
     pub(crate) fn fill_table(
@@ -283,7 +267,7 @@ impl Engine {
                     tx.send(res).unwrap();
                 });
             }
-            for i in 0..cnt {
+            for _ in 0..cnt {
                 let res = rx.recv().unwrap();
                 if let Err(err) = res {
                     error!("compact failed, {:?}", err);
@@ -321,7 +305,7 @@ impl Engine {
 
         for cf in 0..NUM_CFS {
             let scf = shard.get_cf(cf);
-            for lh in &scf.levels[..scf.levels.len()-1] {
+            for lh in &scf.levels[..scf.levels.len() - 1] {
                 let score = lh.total_size as f64
                     / ((self.opts.base_size as f64) * 10f64.powf((lh.level - 1) as f64));
                 if max_pri.score < score {

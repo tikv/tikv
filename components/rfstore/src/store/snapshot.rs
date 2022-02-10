@@ -1,18 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::Error as EngineError;
-use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Result as EngineResult};
 use kvengine::SnapAccess;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tikv_util::error;
-use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
-use txn_types::{Key, Value};
 
 /// Snapshot of a region.
 ///
@@ -59,31 +54,6 @@ impl Clone for RegionSnapshot {
             max_ts_sync_status: self.max_ts_sync_status.clone(),
             term: self.term,
             txn_extra_op: self.txn_extra_op.clone(),
-        }
-    }
-}
-
-impl RegionSnapshot {
-    #[inline(never)]
-    fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
-        CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
-        if panic_when_unexpected_key_or_data() {
-            set_panic_mark();
-            panic!(
-                "failed to get value of key {} in region {}: {:?}",
-                log_wrappers::Value::key(&key),
-                self.snap.get_id(),
-                e,
-            );
-        } else {
-            error!(
-                "failed to get value of key in cf";
-                "key" => log_wrappers::Value::key(&key),
-                "region" => self.snap.get_id(),
-                "cf" => cf,
-                "error" => ?e,
-            );
-            e
         }
     }
 }

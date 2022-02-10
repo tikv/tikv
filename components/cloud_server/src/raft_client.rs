@@ -2,7 +2,6 @@
 
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
-use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
@@ -18,7 +17,6 @@ use rfstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use std::collections::VecDeque;
 use std::ffi::CString;
-use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -29,7 +27,6 @@ use tikv::server::metrics::*;
 use tikv::server::{self, Config, StoreAddrResolver};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::Scheduler;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 

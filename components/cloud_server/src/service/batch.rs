@@ -11,7 +11,6 @@ use tikv::storage::{
     Storage,
 };
 use tikv::storage::{ResponseBatchConsumer, Result};
-use tikv_kv::Snapshot;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::Instant;

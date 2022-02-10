@@ -4,7 +4,6 @@ use crate::{Error, Result};
 use kvproto::metapb;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use protobuf::Message;
-use raft_proto::eraftpb::{self, MessageType};
 use slog::{Key, Record, Serializer};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -215,7 +214,12 @@ impl RegionIDVer {
 }
 
 impl slog::Value for RegionIDVer {
-    fn serialize(&self, _record: &Record, key: Key, serializer: &mut Serializer) -> slog::Result {
+    fn serialize(
+        &self,
+        _record: &Record,
+        key: Key,
+        serializer: &mut dyn Serializer,
+    ) -> slog::Result {
         serializer.emit_str(key, &self.to_string())
     }
 }

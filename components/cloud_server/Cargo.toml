@@ -103,6 +103,3 @@ paste = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
-
-
-[patch.crates-io]

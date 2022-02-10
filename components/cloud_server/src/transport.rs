@@ -3,7 +3,6 @@
 use kvproto::raft_serverpb::RaftMessage;
 
 use crate::raft_client::RaftClient;
-use engine_traits::KvEngine;
 use rfstore::router::RaftStoreRouter;
 use rfstore::store::Transport;
 use rfstore::Result as RaftStoreResult;

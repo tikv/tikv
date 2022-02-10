@@ -101,6 +101,7 @@ impl Value {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn encode_buf(meta: u8, user_meta: &[u8], version: u64, val: &[u8]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(VALUE_PTR_OFF + user_meta.len() + val.len());
         buf.resize(buf.capacity(), 0);

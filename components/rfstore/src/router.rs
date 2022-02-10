@@ -5,7 +5,7 @@ use crate::store::{
     ProposalRouter, RaftCommand, SignificantMsg, StoreMsg, StoreRouter,
 };
 use crate::Error::RegionNotFound;
-use crate::{Error as RaftStoreError, Result as RaftStoreResult};
+use crate::Result as RaftStoreResult;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use slog_global::info;
@@ -195,10 +195,6 @@ impl RaftRouter {
         }
     }
 
-    pub(crate) fn get(&self, region_id: u64) -> Option<dashmap::mapref::one::Ref<u64, PeerStates>> {
-        self.peers.get(&region_id)
-    }
-
     pub(crate) fn register(&self, peer: PeerFsm) {
         let id = peer.peer.region().id;
         let ver = peer.peer.region().get_region_epoch().get_version();
@@ -221,10 +217,10 @@ impl RaftRouter {
         }
     }
 
-    pub(crate) fn send(&self, id: u64, mut msg: PeerMsg) -> RaftStoreResult<()> {
+    pub(crate) fn send(&self, id: u64, msg: PeerMsg) -> RaftStoreResult<()> {
         if let Some(peer) = self.peers.get(&id) {
             if !peer.closed.load(Ordering::Relaxed) {
-                self.peer_sender.send((id, msg));
+                self.peer_sender.send((id, msg)).unwrap();
                 return Ok(());
             }
         }
@@ -232,7 +228,7 @@ impl RaftRouter {
     }
 
     pub(crate) fn send_store(&self, msg: StoreMsg) {
-        self.store_sender.send(msg);
+        self.store_sender.send(msg).unwrap();
     }
 }
 
@@ -257,7 +253,7 @@ impl RaftStoreRouter for RaftRouter {
     fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> PeerMsg) {
         for peer in self.peers.iter() {
             let msg = msg_gen();
-            self.peer_sender.send((*peer.key(), msg));
+            self.peer_sender.send((*peer.key(), msg)).unwrap();
         }
     }
 }
@@ -266,9 +262,9 @@ fn send_command_impl(
     router: &impl ProposalRouter,
     req: RaftCmdRequest,
     cb: Callback,
-    deadline: Option<Deadline>,
+    _deadline: Option<Deadline>,
 ) -> RaftStoreResult<()> {
-    let mut cmd = RaftCommand::new(req, cb);
+    let cmd = RaftCommand::new(req, cb);
     // TODO(x) handle deadline
     router.send(cmd)
 }

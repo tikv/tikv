@@ -212,7 +212,7 @@ impl EngineCore {
             if i == 1 && shard.get_split_stage() == kvenginepb::SplitStage::PreSplit {
                 mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplitFlushDone);
             }
-            let mut mem_tbl = mem_tbl.clone();
+            let mem_tbl = mem_tbl.clone();
             mem_tbl.set_version(shard.load_mem_table_version());
             info!(
                 "shard {}:{} trigger flush mem-table ts {}, size {}",

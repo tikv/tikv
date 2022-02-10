@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::store::cmd_resp::{err_resp, new_error};
 use crate::store::{
     cf_name_to_num, cmd_resp, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
     RegionSnapshot, RequestInspector, RequestPolicy, StoreMeta,

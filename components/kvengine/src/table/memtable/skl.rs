@@ -19,8 +19,6 @@ pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
 const RAND_SEED: u32 = 410958445;
 
-const MAX_NODE_SIZE: usize = std::mem::size_of::<Node>();
-
 pub struct WriteBatch {
     pub(crate) entries: Vec<WriteBatchEntry>,
     pub(crate) buf: BytesMut,

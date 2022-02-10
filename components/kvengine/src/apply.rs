@@ -7,7 +7,6 @@ use crate::{
 };
 use kvenginepb as pb;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {

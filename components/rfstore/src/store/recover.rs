@@ -14,7 +14,7 @@ use protobuf::{Message, ProtobufEnum};
 use raft_proto::eraftpb;
 use slog_global::info;
 use std::sync::Arc;
-use tikv_util::{debug, error, warn};
+use tikv_util::{debug, warn};
 
 #[derive(Clone)]
 pub struct RecoverHandler {
@@ -95,7 +95,7 @@ fn load_store_ident(rf_engine: &rfengine::RFEngine) -> Option<raft_serverpb::Sto
         return None;
     }
     let mut ident = raft_serverpb::StoreIdent::new();
-    ident.merge_from_bytes(val.unwrap().chunk());
+    ident.merge_from_bytes(val.unwrap().chunk()).unwrap();
     return Some(ident);
 }
 
@@ -181,7 +181,7 @@ impl kvengine::MetaIterator for RecoverHandler {
     {
         let mut err_msg = None;
         self.rf_engine
-            .iterate_all_states(false, |region_id, key, val| {
+            .iterate_all_states(false, |_region_id, key, val| {
                 if key[0] == KV_ENGINE_META_KEY[0] {
                     let mut cs = kvenginepb::ChangeSet::new();
                     if let Err(e) = cs.merge_from_bytes(val) {

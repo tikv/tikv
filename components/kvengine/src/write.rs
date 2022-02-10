@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, intrinsics::transmute, sync::atomic::Ordering, time::Instant};
+use std::{collections::HashMap, time::Instant};
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BytesMut};
@@ -129,7 +129,7 @@ impl Engine {
             }
             // Recover the shard to the pre-split stage when this shard is ingested.
         }
-        let mut mem_tbl = shard.get_writable_mem_table();
+        let mem_tbl = shard.get_writable_mem_table();
         for cf in 0..NUM_CFS {
             mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf));
         }
@@ -173,7 +173,7 @@ impl Engine {
         }
     }
 
-    pub(crate) fn schedule_flush_task(&self, shard: &Shard, mut mem_tbl: memtable::CFTable) {
+    pub(crate) fn schedule_flush_task(&self, shard: &Shard, mem_tbl: memtable::CFTable) {
         let mut guard = shard.last_switch_time.write().unwrap();
         let last_switch_instant = *guard;
         *guard = Instant::now();

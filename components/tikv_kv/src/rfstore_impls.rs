@@ -72,11 +72,11 @@ impl Iterator for rfstore::store::RegionSnapshotIterator {
         unreachable!()
     }
 
-    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
+    fn seek(&mut self, _key: &Key) -> kv::Result<bool> {
         unreachable!()
     }
 
-    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
+    fn seek_for_prev(&mut self, _key: &Key) -> kv::Result<bool> {
         unreachable!()
     }
 

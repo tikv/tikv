@@ -21,7 +21,6 @@ pub struct CloudStore<S: Snapshot> {
 
 const WRITE_CF: usize = 0;
 const LOCK_CF: usize = 1;
-const EXTRA_CF: usize = 2;
 
 impl<S: Snapshot> super::Store for CloudStore<S> {
     type Scanner = CloudStoreScanner;
@@ -42,7 +41,7 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
     }
 
     fn incremental_get(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        let mut stat = &mut self.stats;
+        let stat = &mut self.stats;
         let item = Self::get_inner(
             user_key,
             &self.snapshot,
@@ -89,7 +88,7 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
         let lower_bound = lower_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
         let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
         let mut stats = Statistics::default();
-        let mut lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
+        let lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
         self.check_locks(
             lock_iter,
             lower_bound.clone(),

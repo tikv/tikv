@@ -5,13 +5,13 @@ use fail::fail_point;
 use kvengine::ShardMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader,
-    Request, StatusCmdType, StatusResponse,
+    CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, StatusCmdType,
+    StatusResponse,
 };
 use kvproto::raft_serverpb::RaftMessage;
-use protobuf::{Message, ProtobufEnum};
+use protobuf::ProtobufEnum;
+use raft;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raft::{self, Ready, StateRole};
 use raft_proto::eraftpb;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
@@ -22,7 +22,7 @@ use tikv_util::{box_err, debug, error, info, trace, warn};
 
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::Callback;
-use crate::store::peer::{ConsistencyState, Peer};
+use crate::store::peer::Peer;
 use crate::store::{notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask};
 use crate::store::{
     raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
@@ -44,19 +44,11 @@ use txn_types::WriteBatchFlags;
 ///
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
-const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
 pub struct PeerFsm {
     pub(crate) peer: Peer,
     pub(crate) stopped: bool,
     ticker: Ticker,
-}
-
-pub struct BatchRaftCmdRequestBuilder {
-    raft_entry_max_size: f64,
-    batch_req_size: u32,
-    request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback, usize)>,
 }
 
 impl PeerFsm {
@@ -213,9 +205,9 @@ impl<'a> PeerMsgHandler<'a> {
                 self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
             }
             CasualMessage::HalfSplitRegion {
-                region_epoch,
-                policy,
-                source,
+                region_epoch: _,
+                policy: _,
+                source: _,
             } => {
                 // TODO(x) handle half split region;
                 warn!("ignore half split region");
@@ -261,24 +253,6 @@ impl<'a> PeerMsgHandler<'a> {
                         self.fsm.peer.raft_group.report_unreachable(peer_id);
                     }
                 }
-            }
-        }
-    }
-
-    fn on_leader_callback(&mut self, cb: Callback) {
-        let msg = new_read_index_request(
-            self.region_id(),
-            self.region().get_region_epoch().clone(),
-            self.fsm.peer.peer.clone(),
-        );
-        self.propose_raft_command(msg, cb);
-    }
-
-    fn on_role_changed(&mut self, ready: &Ready) {
-        // Update leader lease when the Raft state changes.
-        if let Some(ss) = ready.ss() {
-            if StateRole::Leader == ss.raft_state {
-                self.fsm.peer.heartbeat_pd(&self.ctx);
             }
         }
     }
@@ -435,7 +409,7 @@ impl<'a> PeerMsgHandler<'a> {
         Ok(())
     }
 
-    fn on_extra_message(&mut self, mut msg: RaftMessage) {
+    fn on_extra_message(&mut self, _msg: RaftMessage) {
         // TODO(x)
     }
 
@@ -776,8 +750,6 @@ impl<'a> PeerMsgHandler<'a> {
 
         let derived = regions.last().unwrap().clone();
         let region_id = derived.get_id();
-        // Roughly estimate the size and keys for new regions.
-        let new_region_count = regions.len() as u64;
         let mut meta = self.ctx.global.store_meta.lock().unwrap();
         meta.set_region(
             &self.ctx.global.coprocessor_host,
@@ -814,7 +786,6 @@ impl<'a> PeerMsgHandler<'a> {
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{} original region should exist", self.fsm.peer.tag());
         }
-        let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
 
@@ -1024,7 +995,7 @@ impl<'a> PeerMsgHandler<'a> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
+    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -1094,12 +1065,6 @@ impl<'a> PeerMsgHandler<'a> {
                 return;
             }
         }
-    }
-
-    #[inline]
-    fn region_split_skip_max_count(&self) -> usize {
-        fail_point!("region_split_skip_max_count", |_| { usize::max_value() });
-        REGION_SPLIT_SKIP_MAX_COUNT
     }
 
     fn on_split_region_check_tick(&mut self) {
@@ -1316,7 +1281,7 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_apply_change_set_result(&mut self, mut msg: MsgApplyChangeSetResult) {
-        let mut change = msg.change_set;
+        let change = msg.change_set;
         let tag = self.peer.tag();
         if msg.err.is_some() {
             let err = msg.err.take().unwrap();

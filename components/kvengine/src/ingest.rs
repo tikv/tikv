@@ -4,7 +4,6 @@ use crate::table::sstable::{L0Table, SSTable};
 use crate::*;
 use dashmap::mapref::entry::Entry;
 use std::iter::Iterator;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
 pub struct IngestTree {

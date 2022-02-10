@@ -18,30 +18,26 @@ use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
 
-use engine_rocks::RocksEngine;
 use rfstore::router::RaftStoreRouter;
 use security::SecurityManager;
 use tikv::coprocessor::Endpoint;
 use tikv::coprocessor_v2;
 use tikv::server::{Config, Proxy};
 use tikv::storage::lock_manager::LockManager;
-use tikv::storage::{Engine, Storage};
+use tikv::storage::Storage;
 use tikv_util::config::VersionTrack;
 use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 use tikv_util::Either;
 
 use super::raft_client::{ConnectionBuilder, RaftClient};
 use tikv::server::load_statistics::*;
 use tikv::server::metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC};
 
-use super::service::*;
 use super::transport::ServerTransport;
 use crate::service::KvService;
 use crate::RaftKv;
 use tikv::read_pool::ReadPool;
-use tikv::server::config;
 use tikv::server::resolve::StoreAddrResolver;
 
 use engine_traits::Error as EngineTraitError;
@@ -55,7 +51,6 @@ use thiserror::Error;
 use tikv::storage::kv::Error as EngineError;
 use tikv::storage::Error as StorageError;
 use tikv_util::codec::Error as CodecError;
-use tikv_util::worker::ScheduleError;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -361,8 +356,6 @@ pub mod test_router {
     use rfstore::store::*;
     use rfstore::Result as RaftStoreResult;
 
-    use engine_rocks::RocksSnapshot;
-    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
 
     #[derive(Clone)]

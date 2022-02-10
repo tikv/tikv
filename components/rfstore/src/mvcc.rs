@@ -2,7 +2,6 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, Bytes, BytesMut};
-use std::ops::Deref;
 
 pub const WRITE_CF: usize = 0;
 pub const LOCK_CF: usize = 1;
