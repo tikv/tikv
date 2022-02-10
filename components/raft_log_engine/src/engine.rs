@@ -144,6 +144,7 @@ impl RaftEngine for RaftLogEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        _first_index: u64,
         _: &RaftLocalState,
         batch: &mut RaftLogBatch,
     ) -> Result<()> {

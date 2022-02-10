@@ -252,17 +252,35 @@ impl Recorder {
             }
             let sampled = sample.contained + sample.left + sample.right;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_enough_key"])
+                    .inc();
                 continue;
             }
+
             let diff = (sample.left - sample.right) as f64;
             let balance_score = diff.abs() / (sample.left + sample.right) as f64;
+            LOAD_BASE_SPLIT_SAMPLE_VEC
+                .with_label_values(&["balance_score"])
+                .observe(balance_score);
             if balance_score >= split_balance_score {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_balance_key"])
+                    .inc();
                 continue;
             }
+
             let contained_score = sample.contained as f64 / sampled as f64;
+            LOAD_BASE_SPLIT_SAMPLE_VEC
+                .with_label_values(&["contained_score"])
+                .observe(contained_score);
             if contained_score >= split_contained_score {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_uncross_key"])
+                    .inc();
                 continue;
             }
+
             let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
@@ -367,6 +385,10 @@ impl AutoSplitController {
                 .iter()
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
             debug!("load base split params";"region_id"=>region_id,"qps"=>qps,"qps_threshold"=>self.cfg.qps_threshold,"byte"=>byte,"byte_threshold"=>self.cfg.byte_threshold);
+
+            QUERY_REGION_VEC
+                .with_label_values(&["read"])
+                .observe(qps as f64);
 
             if qps < self.cfg.qps_threshold && byte < self.cfg.byte_threshold {
                 self.recorders.remove_entry(&region_id);

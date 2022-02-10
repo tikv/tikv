@@ -6,13 +6,15 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
+use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
@@ -1109,6 +1111,16 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn get_first_log(&self, region_id: u64, store_id: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+        let raft_engine = self.engines[&store_id].raft.clone();
+        let seek_key = keys::raft_log_key(region_id, 0);
+        let prefix = keys::raft_log_prefix(region_id);
+        match raft_engine.seek(&seek_key).unwrap() {
+            Some((k, v)) if k.starts_with(&prefix) => Some((k, v)),
+            _ => None,
+        }
+    }
+
     pub fn restore_kv_meta(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
         let (meta_start, meta_end) = (
             keys::region_meta_prefix(region_id),
@@ -1484,6 +1496,38 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         request_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
+    pub fn gc_peer(
+        &mut self,
+        region_id: u64,
+        node_id: u64,
+        peer: metapb::Peer,
+    ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+
+        let mut message = RaftMessage::default();
+        message.set_region_id(region_id);
+        message.set_from_peer(peer.clone());
+        message.set_to_peer(peer);
+        message.set_region_epoch(self.get_region_epoch(region_id));
+        message.set_is_tombstone(true);
+        router.send_raft_message(message)
+    }
+
+    pub fn must_gc_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
+        for _ in 0..250 {
+            self.gc_peer(region_id, node_id, peer.clone()).unwrap();
+            if self.region_local_state(region_id, node_id).get_state() == PeerState::Tombstone {
+                return;
+            }
+            sleep_ms(20);
+        }
+
+        panic!(
+            "gc peer timeout: region id {}, node id {}, peer {:?}",
+            region_id, node_id, peer
+        );
     }
 }
 
