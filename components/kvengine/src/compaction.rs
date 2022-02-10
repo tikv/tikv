@@ -321,7 +321,7 @@ impl Engine {
 
         for cf in 0..NUM_CFS {
             let scf = shard.get_cf(cf);
-            for lh in scf.levels.as_ref() {
+            for lh in &scf.levels[..scf.levels.len()-1] {
                 let score = lh.total_size as f64
                     / ((self.opts.base_size as f64) * 10f64.powf((lh.level - 1) as f64));
                 if max_pri.score < score {
