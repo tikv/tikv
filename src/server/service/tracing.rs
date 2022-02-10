@@ -5,12 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use chrono::{DateTime, Local};
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::prelude::*;
 use kvproto::tracepb;
 use minitrace::prelude::*;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_json::json;
+use std::time::UNIX_EPOCH;
 use tikv_util::time::{duration_to_sec, Instant};
 
 use crate::server::metrics::{GrpcTypeKind, GRPC_MSG_HISTOGRAM_STATIC};
@@ -233,9 +235,10 @@ impl TracingReport {
     fn span_to_json(span: &SpanRecord) -> serde_json::Value {
         json!({
             "span_id": span.id,
+            "parent_id": span.parent_id,
             "event": span.event.to_string(),
-            "begin_unix_ns": span.begin_unix_time_ns,
-            "duration_ns": span.duration_ns,
+            "begin": format_unix_time(span.begin_unix_time_ns),
+            "duration_ms": span.duration_ns as f64 / 1_000_000.0,
             "properties": Self::properties_to_json(&span.properties)
         })
     }
@@ -247,4 +250,9 @@ impl TracingReport {
             .collect();
         map.into()
     }
+}
+
+fn format_unix_time(unix_time_ns: u64) -> String {
+    let datetime: DateTime<Local> = (UNIX_EPOCH + Duration::from_nanos(unix_time_ns)).into();
+    datetime.format("%H:%M:%S%.3f").to_string()
 }
