@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{prelude::*, BufReader};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,7 +21,10 @@ use engine_traits::{
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_util::time::{Instant, Limiter};
+use tikv_util::{
+    codec::stream_event::{EventIterator, Iterator as EIterator},
+    time::{Instant, Limiter},
+};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::import_file::{ImportDir, ImportFile};
@@ -127,6 +132,41 @@ impl SSTImporter {
         self.dir.exist(meta).unwrap_or(false)
     }
 
+    // Donwloads and apply a KV file from an external storage.
+    pub fn apply<E: KvEngine>(
+        &self,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        cf: &str,
+        speed_limiter: Limiter,
+        engine: E,
+    ) -> Result<Option<Range>> {
+        debug!("apply start";
+            "url" => ?backend,
+            "name" => name,
+            "cf" => cf,
+            "rewrite_rule" => ?rewrite_rule,
+        );
+        match self.do_download_and_apply::<E>(
+            backend,
+            name,
+            rewrite_rule,
+            cf,
+            &speed_limiter,
+            engine,
+        ) {
+            Ok(r) => {
+                info!("apply"; "name" => name, "range" => ?r);
+                Ok(r)
+            }
+            Err(e) => {
+                error!(%e; "apply failed"; "name" => name,);
+                Err(e)
+            }
+        }
+    }
+
     // Downloads an SST file from an external storage.
     //
     // This method is blocking. It performs the following transformations before
@@ -166,7 +206,7 @@ impl SSTImporter {
             name,
             rewrite_rule,
             crypter,
-            speed_limiter,
+            &speed_limiter,
             engine,
         ) {
             Ok(r) => {
@@ -192,6 +232,168 @@ impl SSTImporter {
         self.switcher.get_mode()
     }
 
+    fn download_file_from_external_storage(
+        &self,
+        file_length: u64,
+        src_file_name: &str,
+        dst_file: std::path::PathBuf,
+        backend: &StorageBackend,
+        file_crypter: Option<FileEncryptionInfo>,
+        speed_limiter: &Limiter,
+    ) -> Result<()> {
+        let start_read = Instant::now();
+        // prepare to download the file from the external_storage
+        // TODO: pass a config to support hdfs
+        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
+        let url = ext_storage.url()?.to_string();
+
+        let ext_storage: Box<dyn external_storage_export::ExternalStorage> =
+            if let Some(key_manager) = &self.key_manager {
+                Box::new(external_storage_export::EncryptedExternalStorage {
+                    key_manager: (*key_manager).clone(),
+                    storage: ext_storage,
+                }) as _
+            } else {
+                ext_storage as _
+            };
+
+        let result = ext_storage.restore(
+            src_file_name,
+            dst_file.clone(),
+            file_length,
+            speed_limiter,
+            file_crypter,
+        );
+        IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
+        result.map_err(|e| Error::CannotReadExternalStorage {
+            url: url.to_string(),
+            name: src_file_name.to_owned(),
+            local_path: dst_file.clone(),
+            err: e,
+        })?;
+
+        OpenOptions::new()
+            .append(true)
+            .open(dst_file)?
+            .sync_data()?;
+
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["read"])
+            .observe(start_read.saturating_elapsed().as_secs_f64());
+
+        debug!("downloaded file succeed";
+            "name" => src_file_name,
+            "url"  => %url,
+        );
+        Ok(())
+    }
+
+    fn do_download_and_apply<E: KvEngine>(
+        &self,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        cf: &str,
+        speed_limiter: &Limiter,
+        engine: E,
+    ) -> Result<Option<Range>> {
+        let path = self.dir.get_import_path(name)?;
+        let start = Instant::now();
+        self.download_file_from_external_storage(
+            // don't check file length after download file for now.
+            0,
+            name,
+            path.temp.clone(),
+            backend,
+            // don't support encrypt for now.
+            None,
+            speed_limiter,
+        )?;
+        info!("download file finished {}", name);
+
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&["download"])
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        // iterator `path.temp` file and performs rewrites and apply.
+        let file = File::open(path.temp)?;
+        let mut reader = BufReader::new(file);
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer)?;
+
+        let mut event_iter = EventIterator::new(buffer);
+
+        let old_prefix = rewrite_rule.get_old_key_prefix();
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+
+        let perform_rewrite = old_prefix != new_prefix;
+
+        // perform iteration and key rewrite.
+        let mut key = keys::data_key(new_prefix);
+        let new_prefix_data_key_len = key.len();
+        let mut smallest_key = None;
+        let mut largest_key = None;
+
+        let start = Instant::now();
+        loop {
+            if !event_iter.valid() {
+                break;
+            }
+            event_iter.next()?;
+            let iter_key = event_iter.key().to_vec();
+
+            smallest_key = smallest_key.map_or_else(|| Some(iter_key.clone()), |v: Vec<u8>| {
+                Some(v.min(iter_key.clone()))
+            });
+
+            largest_key = largest_key.map_or_else(|| Some(iter_key.clone()), |v: Vec<u8>| {
+                Some(v.max(iter_key.clone()))
+            });
+
+            if perform_rewrite {
+                let old_key = event_iter.key();
+
+                if !old_key.starts_with(old_prefix) {
+                    return Err(Error::WrongKeyPrefix {
+                        what: "Key in file",
+                        key: old_key.to_vec(),
+                        prefix: old_prefix.to_vec(),
+                    });
+                }
+                key.truncate(new_prefix_data_key_len);
+                key.extend_from_slice(&old_key[old_prefix.len()..]);
+
+                debug!(
+                    "perform rewrite new key: {:?}, new key prefix: {:?}, old key prefix: {:?}",
+                    log_wrappers::Value::key(keys::origin_key(&key)),
+                    log_wrappers::Value::key(new_prefix),
+                    log_wrappers::Value::key(old_prefix),
+                );
+            } else {
+                key = keys::data_key(event_iter.key());
+            }
+            let value = Cow::Borrowed(event_iter.value());
+            // TODO handle delete cf
+            engine.put_cf(cf, &key, &value)?;
+        }
+        engine.flush_cf(cf, true)?;
+        let label = if perform_rewrite { "rewrite" } else { "normal" };
+        info!("apply file finished {}", name);
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&[label])
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        match (smallest_key, largest_key) {
+            (Some(sk), Some(lk)) => {
+                let mut final_range = Range::default();
+                final_range.set_start(sk);
+                final_range.set_end(lk);
+                Ok(Some(final_range))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn do_download<E: KvEngine>(
         &self,
         meta: &SstMeta,
@@ -199,73 +401,37 @@ impl SSTImporter {
         name: &str,
         rewrite_rule: &RewriteRule,
         crypter: Option<CipherInfo>,
-        speed_limiter: Limiter,
+        speed_limiter: &Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
-        let url = {
-            let start_read = Instant::now();
 
-            // prepare to download the file from the external_storage
-            // TODO: pass a config to support hdfs
-            let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
-            let url = ext_storage.url()?.to_string();
+        let file_crypter = crypter.map(|c| FileEncryptionInfo {
+            method: encryption_method_to_db_encryption_method(c.cipher_type),
+            key: c.cipher_key,
+            iv: meta.cipher_iv.to_owned(),
+        });
 
-            let ext_storage: Box<dyn external_storage_export::ExternalStorage> =
-                if let Some(key_manager) = &self.key_manager {
-                    Box::new(external_storage_export::EncryptedExternalStorage {
-                        key_manager: (*key_manager).clone(),
-                        storage: ext_storage,
-                    }) as _
-                } else {
-                    ext_storage as _
-                };
-
-            let file_crypter = crypter.map(|c| FileEncryptionInfo {
-                method: encryption_method_to_db_encryption_method(c.cipher_type),
-                key: c.cipher_key,
-                iv: meta.cipher_iv.to_owned(),
-            });
-
-            let result = ext_storage.restore(
-                name,
-                path.temp.to_owned(),
-                meta.length,
-                &speed_limiter,
-                file_crypter,
-            );
-            IMPORTER_DOWNLOAD_BYTES.observe(meta.length as _);
-            result.map_err(|e| Error::CannotReadExternalStorage {
-                url: url.to_string(),
-                name: name.to_owned(),
-                local_path: path.temp.to_owned(),
-                err: e,
-            })?;
-
-            OpenOptions::new()
-                .append(true)
-                .open(&path.temp)?
-                .sync_data()?;
-
-            IMPORTER_DOWNLOAD_DURATION
-                .with_label_values(&["read"])
-                .observe(start_read.saturating_elapsed().as_secs_f64());
-
-            url
-        };
+        self.download_file_from_external_storage(
+            meta.length,
+            name,
+            path.temp.clone(),
+            backend,
+            file_crypter,
+            speed_limiter,
+        )?;
 
         // now validate the SST file.
-        let path_str = path.temp.to_str().unwrap();
         let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
         // Use abstracted SstReader after Env is abstracted.
-        let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+        let dst_file_name = path.temp.to_str().unwrap();
+        let sst_reader = RocksSstReader::open_with_env(dst_file_name, Some(env))?;
         sst_reader.verify_checksum()?;
 
         debug!("downloaded file and verified";
             "meta" => ?meta,
-            "url" => %url,
             "name" => name,
-            "path" => path_str,
+            "path" => dst_file_name,
         );
 
         // undo key rewrite so we could compare with the keys inside SST

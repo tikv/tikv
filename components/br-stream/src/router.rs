@@ -13,7 +13,6 @@ use std::{
 
 use crate::{
     annotate,
-    codec::Encoder,
     endpoint::Task,
     errors::Error,
     metadata::StreamTask,
@@ -41,7 +40,9 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 
 use tikv_util::{
-    box_err, defer, error, info,
+    box_err,
+    codec::stream_event::EventEncoder,
+    defer, info, error,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -825,7 +826,7 @@ impl DataFile {
     async fn on_event(&mut self, mut kv: ApplyEvent) -> Result<usize> {
         let now = Instant::now_coarse();
         let _entry_size = kv.size();
-        let encoded = Encoder::encode_event(&kv.key, &kv.value);
+        let encoded = EventEncoder::encode_event(&kv.key, &kv.value);
         let mut size = 0;
         for slice in encoded {
             let slice = slice.as_ref();
