@@ -28,7 +28,8 @@ pub fn thread_id() -> usize {
 /// Gets the ID of the current thread.
 #[cfg(not(target_os = "linux"))]
 pub fn thread_id() -> usize {
-    thread_id::get()
+    // thread_id::get()
+    1
 }
 
 /// Get all thread id collections under the current process.
