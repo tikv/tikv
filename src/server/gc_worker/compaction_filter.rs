@@ -95,7 +95,7 @@ lazy_static! {
     ).unwrap();
 
     /// Counter of mvcc deletions met in compaction filter.
-    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_MET: IntCounter: register_int_counter!(
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_MET: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_mvcc_deletion_met",
         "MVCC deletion from compaction filter met"
     ).unwrap();
