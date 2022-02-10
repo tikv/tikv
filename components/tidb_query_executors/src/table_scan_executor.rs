@@ -274,7 +274,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let physical_table_id_column_idx = self
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
-            .map(|idx| *idx);
+            .copied();
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
