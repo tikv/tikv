@@ -573,6 +573,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compact_whole_cluster(
     pd_client: &RpcClient,
     cfg: &TiKvConfig,
