@@ -402,8 +402,10 @@ impl RouterInner {
         }
     }
 
+    /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
         for (name, task_info) in self.tasks.lock().await.iter() {
+            // if stream task need flush this time, schedule Task::Flush, or update time justly.
             if task_info.should_flush().await
                 && task_info.set_flushing_status_cas(false, true).is_ok()
             {
@@ -416,6 +418,8 @@ impl RouterInner {
                     error!("backup stream schedule task failed"; "error" => ?e);
                     task_info.set_flushing_status(false);
                 }
+            }else{
+                task_info.update_flush_time();
             }
         }
     }
