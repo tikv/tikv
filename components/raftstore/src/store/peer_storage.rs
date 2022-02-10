@@ -19,15 +19,20 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfState, Entry, HardState, Snapshot};
-use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use raft::{
+    self, util::limit_size, Error as RaftError, GetEntriesContext, RaftState, Ready, Storage,
+    StorageError,
+};
 
 use crate::store::async_io::write::WriteTask;
 use crate::store::fsm::GenSnapTask;
 use crate::store::memory::*;
 use crate::store::peer::PersistSnapshotResult;
 use crate::store::util;
+use crate::store::worker::RaftlogFetchTask;
 use crate::{bytes_capacity, Error, Result};
-use engine_traits::{RaftEngine, RaftLogBatch};
+use collections::HashMap;
+use engine_traits::{RaftEngine, RaftLogBatch, RAFT_LOG_MULTI_GET_CNT};
 use into_other::into_other;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::time::Instant;
@@ -43,6 +48,9 @@ use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
+const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
+
+pub const MAX_INIT_ENTRY_COUNT: usize = 1024;
 
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;
@@ -630,12 +638,66 @@ where
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask<EK::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
     cache: EntryCache,
 
+    raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    raftlog_fetch_stats: AsyncFetchStats,
+    async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+
     pub tag: String,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RaftlogFetchState {
+    Fetching,
+    Fetched(Box<RaftlogFetchResult>),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct RaftlogFetchResult {
+    pub ents: raft::Result<Vec<Entry>>,
+    // because entries may be empty, so store the original low index that the task issued
+    pub low: u64,
+    // the original max size that the task issued
+    pub max_size: u64,
+    // if the ents hit max_size
+    pub hit_size_limit: bool,
+    // the times that async fetch have already tried
+    pub tried_cnt: usize,
+    // the term when the task issued
+    pub term: u64,
+}
+
+#[derive(Default)]
+struct AsyncFetchStats {
+    async_fetch: Cell<u64>,
+    sync_fetch: Cell<u64>,
+    fallback_fetch: Cell<u64>,
+    fetch_invalid: Cell<u64>,
+    fetch_unused: Cell<u64>,
+}
+
+impl AsyncFetchStats {
+    fn flush_stats(&mut self) {
+        RAFT_ENTRY_FETCHES
+            .async_fetch
+            .inc_by(self.async_fetch.replace(0));
+        RAFT_ENTRY_FETCHES
+            .sync_fetch
+            .inc_by(self.sync_fetch.replace(0));
+        RAFT_ENTRY_FETCHES
+            .fallback_fetch
+            .inc_by(self.fallback_fetch.replace(0));
+        RAFT_ENTRY_FETCHES
+            .fetch_invalid
+            .inc_by(self.fetch_invalid.replace(0));
+        RAFT_ENTRY_FETCHES
+            .fetch_unused
+            .inc_by(self.fetch_unused.replace(0));
+    }
 }
 
 impl<EK, ER> Storage for PeerStorage<EK, ER>
@@ -652,8 +714,10 @@ where
         low: u64,
         high: u64,
         max_size: impl Into<Option<u64>>,
+        context: GetEntriesContext,
     ) -> raft::Result<Vec<Entry>> {
-        self.entries(low, high, max_size.into().unwrap_or(u64::MAX))
+        let max_size = max_size.into();
+        self.entries(low, high, max_size.unwrap_or(u64::MAX), context)
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -668,8 +732,8 @@ where
         Ok(self.last_index())
     }
 
-    fn snapshot(&self, request_index: u64) -> raft::Result<Snapshot> {
-        self.snapshot(request_index)
+    fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        self.snapshot(request_index, to)
     }
 }
 
@@ -681,7 +745,8 @@ where
     pub fn new(
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        region_sched: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
@@ -707,12 +772,15 @@ where
             apply_state,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
-            region_sched,
+            region_scheduler,
+            raftlog_fetch_scheduler,
             snap_tried_cnt: RefCell::new(0),
             tag,
             applied_index_term,
             last_term,
             cache: EntryCache::default(),
+            async_fetch_results: RefCell::new(HashMap::default()),
+            raftlog_fetch_stats: AsyncFetchStats::default(),
         })
     }
 
@@ -757,9 +825,187 @@ where
         Ok(())
     }
 
-    pub fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
+    pub fn clean_async_fetch_res(&mut self, low: u64) {
+        self.async_fetch_results.borrow_mut().remove(&low);
+    }
+
+    // Update the async fetch result.
+    // None indicates cleanning the fetched result.
+    pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
+        // If it's in fetching, don't clean the async fetch result.
+        if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
+            && res.is_none()
+        {
+            return;
+        }
+
+        match res {
+            Some(res) => {
+                if let Some(RaftlogFetchState::Fetched(prev)) = self
+                    .async_fetch_results
+                    .borrow_mut()
+                    .insert(low, RaftlogFetchState::Fetched(res))
+                {
+                    info!(
+                        "unconsumed async fetch res";
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id,
+                        "res" => ?prev,
+                        "low" => low,
+                    );
+                }
+            }
+            None => {
+                let prev = self.async_fetch_results.borrow_mut().remove(&low);
+                if prev.is_some() {
+                    self.raftlog_fetch_stats.fetch_unused.update(|m| m + 1);
+                }
+            }
+        }
+    }
+
+    fn async_fetch(
+        &self,
+        region_id: u64,
+        low: u64,
+        high: u64,
+        max_size: u64,
+        context: GetEntriesContext,
+        buf: &mut Vec<Entry>,
+    ) -> raft::Result<usize> {
+        if let Some(RaftlogFetchState::Fetching) = self.async_fetch_results.borrow().get(&low) {
+            // already an async fetch in flight
+            return Err(raft::Error::Store(
+                raft::StorageError::LogTemporarilyUnavailable,
+            ));
+        }
+
+        let tried_cnt = if let Some(RaftlogFetchState::Fetched(res)) =
+            self.async_fetch_results.borrow_mut().remove(&low)
+        {
+            assert_eq!(res.low, low);
+            let mut ents = res.ents?;
+            let first = ents.first().map(|e| e.index).unwrap();
+            assert_eq!(first, res.low);
+            let last = ents.last().map(|e| e.index).unwrap();
+
+            if last + 1 >= high {
+                // async fetch res covers [low, high)
+                ents.truncate((high - first) as usize);
+                assert_eq!(ents.last().map(|e| e.index).unwrap(), high - 1);
+                if max_size < res.max_size {
+                    limit_size(&mut ents, Some(max_size));
+                }
+                let count = ents.len();
+                buf.append(&mut ents);
+                fail_point!("on_async_fetch_return");
+                return Ok(count);
+            } else if res.hit_size_limit && max_size <= res.max_size {
+                // async fetch res doesn't cover [low, high) due to hit size limit
+                if max_size < res.max_size {
+                    limit_size(&mut ents, Some(max_size));
+                };
+                let count = ents.len();
+                buf.append(&mut ents);
+                return Ok(count);
+            } else if last + RAFT_LOG_MULTI_GET_CNT > high - 1
+                && res.tried_cnt + 1 == MAX_ASYNC_FETCH_TRY_CNT
+            {
+                let mut fetched_size = ents.iter().fold(0, |acc, e| acc + e.compute_size() as u64);
+                if max_size <= fetched_size {
+                    limit_size(&mut ents, Some(max_size));
+                    let count = ents.len();
+                    buf.append(&mut ents);
+                    return Ok(count);
+                }
+
+                // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
+                for idx in last + 1..high {
+                    let ent = self.engines.raft.get_entry(region_id, idx)?;
+                    match ent {
+                        None => {
+                            return Err(raft::Error::Store(raft::StorageError::Unavailable));
+                        }
+                        Some(ent) => {
+                            let size = ent.compute_size() as u64;
+                            if fetched_size + size > max_size {
+                                break;
+                            } else {
+                                fetched_size += size;
+                                ents.push(ent);
+                            }
+                        }
+                    }
+                }
+                let count = ents.len();
+                buf.append(&mut ents);
+                return Ok(count);
+            }
+            info!(
+                "async fetch invalid";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "first" => first,
+                "last" => last,
+                "low" => low,
+                "high" => high,
+                "max_size" => max_size,
+                "res_max_size" => res.max_size,
+            );
+            // low index or max size is changed, the result is not fit for the current range, so refetch again.
+            self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
+            res.tried_cnt + 1
+        } else {
+            1
+        };
+
+        // the first/second try: get [low, high) asynchronously
+        // the third try:
+        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high) synchronously
+        //  - else: get [low, high) synchronously
+        if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
+            // even the larger range is invalid again, fallback to fetch in sync way
+            self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
+            let count = self.engines.raft.fetch_entries_to(
+                region_id,
+                low,
+                high,
+                Some(max_size as usize),
+                buf,
+            )?;
+            return Ok(count);
+        }
+
+        self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
+        self.async_fetch_results
+            .borrow_mut()
+            .insert(low, RaftlogFetchState::Fetching);
+        self.raftlog_fetch_scheduler
+            .schedule(RaftlogFetchTask::PeerStorage {
+                region_id,
+                context,
+                low,
+                high,
+                max_size: (max_size as usize),
+                tried_cnt,
+                term: self.hard_state().get_term(),
+            })
+            .unwrap();
+        Err(raft::Error::Store(
+            raft::StorageError::LogTemporarilyUnavailable,
+        ))
+    }
+
+    pub fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: u64,
+        context: GetEntriesContext,
+    ) -> raft::Result<Vec<Entry>> {
         self.check_range(low, high)?;
-        let mut ents = Vec::with_capacity((high - low) as usize);
+        let mut ents =
+            Vec::with_capacity(std::cmp::min((high - low) as usize, MAX_INIT_ENTRY_COUNT));
         if low == high {
             return Ok(ents);
         }
@@ -767,24 +1013,35 @@ where
         let cache_low = self.cache.first_index().unwrap_or(u64::MAX);
         if high <= cache_low {
             self.cache.miss.update(|m| m + 1);
-            self.engines.raft.fetch_entries_to(
-                region_id,
-                low,
-                high,
-                Some(max_size as usize),
-                &mut ents,
-            )?;
-            return Ok(ents);
+            return if context.can_async() {
+                self.async_fetch(region_id, low, high, max_size, context, &mut ents)?;
+                Ok(ents)
+            } else {
+                self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                self.engines.raft.fetch_entries_to(
+                    region_id,
+                    low,
+                    high,
+                    Some(max_size as usize),
+                    &mut ents,
+                )?;
+                Ok(ents)
+            };
         }
         let begin_idx = if low < cache_low {
             self.cache.miss.update(|m| m + 1);
-            let fetched_count = self.engines.raft.fetch_entries_to(
-                region_id,
-                low,
-                cache_low,
-                Some(max_size as usize),
-                &mut ents,
-            )?;
+            let fetched_count = if context.can_async() {
+                self.async_fetch(region_id, low, cache_low, max_size, context, &mut ents)?
+            } else {
+                self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                self.engines.raft.fetch_entries_to(
+                    region_id,
+                    low,
+                    cache_low,
+                    Some(max_size as usize),
+                    &mut ents,
+                )?
+            };
             if fetched_count < (cache_low - low) as usize {
                 // Less entries are fetched than expected.
                 return Ok(ents);
@@ -978,7 +1235,7 @@ where
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
     /// snapshot.
-    pub fn snapshot(&self, request_index: u64) -> raft::Result<Snapshot> {
+    pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
@@ -1016,6 +1273,7 @@ where
                         "region_id" => self.region.get_id(),
                         "peer_id" => self.peer_id,
                         "times" => *tried_cnt,
+                        "request_peer" => to,
                     );
                 }
             }
@@ -1039,6 +1297,7 @@ where
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
             "request_index" => request_index,
+            "request_peer" => to,
         );
 
         if !tried || !last_canceled {
@@ -1165,6 +1424,7 @@ where
     pub fn flush_cache_metrics(&mut self) {
         // NOTE: memory usage of entry cache is flushed realtime.
         self.cache.flush_stats();
+        self.raftlog_fetch_stats.flush_stats();
         if self.engines.raft.has_builtin_entry_cache() {
             if let Some(stats) = self.engines.raft.flush_stats() {
                 RAFT_ENTRIES_CACHES_GAUGE.set(stats.cache_size as i64);
@@ -1292,7 +1552,7 @@ where
         let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
         let region_id = self.get_region_id();
         box_try!(
-            self.region_sched
+            self.region_scheduler
                 .schedule(RegionTask::destroy(region_id, start_key, end_key))
         );
         Ok(())
@@ -1307,14 +1567,14 @@ where
         let (old_start_key, old_end_key) = (enc_start_key(old_region), enc_end_key(old_region));
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         if old_start_key < new_start_key {
-            box_try!(self.region_sched.schedule(RegionTask::destroy(
+            box_try!(self.region_scheduler.schedule(RegionTask::destroy(
                 old_region.get_id(),
                 old_start_key,
                 new_start_key
             )));
         }
         if new_end_key < old_end_key {
-            box_try!(self.region_sched.schedule(RegionTask::destroy(
+            box_try!(self.region_scheduler.schedule(RegionTask::destroy(
                 old_region.get_id(),
                 new_end_key,
                 old_end_key
@@ -1325,7 +1585,7 @@ where
 
     /// Delete all extra split data from the `start_key` to `end_key`.
     pub fn clear_extra_split_data(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        box_try!(self.region_sched.schedule(RegionTask::destroy(
+        box_try!(self.region_scheduler.schedule(RegionTask::destroy(
             self.get_region_id(),
             start_key,
             end_key
@@ -1460,7 +1720,7 @@ where
         fail_point!("skip_schedule_applying_snapshot", |_| {});
 
         // TODO: gracefully remove region instead.
-        if let Err(e) = self.region_sched.schedule(task) {
+        if let Err(e) = self.region_scheduler.schedule(task) {
             info!(
                 "failed to to schedule apply job, are we shutting down?";
                 "region_id" => self.region.get_id(),
@@ -1788,8 +2048,7 @@ mod tests {
     use crate::coprocessor::CoprocessorHost;
     use crate::store::async_io::write::write_to_db_for_test;
     use crate::store::fsm::apply::compact_raft_log;
-    use crate::store::worker::RegionRunner;
-    use crate::store::worker::RegionTask;
+    use crate::store::worker::{RaftlogFetchRunner, RegionRunner, RegionTask};
     use crate::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_test::raft::RaftTestEngine;
@@ -1799,7 +2058,7 @@ mod tests {
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
-    use raft::{Error as RaftError, StorageError};
+    use raft::{Error as RaftError, GetEntriesContext, StorageError};
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;
@@ -1807,7 +2066,7 @@ mod tests {
     use std::sync::*;
     use std::time::Duration;
     use tempfile::{Builder, TempDir};
-    use tikv_util::worker::{LazyWorker, Scheduler, Worker};
+    use tikv_util::worker::{dummy_scheduler, LazyWorker, Scheduler, Worker};
 
     use super::*;
 
@@ -1827,7 +2086,8 @@ mod tests {
     }
 
     fn new_storage(
-        sched: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
@@ -1841,17 +2101,27 @@ mod tests {
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
-        PeerStorage::new(engines, &region, sched, 1, "".to_owned()).unwrap()
+        PeerStorage::new(
+            engines,
+            &region,
+            region_scheduler,
+            raftlog_fetch_scheduler,
+            1,
+            "".to_owned(),
+        )
+        .unwrap()
     }
 
     fn new_storage_from_ents(
-        sched: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
-        let mut store = new_storage(sched, path);
+        let mut store = new_storage(region_scheduler, raftlog_fetch_scheduler, path);
         let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(ents[1..].to_vec(), &mut write_task);
+        store.update_cache_persisted(ents.last().unwrap().get_index());
         store
             .apply_state
             .mut_truncated_state()
@@ -1920,7 +2190,8 @@ mod tests {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let sched = worker.scheduler();
-            let store = new_storage_from_ents(sched, &td, &ents);
+            let (dummy_scheduler, _) = dummy_scheduler();
+            let store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
             let t = store.term(idx);
             if wterm != t {
                 panic!("#{}: expect res {:?}, got {:?}", i, wterm, t);
@@ -1976,7 +2247,13 @@ mod tests {
         for (first_index, left) in cases {
             let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
             let sched = worker.scheduler();
-            let mut store = new_storage_from_ents(sched, &td, &[new_entry(3, 3), new_entry(4, 4)]);
+            let (dummy_scheduler, _) = dummy_scheduler();
+            let mut store = new_storage_from_ents(
+                sched,
+                dummy_scheduler,
+                &td,
+                &[new_entry(3, 3), new_entry(4, 4)],
+            );
             append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
 
             assert_eq!(6, get_meta_key_count(&store));
@@ -1990,6 +2267,35 @@ mod tests {
             raft_wb.write().unwrap();
 
             assert_eq!(left, get_meta_key_count(&store));
+        }
+    }
+
+    use crate::store::{SignificantMsg, SignificantRouter};
+    use crate::Result as RaftStoreResult;
+
+    pub struct TestRouter<EK: KvEngine> {
+        ch: SyncSender<SignificantMsg<EK::Snapshot>>,
+    }
+
+    impl<EK: KvEngine> TestRouter<EK> {
+        pub fn new() -> (Self, Receiver<SignificantMsg<EK::Snapshot>>) {
+            let (tx, rx) = sync_channel(1);
+            (Self { ch: tx }, rx)
+        }
+    }
+
+    impl<EK> SignificantRouter<EK> for TestRouter<EK>
+    where
+        EK: KvEngine,
+    {
+        /// Sends a significant message. We should guarantee that the message can't be dropped.
+        fn significant_send(
+            &self,
+            _: u64,
+            msg: SignificantMsg<EK::Snapshot>,
+        ) -> RaftStoreResult<()> {
+            self.ch.send(msg).unwrap();
+            Ok(())
         }
     }
 
@@ -2053,14 +2359,291 @@ mod tests {
             ),
         ];
 
+        let mut count = 0;
         for (i, (lo, hi, maxsize, wentries)) in tests.drain(..).enumerate() {
+            let (router, rx) = TestRouter::new();
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-            let worker = Worker::new("snap-manager").lazy_build("snap-manager");
-            let sched = worker.scheduler();
-            let store = new_storage_from_ents(sched, &td, &ents);
-            let e = store.entries(lo, hi, maxsize);
+            let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+            let region_scheduler = region_worker.scheduler();
+            let mut raftlog_fetch_worker =
+                Worker::new("raftlog-fetch-worker").lazy_build("raftlog-fetch-worker");
+            let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
+            let mut store =
+                new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
+            raftlog_fetch_worker.start(RaftlogFetchRunner::<KvTestEngine, RaftTestEngine, _>::new(
+                router,
+                store.engines.raft.clone(),
+            ));
+            store.compact_cache_to(5);
+            let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
+            if e == Err(raft::Error::Store(
+                raft::StorageError::LogTemporarilyUnavailable,
+            )) {
+                let res = rx.recv().unwrap();
+                match res {
+                    SignificantMsg::RaftlogFetched { res, context } => {
+                        store.update_async_fetch_res(lo, Some(res));
+                        count += 1;
+                        e = store.entries(lo, hi, maxsize, context);
+                    }
+                    _ => unreachable!(),
+                };
+            }
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
+            }
+        }
+
+        assert_ne!(count, 0);
+    }
+
+    #[test]
+    fn test_async_fetch() {
+        let ents = vec![
+            new_entry(2, 2),
+            new_entry(3, 3),
+            new_entry(4, 4),
+            new_entry(5, 5),
+            new_entry(6, 6),
+        ];
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+        let region_scheduler = region_worker.scheduler();
+        let (dummy_scheduler, _rx) = dummy_scheduler();
+        let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
+
+        let max_u64 = u64::max_value();
+        let mut tests = vec![
+            // already compacted
+            (
+                3,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Err(RaftError::Store(StorageError::Compacted)),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Err(RaftError::Store(StorageError::Compacted)),
+                vec![],
+            ),
+            // fetch partial entries due to max size limit
+            (
+                3,
+                7,
+                30,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents[1..4].to_vec()),
+                    low: 3,
+                    max_size: 30,
+                    hit_size_limit: true,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Ok(3),
+                ents[1..4].to_vec(),
+            ),
+            // fetch all entries
+            (
+                2,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents.clone()),
+                    low: 2,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Ok(5),
+                ents.clone(),
+            ),
+            // high is smaller than before
+            (
+                3,
+                5,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents[1..].to_vec()),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Ok(2),
+                ents[1..3].to_vec(),
+            ),
+            // high is larger than before, second try
+            (
+                3,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents[1..4].to_vec()),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Err(RaftError::Store(StorageError::LogTemporarilyUnavailable)),
+                vec![],
+            ),
+            // high is larger than before, thrid try
+            (
+                3,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents[1..4].to_vec()),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 2,
+                    term: 1,
+                },
+                Ok(4),
+                ents[1..].to_vec(),
+            ),
+            // max size is smaller than before
+            (
+                2,
+                7,
+                10,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents.clone()),
+                    low: 2,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Ok(2),
+                ents[..2].to_vec(),
+            ),
+            // max size is larger than before but with lower high
+            (
+                2,
+                5,
+                40,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents.clone()),
+                    low: 2,
+                    max_size: 30,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Ok(3),
+                ents[..3].to_vec(),
+            ),
+            // low index is smaller than before
+            (
+                2,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Err(RaftError::Store(StorageError::Compacted)),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Err(RaftError::Store(StorageError::LogTemporarilyUnavailable)),
+                vec![],
+            ),
+            // low index is larger than before
+            (
+                4,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(vec![]),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: 1,
+                    term: 1,
+                },
+                Err(RaftError::Store(StorageError::LogTemporarilyUnavailable)),
+                vec![],
+            ),
+            // hit tried several lmit
+            (
+                3,
+                7,
+                max_u64,
+                1,
+                RaftlogFetchResult {
+                    ents: Ok(ents[1..4].to_vec()),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: MAX_ASYNC_FETCH_TRY_CNT,
+                    term: 1,
+                },
+                Ok(4),
+                ents[1..5].to_vec(),
+            ),
+            // term is changed
+            (
+                3,
+                7,
+                max_u64,
+                2,
+                RaftlogFetchResult {
+                    ents: Ok(ents[1..4].to_vec()),
+                    low: 3,
+                    max_size: max_u64,
+                    hit_size_limit: false,
+                    tried_cnt: MAX_ASYNC_FETCH_TRY_CNT,
+                    term: 1,
+                },
+                Ok(4),
+                ents[1..5].to_vec(),
+            ),
+        ];
+
+        for (i, (lo, hi, maxsize, term, async_res, expected_res, expected_ents)) in
+            tests.drain(..).enumerate()
+        {
+            if async_res.low != lo {
+                store.clean_async_fetch_res(lo);
+            } else {
+                store.update_async_fetch_res(lo, Some(Box::new(async_res)));
+            }
+            let mut ents = vec![];
+            store.raft_state.mut_hard_state().set_term(term);
+            let res = store.async_fetch(
+                store.get_region_id(),
+                lo,
+                hi,
+                maxsize,
+                GetEntriesContext::empty(true),
+                &mut ents,
+            );
+            if res != expected_res {
+                panic!("#{}: expect result {:?}, got {:?}", i, expected_res, res);
+            }
+            if ents != expected_ents {
+                panic!("#{}: expect ents {:?}, got {:?}", i, expected_ents, ents);
             }
         }
     }
@@ -2081,7 +2664,8 @@ mod tests {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = Worker::new("snap-manager").lazy_build("snap-manager");
             let sched = worker.scheduler();
-            let mut store = new_storage_from_ents(sched, &td, &ents);
+            let (dummy_scheduler, _) = dummy_scheduler();
+            let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
             let res = store
                 .term(idx)
                 .map_err(From::from)
@@ -2131,9 +2715,10 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker").lazy_build("la");
+        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
-        let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
@@ -2145,7 +2730,7 @@ mod tests {
             router,
         );
         worker.start_with_timer(runner);
-        let snap = s.snapshot(0);
+        let snap = s.snapshot(0, 0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -2169,11 +2754,11 @@ mod tests {
         let (tx, rx) = channel();
         s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
-        assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         tx.send(snap.clone()).unwrap();
-        assert_eq!(s.snapshot(0), Ok(snap.clone()));
+        assert_eq!(s.snapshot(0, 0), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let (tx, rx) = channel();
@@ -2181,7 +2766,8 @@ mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
-            s.snapshot(snap.get_metadata().get_index() + 1).unwrap_err(),
+            s.snapshot(snap.get_metadata().get_index() + 1, 0)
+                .unwrap_err(),
             unavailable
         );
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -2214,7 +2800,7 @@ mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
-        assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -2231,7 +2817,7 @@ mod tests {
             ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
-        assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
@@ -2246,13 +2832,13 @@ mod tests {
             }
 
             // Scheduled job failed should trigger .
-            assert_eq!(s.snapshot(0).unwrap_err(), unavailable);
+            assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         }
 
         // When retry too many times, it should report a different error.
-        match s.snapshot(0) {
+        match s.snapshot(0, 0) {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
@@ -2296,10 +2882,13 @@ mod tests {
             let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
             let worker = LazyWorker::new("snap-manager");
             let sched = worker.scheduler();
-            let mut store = new_storage_from_ents(sched, &td, &ents);
+            let (dummy_scheduler, _) = dummy_scheduler();
+            let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
             append_ents(&mut store, &entries);
             let li = store.last_index();
-            let actual_entries = store.entries(4, li + 1, u64::max_value()).unwrap();
+            let actual_entries = store
+                .entries(4, li + 1, u64::max_value(), GetEntriesContext::empty(false))
+                .unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
@@ -2312,10 +2901,13 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
-        let mut store = new_storage_from_ents(sched, &td, &ents);
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         store.cache.cache.clear();
         // empty cache should fetch data from rocksdb directly.
-        let mut res = store.entries(4, 6, u64::max_value()).unwrap();
+        let mut res = store
+            .entries(4, 6, u64::max_value(), GetEntriesContext::empty(false))
+            .unwrap();
         assert_eq!(*res, ents[1..]);
 
         let entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -2323,27 +2915,37 @@ mod tests {
         validate_cache(&store, &entries);
 
         // direct cache access
-        res = store.entries(6, 8, u64::max_value()).unwrap();
+        res = store
+            .entries(6, 8, u64::max_value(), GetEntriesContext::empty(false))
+            .unwrap();
         assert_eq!(res, entries);
 
         // size limit should be supported correctly.
-        res = store.entries(4, 8, 0).unwrap();
+        res = store
+            .entries(4, 8, 0, GetEntriesContext::empty(false))
+            .unwrap();
         assert_eq!(res, vec![new_entry(4, 4)]);
         let mut size = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
-        res = store.entries(4, 8, size).unwrap();
+        res = store
+            .entries(4, 8, size, GetEntriesContext::empty(false))
+            .unwrap();
         let mut exp_res = ents[1..].to_vec();
         assert_eq!(res, exp_res);
         for e in &entries {
             size += u64::from(e.compute_size());
             exp_res.push(e.clone());
-            res = store.entries(4, 8, size).unwrap();
+            res = store
+                .entries(4, 8, size, GetEntriesContext::empty(false))
+                .unwrap();
             assert_eq!(res, exp_res);
         }
 
         // range limit should be supported correctly.
         for low in 4..9 {
             for high in low..9 {
-                let res = store.entries(low, high, u64::max_value()).unwrap();
+                let res = store
+                    .entries(low, high, u64::max_value(), GetEntriesContext::empty(false))
+                    .unwrap();
                 assert_eq!(*res, exp_res[low as usize - 4..high as usize - 4]);
             }
         }
@@ -2355,7 +2957,8 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
-        let mut store = new_storage_from_ents(sched, &td, &ents);
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         store.cache.cache.clear();
 
         // initial cache
@@ -2511,7 +3114,8 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let mut worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
-        let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s1.engines.kv.clone(),
@@ -2523,7 +3127,7 @@ mod tests {
             router,
         );
         worker.start(runner);
-        assert!(s1.snapshot(0).is_err());
+        assert!(s1.snapshot(0, 0).is_err());
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
@@ -2538,7 +3142,7 @@ mod tests {
         worker.stop();
 
         let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let mut s2 = new_storage(sched.clone(), &td2);
+        let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
         assert_eq!(s2.first_index(), s2.applied_index() + 1);
         let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
         let snap_region = s2.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
@@ -2555,7 +3159,7 @@ mod tests {
 
         let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
-        let mut s3 = new_storage_from_ents(sched, &td3, ents);
+        let mut s3 = new_storage_from_ents(sched, dummy_scheduler, &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
         let snap_region = s3.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
@@ -2575,7 +3179,8 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
-        let mut s = new_storage(sched, &td);
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut s = new_storage(sched, dummy_scheduler, &td);
 
         // PENDING can be canceled directly.
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
@@ -2621,7 +3226,8 @@ mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
-        let mut s = new_storage(sched, &td);
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut s = new_storage(sched, dummy_scheduler, &td);
 
         // PENDING can be finished.
         let mut snap_state = SnapState::Applying(Arc::new(AtomicUsize::new(JOB_STATUS_PENDING)));
@@ -2668,8 +3274,10 @@ mod tests {
     #[test]
     fn test_validate_states() {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let worker = LazyWorker::new("snap-manager");
-        let sched = worker.scheduler();
+        let region_worker = LazyWorker::new("snap-manager");
+        let region_sched = region_worker.scheduler();
+        let raftlog_fetch_worker = LazyWorker::new("raftlog-fetch-worker");
+        let raftlog_fetch_sched = raftlog_fetch_worker.scheduler();
         let kv_db =
             engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
@@ -2682,7 +3290,14 @@ mod tests {
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
         let build_storage = || -> Result<PeerStorage<KvTestEngine, RaftTestEngine>> {
-            PeerStorage::new(engines.clone(), &region, sched.clone(), 0, "".to_owned())
+            PeerStorage::new(
+                engines.clone(),
+                &region,
+                region_sched.clone(),
+                raftlog_fetch_sched.clone(),
+                0,
+                "".to_owned(),
+            )
         };
         let mut s = build_storage().unwrap();
         let mut raft_state = RaftLocalState::default();

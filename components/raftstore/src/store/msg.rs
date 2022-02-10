@@ -13,14 +13,14 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
-use raft::SnapshotStatus;
+use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
-use crate::store::SnapKey;
+use crate::store::{RaftlogFetchResult, SnapKey};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -303,6 +303,11 @@ where
     },
     LeaderCallback(Callback<SK>),
     RaftLogGcFlushed,
+    // Reports the result of asynchronous Raft logs fetching.
+    RaftlogFetched {
+        context: GetEntriesContext,
+        res: Box<RaftlogFetchResult>,
+    },
 }
 
 /// Message that will be sent to a peer.
@@ -372,6 +377,9 @@ pub enum CasualMessage<EK: KvEngine> {
     RejectRaftAppend {
         peer_id: u64,
     },
+
+    // Try renew leader lease
+    RenewLease,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -427,6 +435,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
             }
+            CasualMessage::RenewLease => write!(fmt, "RenewLease"),
         }
     }
 }
