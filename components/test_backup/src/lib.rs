@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 use std::{cmp, fs};
 
 use futures::channel::mpsc as future_mpsc;
