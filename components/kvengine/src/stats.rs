@@ -1,10 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{load_bool, load_u64, CF_LEVELS, NUM_CFS};
-use std::sync::atomic::Ordering::Relaxed;
-use std::time::Instant;
 use bytes::Buf;
 use protobuf::ProtobufEnum;
+use std::sync::atomic::Ordering::Relaxed;
+use std::time::Instant;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]

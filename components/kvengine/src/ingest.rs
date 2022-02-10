@@ -49,7 +49,7 @@ impl Engine {
         let fs_opts = dfs::Options::new(tree.change_set.shard_id, tree.change_set.shard_ver);
         for l0_create in snap.get_l0_creates() {
             let file = self.fs.open(l0_create.id, fs_opts)?;
-            let l0_tbl = L0Table::new(file, self.cache.clone())?;
+            let l0_tbl = L0Table::new(file, Some(self.cache.clone()))?;
             l0_tbls.push(l0_tbl);
         }
         l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
@@ -60,7 +60,7 @@ impl Engine {
         }
         for table_create in snap.get_table_creates() {
             let file = self.fs.open(table_create.id, fs_opts)?;
-            let tbl = SSTable::new(file, self.cache.clone())?;
+            let tbl = SSTable::new(file, Some(self.cache.clone()))?;
             let scf = &mut scf_builders.as_mut_slice()[table_create.cf as usize];
             scf.add_table(tbl, table_create.level as usize);
         }

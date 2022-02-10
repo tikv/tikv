@@ -33,7 +33,7 @@ impl Deref for SSTable {
 impl SSTable {
     pub fn new(
         file: Arc<dyn dfs::File>,
-        cache: SegmentedCache<BlockCacheKey, Bytes>,
+        cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let size = file.size();
         let core = SSTableCore::new(file, 0, size, cache)?;
@@ -46,7 +46,7 @@ impl SSTable {
         file: Arc<dyn dfs::File>,
         start: u64,
         end: u64,
-        cache: SegmentedCache<BlockCacheKey, Bytes>,
+        cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let core = SSTableCore::new(file, start, end, cache)?;
         Ok(Self {
@@ -106,7 +106,7 @@ impl SSTable {
 
 pub struct SSTableCore {
     file: Arc<dyn dfs::File>,
-    cache: SegmentedCache<BlockCacheKey, Bytes>,
+    cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     start_off: u64,
     footer: Footer,
     smallest_buf: Bytes,
@@ -120,7 +120,7 @@ impl SSTableCore {
         file: Arc<dyn dfs::File>,
         start_off: u64,
         end_off: u64,
-        cache: SegmentedCache<BlockCacheKey, Bytes>,
+        cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let size = end_off - start_off;
         let mut footer = Footer::default();
@@ -181,14 +181,19 @@ impl SSTableCore {
     }
 
     fn load_block_by_addr_len(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {
+        if self.cache.is_none() {
+            let raw_block = self.file.read(addr.curr_off as u64, length)?;
+            return Ok(raw_block.slice(4..));
+        }
+        let cache = self.cache.as_ref().unwrap();
         let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
-        if let Some(block) = self.cache.get(&cache_key) {
+        if let Some(block) = cache.get(&cache_key) {
             return Ok(block);
         }
         let raw_block = self.file.read(addr.curr_off as u64, length)?;
         validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
         let block = raw_block.slice(4..);
-        self.cache.insert(cache_key, block.clone());
+        cache.insert(cache_key, block.clone());
         Ok(block)
     }
 
@@ -271,7 +276,7 @@ impl Index {
         let mut filter = None;
         while data[offset] != EXTRA_END {
             let extra_type = data[offset];
-            let extra_sub_type = data[offset+1];
+            let extra_sub_type = data[offset + 1];
             offset += 2;
             let extra_len = LittleEndian::read_u32(&data[offset..]) as usize;
             offset += 4;

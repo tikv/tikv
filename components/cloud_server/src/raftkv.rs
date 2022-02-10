@@ -510,16 +510,6 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
     }
 }
 
-#[derive(Default)]
-struct Operation {
-    tp: u8,
-    key: Option<Vec<u8>>,
-    lock: Option<Lock>,
-    val: Option<Vec<u8>>,
-    ts: u64,
-    del: bool,
-}
-
 /**
 Reconstruct transaction operations from separated modifications.
 

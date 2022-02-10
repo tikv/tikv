@@ -533,14 +533,13 @@ pub(crate) fn compact_l0(
 ) -> Result<Vec<pb::TableCreate>> {
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let l0_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let cache = SegmentedCache::new(256, 1);
-    let mut l0_tbls = in_mem_files_to_l0_tables(&l0_files, cache.clone());
+    let mut l0_tbls = in_mem_files_to_l0_tables(&l0_files);
     l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
     let mut mult_cf_bot_tbls = vec![];
     for cf in 0..NUM_CFS {
         let bot_ids = &req.multi_cf_bottoms[cf];
         let bot_files = load_table_files(&bot_ids, fs.clone(), opts)?;
-        let mut bot_tbls = in_mem_files_to_tables(&bot_files, cache.clone());
+        let mut bot_tbls = in_mem_files_to_tables(&bot_files);
         bot_tbls.sort_by(|a, b| a.smallest().cmp(b.smallest()));
         mult_cf_bot_tbls.push(bot_tbls);
     }
@@ -610,25 +609,19 @@ pub(crate) fn load_table_files(
     Ok(files)
 }
 
-fn in_mem_files_to_l0_tables(
-    files: &Vec<dfs::InMemFile>,
-    cache: SegmentedCache<sstable::BlockCacheKey, Bytes>,
-) -> Vec<sstable::L0Table> {
+fn in_mem_files_to_l0_tables(files: &Vec<dfs::InMemFile>) -> Vec<sstable::L0Table> {
     let mut tables = vec![];
     for file in files {
-        let table = sstable::L0Table::new(Arc::new(file.clone()), cache.clone()).unwrap();
+        let table = sstable::L0Table::new(Arc::new(file.clone()), None).unwrap();
         tables.push(table);
     }
     tables
 }
 
-fn in_mem_files_to_tables(
-    files: &Vec<dfs::InMemFile>,
-    cache: SegmentedCache<sstable::BlockCacheKey, Bytes>,
-) -> Vec<sstable::SSTable> {
+fn in_mem_files_to_tables(files: &Vec<dfs::InMemFile>) -> Vec<sstable::SSTable> {
     let mut tables = vec![];
     for file in files {
-        let table = sstable::SSTable::new(Arc::new(file.clone()), cache.clone()).unwrap();
+        let table = sstable::SSTable::new(Arc::new(file.clone()), None).unwrap();
         tables.push(table);
     }
     tables
@@ -751,13 +744,12 @@ pub(crate) fn compact_tables(
     req: &CompactionRequest,
     fs: Arc<dyn dfs::DFS>,
 ) -> Result<Vec<pb::TableCreate>> {
-    let cache = SegmentedCache::new(256, 1);
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
-    let mut top_tables = in_mem_files_to_tables(&top_files, cache.clone());
+    let mut top_tables = in_mem_files_to_tables(&top_files);
     top_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
     let bot_files = load_table_files(&req.bottoms, fs.clone(), opts)?;
-    let mut bot_tables = in_mem_files_to_tables(&bot_files, cache.clone());
+    let mut bot_tables = in_mem_files_to_tables(&bot_files);
     bot_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
     let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false));
     let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false));

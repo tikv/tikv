@@ -154,11 +154,11 @@ impl EngineCore {
         for (fid, fm) in &meta.files {
             let file = self.fs.open(*fid, dfs_opts)?;
             if fm.cf == -1 {
-                let l0_tbl = L0Table::new(file, self.cache.clone())?;
+                let l0_tbl = L0Table::new(file, Some(self.cache.clone()))?;
                 l0_tbls.push(l0_tbl);
                 continue;
             }
-            let tbl = SSTable::new(file, self.cache.clone())?;
+            let tbl = SSTable::new(file, Some(self.cache.clone()))?;
             scf_builders[fm.cf as usize].add_table(tbl, fm.level as usize);
         }
         l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));

@@ -51,7 +51,7 @@ impl Engine {
         if flush.has_l0_create() {
             let opts = dfs::Options::new(shard.id, shard.ver);
             let file = self.fs.open(flush.get_l0_create().id, opts)?;
-            let l0_tbl = sstable::L0Table::new(file, self.cache.clone())?;
+            let l0_tbl = sstable::L0Table::new(file, Some(self.cache.clone()))?;
             shard.atomic_add_l0_table(l0_tbl);
             shard.atomic_remove_mem_table();
         }
@@ -159,7 +159,7 @@ impl Engine {
                 continue;
             }
             let file = self.fs.open(create.id, opts)?;
-            let tbl = sstable::SSTable::new(file, self.cache.clone())?;
+            let tbl = sstable::SSTable::new(file, Some(self.cache.clone()))?;
             new_level.total_size += tbl.size();
             new_level.tables.push(tbl);
             need_update = true;
@@ -218,7 +218,7 @@ impl Engine {
         let fs_opts = dfs::Options::new(shard.id, shard.ver);
         for l0 in split_files.get_l0_creates() {
             let file = self.fs.open(l0.id, fs_opts)?;
-            let l0 = sstable::L0Table::new(file, self.cache.clone())?;
+            let l0 = sstable::L0Table::new(file, Some(self.cache.clone()))?;
             new_l0s.push(l0);
         }
         for old_l0 in old_l0s.tbls.as_ref() {
@@ -240,7 +240,7 @@ impl Engine {
             let scf_builder = &mut scf_builders[cf];
             let level = tbl.level as usize;
             let file = self.fs.open(tbl.id, fs_opts)?;
-            let table = sstable::SSTable::new(file, self.cache.clone())?;
+            let table = sstable::SSTable::new(file, Some(self.cache.clone()))?;
             scf_builder.add_table(table, level);
         }
         for cf in 0..NUM_CFS {

@@ -45,7 +45,7 @@ impl Deref for L0Table {
 impl L0Table {
     pub fn new(
         file: Arc<dyn dfs::File>,
-        cache: SegmentedCache<BlockCacheKey, Bytes>,
+        cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let core = L0TableCore::new(file, cache)?;
         Ok(Self {
@@ -65,7 +65,7 @@ pub struct L0TableCore {
 impl L0TableCore {
     pub fn new(
         file: Arc<dyn dfs::File>,
-        cache: SegmentedCache<BlockCacheKey, Bytes>,
+        cache: Option<SegmentedCache<BlockCacheKey, Bytes>>,
     ) -> Result<Self> {
         let footer_off = file.size() - L0_FOOTER_SIZE as u64;
         let mut footer = L0Footer::default();
