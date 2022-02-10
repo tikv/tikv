@@ -7,12 +7,11 @@ use std::collections::HashSet;
 use std::slice::Iter;
 use std::time::{Duration, SystemTime};
 
+use rand::Rng;
+
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::Peer;
 use kvproto::pdpb::QueryKind;
-
-use rand::Rng;
-
 use tikv_util::config::Tracker;
 use tikv_util::{debug, info};
 
@@ -22,7 +21,6 @@ use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
-pub const MAX_RETRY_TIME: i32 = 1000;
 
 pub struct SplitInfo {
     pub region_id: u64,
@@ -48,56 +46,50 @@ impl Sample {
     }
 }
 
-// It will return prefix sum of iter. `read` is a function to be used to read data from iter.
+// It will return prefix sum of the given iter,
+// `read` is a function to process the item from the iter.
+#[inline(always)]
 fn prefix_sum<F, T>(iter: Iter<'_, T>, read: F) -> Vec<usize>
 where
     F: Fn(&T) -> usize,
 {
-    let mut pre_sum = vec![];
     let mut sum = 0;
-    for item in iter {
+    iter.map(|item| {
         sum += read(item);
-        pre_sum.push(sum);
-    }
-    pre_sum
+        sum
+    })
+    .collect()
 }
 
-// It will return sample_num numbers by sample from lists.
-// The list in the lists has the length of N1, N2, N3 ... Np ... NP in turn.
-// Their prefix sum is pre_sum and we can get mut list from lists by get_mut.
-// Take a random number d from [1, N]. If d < N1, select a data in the first list with an equal probability without replacement;
-// If N1 <= d <(N1 + N2), then select a data in the second list with equal probability without replacement;
-// and so on, repeat m times, and finally select sample_num pieces of data from lists.
+// This function uses the distributed/parallel reservoir sampling algorithm.
+// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple key_ranges_providers with the same possibility.
 fn sample<F, T>(
     sample_num: usize,
     pre_sum: &[usize],
-    mut lists: Vec<T>,
-    get_mut: F,
+    mut key_ranges_providers: Vec<T>,
+    key_ranges_getter: F,
 ) -> Vec<KeyRange>
 where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
+    // pre_sum should be calculated from the lists, so they should have the same length.
+    assert_eq!(pre_sum.len(), key_ranges_providers.len());
     let mut rng = rand::thread_rng();
-    let mut key_ranges = vec![];
-    let high_bound = *pre_sum.last().unwrap();
-    for _ in 0..MAX_RETRY_TIME {
-        let d = rng.gen_range(0..high_bound + 1) as usize;
-        let i = match pre_sum.binary_search(&d) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-        if i < lists.len() {
-            let list = get_mut(&mut lists[i]);
-            if !list.is_empty() {
-                let j = rng.gen_range(0..list.len()) as usize;
-                key_ranges.push(list.remove(j)); // Sampling without replacement
-            }
-        }
-        if key_ranges.len() >= std::cmp::min(sample_num, high_bound) {
-            break;
+    let mut sampled_key_ranges = vec![];
+    // The sum of the QPS is the number of all the key ranges.
+    let all_key_ranges_num = *pre_sum.last().unwrap();
+    let sample_num = std::cmp::min(sample_num, all_key_ranges_num);
+    while sampled_key_ranges.len() < sample_num {
+        let i = pre_sum
+            .binary_search(&rng.gen_range(0..=all_key_ranges_num))
+            .unwrap_or_else(|i| i);
+        let key_ranges = key_ranges_getter(&mut key_ranges_providers[i]);
+        if !key_ranges.is_empty() {
+            let j = rng.gen_range(0..key_ranges.len());
+            sampled_key_ranges.push(key_ranges.remove(j)); // Sampling without replacement
         }
     }
-    key_ranges
+    sampled_key_ranges
 }
 
 // RegionInfo will maintain key_ranges with sample_num length by reservoir sampling.
@@ -156,26 +148,26 @@ impl RegionInfo {
 }
 
 pub struct Recorder {
-    pub detect_num: u64,
+    pub detect_times: u64,
+    pub detected_times: u64,
     pub peer: Peer,
     pub key_ranges: Vec<Vec<KeyRange>>,
-    pub times: u64,
     pub create_time: SystemTime,
 }
 
 impl Recorder {
-    fn new(detect_num: u64) -> Recorder {
+    fn new(detect_times: u64) -> Recorder {
         Recorder {
-            detect_num,
+            detect_times,
+            detected_times: 0,
             peer: Peer::default(),
             key_ranges: vec![],
-            times: 0,
             create_time: SystemTime::now(),
         }
     }
 
     fn record(&mut self, key_ranges: Vec<KeyRange>) {
-        self.times += 1;
+        self.detected_times += 1;
         self.key_ranges.push(key_ranges);
     }
 
@@ -186,7 +178,7 @@ impl Recorder {
     }
 
     fn is_ready(&self) -> bool {
-        self.times >= self.detect_num
+        self.detected_times >= self.detect_times
     }
 
     fn convert(&self, key_ranges: Vec<KeyRange>) -> Vec<Sample> {
@@ -310,7 +302,7 @@ impl WriteStats {
         let query_stats = self
             .region_infos
             .entry(region_id)
-            .or_insert_with(|| QueryStats::default());
+            .or_insert_with(QueryStats::default);
         query_stats.add_query_num(kind, 1);
     }
 
@@ -321,11 +313,19 @@ impl WriteStats {
 
 #[derive(Clone, Debug)]
 pub struct ReadStats {
+    // RegionID -> RegionInfo
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
 }
 
 impl ReadStats {
+    pub fn with_sample_num(sample_num: usize) -> Self {
+        ReadStats {
+            region_infos: HashMap::default(),
+            sample_num,
+        }
+    }
+
     pub fn add_query_num(
         &mut self,
         region_id: u64,
@@ -381,6 +381,7 @@ impl Default for ReadStats {
 }
 
 pub struct AutoSplitController {
+    // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
     cfg: SplitConfig,
     cfg_tracker: Tracker<SplitConfig>,
@@ -415,17 +416,23 @@ impl AutoSplitController {
     }
 
     pub fn flush(&mut self, read_stats_vec: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
-        let mut split_infos = Vec::default();
+        let mut split_infos = vec![];
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
         let region_infos_map = self.collect_read_stats(read_stats_vec);
 
         for (region_id, region_infos) in region_infos_map {
-            let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
-            let qps = *pre_sum.last().unwrap(); // region_infos is not empty
+            let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
+            // region_infos is not empty, so it's safe to unwrap here.
+            let qps = *qps_prefix_sum.last().unwrap();
             let byte = region_infos
                 .iter()
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
-            debug!("load base split params";"region_id"=>region_id,"qps"=>qps,"qps_threshold"=>self.cfg.qps_threshold,"byte"=>byte,"byte_threshold"=>self.cfg.byte_threshold);
+            debug!("load base split params";
+                    "region_id"=>region_id,
+                    "qps"=>qps,
+                    "qps_threshold"=>self.cfg.qps_threshold,
+                    "byte"=>byte,
+                    "byte_threshold"=>self.cfg.byte_threshold);
 
             QUERY_REGION_VEC
                 .with_label_values(&["read"])
@@ -438,16 +445,16 @@ impl AutoSplitController {
 
             LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
 
-            let num = self.cfg.detect_times;
+            let detect_times = self.cfg.detect_times;
             let recorder = self
                 .recorders
                 .entry(region_id)
-                .or_insert_with(|| Recorder::new(num));
+                .or_insert_with(|| Recorder::new(detect_times));
             recorder.update_peer(&region_infos[0].peer);
 
             let key_ranges = sample(
                 self.cfg.sample_num,
-                &pre_sum,
+                &qps_prefix_sum,
                 region_infos,
                 RegionInfo::get_key_ranges_mut,
             );
@@ -722,7 +729,7 @@ mod tests {
             // qps_stats_vec contains 2000 qps and a readStats with a key range;
             let mut qps_stats_vec = vec![];
 
-            let mut qps_stats = ReadStats::default();
+            let mut qps_stats = ReadStats::with_sample_num(hub.cfg.sample_num);
             qps_stats.add_query_num(
                 1,
                 &Peer::default(),
@@ -731,7 +738,7 @@ mod tests {
             );
             qps_stats_vec.push(qps_stats);
 
-            let mut qps_stats = ReadStats::default();
+            let mut qps_stats = ReadStats::with_sample_num(hub.cfg.sample_num);
             for _ in 0..2000 {
                 qps_stats.add_query_num(
                     1,
