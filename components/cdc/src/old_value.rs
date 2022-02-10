@@ -48,8 +48,11 @@ impl SizePolicy<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizePoli
 #[derive(CopyGetters)]
 pub struct OldValueCache {
     cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizePolicy>,
+    #[getset(get_copy = "pub")]
     access_count: usize,
+    #[getset(get_copy = "pub")]
     miss_count: usize,
+    #[getset(get_copy = "pub")]
     miss_none_count: usize,
     #[getset(get_copy = "pub")]
     update_count: usize,

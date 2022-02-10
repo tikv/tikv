@@ -3,6 +3,7 @@
 use std::sync::*;
 use std::time::Duration;
 
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use futures::SinkExt;
@@ -15,7 +16,6 @@ use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, OldValueCache, Task, Validate};
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
@@ -1311,7 +1311,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1353,7 +1353,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1395,7 +1395,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1449,7 +1449,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1476,7 +1476,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1508,7 +1508,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1535,7 +1535,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
