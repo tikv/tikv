@@ -14,7 +14,7 @@ use crate::interface::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::row;
+use tidb_query_datatype::codec::{row, table};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
@@ -271,12 +271,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // 1st turn: [non-pk, non-pk, non-pk, pk]
         // 2nd turn: [non-pk, non-pk, pk]
         // 3rd turn: [pk]
-        //let some_physical_table_id_column_index = self.column_id_index.get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
-        let some_physical_table_id_column_index = self.column_id_index.get(&-3);
-        let physical_table_id_column_idx = match some_physical_table_id_column_index {
-            Some(idx) => Some(*idx),
-            None => None,
-        };
+        let physical_table_id_column_idx = self
+            .column_id_index
+            .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID)
+            .map(|idx| *idx);
         let mut last_index = 0usize;
         for handle_index in &self.handle_indices {
             // `handle_indices` is expected to be sorted.
@@ -328,7 +326,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::{datum, table};
+        use tidb_query_datatype::codec::{datum};
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
@@ -379,14 +377,11 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         let some_physical_table_id_column_index = self
             .column_id_index
             .get(&table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
-        match some_physical_table_id_column_index {
-            Some(idx) => {
-                let table_id = table::decode_table_id(key)?;
-                columns[*idx].mut_decoded().push_int(Some(table_id));
-                // decoded_columns += 1; // Not used afterwards!
-                self.is_column_filled[*idx] = true;
-            }
-            None => {} // nothing to do
+        if let Some(idx) = some_physical_table_id_column_index {
+            let table_id = table::decode_table_id(key)?;
+            columns[*idx].mut_decoded().push_int(Some(table_id));
+            // decoded_columns += 1; // Not used afterwards!
+            self.is_column_filled[*idx] = true;
         }
 
         // Some fields may be missing in the row, we push corresponding default value to make all
