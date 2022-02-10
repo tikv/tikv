@@ -28,12 +28,12 @@ use super::RecorderHandle;
 const RECORD_FREQUENCY: f64 = 99.0;
 const GC_INTERVAL_SECS: u64 = 15 * 60;
 
-pub fn init_recorder() -> RecorderHandle {
+pub fn init_recorder(enabled: bool) -> RecorderHandle {
     lazy_static! {
         static ref HANDLE: RecorderHandle = {
             let config = crate::Config::default();
 
-            let pause = Arc::new(AtomicBool::new(config.enabled));
+            let pause = Arc::new(AtomicBool::new(!config.enabled));
             let pause0 = pause.clone();
             let precision_ms = Arc::new(AtomicU64::new(config.precision.0.as_millis() as _));
             let precision_ms0 = precision_ms.clone();
@@ -59,6 +59,11 @@ pub fn init_recorder() -> RecorderHandle {
                 .expect("Failed to create recorder thread");
             RecorderHandle::new(join_handle, pause0, precision_ms0)
         };
+    }
+    if enabled {
+        HANDLE.resume();
+    } else {
+        HANDLE.pause();
     }
     HANDLE.clone()
 }
@@ -521,8 +526,7 @@ mod tests {
 
     #[test]
     fn test_cpu_record() {
-        let handle = init_recorder();
-        handle.resume();
+        let handle = init_recorder(true);
 
         // Heavy CPU only with 1 thread
         {
