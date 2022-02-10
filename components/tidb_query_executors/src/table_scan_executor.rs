@@ -380,7 +380,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         if let Some(idx) = some_physical_table_id_column_index {
             let table_id = table::decode_table_id(key)?;
             columns[*idx].mut_decoded().push_int(Some(table_id));
-            // decoded_columns += 1; // Not used afterwards!
             self.is_column_filled[*idx] = true;
         }
 
