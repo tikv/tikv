@@ -188,6 +188,8 @@ fn test_tick_after_destroy() {
 fn test_stale_peer_cache() {
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
+    // Merge checks if cache returns None, but the test case returns None on purpose.
+    cluster.cfg.raft_store.dev_assert = false;
 
     cluster.run();
     // Now region 1 only has peer (1, 1);
