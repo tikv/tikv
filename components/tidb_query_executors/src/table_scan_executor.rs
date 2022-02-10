@@ -326,7 +326,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::{datum};
+        use tidb_query_datatype::codec::datum;
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
