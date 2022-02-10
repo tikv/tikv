@@ -38132,7 +38132,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 46
       },
       "id": 13016,
       "panels": [
@@ -38157,7 +38157,7 @@
             "h": 10,
             "w": 6,
             "x": 0,
-            "y": 44
+            "y": 47
           },
           "hiddenSeries": false,
           "id": 13262,
@@ -38266,7 +38266,7 @@
             "h": 10,
             "w": 6,
             "x": 6,
-            "y": 44
+            "y": 47
           },
           "hiddenSeries": false,
           "id": 12843,
@@ -38357,7 +38357,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
+          "description": "The estimated memory usage by the streaming backup module.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -38368,7 +38368,7 @@
             "h": 10,
             "w": 6,
             "x": 12,
-            "y": 44
+            "y": 47
           },
           "hiddenSeries": false,
           "id": 13100,
@@ -38451,7 +38451,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -38475,7 +38475,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
+          "description": "The errors met when backing up.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -38486,7 +38486,7 @@
             "h": 10,
             "w": 6,
             "x": 18,
-            "y": 44
+            "y": 47
           },
           "hiddenSeries": false,
           "id": 13101,
@@ -38518,8 +38518,8 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "increase(tikv_stream_errors{instance=~\"$instance\"}[45s])",
-              "format": "heatmap",
+              "expr": "increase(tikv_stream_errors{instance=~\"$instance\"}[$__rate_interval])",
+              "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
@@ -38581,6 +38581,297 @@
           }
         },
         {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 57
+          },
+          "hiddenSeries": false,
+          "id": 13782,
+          "legend": {
+            "avg": false,
+            "current": false,
+            "max": false,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "$$hashKey": "object:240",
+              "alias": "Current Time",
+              "dashes": true,
+              "fill": 0
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "tikv_stream_store_checkpoint_ts{instance=~\"$instance\"} / 262144 ",
+              "interval": "",
+              "legendFormat": "{{ task }}@{{instance}}",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "time() * 1000",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "Current Time",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Checkpoint TS of Tasks",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "$$hashKey": "object:169",
+              "format": "dateTimeAsIsoNoDateIfToday",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "$$hashKey": "object:170",
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "This panel shows tasks with at least one successful flush.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": null,
+                "filterable": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Field"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 651
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Task Name"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 1278
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 57
+          },
+          "id": 13784,
+          "options": {
+            "showHeader": true,
+            "sortBy": []
+          },
+          "pluginVersion": "7.5.7",
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "tikv_stream_store_checkpoint_ts{instance=~\"$instance\"}",
+              "format": "time_series",
+              "interval": "",
+              "legendFormat": "{{ task }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Running Tasks",
+          "transformations": [
+            {
+              "id": "reduce",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Max": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Field": "Task Name"
+                }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The duration of converting a raft request into a apply event.    \n*This duration is for consuming a batch of events.*",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 64
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 13934,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "max(rate(tikv_stream_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"to_stream_event\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Backup Convert Raft Event duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
           "cards": {
             "cardPadding": 0,
             "cardRound": 0
@@ -38603,9 +38894,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 0,
-            "y": 54
+            "w": 12,
+            "x": 12,
+            "y": 64
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -38686,9 +38977,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 6,
-            "y": 54
+            "w": 12,
+            "x": 0,
+            "y": 71
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -38762,89 +39053,6 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The duration of converting a raft request into a apply event.    \n*This duration is for consuming a batch of events.*",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 7,
-            "w": 6,
-            "x": 12,
-            "y": 54
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 6905,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(rate(tikv_stream_event_handle_duration_sec_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", stage=~\"to_stream_event\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Backup Convert Raft Event duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total cost of writing a event into temporary file.\nComparing to the ***Save*** duration, it doesn't contain the time cost of routing the task by range / task.    \n*This duration is for consuming an single event.*",
           "fieldConfig": {
             "defaults": {},
@@ -38853,8 +39061,8 @@
           "gridPos": {
             "h": 7,
             "w": 6,
-            "x": 0,
-            "y": 61
+            "x": 12,
+            "y": 71
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -38936,8 +39144,8 @@
           "gridPos": {
             "h": 7,
             "w": 6,
-            "x": 6,
-            "y": 61
+            "x": 18,
+            "y": 71
           },
           "heatmap": {},
           "hideZeroBuckets": true,
