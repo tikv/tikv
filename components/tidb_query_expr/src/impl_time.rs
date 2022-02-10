@@ -865,6 +865,12 @@ pub fn duration_string_time_diff(
     duration_duration_time_diff(ctx, arg1, &arg2)
 }
 
+#[rpn_fn]
+#[inline]
+pub fn quarter(t: &DateTime) -> Result<Option<Int>> {
+    Ok(Some(Int::from(t.month() + 2) / 3))
+}
+
 /// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
     match duration.subsec_micros() {
@@ -2594,6 +2600,33 @@ mod tests {
                 .push_param(duration)
                 .push_param(string)
                 .evaluate::<Duration>(ScalarFuncSig::DurationStringTimeDiff)
+                .unwrap();
+            assert_eq!(output, expected, "got {}", output.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_quarter() {
+        let cases = vec![
+            (Some("2008-04-01"), Some(2)),
+            (Some("2008-01-01"), Some(1)),
+            (Some("2008-03-31"), Some(1)),
+            (Some("2008-06-30"), Some(2)),
+            (Some("2008-07-01"), Some(3)),
+            (Some("2008-09-30"), Some(3)),
+            (Some("2008-10-01"), Some(4)),
+            (Some("2008-12-31"), Some(4)),
+            (Some("2008-00-01"), Some(0)),
+            (None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (datetime, exp) in cases {
+            let expected = exp.map(|exp| Int::from(exp));
+            let datetime = datetime
+                .map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime)
+                .evaluate::<Int>(ScalarFuncSig::Quarter)
                 .unwrap();
             assert_eq!(output, expected, "got {}", output.unwrap());
         }
