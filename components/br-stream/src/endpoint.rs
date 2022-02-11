@@ -26,7 +26,7 @@ use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::metrics;
-use crate::router::{ApplyEvent, Router};
+use crate::router::{ApplyEvent, Router, FLUSH_STORAGE_INTERVAL};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 
@@ -138,7 +138,7 @@ where
     RT: RaftStoreRouter<E> + 'static,
 {
     async fn starts_flush_ticks(router: Router) {
-        let ticker = tick(Duration::from_secs(10));
+        let ticker = tick(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 5));
         loop {
             // wait 10s to trigger tick
             let _ = ticker.recv().unwrap();

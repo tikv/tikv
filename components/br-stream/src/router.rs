@@ -53,7 +53,7 @@ use tokio::sync::Mutex;
 use tokio::{fs::remove_file, fs::File};
 use txn_types::{Key, Lock, TimeStamp};
 
-const FLUSH_STORAGE_INTERVAL: u64 = 300;
+pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -418,8 +418,6 @@ impl RouterInner {
                     error!("backup stream schedule task failed"; "error" => ?e);
                     task_info.set_flushing_status(false);
                 }
-            } else {
-                task_info.update_flush_time();
             }
         }
     }
