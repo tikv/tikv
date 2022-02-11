@@ -128,8 +128,7 @@ where
     hibernate_state: HibernateState,
     stopped: bool,
     has_ready: bool,
-    mailbox: Option<BasicMailbox<PeerFsm<EK, ER
-  ,
+    mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
     skip_split_count: usize,
@@ -2046,7 +2045,6 @@ where
                 merged_by_target,
                 reason,
             });
-          
             info!(
                 "delays destroy";
                 "region_id" => self.fsm.region_id(),
