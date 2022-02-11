@@ -63,6 +63,7 @@ where
 
 // This function uses the distributed/parallel reservoir sampling algorithm.
 // It will sample min(sample_num, all_key_ranges_num) key ranges from multiple key_ranges_providers with the same possibility.
+// NOTICE: pre_sum should be calculated from the lists, so they should have the same length too.
 fn sample<F, T>(
     sample_num: usize,
     pre_sum: &[usize],
@@ -72,8 +73,6 @@ fn sample<F, T>(
 where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
-    // pre_sum should be calculated from the lists, so they should have the same length.
-    assert_eq!(pre_sum.len(), key_ranges_providers.len());
     let mut rng = rand::thread_rng();
     let mut sampled_key_ranges = vec![];
     // The sum of the QPS is the number of all the key ranges.
@@ -147,6 +146,8 @@ impl RegionInfo {
     }
 }
 
+// Recorder is used to record the potential split-able key ranges,
+// sample and split them according to the split config appropriately.
 pub struct Recorder {
     pub detect_times: u64,
     pub detected_times: u64,
@@ -194,21 +195,20 @@ impl Recorder {
             .collect()
     }
 
-    fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
+    // collect the split keys from the recorded key_ranges.
+    fn collect(&self, config: &SplitConfig) -> Vec<u8> {
         let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
         let sampled_key_ranges =
             sample(config.sample_num, &pre_sum, self.key_ranges.clone(), |x| x);
-        let mut samples: Vec<Sample> = self.convert(sampled_key_ranges);
-        for key_ranges in &self.key_ranges {
-            for key_range in key_ranges {
-                Recorder::sample(&mut samples, key_range);
-            }
-        }
+        let mut samples = self.convert(sampled_key_ranges);
+        self.key_ranges.iter().flatten().for_each(|key_range| {
+            Recorder::sample(&mut samples, key_range);
+        });
         Recorder::split_key(
             samples,
             config.split_balance_score,
             config.split_contained_score,
-            config.sample_threshold as i32,
+            config.sample_threshold,
         )
     }
 
@@ -240,7 +240,7 @@ impl Recorder {
         samples: Vec<Sample>,
         split_balance_score: f64,
         split_contained_score: f64,
-        sample_threshold: i32,
+        sample_threshold: u64,
     ) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
@@ -248,7 +248,7 @@ impl Recorder {
             if sample.key.is_empty() {
                 continue;
             }
-            let sampled = sample.contained + sample.left + sample.right;
+            let sampled = (sample.contained + sample.left + sample.right) as u64;
             if (sample.left + sample.right) == 0 || sampled < sample_threshold {
                 LOAD_BASE_SPLIT_EVENT
                     .with_label_values(&["no_enough_key"])
@@ -463,12 +463,11 @@ impl AutoSplitController {
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
                 if !key.is_empty() {
-                    let split_info = SplitInfo {
+                    split_infos.push(SplitInfo {
                         region_id,
                         split_key: key,
                         peer: recorder.peer.clone(),
-                    };
-                    split_infos.push(split_info);
+                    });
                     LOAD_BASE_SPLIT_EVENT
                         .with_label_values(&["prepare_to_split"])
                         .inc();
