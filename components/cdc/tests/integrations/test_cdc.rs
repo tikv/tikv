@@ -969,6 +969,7 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
     let ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
+
     // Update value
     let mut m2 = Mutation::default();
     m2.set_op(Op::Put);
@@ -978,6 +979,8 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
     let ts4 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1], ts3, ts4);
+
+    // The downstream 1 can get old values as expected.
     let mut event_count = 0;
     loop {
         let events = receive_event_1(false).events.to_vec();
@@ -1003,6 +1006,7 @@ fn test_old_value_multi_changefeeds() {
         }
     }
 
+    // The downstream 2 can also get old values because `req`.`extra_op` field is ignored now.
     event_count = 0;
     loop {
         let events = receive_event_2(false).events.to_vec();
@@ -1011,7 +1015,11 @@ fn test_old_value_multi_changefeeds() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
-                            assert_eq!(row.get_old_value(), b"");
+                            if row.get_start_ts() == ts3.into_inner() {
+                                assert_eq!(row.get_old_value(), b"v1");
+                            } else {
+                                assert_eq!(row.get_old_value(), b"");
+                            }
                             event_count += 1;
                         }
                     }
