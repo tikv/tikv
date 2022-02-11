@@ -9,6 +9,7 @@ use std::{mem, thread};
 
 use engine_rocks::RocksSnapshot;
 use kvproto::metapb;
+use more_asserts::assert_le;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
@@ -40,6 +41,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.cfg.raft_store.renew_leader_lease_advance_duration = ReadableDuration::secs(0);
 
     let node_id = 1u64;
     let store_id = 1u64;
@@ -171,6 +173,8 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
     let election_timeout = configure_for_lease_read(cluster, Some(500), Some(5));
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.cfg.raft_store.renew_leader_lease_advance_duration = ReadableDuration::secs(0);
 
     let store_id = 1u64;
     let peer = new_peer(store_id, 1);
@@ -768,4 +772,48 @@ fn test_infinite_lease() {
         thread::sleep(max_lease / 4);
     }
     assert_eq!(detector.ctx.rl().len(), 1);
+}
+
+// LocalReader will try to renew lease in advance, so the region that has continuous reads
+// should not go to hibernate.
+#[test]
+fn test_node_local_read_renew_lease() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
+    let (base_tick_ms, election_ticks) = (50, 10);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
+    for id in 2..=3 {
+        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
+    }
+
+    // Write the initial value for a key.
+    let key = b"k";
+    cluster.must_put(key, b"v1");
+    // Force `peer` to become leader.
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let peer = new_peer(1, 1);
+    cluster.must_transfer_leader(region_id, peer.clone());
+
+    let detector = LeaseReadFilter::default();
+    cluster.add_send_filter(CloneFilterFactory(detector.clone()));
+
+    // election_timeout_ticks * base_tick_interval * 3
+    let hibernate_wait = election_ticks * Duration::from_millis(base_tick_ms) * 3;
+    let request_wait = Duration::from_millis(base_tick_ms);
+    let max_renew_lease_time = 3;
+    let round = hibernate_wait.as_millis() / request_wait.as_millis();
+    for i in 0..round {
+        // Issue a read request and check the value on response.
+        must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
+        // Plus 1 to prevent case failure when test machine is too slow.
+        assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
+        thread::sleep(request_wait);
+    }
 }

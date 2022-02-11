@@ -100,14 +100,14 @@ where
                     region_id,
                     SignificantMsg::RaftlogFetched {
                         context,
-                        res: RaftlogFetchResult::Fetched {
+                        res: Box::new(RaftlogFetchResult {
                             ents: res.map(|_| ents).map_err(|e| e.into()),
                             low,
                             max_size: max_size as u64,
                             hit_size_limit,
                             tried_cnt,
                             term,
-                        },
+                        }),
                     },
                 );
             }

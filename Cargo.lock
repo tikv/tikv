@@ -3638,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#cc0fa30612c7f8e849436681a468996d1624682a"
+source = "git+https://github.com/tikv/raft-engine?branch=master#e478e070aa7e9a1d0a9053a92abd632bf15a986d"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3659,6 +3659,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "rayon",
+ "scopeguard",
  "serde",
  "thiserror",
 ]
