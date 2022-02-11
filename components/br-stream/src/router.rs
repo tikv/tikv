@@ -42,7 +42,7 @@ use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{
     box_err,
     codec::stream_event::EventEncoder,
-    defer, info, error,
+    defer, error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -53,7 +53,7 @@ use tokio::sync::Mutex;
 use tokio::{fs::remove_file, fs::File};
 use txn_types::{Key, Lock, TimeStamp};
 
-const FLUSH_STORAGE_INTERVAL: u64 = 300;
+pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -382,6 +382,26 @@ impl RouterInner {
             _ => None,
         }
     }
+
+    /// tick aims to flush log/meta to extern storage periodically.
+    pub async fn tick(&self) {
+        for (name, task_info) in self.tasks.lock().await.iter() {
+            // if stream task need flush this time, schedule Task::Flush, or update time justly.
+            if task_info.should_flush().await
+                && task_info.set_flushing_status_cas(false, true).is_ok()
+            {
+                info!(
+                    "backup stream trigger flush task by tick";
+                    "task" => ?task_info,
+                );
+
+                if let Err(e) = self.scheduler.schedule(Task::Flush(name.clone())) {
+                    error!("backup stream schedule task failed"; "error" => ?e);
+                    task_info.set_flushing_status(false);
+                }
+            }
+        }
+    }
 }
 
 /// The handle of a temporary file.
@@ -612,8 +632,9 @@ impl StreamTaskInfo {
         unsafe { Box::from_raw(ptr) };
     }
 
-    pub fn should_flush(&self) -> bool {
+    pub async fn should_flush(&self) -> bool {
         self.get_last_flush_time().saturating_elapsed() >= self.flush_interval
+            && !self.files.read().await.is_empty()
     }
 
     pub fn is_flushing(&self) -> bool {

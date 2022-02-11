@@ -342,13 +342,15 @@ impl SSTImporter {
             event_iter.next()?;
             let iter_key = event_iter.key().to_vec();
 
-            smallest_key = smallest_key.map_or_else(|| Some(iter_key.clone()), |v: Vec<u8>| {
-                Some(v.min(iter_key.clone()))
-            });
+            smallest_key = smallest_key.map_or_else(
+                || Some(iter_key.clone()),
+                |v: Vec<u8>| Some(v.min(iter_key.clone())),
+            );
 
-            largest_key = largest_key.map_or_else(|| Some(iter_key.clone()), |v: Vec<u8>| {
-                Some(v.max(iter_key.clone()))
-            });
+            largest_key = largest_key.map_or_else(
+                || Some(iter_key.clone()),
+                |v: Vec<u8>| Some(v.max(iter_key.clone())),
+            );
 
             if perform_rewrite {
                 let old_key = event_iter.key();

@@ -26,7 +26,7 @@ use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::metrics;
-use crate::router::{ApplyEvent, Router};
+use crate::router::{ApplyEvent, Router, FLUSH_STORAGE_INTERVAL};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 
@@ -108,9 +108,7 @@ where
                     err.report("failed to start watch tasks");
                 }
             });
-            pool.spawn(Endpoint::<_, R, E, RT>::starts_flush_ticks(
-                meta_client.clone(),
-                scheduler.clone(),
+            pool.spawn(Endpoint::<EtcdStore, R, E, RT>::starts_flush_ticks(
                 range_router.clone(),
             ));
         }
@@ -139,35 +137,13 @@ where
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
 {
-    async fn starts_flush_ticks(
-        meta_client: MetadataClient<S>,
-        scheduler: Scheduler<Task>,
-        router: Router,
-    ) -> Result<()> {
-        let ticker = tick(Duration::from_secs(10));
+    async fn starts_flush_ticks(router: Router) {
+        let ticker = tick(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 5));
         loop {
             // wait 10s to trigger tick
             let _ = ticker.recv().unwrap();
             debug!("backup stream trigger flush tick");
-            match meta_client.get_tasks().await {
-                Ok(tasks) => {
-                    for task in tasks.inner {
-                        debug!("backup stream get task in flush tick"; "task" => ?task);
-                        router.get_task_info(&task.info.name).await.and_then(|task_info| {
-                            if task_info.should_flush() && !task_info.is_flushing() && task_info.set_flushing_status_cas(false, true).is_ok() {
-                                info!("backup stream trigger flush task by tick"; "task" => ?task);
-                                scheduler.schedule(Task::Flush(task.info.name.to_string())).map_err(|e| {
-                                    error!("backup stream schedule task failed"; "error" => ?e);
-                                    e.into()
-                                })
-                            } else {
-                                Ok(())
-                            }
-                        })?;
-                    }
-                }
-                Err(e) => error!("backup stream get tasks failed"; "error" => ?e),
-            }
+            router.tick().await;
         }
     }
 
