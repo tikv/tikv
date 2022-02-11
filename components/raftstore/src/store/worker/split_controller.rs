@@ -198,73 +198,17 @@ impl Samples {
             }
         }
     }
-}
 
-// Recorder is used to record the potential split-able key ranges,
-// sample and split them according to the split config appropriately.
-pub struct Recorder {
-    pub detect_times: u64,
-    pub detected_times: u64,
-    pub peer: Peer,
-    pub key_ranges: Vec<Vec<KeyRange>>,
-    pub create_time: SystemTime,
-}
-
-impl Recorder {
-    fn new(detect_times: u64) -> Recorder {
-        Recorder {
-            detect_times,
-            detected_times: 0,
-            peer: Peer::default(),
-            key_ranges: vec![],
-            create_time: SystemTime::now(),
-        }
-    }
-
-    fn record(&mut self, key_ranges: Vec<KeyRange>) {
-        self.detected_times += 1;
-        self.key_ranges.push(key_ranges);
-    }
-
-    fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
-            self.peer = peer.clone();
-        }
-    }
-
-    fn is_ready(&self) -> bool {
-        self.detected_times >= self.detect_times
-    }
-
-    // collect the split keys from the recorded key_ranges.
-    fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let sampled_key_ranges = sample(
-            config.sample_num,
-            &prefix_sum(self.key_ranges.iter(), Vec::len),
-            self.key_ranges.clone(),
-            |x| x,
-        );
-        let mut samples = Samples::from(sampled_key_ranges);
-        self.key_ranges.iter().flatten().for_each(|key_range| {
-            samples.evaluate(key_range);
-        });
-        Recorder::split_key(
-            samples,
-            config.split_balance_score,
-            config.split_contained_score,
-            config.sample_threshold,
-        )
-    }
-
+    // split the keys with the given split config and sampled data.
     fn split_key(
-        samples: Samples,
+        &self,
         split_balance_score: f64,
         split_contained_score: f64,
         sample_threshold: u64,
     ) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
-        for (index, sample) in samples.0.iter().enumerate() {
+        for (index, sample) in self.0.iter().enumerate() {
             if sample.key.is_empty() {
                 continue;
             }
@@ -306,9 +250,67 @@ impl Recorder {
             }
         }
         if best_index >= 0 {
-            return samples.0[best_index as usize].key.clone();
+            return self.0[best_index as usize].key.clone();
         }
         return vec![];
+    }
+}
+
+// Recorder is used to record the potential split-able key ranges,
+// sample and split them according to the split config appropriately.
+pub struct Recorder {
+    pub detect_times: u64,
+    pub detected_times: u64,
+    pub peer: Peer,
+    pub key_ranges: Vec<Vec<KeyRange>>,
+    pub create_time: SystemTime,
+}
+
+impl Recorder {
+    fn new(detect_times: u64) -> Recorder {
+        Recorder {
+            detect_times,
+            detected_times: 0,
+            peer: Peer::default(),
+            key_ranges: vec![],
+            create_time: SystemTime::now(),
+        }
+    }
+
+    fn record(&mut self, key_ranges: Vec<KeyRange>) {
+        self.detected_times += 1;
+        self.key_ranges.push(key_ranges);
+    }
+
+    fn update_peer(&mut self, peer: &Peer) {
+        if self.peer != *peer {
+            self.peer = peer.clone();
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.detected_times >= self.detect_times
+    }
+
+    // collect the split keys from the recorded key_ranges.
+    // This will start a second-level sampling on the previous sampled key ranges,
+    // evaluate the samples according to the given key range, and compute the split keys finally.
+    fn collect(&self, config: &SplitConfig) -> Vec<u8> {
+        let sampled_key_ranges = sample(
+            config.sample_num,
+            &prefix_sum(self.key_ranges.iter(), Vec::len),
+            self.key_ranges.clone(),
+            |x| x,
+        );
+        let mut samples = Samples::from(sampled_key_ranges);
+        self.key_ranges.iter().flatten().for_each(|key_range| {
+            samples.evaluate(key_range);
+        });
+        samples.split_key(
+            config.split_balance_score,
+            config.split_contained_score,
+            config.sample_threshold,
+        )
     }
 }
 
