@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
@@ -251,29 +252,30 @@ impl Engine {
 
     pub(crate) fn run_compaction(&self) {
         let mut results = Vec::new();
+        let running_counter = Arc::new(AtomicU64::new(0));
         loop {
             self.get_compaction_priorities(&mut results);
-            let cnt = results.len().min(self.opts.num_compactors);
-            let (tx, rx) = tikv_util::mpsc::bounded(cnt);
-            for i in 0..cnt {
+            let num_running = running_counter.load(std::sync::atomic::Ordering::SeqCst);
+            let num_runnable = self.opts.num_compactors - num_running as usize;
+            let num_jobs = results.len().min(num_runnable);
+            for i in 0..num_jobs {
                 let pri = results[i].clone();
                 if let Ok(shard) = self.get_shard_with_ver(pri.shard_id, pri.shard_ver) {
                     store_bool(&shard.compacting, true);
+                } else {
+                    continue;
                 }
                 let engine = self.clone();
-                let tx = tx.clone();
+                let counter = running_counter.clone();
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 std::thread::spawn(move || {
-                    let res = engine.compact(&pri);
-                    tx.send(res).unwrap();
+                    if let Err(err) = engine.compact(&pri) {
+                        error!("compact failed, {:?}", err);
+                    }
+                    counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 });
             }
-            for _ in 0..cnt {
-                let res = rx.recv().unwrap();
-                if let Err(err) = res {
-                    error!("compact failed, {:?}", err);
-                }
-            }
-            if results.len() == 0 {
+            if num_jobs == 0 {
                 std::thread::sleep(Duration::from_millis(100));
             }
         }

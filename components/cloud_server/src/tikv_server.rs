@@ -689,6 +689,7 @@ impl TiKVServer {
             }
             Some(c) => c.0 as usize,
         };
+        kv_opts.num_compactors = conf.rocksdb.max_background_jobs as usize;
         kv_opts.max_mem_table_size_factor = 16;
         kv_opts.max_block_cache_size = capacity as i64;
         let opts = Arc::new(kv_opts);
