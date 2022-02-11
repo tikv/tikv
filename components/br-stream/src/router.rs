@@ -418,7 +418,7 @@ impl RouterInner {
                     error!("backup stream schedule task failed"; "error" => ?e);
                     task_info.set_flushing_status(false);
                 }
-            }else{
+            } else {
                 task_info.update_flush_time();
             }
         }
