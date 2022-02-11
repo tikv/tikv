@@ -506,15 +506,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let conn = self.connections.get_mut(&conn_id).unwrap();
         downstream.set_sink(conn.get_sink().clone());
 
-        let txn_extra_op = match self.store_meta.lock().unwrap().readers.get(&region_id) {
-            Some(reader) => reader.txn_extra_op.clone(),
-            None => {
-                error!("cdc register for a not found region"; "region_id" => region_id);
-                let _ = downstream.sink_region_not_found(region_id);
-                return;
-            }
-        };
-
         // Check if the cluster id matches.
         let request_cluster_id = request.get_header().get_cluster_id();
         if version >= FeatureGate::validate_cluster_id() && self.cluster_id != request_cluster_id {
@@ -527,6 +518,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let _ = downstream.sink_error_event(region_id, err_event);
             return;
         }
+
+        let txn_extra_op = match self.store_meta.lock().unwrap().readers.get(&region_id) {
+            Some(reader) => reader.txn_extra_op.clone(),
+            None => {
+                error!("cdc register for a not found region"; "region_id" => region_id);
+                let _ = downstream.sink_region_not_found(region_id);
+                return;
+            }
+        };
 
         // TODO: Add a new task to close incompatible features.
         if let Some(e) = conn.check_version_and_set_feature(version) {
