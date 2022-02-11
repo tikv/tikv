@@ -73,6 +73,8 @@ pub struct Config {
     pub channel_capacity: usize,
 
     pub region_split_size: ReadableSize,
+
+    pub apply_pool_size: usize,
 }
 
 impl Default for Config {
@@ -105,6 +107,7 @@ impl Default for Config {
             // We should turn on this only in our tests.
             consistency_check_interval: ReadableDuration::secs(0),
             channel_capacity: 40960,
+            apply_pool_size: 3,
         }
     }
 }
@@ -143,6 +146,7 @@ impl Config {
         cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
 
         cfg.region_split_size = old_cop.region_split_size;
+        cfg.apply_pool_size = old.apply_batch_system.pool_size;
         cfg
     }
 }

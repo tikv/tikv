@@ -163,7 +163,7 @@ impl RaftBatchSystem {
         self.workers = Some(workers);
         self.ctx = Some(ctx);
         let peer_receiver = self.peer_receiver.take().unwrap();
-        let (mut rw, apply_recevier) = RaftWorker::new(
+        let (mut rw, apply_receivers) = RaftWorker::new(
             self.ctx.clone().unwrap(),
             peer_receiver,
             self.router.clone(),
@@ -171,16 +171,18 @@ impl RaftBatchSystem {
         std::thread::spawn(move || {
             rw.run();
         });
-        let mut aw = ApplyWorker::new(
-            self.ctx.as_ref().unwrap().engines.kv.clone(),
-            self.ctx.as_ref().unwrap().region_scheduler.clone(),
-            self.ctx.as_ref().unwrap().split_scheduler.clone(),
-            self.router.clone(),
-            apply_recevier,
-        );
-        let _peer_handle = std::thread::spawn(move || {
-            aw.run();
-        });
+        for apply_receiver in apply_receivers {
+            let mut aw = ApplyWorker::new(
+                self.ctx.as_ref().unwrap().engines.kv.clone(),
+                self.ctx.as_ref().unwrap().region_scheduler.clone(),
+                self.ctx.as_ref().unwrap().split_scheduler.clone(),
+                self.router.clone(),
+                apply_receiver,
+            );
+            let _peer_handle = std::thread::spawn(move || {
+                aw.run();
+            });
+        }
 
         let store_fsm = self.store_fsm.take().unwrap();
         let mut sw = StoreWorker::new(store_fsm, self.ctx.clone().unwrap());

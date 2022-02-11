@@ -8,7 +8,6 @@ use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tikv_util::debug;
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::worker::Scheduler;
 
@@ -70,7 +69,7 @@ pub(crate) struct RaftWorker {
     ctx: RaftContext,
     receiver: Receiver<(u64, PeerMsg)>,
     router: RaftRouter,
-    apply_sender: Sender<ApplyBatch>,
+    apply_senders: Vec<Sender<ApplyBatch>>,
     last_tick: Instant,
     tick_millis: u64,
 }
@@ -80,8 +79,15 @@ impl RaftWorker {
         ctx: GlobalContext,
         receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
-    ) -> (Self, Receiver<ApplyBatch>) {
-        let (apply_sender, apply_receiver) = tikv_util::mpsc::unbounded();
+    ) -> (Self, Vec<Receiver<ApplyBatch>>) {
+        let apply_pool_size = ctx.cfg.value().apply_pool_size;
+        let mut apply_senders = Vec::with_capacity(apply_pool_size);
+        let mut apply_receivers = Vec::with_capacity(apply_pool_size);
+        for _ in 0..apply_pool_size {
+            let (sender, receiver) = tikv_util::mpsc::unbounded();
+            apply_senders.push(sender);
+            apply_receivers.push(receiver);
+        }
         let tick_millis = ctx.cfg.value().raft_base_tick_interval.as_millis();
         let ctx = RaftContext::new(ctx);
         (
@@ -89,11 +95,11 @@ impl RaftWorker {
                 ctx,
                 receiver,
                 router,
-                apply_sender,
+                apply_senders,
                 last_tick: Instant::now(),
                 tick_millis,
             },
-            apply_receiver,
+            apply_receivers,
         )
     }
 
@@ -160,17 +166,23 @@ impl RaftWorker {
         }
         PeerMsgHandler::new(&mut peer_fsm, &mut self.ctx).handle_msgs(&mut inbox.msgs);
         peer_fsm.peer.handle_raft_ready(&mut self.ctx);
-        self.maybe_send_apply(&inbox.peer.applier);
+        self.maybe_send_apply(&inbox.peer.applier, &peer_fsm);
         peer_fsm.peer.maybe_finish_split(&mut self.ctx);
     }
 
-    fn maybe_send_apply(&mut self, applier: &Arc<Mutex<Applier>>) {
+    fn maybe_send_apply(&mut self, applier: &Arc<Mutex<Applier>>, peer_fsm: &PeerFsm) {
         if !self.ctx.apply_msgs.msgs.is_empty() {
             let peer_batch = ApplyBatch {
                 msgs: mem::take(&mut self.ctx.apply_msgs.msgs),
                 applier: applier.clone(),
+                applying_cnt: peer_fsm.applying_cnt.clone(),
             };
-            self.apply_sender.send(peer_batch).unwrap();
+            peer_batch
+                .applying_cnt
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.apply_senders[peer_fsm.apply_worker_idx]
+                .send(peer_batch)
+                .unwrap();
         }
     }
 
@@ -180,7 +192,6 @@ impl RaftWorker {
         }
         let raft_wb = &mut self.ctx.raft_wb;
         if !raft_wb.is_empty() {
-            debug!("persist_state");
             self.ctx.global.engines.raft.write(raft_wb).unwrap()
         }
         raft_wb.reset();
@@ -236,6 +247,9 @@ impl ApplyWorker {
             for msg in batch.msgs.drain(..) {
                 applier.handle_msg(&mut self.ctx, msg);
             }
+            batch
+                .applying_cnt
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }

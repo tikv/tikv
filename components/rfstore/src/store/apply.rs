@@ -25,6 +25,7 @@ use raftstore::store::util::{ChangePeerI, ConfChangeKind};
 use raftstore::store::QueryStats;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Debug, Formatter};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::vec::Drain;
 use tikv_util::worker::Scheduler;
@@ -161,6 +162,7 @@ pub(crate) struct ApplyMsgs {
 pub(crate) struct ApplyBatch {
     pub(crate) applier: Arc<Mutex<Applier>>,
     pub(crate) msgs: Vec<ApplyMsg>,
+    pub(crate) applying_cnt: Arc<AtomicU64>,
 }
 
 pub(crate) struct YieldState {

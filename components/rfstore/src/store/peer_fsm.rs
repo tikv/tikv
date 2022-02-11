@@ -13,9 +13,12 @@ use protobuf::ProtobufEnum;
 use raft;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft_proto::eraftpb;
+use rand::{thread_rng, Rng};
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
 use tikv_util::{box_err, debug, error, info, trace, warn};
@@ -48,6 +51,11 @@ const MAX_REGIONS_IN_ERROR: usize = 10;
 pub struct PeerFsm {
     pub(crate) peer: Peer,
     pub(crate) stopped: bool,
+    // apply_worker_idx is initialized randomly, and can be changed based on workload.
+    pub(crate) apply_worker_idx: usize,
+    // applying_cnt is increased by raft worker and decreased by apply worker.
+    // When we need to change the worker idx, we need to make sure the applying_cnt is zero.
+    pub(crate) applying_cnt: Arc<AtomicU64>,
     ticker: Ticker,
 }
 
@@ -80,6 +88,8 @@ impl PeerFsm {
         Ok(PeerFsm {
             peer: Peer::new(store_id, cfg, engines, region, meta_peer)?,
             stopped: false,
+            apply_worker_idx: thread_rng().gen_range(0..cfg.apply_pool_size),
+            applying_cnt: Arc::new(AtomicU64::new(0)),
             ticker: Ticker::new(cfg),
         })
     }
@@ -107,6 +117,8 @@ impl PeerFsm {
             peer: Peer::new(store_id, cfg, engines, &region, peer)?,
             stopped: false,
             ticker: Ticker::new(cfg),
+            apply_worker_idx: thread_rng().gen_range(0..cfg.apply_pool_size),
+            applying_cnt: Arc::new(AtomicU64::new(0)),
         })
     }
 
