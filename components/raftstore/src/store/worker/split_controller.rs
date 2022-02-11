@@ -154,6 +154,52 @@ impl RegionInfo {
     }
 }
 
+struct Samples(Vec<Sample>);
+
+impl From<Vec<KeyRange>> for Samples {
+    fn from(key_ranges: Vec<KeyRange>) -> Self {
+        Samples(
+            key_ranges
+                .iter()
+                .fold(HashSet::new(), |mut hash_set, key_range| {
+                    hash_set.insert(&key_range.start_key);
+                    hash_set.insert(&key_range.end_key);
+                    hash_set
+                })
+                .into_iter()
+                .map(|key| Sample::new(key))
+                .collect(),
+        )
+    }
+}
+
+impl Samples {
+    // evaluate the samples according to the given key range, it will update the sample's left, right and contained counter.
+    fn evaluate(&mut self, key_range: &KeyRange) {
+        for mut sample in self.0.iter_mut() {
+            let order_start = if key_range.start_key.is_empty() {
+                Ordering::Greater
+            } else {
+                sample.key.cmp(&key_range.start_key)
+            };
+
+            let order_end = if key_range.end_key.is_empty() {
+                Ordering::Less
+            } else {
+                sample.key.cmp(&key_range.end_key)
+            };
+
+            if order_start == Ordering::Greater && order_end == Ordering::Less {
+                sample.contained += 1;
+            } else if order_start != Ordering::Greater {
+                sample.right += 1;
+            } else {
+                sample.left += 1;
+            }
+        }
+    }
+}
+
 // Recorder is used to record the potential split-able key ranges,
 // sample and split them according to the split config appropriately.
 pub struct Recorder {
@@ -190,31 +236,17 @@ impl Recorder {
         self.detected_times >= self.detect_times
     }
 
-    fn convert(&self, key_ranges: Vec<KeyRange>) -> Vec<Sample> {
-        key_ranges
-            .iter()
-            .fold(HashSet::new(), |mut hash_set, key_range| {
-                hash_set.insert(&key_range.start_key);
-                hash_set.insert(&key_range.end_key);
-                hash_set
-            })
-            .into_iter()
-            .map(|key| Sample::new(key))
-            .collect()
-    }
-
     // collect the split keys from the recorded key_ranges.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let prefix_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
         let sampled_key_ranges = sample(
             config.sample_num,
-            &prefix_sum,
+            &prefix_sum(self.key_ranges.iter(), Vec::len),
             self.key_ranges.clone(),
             |x| x,
         );
-        let mut samples = self.convert(sampled_key_ranges);
+        let mut samples = Samples::from(sampled_key_ranges);
         self.key_ranges.iter().flatten().for_each(|key_range| {
-            Recorder::sample(&mut samples, key_range);
+            samples.evaluate(key_range);
         });
         Recorder::split_key(
             samples,
@@ -224,39 +256,15 @@ impl Recorder {
         )
     }
 
-    fn sample(samples: &mut Vec<Sample>, key_range: &KeyRange) {
-        for mut sample in samples.iter_mut() {
-            let order_start = if key_range.start_key.is_empty() {
-                Ordering::Greater
-            } else {
-                sample.key.cmp(&key_range.start_key)
-            };
-
-            let order_end = if key_range.end_key.is_empty() {
-                Ordering::Less
-            } else {
-                sample.key.cmp(&key_range.end_key)
-            };
-
-            if order_start == Ordering::Greater && order_end == Ordering::Less {
-                sample.contained += 1;
-            } else if order_start != Ordering::Greater {
-                sample.right += 1;
-            } else {
-                sample.left += 1;
-            }
-        }
-    }
-
     fn split_key(
-        samples: Vec<Sample>,
+        samples: Samples,
         split_balance_score: f64,
         split_contained_score: f64,
         sample_threshold: u64,
     ) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
-        for (index, sample) in samples.iter().enumerate() {
+        for (index, sample) in samples.0.iter().enumerate() {
             if sample.key.is_empty() {
                 continue;
             }
@@ -298,7 +306,7 @@ impl Recorder {
             }
         }
         if best_index >= 0 {
-            return samples[best_index as usize].key.clone();
+            return samples.0[best_index as usize].key.clone();
         }
         return vec![];
     }
@@ -546,11 +554,11 @@ mod tests {
 
     impl SampleCase {
         fn sample_key(&self, start_key: &[u8], end_key: &[u8], pos: Position) {
-            let mut samples = vec![Sample::new(&self.key)];
+            let mut samples = Samples(vec![Sample::new(&self.key)]);
             let key_range = build_key_range(start_key, end_key, false);
-            Recorder::sample(&mut samples, &key_range);
+            samples.evaluate(&key_range);
             assert_eq!(
-                samples[0].num(pos),
+                samples.0[0].num(pos),
                 1,
                 "start_key is {:?}, end_key is {:?}",
                 String::from_utf8(Vec::from(start_key)).unwrap(),
@@ -799,19 +807,18 @@ mod tests {
     }
 
     #[test]
-    fn test_recorder_convert() {
-        let r = Recorder::new(1);
+    fn test_samples_from_key_ranges() {
         let key_ranges = vec![];
-        assert_eq!(r.convert(key_ranges).len(), 0);
+        assert_eq!(Samples::from(key_ranges).0.len(), 0);
 
         let key_ranges = vec![build_key_range(b"a", b"b", false)];
-        assert_eq!(r.convert(key_ranges).len(), 2);
+        assert_eq!(Samples::from(key_ranges).0.len(), 2);
 
         let key_ranges = vec![
             build_key_range(b"a", b"a", false),
             build_key_range(b"b", b"c", false),
         ];
-        assert_eq!(r.convert(key_ranges).len(), 3);
+        assert_eq!(Samples::from(key_ranges).0.len(), 3);
     }
 
     fn build_key_ranges(start_key: &[u8], end_key: &[u8], num: usize) -> Vec<KeyRange> {
@@ -857,11 +864,11 @@ mod tests {
     }
 
     #[bench]
-    fn recorder_sample(b: &mut test::Bencher) {
-        let mut samples = vec![Sample::new(b"c")];
+    fn samples_evaluate(b: &mut test::Bencher) {
+        let mut samples = Samples(vec![Sample::new(b"c")]);
         let key_range = build_key_range(b"a", b"b", false);
         b.iter(|| {
-            Recorder::sample(&mut samples, &key_range);
+            samples.evaluate(&key_range);
         });
     }
 
