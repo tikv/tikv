@@ -619,7 +619,8 @@ fn test_gen_during_heavy_recv() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
-
+    assert_eq!(cluster.get_snap_mgr(1).stats().sending_count, 0);
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
     drop(cluster);
     let _ = th.join();
 }
@@ -711,4 +712,34 @@ fn test_correct_snapshot_term() {
     cluster.must_put(b"k1", b"v1");
     // If peer 4 panicks, it won't be able to apply new writes.
     must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+}
+
+/// Test when applying a snapshot, old logs should be cleaned up.
+#[test]
+fn test_snapshot_clean_up_logs_with_log_gc() {
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 50;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    // Speed up log gc.
+    cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    pd_client.must_add_peer(r, new_peer(4, 4));
+    pd_client.must_remove_peer(r, new_peer(3, 3));
+    cluster.must_transfer_leader(r, new_peer(4, 4));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+    cluster.clear_send_filters();
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    // Peer (4, 4) must become leader at the end and send snapshot to 2.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    // No new log is proposed, so there should be no log at all.
+    assert_eq!(cluster.get_first_log(1, 2), None);
 }

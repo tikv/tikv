@@ -2,27 +2,8 @@
 
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
-use std::{thread, u64};
-
-use rand::RngCore;
-use tempfile::{Builder, TempDir};
-
-use kvproto::encryptionpb::EncryptionMethod;
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{
-    ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-    TransferLeader,
-};
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
-use kvproto::raft_cmdpb::{
-    AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftCmdResponse, Request,
-    StatusRequest,
-};
-use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
-use kvproto::tikvpb::TikvClient;
-use raft::eraftpb::ConfChangeType;
 
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
@@ -31,27 +12,42 @@ use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+    CompactionListener, Compat, RocksCompactionJobInfo, RocksEngine, RocksSnapshot,
 };
-use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Engines, Iterable, Peekable};
+use engine_traits::{Engines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::kvrpcpb::*;
+use kvproto::metapb::{self, RegionEpoch};
+use kvproto::pdpb::{
+    ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
+    TransferLeader,
+};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType, RaftCmdRequest,
+    RaftCmdResponse, Request, StatusCmdType, StatusRequest,
+};
+use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
+use kvproto::tikvpb::TikvClient;
+use raft::eraftpb::ConfChangeType;
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
+use rand::RngCore;
+use tempfile::{Builder, TempDir};
 use tikv::config::*;
 use tikv::storage::point_key_range;
 use tikv_util::config::*;
+use tikv_util::time::ThreadReadId;
 use tikv_util::{escape, HandyRwLock};
 use txn_types::Key;
 
-use super::*;
-
 use crate::pd_client::PdClient;
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_RAFT};
+use crate::{Cluster, ServerCluster, Simulator, TestPdClient};
+
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
-use tikv_util::time::ThreadReadId;
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -309,6 +305,12 @@ pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
 
 pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
+}
+
+pub fn sleep_until_election_triggered(cfg: &Config) {
+    let election_timeout =
+        cfg.raft_base_tick_interval.as_millis() * cfg.raft_election_timeout_ticks as u64;
+    sleep_ms(3u64 * election_timeout);
 }
 
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
@@ -1053,4 +1055,57 @@ pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObser
 pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
     let resp = remove_lock_observer(client, max_ts);
     assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+}
+
+pub fn get_tso(pd_client: &TestPdClient) -> u64 {
+    block_on(pd_client.get_tso()).unwrap().into_inner()
+}
+
+// A helpful wrapper to make the test logic clear
+pub struct PeerClient {
+    pub cli: TikvClient,
+    pub ctx: Context,
+}
+
+impl PeerClient {
+    pub fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: metapb::Peer) -> PeerClient {
+        let cli = {
+            let env = Arc::new(Environment::new(1));
+            let channel =
+                ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(peer.get_store_id()));
+            TikvClient::new(channel)
+        };
+        let ctx = {
+            let epoch = cluster.get_region_epoch(region_id);
+            let mut ctx = Context::default();
+            ctx.set_region_id(region_id);
+            ctx.set_peer(peer);
+            ctx.set_region_epoch(epoch);
+            ctx
+        };
+        PeerClient { cli, ctx }
+    }
+
+    pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
+    }
+
+    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+        must_kv_commit(
+            &self.cli,
+            self.ctx.clone(),
+            keys,
+            start_ts,
+            commit_ts,
+            commit_ts,
+        )
+    }
+
+    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
+    }
 }

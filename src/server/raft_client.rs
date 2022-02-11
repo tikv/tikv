@@ -9,7 +9,7 @@ use engine_traits::KvEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
 use futures::task::{Context, Poll, Waker};
-use futures::{Future, Sink};
+use futures::{ready, Future, Sink};
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -171,7 +171,12 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
-        let mut msg_size = msg.start_key.len() + msg.end_key.len();
+        let mut msg_size = msg.start_key.len()
+            + msg.end_key.len()
+            + msg.get_message().context.len()
+            + msg.extra_ctx.len()
+            // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
+            + 11 * msg.get_message().get_entries().len();
         for entry in msg.get_message().get_entries() {
             msg_size += entry.data.len();
         }
@@ -331,20 +336,17 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B, E> {
+struct AsyncRaftSender<R, M, B, E> {
     sender: ClientCStreamSender<M>,
-    receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
     buffer: B,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
-    lifetime: Option<oneshot::Sender<()>>,
-    store_id: u64,
     addr: String,
-    engine: PhantomData<E>,
+    _engine: PhantomData<E>,
 }
 
-impl<R, M, B, E> RaftCall<R, M, B, E>
+impl<R, M, B, E> AsyncRaftSender<R, M, B, E>
 where
     R: RaftStoreRouter<E> + 'static,
     B: Buffer<OutputMessage = M>,
@@ -402,9 +404,52 @@ where
             }
         }
     }
+}
 
-    fn clean_up(&mut self, sink_err: &Option<grpcio::Error>, recv_err: &Option<grpcio::Error>) {
-        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.addr);
+impl<R, M, B, E> Future for AsyncRaftSender<R, M, B, E>
+where
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
+{
+    type Output = grpcio::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<grpcio::Result<()>> {
+        let s = &mut *self;
+        loop {
+            s.fill_msg(ctx);
+            if !s.buffer.empty() {
+                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
+                if let Poll::Ready(Ok(())) = res {
+                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
+                }
+                ready!(res)?;
+                continue;
+            }
+
+            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
+                return Poll::Ready(Err(e));
+            }
+            return Poll::Pending;
+        }
+    }
+}
+
+struct RaftCall<R, M, B, E> {
+    sender: AsyncRaftSender<R, M, B, E>,
+    receiver: ClientCStreamReceiver<Done>,
+    lifetime: Option<oneshot::Sender<()>>,
+    store_id: u64,
+}
+
+impl<R, M, B, E> RaftCall<R, M, B, E>
+where
+    R: RaftStoreRouter<E> + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+    E: KvEngine,
+{
+    fn clean_up(&mut self, sink_err: Option<grpcio::Error>, recv_err: Option<grpcio::Error>) {
+        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
 
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
@@ -416,62 +461,16 @@ where
                 return;
             }
         }
-        let router = &self.router;
-        router.broadcast_unreachable(self.store_id);
+        self.sender.router.broadcast_unreachable(self.store_id);
     }
-}
 
-impl<R, M, B, E> Future for RaftCall<R, M, B, E>
-where
-    R: RaftStoreRouter<E> + Unpin + 'static,
-    B: Buffer<OutputMessage = M> + Unpin,
-    E: KvEngine,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<()> {
-        let s = &mut *self;
-        loop {
-            s.fill_msg(ctx);
-            if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
-                }
-                match res {
-                    Poll::Ready(Ok(())) => continue,
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(e)) => {
-                        let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                            Poll::Ready(Err(e)) => Some(e),
-                            _ => None,
-                        };
-                        s.clean_up(&Some(e), &re);
-                        return Poll::Ready(());
-                    }
-                }
-            }
-
-            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
-                let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                    Poll::Ready(Err(e)) => Some(e),
-                    _ => None,
-                };
-                s.clean_up(&Some(e), &re);
-                return Poll::Ready(());
-            }
-            match Pin::new(&mut s.receiver).poll(ctx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(_)) => {
-                    info!("connection close"; "store_id" => s.store_id, "addr" => %s.addr);
-                    return Poll::Ready(());
-                }
-                Poll::Ready(Err(e)) => {
-                    s.clean_up(&None, &Some(e));
-                    return Poll::Ready(());
-                }
-            }
+    async fn poll(&mut self) {
+        let res = futures::join!(&mut self.sender, &mut self.receiver);
+        if let (Ok(()), Ok(Done { .. })) = res {
+            info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
+            return;
         }
+        self.clean_up(res.0.err(), res.1.err());
     }
 }
 
@@ -571,7 +570,6 @@ where
 
         let cb = ChannelBuilder::new(self.builder.env.clone())
             .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_send_message_len(self.builder.cfg.max_grpc_send_msg_len)
             .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
             .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
@@ -587,39 +585,47 @@ where
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (batch_sink, batch_stream) = client.batch_raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: batch_sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: batch_sink,
+                queue: self.queue.clone(),
+                buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
+                router: self.builder.router.clone(),
+                snap_scheduler: self.builder.snap_scheduler.clone(),
+                addr,
+                _engine: PhantomData::<E>,
+            },
             receiver: batch_stream,
-            queue: self.queue.clone(),
-            buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
-            router: self.builder.router.clone(),
-            snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
-            engine: PhantomData::<E>,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 
     fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (sink, stream) = client.raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: sink,
+                queue: self.queue.clone(),
+                buffer: MessageBuffer::new(),
+                router: self.builder.router.clone(),
+                snap_scheduler: self.builder.snap_scheduler.clone(),
+                addr,
+                _engine: PhantomData::<E>,
+            },
             receiver: stream,
-            queue: self.queue.clone(),
-            buffer: MessageBuffer::new(),
-            router: self.builder.router.clone(),
-            snap_scheduler: self.builder.snap_scheduler.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
-            engine: PhantomData::<E>,
         };
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 }
@@ -972,5 +978,62 @@ where
             engine: PhantomData::<E>,
             last_hash: (0, 0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kvproto::metapb::RegionEpoch;
+    use kvproto::raft_serverpb::RaftMessage;
+    use raft::eraftpb::Snapshot;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_push_raft_message_with_context() {
+        let mut msg_buf = BatchMessageBuffer::new(Arc::new(Config::default()));
+        for i in 0..2 {
+            let context_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
+            let context = vec![0; context_len];
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(1);
+            let mut region_epoch = RegionEpoch::default();
+            region_epoch.conf_ver = 1;
+            region_epoch.version = 0x123456;
+            msg.set_region_epoch(region_epoch);
+            msg.set_start_key(b"12345".to_vec());
+            msg.set_end_key(b"67890".to_vec());
+            msg.mut_message().set_snapshot(Snapshot::default());
+            msg.mut_message().set_commit(0);
+            if i != 0 {
+                msg.mut_message().set_context(context.into());
+            }
+            msg_buf.push(msg);
+        }
+        assert!(msg_buf.full());
+    }
+
+    #[test]
+    fn test_push_raft_message_with_extra_ctx() {
+        let mut msg_buf = BatchMessageBuffer::new(Arc::new(Config::default()));
+        for i in 0..2 {
+            let ctx_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
+            let ctx = vec![0; ctx_len];
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(1);
+            let mut region_epoch = RegionEpoch::default();
+            region_epoch.conf_ver = 1;
+            region_epoch.version = 0x123456;
+            msg.set_region_epoch(region_epoch);
+            msg.set_start_key(b"12345".to_vec());
+            msg.set_end_key(b"67890".to_vec());
+            msg.mut_message().set_snapshot(Snapshot::default());
+            msg.mut_message().set_commit(0);
+            if i != 0 {
+                msg.set_extra_ctx(ctx);
+            }
+            msg_buf.push(msg);
+        }
+        assert!(msg_buf.full());
     }
 }

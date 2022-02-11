@@ -60,7 +60,7 @@ raftstore = { path = "../raftstore", default-features = false }
 thiserror = "1.0"
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
-tokio = { version = "0.2", features = ["rt-threaded"]}
+tokio = { version = "0.2", features = ["rt-threaded", "time"]}
 txn_types = { path = "../txn_types", default-features = false }
 security = { path = "../security", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -78,3 +78,7 @@ tikv_kv = { path = "../tikv_kv" }
 [[test]]
 name = "integrations"
 path = "tests/integrations/mod.rs"
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
