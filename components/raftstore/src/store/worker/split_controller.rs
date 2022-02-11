@@ -13,7 +13,7 @@ use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::Peer;
 use kvproto::pdpb::QueryKind;
 use tikv_util::config::Tracker;
-use tikv_util::{debug, info};
+use tikv_util::{debug, error, info};
 
 use crate::store::metrics::*;
 use crate::store::worker::query_stats::{is_read_query, QueryStats};
@@ -63,23 +63,31 @@ where
 
 // This function uses the distributed/parallel reservoir sampling algorithm.
 // It will sample min(sample_num, all_key_ranges_num) key ranges from multiple key_ranges_providers with the same possibility.
-// NOTICE: pre_sum should be calculated from the lists, so they should have the same length too.
+// NOTICE: prefix_sum should be calculated from the lists, so they should have the same length too.
 fn sample<F, T>(
     sample_num: usize,
-    pre_sum: &[usize],
+    prefix_sum: &[usize],
     mut key_ranges_providers: Vec<T>,
     key_ranges_getter: F,
 ) -> Vec<KeyRange>
 where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
-    let mut rng = rand::thread_rng();
     let mut sampled_key_ranges = vec![];
-    // The sum of the QPS is the number of all the key ranges.
-    let all_key_ranges_num = *pre_sum.last().unwrap();
+    if prefix_sum.len() != key_ranges_providers.len() {
+        error!("failed to sample, prefix_sum length is not equal to key_ranges_providers length";
+            "prefix_sum_len" => prefix_sum.len(),
+            "key_ranges_providers_len" => key_ranges_providers.len(),
+        );
+        return sampled_key_ranges;
+    }
+
+    let mut rng = rand::thread_rng();
+    // The last sum of the QPS is the number of all the key ranges.
+    let all_key_ranges_num = *prefix_sum.last().unwrap();
     let sample_num = std::cmp::min(sample_num, all_key_ranges_num);
     while sampled_key_ranges.len() < sample_num {
-        let i = pre_sum
+        let i = prefix_sum
             .binary_search(&rng.gen_range(0..=all_key_ranges_num))
             .unwrap_or_else(|i| i);
         let key_ranges = key_ranges_getter(&mut key_ranges_providers[i]);
@@ -197,9 +205,13 @@ impl Recorder {
 
     // collect the split keys from the recorded key_ranges.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
-        let sampled_key_ranges =
-            sample(config.sample_num, &pre_sum, self.key_ranges.clone(), |x| x);
+        let prefix_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
+        let sampled_key_ranges = sample(
+            config.sample_num,
+            &prefix_sum,
+            self.key_ranges.clone(),
+            |x| x,
+        );
         let mut samples = self.convert(sampled_key_ranges);
         self.key_ranges.iter().flatten().for_each(|key_range| {
             Recorder::sample(&mut samples, key_range);
@@ -428,11 +440,12 @@ impl AutoSplitController {
                 .iter()
                 .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
             debug!("load base split params";
-                    "region_id"=>region_id,
-                    "qps"=>qps,
-                    "qps_threshold"=>self.cfg.qps_threshold,
-                    "byte"=>byte,
-                    "byte_threshold"=>self.cfg.byte_threshold);
+                "region_id" => region_id,
+                "qps" => qps,
+                "qps_threshold" => self.cfg.qps_threshold,
+                "byte" => byte,
+                "byte_threshold" => self.cfg.byte_threshold,
+            );
 
             QUERY_REGION_VEC
                 .with_label_values(&["read"])
@@ -471,10 +484,9 @@ impl AutoSplitController {
                     LOAD_BASE_SPLIT_EVENT
                         .with_label_values(&["prepare_to_split"])
                         .inc();
-                    info!(
-                        "load base split region";
-                        "region_id"=>region_id,
-                        "qps"=>qps,
+                    info!("load base split region";
+                        "region_id" => region_id,
+                        "qps" => qps,
                     );
                 }
                 self.recorders.remove(&region_id);
@@ -548,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_sum() {
+    fn test_prefix_sum() {
         let v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let expect = vec![1, 3, 6, 10, 15, 21, 28, 36, 45];
         let pre = prefix_sum(v.iter(), |x| *x);
@@ -753,8 +765,8 @@ mod tests {
 
     fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
         for _ in 0..100 {
-            let pre_sum = prefix_sum(key_ranges.iter(), Vec::len);
-            let sampled_key_ranges = sample(sample_num, &pre_sum, key_ranges.clone(), |x| x);
+            let prefix_sum = prefix_sum(key_ranges.iter(), Vec::len);
+            let sampled_key_ranges = sample(sample_num, &prefix_sum, key_ranges.clone(), |x| x);
             assert_eq!(sampled_key_ranges.len(), sample_num);
         }
     }
