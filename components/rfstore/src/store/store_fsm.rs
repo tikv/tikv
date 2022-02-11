@@ -168,9 +168,12 @@ impl RaftBatchSystem {
             peer_receiver,
             self.router.clone(),
         );
-        std::thread::spawn(move || {
-            rw.run();
-        });
+        std::thread::Builder::new()
+            .name("raft".to_string())
+            .spawn(move || {
+                rw.run();
+            })
+            .unwrap();
         for apply_receiver in apply_receivers {
             let mut aw = ApplyWorker::new(
                 self.ctx.as_ref().unwrap().engines.kv.clone(),
@@ -179,16 +182,22 @@ impl RaftBatchSystem {
                 self.router.clone(),
                 apply_receiver,
             );
-            let _peer_handle = std::thread::spawn(move || {
-                aw.run();
-            });
+            let _peer_handle = std::thread::Builder::new()
+                .name("apply".to_string())
+                .spawn(move || {
+                    aw.run();
+                })
+                .unwrap();
         }
 
         let store_fsm = self.store_fsm.take().unwrap();
         let mut sw = StoreWorker::new(store_fsm, self.ctx.clone().unwrap());
-        let _store_handle = std::thread::spawn(move || {
-            sw.run();
-        });
+        let _store_handle = std::thread::Builder::new()
+            .name("store".to_string())
+            .spawn(move || {
+                sw.run();
+            })
+            .unwrap();
 
         self.router.send_store(StoreMsg::Start {
             store: self.ctx.as_ref().unwrap().store.clone(),

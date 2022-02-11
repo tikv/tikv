@@ -219,15 +219,6 @@ impl Arena {
         if addr.0 == NULL_ARENA_ADDR {
             return ptr::null_mut();
         }
-        if addr.block_idx() > 32 {
-            error!(
-                "{}, {}, {}, {}",
-                addr.block_idx(),
-                addr.block_off(),
-                addr.size(),
-                addr.0
-            );
-        }
         assert!(addr.block_idx() < 32, "{}, {}", addr.block_idx(), addr.0);
         let bin = self.get_mut_bytes(addr);
         let ptr = bin.as_mut_ptr() as *mut Node;

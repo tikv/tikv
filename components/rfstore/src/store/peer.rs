@@ -1403,7 +1403,7 @@ impl Peer {
         }
         shard_meta.apply_change_set(&mut cs);
         info!(
-            "shard meta apply change set {:?}, all files {:?}", &cs, shard_meta.all_files();
+            "shard meta apply change set {:?}", &cs;
             "region" => tag,
         );
         ctx.raft_wb

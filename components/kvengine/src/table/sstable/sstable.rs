@@ -182,19 +182,22 @@ impl SSTableCore {
 
     fn load_block_by_addr_len(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {
         if self.cache.is_none() {
-            let raw_block = self.file.read(addr.curr_off as u64, length)?;
-            return Ok(raw_block.slice(4..));
+            return self.read_block_from_file(addr, length);
         }
         let cache = self.cache.as_ref().unwrap();
         let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
         if let Some(block) = cache.get(&cache_key) {
             return Ok(block);
         }
-        let raw_block = self.file.read(addr.curr_off as u64, length)?;
-        validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
-        let block = raw_block.slice(4..);
+        let block = self.read_block_from_file(addr, length)?;
         cache.insert(cache_key, block.clone());
         Ok(block)
+    }
+
+    fn read_block_from_file(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {
+        let raw_block = self.file.read(addr.curr_off as u64, length)?;
+        validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
+        return Ok(raw_block.slice(4..));
     }
 
     pub fn load_old_block(&self, pos: usize) -> Result<Bytes> {
@@ -453,8 +456,8 @@ pub(crate) fn build_test_table_with_prefix(prefix: &str, n: usize) -> Arc<dyn df
 }
 
 #[cfg(test)]
-pub(crate) fn new_test_cache() -> SegmentedCache<BlockCacheKey, Bytes> {
-    SegmentedCache::new(1024, 4)
+pub(crate) fn new_test_cache() -> Option<SegmentedCache<BlockCacheKey, Bytes>> {
+    Some(SegmentedCache::new(1024, 4))
 }
 
 #[cfg(test)]

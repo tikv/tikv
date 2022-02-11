@@ -81,17 +81,23 @@ impl Engine {
         info!("engine load {} shards", metas.len());
         en.load_shards(metas, recoverer)?;
         let flush_en = en.clone();
-        thread::spawn(move || {
-            flush_en.run_flush_worker(flush_rx, flush_result_tx);
-        });
+        thread::Builder::new()
+            .name("flush".to_string())
+            .spawn(move || {
+                flush_en.run_flush_worker(flush_rx, flush_result_tx);
+            })
+            .unwrap();
         let flush_result_en = en.clone();
         thread::spawn(move || {
             flush_result_en.run_flush_result(flush_result_rx);
         });
         let compact_en = en.clone();
-        thread::spawn(move || {
-            compact_en.run_compaction();
-        });
+        thread::Builder::new()
+            .name("compaction".to_string())
+            .spawn(move || {
+                compact_en.run_compaction();
+            })
+            .unwrap();
         Ok(en)
     }
 
