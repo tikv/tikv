@@ -22,30 +22,6 @@ use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
 
-pub struct SplitInfo {
-    pub region_id: u64,
-    pub split_key: Vec<u8>,
-    pub peer: Peer,
-}
-
-pub struct Sample {
-    pub key: Vec<u8>,
-    pub left: i32,
-    pub contained: i32,
-    pub right: i32,
-}
-
-impl Sample {
-    fn new(key: &[u8]) -> Sample {
-        Sample {
-            key: key.to_owned(),
-            left: 0,
-            contained: 0,
-            right: 0,
-        }
-    }
-}
-
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
 #[inline(always)]
@@ -99,57 +75,23 @@ where
     sampled_key_ranges
 }
 
-// RegionInfo will maintain key_ranges with sample_num length by reservoir sampling.
-// And it will save qps num and peer.
-#[derive(Debug, Clone)]
-pub struct RegionInfo {
-    pub sample_num: usize,
-    pub query_stats: QueryStats,
-    pub peer: Peer,
-    pub key_ranges: Vec<KeyRange>,
-    pub flow: FlowStatistics,
+pub struct Sample {
+    pub key: Vec<u8>,
+    // left means the number of key ranges located in the sample's left.
+    pub left: i32,
+    // contained means the number of key ranges the sample locates inside.
+    pub contained: i32,
+    // right means the number of key ranges located in the sample's right.
+    pub right: i32,
 }
 
-impl RegionInfo {
-    fn new(sample_num: usize) -> RegionInfo {
-        RegionInfo {
-            sample_num,
-            query_stats: QueryStats::default(),
-            key_ranges: Vec::with_capacity(sample_num),
-            peer: Peer::default(),
-            flow: FlowStatistics::default(),
-        }
-    }
-
-    fn get_read_qps(&self) -> usize {
-        self.query_stats.get_read_query_num() as usize
-    }
-
-    fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
-        &mut self.key_ranges
-    }
-
-    fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
-        for (i, key_range) in key_ranges.into_iter().enumerate() {
-            let n = self.get_read_qps() + i;
-            if n == 0 || self.key_ranges.len() < self.sample_num {
-                self.key_ranges.push(key_range);
-            } else {
-                let j = rand::thread_rng().gen_range(0..n) as usize;
-                if j < self.sample_num {
-                    self.key_ranges[j] = key_range;
-                }
-            }
-        }
-    }
-
-    fn add_query_num(&mut self, kind: QueryKind, query_num: u64) {
-        self.query_stats.add_query_num(kind, query_num);
-    }
-
-    fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
-            self.peer = peer.clone();
+impl Sample {
+    fn new(key: &[u8]) -> Sample {
+        Sample {
+            key: key.to_owned(),
+            left: 0,
+            contained: 0,
+            right: 0,
         }
     }
 }
@@ -212,16 +154,19 @@ impl Samples {
             if sample.key.is_empty() {
                 continue;
             }
-            let sampled = (sample.contained + sample.left + sample.right) as u64;
-            if (sample.left + sample.right) == 0 || sampled < sample_threshold {
+            let evaluated_key_num_lr = sample.left + sample.right;
+            let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as u64;
+            if evaluated_key_num_lr == 0 || evaluated_key_num < sample_threshold {
                 LOAD_BASE_SPLIT_EVENT
                     .with_label_values(&["no_enough_key"])
                     .inc();
                 continue;
             }
 
-            let diff = (sample.left - sample.right) as f64;
-            let balance_score = diff.abs() / (sample.left + sample.right) as f64;
+            // The balance score is the difference in the number of requested keys between the left and right of a sample key.
+            // The smaller the balance score, the more balanced the load will be after this splitting.
+            let balance_score =
+                (sample.left as f64 - sample.right as f64).abs() / evaluated_key_num_lr as f64;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["balance_score"])
                 .observe(balance_score);
@@ -232,7 +177,9 @@ impl Samples {
                 continue;
             }
 
-            let contained_score = sample.contained as f64 / sampled as f64;
+            // The contained score is the ratio of a sample key that are contained in the requested key.
+            // The larger the contained score, the more RPCs will be received after this splitting.
+            let contained_score = sample.contained as f64 / evaluated_key_num as f64;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
@@ -243,6 +190,8 @@ impl Samples {
                 continue;
             }
 
+            // We try to find a split key that has the smallest balance score and the smallest contained score
+            // to make the splitting will keep the load balanced while not increasing too many number of RPCs.
             let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
@@ -314,22 +263,58 @@ impl Recorder {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct WriteStats {
-    pub region_infos: HashMap<u64, QueryStats>,
+// RegionInfo will maintain key_ranges with sample_num length by reservoir sampling.
+// And it will save qps num and peer.
+#[derive(Debug, Clone)]
+pub struct RegionInfo {
+    pub sample_num: usize,
+    pub query_stats: QueryStats,
+    pub peer: Peer,
+    pub key_ranges: Vec<KeyRange>,
+    pub flow: FlowStatistics,
 }
 
-impl WriteStats {
-    pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
-        let query_stats = self
-            .region_infos
-            .entry(region_id)
-            .or_insert_with(QueryStats::default);
-        query_stats.add_query_num(kind, 1);
+impl RegionInfo {
+    fn new(sample_num: usize) -> RegionInfo {
+        RegionInfo {
+            sample_num,
+            query_stats: QueryStats::default(),
+            key_ranges: Vec::with_capacity(sample_num),
+            peer: Peer::default(),
+            flow: FlowStatistics::default(),
+        }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.region_infos.is_empty()
+    fn get_read_qps(&self) -> usize {
+        self.query_stats.get_read_query_num() as usize
+    }
+
+    fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
+        &mut self.key_ranges
+    }
+
+    fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
+        for (i, key_range) in key_ranges.into_iter().enumerate() {
+            let n = self.get_read_qps() + i;
+            if n == 0 || self.key_ranges.len() < self.sample_num {
+                self.key_ranges.push(key_range);
+            } else {
+                let j = rand::thread_rng().gen_range(0..n) as usize;
+                if j < self.sample_num {
+                    self.key_ranges[j] = key_range;
+                }
+            }
+        }
+    }
+
+    fn add_query_num(&mut self, kind: QueryKind, query_num: u64) {
+        self.query_stats.add_query_num(kind, query_num);
+    }
+
+    fn update_peer(&mut self, peer: &Peer) {
+        if self.peer != *peer {
+            self.peer = peer.clone();
+        }
     }
 }
 
@@ -400,6 +385,31 @@ impl Default for ReadStats {
             region_infos: HashMap::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WriteStats {
+    pub region_infos: HashMap<u64, QueryStats>,
+}
+
+impl WriteStats {
+    pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
+        let query_stats = self
+            .region_infos
+            .entry(region_id)
+            .or_insert_with(QueryStats::default);
+        query_stats.add_query_num(kind, 1);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.region_infos.is_empty()
+    }
+}
+
+pub struct SplitInfo {
+    pub region_id: u64,
+    pub split_key: Vec<u8>,
+    pub peer: Peer,
 }
 
 pub struct AutoSplitController {
