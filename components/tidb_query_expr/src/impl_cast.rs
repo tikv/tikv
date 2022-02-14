@@ -658,9 +658,9 @@ fn cast_bit_as_string(
             let mut buf = [0; 8];
             BigEndian::write_i64(&mut buf, *val);
             let flen = extra.ret_field_type.as_accessor().flen();
-            if (flen > 0 && flen <= 8) {
+            if flen > 0 && flen <= 8 {
                 let start_idx: usize = (8 - flen) as usize;
-                let mut buf = &buf[start_idx..8];
+                let buf = &buf[start_idx..8];
                 cast_as_string_helper(ctx, extra, buf.to_vec())
             } else {
                 //In cast bit(m) to var_string(n); n may be equal or less than 8, n = int(( m + 7 ) / 8);
