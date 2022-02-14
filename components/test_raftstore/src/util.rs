@@ -6,6 +6,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
@@ -32,7 +33,9 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType, RaftCmdRequest,
     RaftCmdResponse, Request, StatusCmdType, StatusRequest,
 };
-use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
+use kvproto::raft_serverpb::{
+    PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
+};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, Entry};
@@ -364,9 +367,13 @@ pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartb
     resp
 }
 
-pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
+pub fn new_pd_transfer_leader(
+    peer: metapb::Peer,
+    peers: Vec<metapb::Peer>,
+) -> RegionHeartbeatResponse {
     let mut transfer_leader = TransferLeader::default();
     transfer_leader.set_peer(peer);
+    transfer_leader.set_peers(peers.into());
 
     let mut resp = RegionHeartbeatResponse::default();
     resp.set_transfer_leader(transfer_leader);
@@ -1174,6 +1181,44 @@ pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
 
 pub fn get_tso(pd_client: &TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
+}
+
+pub fn is_compacted(
+    all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
+    before_states: &HashMap<u64, RaftTruncatedState>,
+    compact_count: u64,
+) -> bool {
+    // Every peer must have compacted logs, so the truncate log state index/term must > than before.
+    let mut compacted_idx = HashMap::default();
+
+    for (&id, engines) in all_engines {
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        let after_state = state.take_truncated_state();
+
+        let before_state = &before_states[&id];
+        let idx = after_state.get_index();
+        let term = after_state.get_term();
+        if idx == before_state.get_index() || term == before_state.get_term() {
+            return false;
+        }
+        if idx - before_state.get_index() < compact_count {
+            return false;
+        }
+        assert!(term > before_state.get_term());
+        compacted_idx.insert(id, idx);
+    }
+
+    // wait for actual deletion.
+    sleep_ms(100);
+
+    for (id, engines) in all_engines {
+        for i in 0..compacted_idx[id] {
+            if engines.raft.get_entry(1, i).unwrap().is_some() {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 // A helpful wrapper to make the test logic clear

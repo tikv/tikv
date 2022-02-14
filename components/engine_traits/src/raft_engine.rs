@@ -4,6 +4,8 @@ use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
+pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
 

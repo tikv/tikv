@@ -15239,7 +15239,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 12797,
       "panels": [
@@ -15261,7 +15261,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 102
+            "y": 16
           },
           "hiddenSeries": false,
           "id": 12882,
@@ -15390,7 +15390,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 102
+            "y": 16
           },
           "hiddenSeries": false,
           "id": 12886,
@@ -15522,7 +15522,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 110
+            "y": 24
           },
           "hiddenSeries": false,
           "id": 12881,
@@ -15632,7 +15632,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 110
+            "y": 24
           },
           "hiddenSeries": false,
           "id": 12972,
@@ -15742,7 +15742,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 118
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 12884,
@@ -15849,7 +15849,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 118
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 12973,
@@ -15978,7 +15978,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 126
+            "y": 40
           },
           "hiddenSeries": false,
           "id": 12883,
@@ -16110,7 +16110,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 126
+            "y": 40
           },
           "hiddenSeries": false,
           "id": 12887,
@@ -16220,7 +16220,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 134
+            "y": 48
           },
           "hiddenSeries": false,
           "id": 12975,
@@ -16330,7 +16330,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 134
+            "y": 48
           },
           "hiddenSeries": false,
           "id": 12974,
@@ -16418,9 +16418,119 @@
             "align": false,
             "alignLevel": null
           }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 56
+          },
+          "hiddenSeries": false,
+          "id": 23763572229,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.7",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(rate(tikv_raftstore_entry_fetches{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}",
+              "metric": "tikv_raftstore_check_split_total",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Raft log fetch",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
         }
       ],
-      "title": "Raft Log GC",
+      "title": "Raft Log",
       "type": "row"
     },
     {
@@ -16555,7 +16665,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 17
       },
       "id": 4200,
       "panels": [
@@ -20840,18 +20950,32 @@
               "refId": "E"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 1,
-              "legendFormat": "mvcc-deletion-handled",
-              "refId": "F"
-            },
-            {
               "expr": "sum(rate(tikv_gc_compaction_failure{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "failure-{{type}}",
+              "refId": "F"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "mvcc-deletion-met",
               "refId": "G"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "mvcc-deletion-handled",
+              "refId": "H"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "mvcc-deletion-wasted",
+              "refId": "I"
             }
           ],
           "thresholds": [],
