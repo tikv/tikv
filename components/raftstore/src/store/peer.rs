@@ -3616,6 +3616,9 @@ where
             let pessimistic_locks = self.txn_ext.pessimistic_locks.read();
             if !pessimistic_locks.is_empty() {
                 if !pessimistic_locks.is_valid {
+                    // If `is_valid` is already false, it means the in-memory pessimistic locks are
+                    // being transferred, probably triggered by transferring leader. In this case,
+                    // we abort merging to simplify the situation.
                     return Err(box_err!(
                         "pessimistic locks are invalid, indicating an ongoing region change, skip merging."
                     ));
