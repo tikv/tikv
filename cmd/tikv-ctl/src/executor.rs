@@ -463,7 +463,6 @@ pub trait DebugExecutor {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn compact(
         &self,
         address: Option<&str>,
