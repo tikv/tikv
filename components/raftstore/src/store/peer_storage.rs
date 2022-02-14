@@ -2244,7 +2244,7 @@ mod tests {
     #[test]
     fn test_storage_clear_meta() {
         let worker = Worker::new("snap-manager").lazy_build("snap-manager");
-        let cases = vec![(0, 0), (5, 1)];
+        let cases = vec![(0, 0), (3, 0)];
         for (first_index, left) in cases {
             let td = Builder::new().prefix("tikv-store").tempdir().unwrap();
             let sched = worker.scheduler();
