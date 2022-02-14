@@ -178,7 +178,7 @@ impl Samples {
             }
 
             // The contained score is the ratio of a sample key that are contained in the requested key.
-            // The larger the contained score, the more RPCs will be received after this splitting.
+            // The larger the contained score, the more RPCs the cluster will receive after this splitting.
             let contained_score = sample.contained as f64 / evaluated_key_num as f64;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
@@ -191,7 +191,7 @@ impl Samples {
             }
 
             // We try to find a split key that has the smallest balance score and the smallest contained score
-            // to make the splitting will keep the load balanced while not increasing too many number of RPCs.
+            // to make the splitting keep the load balanced while not increasing too many RPCs.
             let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
@@ -432,7 +432,8 @@ impl AutoSplitController {
         AutoSplitController::new(SplitConfigManager::default())
     }
 
-    fn collect_read_stats(&self, read_stats_vec: Vec<ReadStats>) -> HashMap<u64, Vec<RegionInfo>> {
+    // collect the read stats from read_stats_vec and dispatch them to a region hashmap.
+    fn collect_read_stats(read_stats_vec: Vec<ReadStats>) -> HashMap<u64, Vec<RegionInfo>> {
         // collect from different thread
         let mut region_infos_map = HashMap::default(); // regionID-regionInfos
         let capacity = read_stats_vec.len();
@@ -447,10 +448,12 @@ impl AutoSplitController {
         region_infos_map
     }
 
+    // flush the read stats info into the recorder and check if the region needs to be split
+    // according to all the stats info the recorder has collected before.
     pub fn flush(&mut self, read_stats_vec: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut split_infos = vec![];
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
-        let region_infos_map = self.collect_read_stats(read_stats_vec);
+        let region_infos_map = Self::collect_read_stats(read_stats_vec);
 
         for (region_id, region_infos) in region_infos_map {
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
