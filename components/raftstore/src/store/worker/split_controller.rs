@@ -220,7 +220,7 @@ impl Recorder {
         )
     }
 
-    fn sample(samples: &mut Vec<Sample>, key_range: &KeyRange) {
+    fn sample(samples: &mut [Sample], key_range: &KeyRange) {
         for mut sample in samples.iter_mut() {
             let order_start = if key_range.start_key.is_empty() {
                 Ordering::Greater
