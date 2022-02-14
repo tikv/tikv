@@ -461,11 +461,8 @@ pub mod ctor {
                 config.dir = path.to_owned();
                 RaftLogEngine::new(
                     config,
-                    db_opts
-                        .as_ref()
-                        .map(|opts| opts.key_manager.clone())
-                        .flatten(),
-                    db_opts.map(|opts| opts.rate_limiter).flatten(),
+                    db_opts.as_ref().and_then(|opts| opts.key_manager.clone()),
+                    db_opts.and_then(|opts| opts.rate_limiter),
                 )
             }
         }

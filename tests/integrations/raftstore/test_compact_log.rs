@@ -1,23 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, RaftEngineReadOnly, CF_RAFT};
 use kvproto::raft_serverpb::RaftApplyState;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
-
-fn get_raft_msg_or_default<M: protobuf::Message + Default, ER: RaftEngineReadOnly>(
-    engines: &Engines<RocksEngine, ER>,
-    key: &[u8],
-) -> M {
-    engines
-        .kv
-        .get_msg_cf(CF_RAFT, key)
-        .unwrap()
-        .unwrap_or_default()
-}
 
 fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();

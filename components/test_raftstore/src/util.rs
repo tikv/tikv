@@ -1183,6 +1183,17 @@ pub fn get_tso(pd_client: &TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
 }
 
+pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
+    engines: &Engines<RocksEngine, RaftTestEngine>,
+    key: &[u8],
+) -> M {
+    engines
+        .kv
+        .get_msg_cf(CF_RAFT, key)
+        .unwrap()
+        .unwrap_or_default()
+}
+
 pub fn is_compacted(
     all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,

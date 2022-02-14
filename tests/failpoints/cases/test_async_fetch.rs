@@ -46,7 +46,7 @@ fn test_node_cache_compact_with_one_node_down() {
 
     cluster.stop_node(1);
 
-    for i in 1..60 {
+    for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
@@ -84,20 +84,20 @@ fn test_node_cache_compact_with_one_node_down() {
     );
 
     // logs should be replicated to node 1 successfully.
-    for i in 1..60 {
+    for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
     }
 
-    for i in 60..200 {
+    for i in 60..200u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i > 100 && check_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100 && is_compacted(&cluster.engines, &before_states, 1) {
             return;
         }
     }
