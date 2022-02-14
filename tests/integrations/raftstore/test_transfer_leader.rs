@@ -83,7 +83,7 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for id in 1..4 {
         // select a new leader to transfer
-        pd_client.transfer_leader(region.get_id(), new_peer(id, id));
+        pd_client.transfer_leader(region.get_id(), new_peer(id, id), vec![]);
 
         for _ in 0..100 {
             // reset leader and wait transfer successfully.
@@ -112,10 +112,68 @@ fn test_pd_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
+fn test_pd_transfer_leader_multi_target<T: Simulator>(cluster: &mut Cluster<T>) {
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    cluster.must_put(b"k2", b"v2");
+    // append index of the cluster will finally be 2, 2, 1
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    must_get_none(&cluster.get_engine(3), b"k2");
+
+    // select multi target leaders to transfer
+    // set `peer` to 3, make sure the new leader comes from `peers`
+    let mut region = cluster.get_region(b"");
+    pd_client.transfer_leader(
+        region.get_id(),
+        new_peer(3, 3),
+        vec![new_peer(2, 2), new_peer(3, 3)],
+    );
+
+    for _ in 0..100 {
+        // reset leader and wait transfer successfully.
+        cluster.reset_leader_of_region(1);
+
+        sleep_ms(20);
+
+        if let Some(leader) = cluster.leader_of_region(1) {
+            if leader.get_id() == 2 {
+                break;
+            }
+        }
+    }
+
+    // call command on this leader directly, must successfully.
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    assert!(cluster.leader_of_region(1) == Some(new_peer(2, 2)));
+    let leader_id = cluster.leader_of_region(1).unwrap().id;
+    req.mut_header().set_peer(new_peer(leader_id, leader_id));
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+}
+
 #[test]
 fn test_server_pd_transfer_leader() {
     let mut cluster = new_server_cluster(0, 3);
     test_pd_transfer_leader(&mut cluster);
+}
+
+#[test]
+fn test_server_pd_transfer_leader_multi_target() {
+    let mut cluster = new_server_cluster(0, 3);
+    test_pd_transfer_leader_multi_target(&mut cluster);
 }
 
 fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
