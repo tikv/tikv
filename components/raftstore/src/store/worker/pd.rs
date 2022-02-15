@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Sender,Receiver};
 use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
@@ -342,13 +342,15 @@ where
     }
 }
 
-const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_LOAD_BASE_SPLIT_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-fn default_collect_interval() -> Duration {
+fn default_collect_tick_interval() -> Duration {
     #[cfg(feature = "failpoints")]
-    fail_point!("mock_collect_interval", |_| { Duration::from_millis(1) });
-    DEFAULT_COLLECT_INTERVAL
+    fail_point!("mock_collect_tick_interval", |_| {
+        Duration::from_millis(1)
+    });
+    DEFAULT_COLLECT_TICK_INTERVAL
 }
 
 #[inline]
@@ -372,9 +374,9 @@ where
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
     sender: Option<Sender<ReadStats>>,
-    thread_info_interval: Duration,
-    qps_info_interval: Duration,
-    collect_interval: Duration,
+    collect_store_infos_interval: Duration,
+    load_base_split_interval: Duration,
+    collect_tick_interval: Duration,
 }
 
 impl<EK, ER> StatsMonitor<EK, ER>
@@ -388,9 +390,9 @@ where
             handle: None,
             timer: None,
             sender: None,
-            thread_info_interval: interval,
-            qps_info_interval: cmp::min(DEFAULT_QPS_INFO_INTERVAL, interval),
-            collect_interval: cmp::min(DEFAULT_COLLECT_INTERVAL, interval),
+            collect_store_infos_interval: interval,
+            load_base_split_interval: cmp::min(DEFAULT_LOAD_BASE_SPLIT_INTERVAL, interval),
+            collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
         }
     }
 
@@ -400,22 +402,21 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
-        if self.collect_interval < default_collect_interval() {
+        if self.collect_tick_interval < default_collect_tick_interval()
+            || self.collect_store_infos_interval < self.collect_tick_interval
+        {
             info!("it seems we are running tests, skip stats monitoring.");
             return Ok(());
         }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
-        let collect_interval = self.collect_interval;
-        if self.thread_info_interval < self.collect_interval {
-            info!("running in test mode, skip starting monitor.");
-            return Ok(());
-        }
-        let thread_info_interval = self
-            .thread_info_interval
-            .div_duration_f64(self.collect_interval) as i32;
-        let qps_info_interval = self
-            .qps_info_interval
-            .div_duration_f64(self.collect_interval) as i32;
+        let tick_interval = self.collect_tick_interval;
+        let collect_store_infos_interval = self
+            .collect_store_infos_interval
+            .div_duration_f64(tick_interval) as i32;
+        let load_base_split_interval = self
+            .load_base_split_interval
+            .div_duration_f64(tick_interval) as i32;
+
         let (tx, rx) = mpsc::channel();
         self.timer = Some(tx);
 
@@ -431,60 +432,78 @@ where
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
-                    if timer_cnt % thread_info_interval == 0 {
-                        thread_stats.record();
-                        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
-                        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
-                        let write_io_rates =
-                            convert_record_pairs(thread_stats.get_write_io_rates());
-
-                        let task = Task::StoreInfos {
-                            cpu_usages,
-                            read_io_rates,
-                            write_io_rates,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send store infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(tick_interval) {
+                    if timer_cnt % collect_store_infos_interval == 0 {
+                        StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
-                    if timer_cnt % qps_info_interval == 0 {
-                        let mut others = vec![];
-                        while let Ok(other) = receiver.try_recv() {
-                            others.push(other);
-                        }
-                        let (top, split_infos) = auto_split_controller.flush(others);
-                        auto_split_controller.clear();
-                        let task = Task::AutoSplit { split_infos };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send split infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
-
-                        for i in 0..TOP_N {
-                            if i < top.len() {
-                                READ_QPS_TOPN
-                                    .with_label_values(&[&i.to_string()])
-                                    .set(top[i] as f64);
-                            } else {
-                                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
-                            }
-                        }
+                    if timer_cnt % load_base_split_interval == 0 {
+                        StatsMonitor::load_base_split(
+                            &mut auto_split_controller,
+                            &receiver,
+                            &scheduler,
+                        );
                     }
                     // modules timer_cnt with the least common multiple of intervals to avoid overflow
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
-                    auto_split_controller.refresh_cfg();
+                    timer_cnt =
+                        (timer_cnt + 1) % (load_base_split_interval * collect_store_infos_interval);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
 
         self.handle = Some(h);
         Ok(())
+    }
+
+    pub fn collect_store_infos(
+        thread_stats: &mut ThreadInfoStatistics,
+        scheduler: &Scheduler<Task<EK, ER>>,
+    ) {
+        thread_stats.record();
+        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
+        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
+        let write_io_rates = convert_record_pairs(thread_stats.get_write_io_rates());
+
+        let task = Task::StoreInfos {
+            cpu_usages,
+            read_io_rates,
+            write_io_rates,
+        };
+        if let Err(e) = scheduler.schedule(task) {
+            error!(
+                "failed to send store infos to pd worker";
+                "err" => ?e,
+            );
+        }
+    }
+
+    pub fn load_base_split(
+        auto_split_controller: &mut AutoSplitController,
+        receiver: &Receiver<ReadStats>,
+        scheduler: &Scheduler<Task<EK, ER>>,
+    ) {
+        auto_split_controller.refresh_cfg();
+        let mut others = vec![];
+        while let Ok(other) = receiver.try_recv() {
+            others.push(other);
+        }
+        let (top, split_infos) = auto_split_controller.flush(others);
+        auto_split_controller.clear();
+        let task = Task::AutoSplit { split_infos };
+        if let Err(e) = scheduler.schedule(task) {
+            error!(
+                "failed to send split infos to pd worker";
+                "err" => ?e,
+            );
+        }
+        for i in 0..TOP_N {
+            if i < top.len() {
+                READ_QPS_TOPN
+                    .with_label_values(&[&i.to_string()])
+                    .set(top[i] as f64);
+            } else {
+                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
+            }
+        }
     }
 
     pub fn stop(&mut self) {
