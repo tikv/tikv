@@ -1068,7 +1068,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cmd: TypedCommand<T>,
         callback: Callback<T>,
     ) -> Result<()> {
-        if self.enable_ttl {
+        if let ApiVersion::V1ttl = self.api_version {
             return Err(box_err!(
                 "can't sched txn cmd({}) with TTL enabled",
                 cmd.cmd.tag()
@@ -2191,10 +2191,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
-        self.config.api_version = match api_version {
-            ApiVersion::V1 | ApiVersion::V1ttl => 1,
-            ApiVersion::V2 => 2,
-        };
+        self.config.set_api_version(api_version);
         self
     }
 
