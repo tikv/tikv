@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, i32, isize};
 
 use super::Result;
@@ -139,7 +140,7 @@ pub struct Config {
     #[online_config(skip)]
     pub heavy_load_threshold: usize,
     #[online_config(skip)]
-    pub heavy_load_wait_duration: ReadableDuration,
+    pub heavy_load_wait_duration: Option<ReadableDuration>,
     #[online_config(skip)]
     pub enable_request_batch: bool,
     #[online_config(skip)]
@@ -236,11 +237,10 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
-            // 300 means gRPC threads are under heavy load if their total CPU usage
-            // is greater than 300%.
-            heavy_load_threshold: 300,
-            // The resolution of timer in tokio is 1ms.
-            heavy_load_wait_duration: ReadableDuration::millis(1),
+            // 75 means a gRPC thread is under heavy load if its total CPU usage
+            // is greater than 75%.
+            heavy_load_threshold: 75,
+            heavy_load_wait_duration: None,
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             reject_messages_on_memory_ratio: 0.2,
@@ -253,6 +253,13 @@ impl Default for Config {
 }
 
 impl Config {
+    #[inline]
+    pub fn heavy_load_wait_duration(&self) -> Duration {
+        self.heavy_load_wait_duration
+            .unwrap_or_else(|| ReadableDuration::micros(50))
+            .0
+    }
+
     /// Validates the configuration and returns an error if it is misconfigured.
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
@@ -352,6 +359,12 @@ impl Config {
             return Err(box_err!(
                 "server.reject_messages_on_memory_ratio must be greater than 0"
             ));
+        }
+
+        if self.heavy_load_threshold > 100 {
+            // The configuration has been changed to describe CPU usage of a single thread instead
+            // of all threads. So migrate from the old style.
+            self.heavy_load_threshold = 75;
         }
 
         Ok(())

@@ -1,14 +1,23 @@
-log-level = "debug"
-log-file = "foo"
-log-format = "json"
+log-level = "info"
+log-file = ""
+log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-enable-io-snoop = false
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
+
+[log]
+level = "fatal"
+format = "json"
+
+[log.file]
+filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
 
 [readpool.unified]
 min-thread-count = 5
@@ -66,7 +75,7 @@ end-point-max-concurrency = 10
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
-heavy-load-threshold = 1000
+heavy-load-threshold = 25
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
@@ -202,7 +211,8 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-raft-msg-flush-interval = "2333us"
+check-leader-lease-interval = "123ms"
+renew-leader-lease-advance-duration = "456ms"
 
 [coprocessor]
 split-region-on-table = false
@@ -550,7 +560,7 @@ max-sorted-runs = 100
 gc-merge-rewrite = true
 
 [raft-engine]
-enable = true
+enable = false
 dir = "test-dir"
 batch-compression-threshold = "1KB"
 bytes-per-sync = "64KB"

@@ -105,6 +105,7 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
+    #[must_use]
     pub fn append_ts(mut self, ts: TimeStamp) -> Key {
         self.0.encode_u64_desc(ts.into_inner()).unwrap();
         self
@@ -508,6 +509,9 @@ bitflags! {
         const ONE_PC = 0b00000001;
         /// Indicates this request is from a stale read-only transaction.
         const STALE_READ = 0b00000010;
+        /// Indicates this request is a transfer leader command that needs to be proposed
+        /// like a normal command.
+        const TRANSFER_LEADER_PROPOSAL = 0b00000100;
     }
 }
 

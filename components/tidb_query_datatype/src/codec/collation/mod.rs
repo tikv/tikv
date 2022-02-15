@@ -12,7 +12,7 @@ use std::ops::Deref;
 use codec::prelude::*;
 use num::Unsigned;
 
-use crate::codec::data_type::{Bytes, BytesRef};
+use crate::codec::data_type::{Bytes, BytesGuard, BytesRef, BytesWriter};
 use crate::codec::Result;
 
 #[macro_export]
@@ -103,6 +103,18 @@ pub trait Encoding {
     #[inline]
     fn encode(data: BytesRef<'_>) -> Result<Bytes> {
         Ok(Bytes::from(data))
+    }
+
+    #[inline]
+    fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
+        let res = s.chars().flat_map(char::to_lowercase);
+        writer.write_from_char_iter(res)
+    }
+
+    #[inline]
+    fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
+        let res = s.chars().flat_map(char::to_uppercase);
+        writer.write_from_char_iter(res)
     }
 }
 

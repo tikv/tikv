@@ -13,8 +13,8 @@ use kvproto::raft_serverpb::RaftMessage;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
-    RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg,
-    StoreRouter, WriteResponse,
+    RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter,
+    StoreMsg, StoreRouter, WriteResponse,
 };
 use raftstore::Result;
 use tempfile::{Builder, TempDir};
@@ -73,6 +73,12 @@ impl CasualRouter<RocksEngine> for SyncBenchRouter {
     }
 }
 
+impl SignificantRouter<RocksEngine> for SyncBenchRouter {
+    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl ProposalRouter<RocksSnapshot> for SyncBenchRouter {
     fn send(
         &self,
@@ -90,11 +96,6 @@ impl StoreRouter<RocksEngine> for SyncBenchRouter {
 impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
     /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
-        Ok(())
-    }
-
-    /// Sends a significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, _: u64, _: SignificantMsg<RocksSnapshot>) -> Result<()> {
         Ok(())
     }
 

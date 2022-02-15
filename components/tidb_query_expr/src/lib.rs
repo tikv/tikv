@@ -312,8 +312,29 @@ fn map_lower_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     if children[0].get_field_type().is_binary_string_like() {
         Ok(lower_fn_meta())
     } else {
-        Ok(lower_utf8_fn_meta())
+        let ret_field_type = children[0].get_field_type();
+        Ok(match_template_charset! {
+            TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+                Charset::TT => lower_utf8_fn_meta::<TT>(),
+            }
+        })
     }
+}
+
+fn map_upper_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    let ret_field_type = children[0].get_field_type();
+    Ok(match_template_charset! {
+     TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+           Charset::TT => upper_utf8_fn_meta::<TT>(),
+        }
+    })
 }
 
 #[rustfmt::skip]
@@ -660,7 +681,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
-        ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
+        ScalarFuncSig::UpperUtf8 => map_upper_sig(value, children)?,
         ScalarFuncSig::Upper => upper_fn_meta(),
         ScalarFuncSig::Lower => map_lower_sig(value, children)?,
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
@@ -734,6 +755,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::StringDurationTimeDiff => string_duration_time_diff_fn_meta(),
         ScalarFuncSig::StringStringTimeDiff => string_string_time_diff_fn_meta(),
         ScalarFuncSig::DurationStringTimeDiff => duration_string_time_diff_fn_meta(),
+        ScalarFuncSig::Quarter => quarter_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

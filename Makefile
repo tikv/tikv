@@ -84,10 +84,6 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
-ifeq ($(BCC_IOSNOOP),1)
-ENABLE_FEATURES += bcc-iosnoop
-endif
-
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb
@@ -98,6 +94,7 @@ endif
 ifneq ($(NO_CLOUD),1)
 ENABLE_FEATURES += cloud-aws
 ENABLE_FEATURES += cloud-gcp
+ENABLE_FEATURES += cloud-azure
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -286,6 +283,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@./scripts/check-redact-log
+	@./scripts/check-docker-build
 	@./scripts/clippy-all
 
 pre-audit:

@@ -275,6 +275,9 @@ pub enum ExecResult<S> {
     IngestSst {
         ssts: Vec<SSTMetaInfo>,
     },
+    TransferLeader {
+        term: u64,
+    },
 }
 
 /// The possible returned value when applying logs.
@@ -1270,7 +1273,8 @@ where
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSst { .. } => {}
+                | ExecResult::IngestSst { .. }
+                | ExecResult::TransferLeader { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1396,7 +1400,7 @@ where
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(request),
-            AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
+            AdminCmdType::TransferLeader => self.exec_transfer_leader(request, ctx.exec_log_term),
             AdminCmdType::ComputeHash => self.exec_compute_hash(ctx, request),
             AdminCmdType::VerifyHash => self.exec_verify_hash(ctx, request),
             // TODO: is it backward compatible to add new cmd_type?
@@ -1500,6 +1504,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1546,6 +1551,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1595,6 +1601,7 @@ where
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
@@ -1666,6 +1673,7 @@ where
         req: &Request,
         ssts: &mut Vec<SSTMetaInfo>,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -2695,6 +2703,23 @@ where
         ))
     }
 
+    fn exec_transfer_leader(
+        &mut self,
+        req: &AdminRequest,
+        term: u64,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        PEER_ADMIN_CMD_COUNTER.transfer_leader.all.inc();
+        let resp = AdminResponse::default();
+
+        let peer = req.get_transfer_leader().get_peer();
+        // Only execute TransferLeader if the expected new leader is self.
+        if peer.get_id() == self.id {
+            Ok((resp, ApplyResult::Res(ExecResult::TransferLeader { term })))
+        } else {
+            Ok((resp, ApplyResult::None))
+        }
+    }
+
     fn exec_compute_hash<W: WriteBatch<EK>>(
         &self,
         ctx: &ApplyContext<EK, W>,
@@ -3430,7 +3455,7 @@ where
         }
     }
 
-    #[allow(unused_mut)]
+    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3445,7 +3470,6 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
@@ -4774,9 +4798,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct ApplyObserver {
-        pre_admin_count: Arc<AtomicUsize>,
         pre_query_count: Arc<AtomicUsize>,
-        post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }

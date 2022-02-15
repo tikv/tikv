@@ -805,8 +805,7 @@ mod tests {
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
         let timeout2 = 12;
-        let overlap_ranges =
-            pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+        let overlap_ranges = pending_delete_ranges.drain_overlap_ranges(b"g", b"q");
         assert_eq!(
             overlap_ranges,
             [
@@ -969,7 +968,7 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("snap-manager");
-        let mut worker = bg_worker.lazy_build("snapshot-worker");
+        let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(

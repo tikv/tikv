@@ -4,6 +4,8 @@ use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
+pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
 
@@ -18,6 +20,9 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize>;
+
+    /// Get all available entries in the region.
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
 }
 
 pub struct RaftLogGCTask {
@@ -50,6 +55,7 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()>;

@@ -303,8 +303,8 @@ mod tests {
                         cf,
                         16,
                         |v| {
-                            v.to_owned()
-                                .into_iter()
+                            v.iter()
+                                .cloned()
                                 .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
                         },
                     )

@@ -39,7 +39,7 @@ use engine_traits::{
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
-use raftstore::store::TxnExt;
+use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
@@ -92,6 +92,22 @@ impl Modify {
     }
 }
 
+impl PessimisticLockPair for Modify {
+    fn as_pair(&self) -> (&Key, &PessimisticLock) {
+        match self {
+            Modify::PessimisticLock(k, lock) => (k, lock),
+            _ => panic!("not a pessimistic lock"),
+        }
+    }
+
+    fn into_pair(self) -> (Key, PessimisticLock) {
+        match self {
+            Modify::PessimisticLock(k, lock) => (k, lock),
+            _ => panic!("not a pessimistic lock"),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
@@ -131,7 +147,7 @@ impl WriteData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
@@ -139,17 +155,6 @@ pub struct SnapContext<'a> {
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
-}
-
-impl<'a> Default for SnapContext<'a> {
-    fn default() -> Self {
-        SnapContext {
-            pb_ctx: Default::default(),
-            read_id: None,
-            start_ts: Default::default(),
-            key_ranges: Default::default(),
-        }
-    }
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -234,7 +239,9 @@ pub trait Engine: Send + Clone + 'static {
 /// at a specific timestamp. This snapshot is lower-level, a view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
-    type Ext<'a>: SnapshotExt;
+    type Ext<'a>: SnapshotExt
+    where
+        Self: 'a;
 
     /// Get the value associated with `key` in default column family
     fn get(&self, key: &Key) -> Result<Option<Value>>;
