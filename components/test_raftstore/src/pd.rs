@@ -1571,9 +1571,9 @@ impl PdClient for TestPdClient {
             peer_stat_sum.set_region_id(region_id);
         }
 
-        cluster.store_stats.insert(store_id.clone(), stats);
+        cluster.store_stats.insert(store_id, stats);
 
-        if let Some(_) = report {
+        if report.is_some() {
             cluster.store_reported_inc();
         }
 
