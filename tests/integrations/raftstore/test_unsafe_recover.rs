@@ -101,6 +101,7 @@ fn test_force_leader() {
     let put = new_put_cmd(b"k2", b"v2");
     let mut region = cluster.get_region(b"k2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
+    // marjority is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
@@ -108,11 +109,13 @@ fn test_force_leader() {
     );
 
     cluster.enter_force_leader(1, 1);
+    // remove the peers on failed nodes
     cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
     cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
     cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
     let put = new_put_cmd(b"k3", b"v3");
     let mut region = cluster.get_region(b"k2");
+    // forbid writes in force leader state
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     let resp = cluster
         .call_command_on_leader(req, Duration::from_millis(10))
@@ -120,8 +123,66 @@ fn test_force_leader() {
     assert!(resp.get_header().has_error());
     cluster.exit_force_leader(1, 1);
 
+    // marjority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
+#[test]
+fn test_force_leader_for_learner() {
+    let mut cluster = new_node_cluster(0, 5);
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(5, 5));
+
+    let region = cluster.get_region(b"k1");
+    // replace one peer with learner
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), new_peer(1, 1));
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), new_learner_peer(1, 1));
+
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    let put = new_put_cmd(b"k2", b"v2");
+    let mut region = cluster.get_region(b"k2");
+    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
+    // marjority is lost, can't propose command successfully.
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .is_err()
+    );
+
+    cluster.enter_force_leader(1, 1);
+    // promote the learner first and remove the peers on failed nodes
+    cluster.pd_client.must_add_peer(1, new_peer(1, 1));
+    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
+    cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
+    cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
+    let put = new_put_cmd(b"k3", b"v3");
+    let mut region = cluster.get_region(b"k2");
+    // forbid writes in force leader state
+    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap();
+    assert!(resp.get_header().has_error());
+    cluster.exit_force_leader(1, 1);
+
+    // marjority is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k2"), None);
+    assert_eq!(cluster.must_get(b"k3"), None);
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 }

@@ -1315,7 +1315,10 @@ where
 
             if self.fsm.peer.force_leader && r == StateRole::Follower {
                 // for some reason, it's not leader anymore
-                warn!("step to follower in force leader state");
+                panic!(
+                    "{} step to follower in force leader state",
+                    self.fsm.peer.tag
+                );
             }
         }
     }
