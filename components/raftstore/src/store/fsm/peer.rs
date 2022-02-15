@@ -899,7 +899,7 @@ where
         } else {
             self.fsm.unsafe_recovery_target_commit_index =
                 self.fsm.peer.raft_group.store().commit_index();
-            self.fsm.unsafe_recovery_wait_apply_counter = counter.clone();
+            self.fsm.unsafe_recovery_wait_apply_counter = counter;
         }
     }
 
@@ -1583,33 +1583,32 @@ where
             }
         }
         // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
-        if self.fsm.unsafe_recovery_target_commit_index != 0 {
-            if self.fsm.peer.raft_group.store().applied_index()
+        if self.fsm.unsafe_recovery_target_commit_index != 0
+            && self.fsm.peer.raft_group.store().applied_index()
                 >= self.fsm.unsafe_recovery_target_commit_index
+        {
+            if self
+                .fsm
+                .unsafe_recovery_wait_apply_counter
+                .fetch_sub(1, Ordering::Relaxed)
+                == 1
             {
-                if self
-                    .fsm
-                    .unsafe_recovery_wait_apply_counter
-                    .fetch_sub(1, Ordering::Relaxed)
-                    == 1
-                {
-                    let stats = StoreStats::default();
-                    let store_info = StoreInfo {
-                        kv_engine: self.ctx.engines.kv.clone(),
-                        raft_engine: self.ctx.engines.raft.clone(),
-                        capacity: self.ctx.cfg.capacity.0,
-                    };
-                    let task = PdTask::StoreHeartbeat {
-                        stats,
-                        store_info,
-                        send_detailed_report: true,
-                    };
-                    if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                        panic!("fail to send detailed report to pd {:?}", e);
-                    }
+                let stats = StoreStats::default();
+                let store_info = StoreInfo {
+                    kv_engine: self.ctx.engines.kv.clone(),
+                    raft_engine: self.ctx.engines.raft.clone(),
+                    capacity: self.ctx.cfg.capacity.0,
+                };
+                let task = PdTask::StoreHeartbeat {
+                    stats,
+                    store_info,
+                    send_detailed_report: true,
+                };
+                if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                    panic!("fail to send detailed report to pd {:?}", e);
                 }
-                self.fsm.unsafe_recovery_target_commit_index = 0;
             }
+            self.fsm.unsafe_recovery_target_commit_index = 0;
         }
     }
 
