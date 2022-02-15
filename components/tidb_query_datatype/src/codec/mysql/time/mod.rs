@@ -2730,7 +2730,7 @@ mod tests {
 
             //2022-02-15 07:45:48.581699 NonFixed(UTC)   c_datetime
             //2022-02-15 07:45:48.581933075 UTC          Utc::now()
-            //We compare length 22 of then; Exceed it my be not equal value ( in milli seconds );
+            //We compare length 22 of then; Exceed it may be not equal ( in milli seconds ).
             let now0 = &c_datetime.to_string()[0..22];
             let now1 = &Utc::now().to_string()[0..22];
             assert_eq!(now0, now1);
