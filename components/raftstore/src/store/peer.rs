@@ -1668,9 +1668,6 @@ where
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
 
-                    self.prepare_merge_fence = 0;
-                    self.pending_prepare_merge = None;
-
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
                         debug!(
@@ -3650,7 +3647,8 @@ where
             return Ok(());
         }
         // The proposed pessimistic locks here will also be carried in CommitMerge. Check the size
-        // to avoid CommitMerge exceeding the size limit of a raft entry.
+        // to avoid CommitMerge exceeding the size limit of a raft entry. This check is a inaccurate
+        // check. We will check the size again accurately later using the protobuf encoding.
         if pessimistic_locks.memory_size > size_limit {
             return Err(box_err!(
                 "pessimistic locks size {} exceed size limit {}, skip merging.",
@@ -3674,6 +3672,14 @@ where
         cmd.mut_header()
             .set_region_epoch(self.region().get_region_epoch().clone());
         cmd.mut_header().set_peer(self.peer.clone());
+        let proposal_size = cmd.compute_size();
+        if proposal_size as usize > size_limit {
+            return Err(box_err!(
+                "pessimistic locks size {} exceed size limit {}, skip merging.",
+                proposal_size,
+                size_limit
+            ));
+        }
 
         {
             let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
@@ -4630,6 +4636,10 @@ where
         pessimistic_locks.clear();
         pessimistic_locks.term = self.term();
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
+
+        // Also clear merge related states
+        self.prepare_merge_fence = 0;
+        self.pending_prepare_merge = None;
     }
 
     pub fn need_renew_lease_at<T>(
