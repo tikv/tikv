@@ -145,8 +145,8 @@ pub struct SegmentMap<K: Ord, V>(BTreeMap<K, SegmentValue<K, V>>);
 
 #[derive(Clone, Debug)]
 pub struct SegmentValue<R, T> {
-    range_end: R,
-    item: T,
+    pub range_end: R,
+    pub item: T,
 }
 
 /// A container for holding ranges without overlapping.
@@ -224,6 +224,10 @@ impl<K: Ord, V> SegmentMap<K, V> {
             || self
                 .get_interval_by_point(range.1)
                 .map_or(false, |rng| <K as Borrow<R>>::borrow(rng.0) != range.1)
+    }
+
+    pub fn get_inner(&mut self) -> &mut BTreeMap<K, SegmentValue<K, V>> {
+        &mut self.0
     }
 }
 

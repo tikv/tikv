@@ -156,7 +156,7 @@ where
         for task in tasks.inner {
             info!("backup stream watch task"; "task" => ?task);
             // move task to schedule
-            scheduler.schedule(Task::WatchTask(task))?;
+            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
         }
 
         let mut watcher = meta_client.events_from(tasks.revision).await?;
@@ -166,10 +166,12 @@ where
                 match event {
                     MetadataEvent::AddTask { task } => {
                         let t = meta_client.get_task(&task).await?;
-                        scheduler.schedule(Task::WatchTask(t))?;
+                        scheduler.schedule(Task::WatchTask(TaskOp::AddTask(t)))?;
                     }
-                    MetadataEvent::RemoveTask { task: _ } => {
+                    MetadataEvent::RemoveTask { task } => {
                         // TODO implement remove task
+                        let t = meta_client.get_task(&task).await?;
+                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(t)))?;
                     }
                     MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
                 }
@@ -236,6 +238,17 @@ where
             self.range_router.clone(),
             self.store_id,
         )
+    }
+
+    pub fn handle_watch_task(&self, op: TaskOp) {
+        match op {
+            TaskOp::AddTask(task) => {
+                self.on_register(task);
+            }
+            TaskOp::RemoveTask(task) => {
+                self.on_unregister(task);
+            }
+        }
     }
 
     // register task ranges
@@ -335,6 +348,14 @@ where
         };
     }
 
+    pub fn on_unregister(&self, task: StreamTask) {
+        let router = self.range_router.clone();
+
+        self.pool.block_on(async move {
+            router.unregister_task(task).await;
+        });
+    }
+
     pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
         let cli = self
@@ -430,13 +451,19 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
 }
 
 pub enum Task {
-    WatchTask(StreamTask),
+    WatchTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(ConfigChange),
     /// Flush the task with name.
     Flush(String),
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
+}
+
+#[derive(Debug)]
+pub enum TaskOp {
+    AddTask(StreamTask),
+    RemoveTask(StreamTask),
 }
 
 #[derive(Debug)]
@@ -487,7 +514,7 @@ where
     fn run(&mut self, task: Task) {
         debug!("run backup stream task"; "task" => ?task);
         match task {
-            Task::WatchTask(task) => self.on_register(task),
+            Task::WatchTask(op) => self.handle_watch_task(op),
             Task::BatchEvent(events) => self.do_backup(events),
             Task::Flush(task) => self.on_flush(task, self.store_id),
             Task::ModifyObserve(op) => self.on_modify_observe(op),

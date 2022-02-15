@@ -287,6 +287,11 @@ impl RouterInner {
         }
     }
 
+    fn unregister_ranges(&self, task_name: &str) {
+        let mut ranges = self.ranges.write().unwrap();
+        ranges.get_inner().retain(|_, v| v.item != task_name);
+    }
+
     // register task info ans range info to router
     pub async fn register_task(
         &self,
@@ -307,6 +312,14 @@ impl RouterInner {
         self.register_ranges(&task_name, ranges);
 
         Ok(())
+    }
+
+    pub async fn unregister_task(&self, mut task: StreamTask) {
+        let task_name = task.info.take_name();
+
+        if let Some(_) = self.tasks.lock().await.remove(&task_name) {
+            self.unregister_ranges(&task_name);
+        }
     }
 
     /// get the task name by a key.
