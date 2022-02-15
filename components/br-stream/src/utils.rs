@@ -140,48 +140,90 @@ impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
     }
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct SegmentMap<K: Ord, V>(BTreeMap<K, SegmentValue<K, V>>);
+
+#[derive(Clone, Debug)]
+pub struct SegmentValue<R, T> {
+    range_end: R,
+    item: T,
+}
+
 /// A container for holding ranges without overlapping.
 /// supports fast(`O(log(n))`) query of overlapping and points in segments.
 ///
 /// Maybe replace it with extended binary search tree or the real segment tree?
 /// So it can contains overlapping segments.
-#[derive(Default)]
-pub struct SegmentTree<T: Ord>(BTreeMap<T, T>);
+pub type SegmentSet<T> = SegmentMap<T, ()>;
 
-impl<T: Ord + std::fmt::Debug> SegmentTree<T> {
-    /// Try to add a element into the segment tree.
+impl<K: Ord, V: Default> SegmentMap<K, V> {
+    /// Try to add a element into the segment tree, with default value.
+    /// (This is useful when using the segment tree as a `Set`, i.e. `SegmentMap<T, ()>`)
     ///
     /// - If no overlapping, insert the range into the tree and returns `true`.
     /// - If overlapping detected, do nothing and return `false`.
-    pub fn add(&mut self, (start, end): (T, T)) -> bool {
+    pub fn add(&mut self, (start, end): (K, K)) -> bool {
+        self.insert((start, end), V::default())
+    }
+}
+
+impl<K: Ord, V> SegmentMap<K, V> {
+    /// Like `add`, but insert a value associated to the key.
+    pub fn insert(&mut self, (start, end): (K, K), value: V) -> bool {
         if self.is_overlapping((&start, &end)) {
             return false;
         }
-        self.0.insert(start, end);
+        self.0.insert(
+            start,
+            SegmentValue {
+                range_end: end,
+                item: value,
+            },
+        );
         true
     }
 
-    pub fn get_interval_by_point<R>(&self, point: &R) -> Option<(&T, &T)>
+    /// Find a segment with its associated value by the point.
+    pub fn get_by_point<R>(&self, point: &R) -> Option<(&K, &K, &V)>
     where
-        T: Borrow<R>,
+        K: Borrow<R>,
         R: Ord + ?Sized,
     {
         self.0
             .range(RangeToInclusiveRef(point))
             .next_back()
-            .filter(|(_, end)| <T as Borrow<R>>::borrow(end) > point)
+            .filter(|(_, end)| <K as Borrow<R>>::borrow(&end.range_end) > point)
+            .map(|(k, v)| (k, &v.range_end, &v.item))
     }
 
+    /// Like `get_by_point`, but omit the segment.
+    pub fn get_value_by_point<R>(&self, point: &R) -> Option<&V>
+    where
+        K: Borrow<R>,
+        R: Ord + ?Sized,
+    {
+        self.get_by_point(point).map(|(_, _, v)| v)
+    }
+
+    /// Like `get_by_point`, but omit the segment.
+    pub fn get_interval_by_point<R>(&self, point: &R) -> Option<(&K, &K)>
+    where
+        K: Borrow<R>,
+        R: Ord + ?Sized,
+    {
+        self.get_by_point(point).map(|(k, v, _)| (k, v))
+    }
+
+    /// Check whether the range is overlapping with any range in the segment tree.
     pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
     where
-        T: Borrow<R>,
+        K: Borrow<R>,
         R: Ord + ?Sized,
     {
         self.get_interval_by_point(range.0).is_some()
             || self
                 .get_interval_by_point(range.1)
-                .map(|rng| <T as Borrow<R>>::borrow(rng.0) != range.1)
-                .unwrap_or(false)
+                .map_or(false, |rng| <K as Borrow<R>>::borrow(rng.0) != range.1)
     }
 }
 
@@ -232,15 +274,20 @@ macro_rules! try_send {
 
 #[cfg(test)]
 mod test {
-    use super::SegmentTree;
+    use crate::utils::SegmentMap;
 
     #[test]
     fn test_segment_tree() {
-        let mut tree = SegmentTree::default();
+        let mut tree = SegmentMap::default();
         assert!(tree.add((1, 4)));
         assert!(tree.add((4, 8)));
         assert!(tree.add((42, 46)));
         assert!(!tree.add((3, 8)));
+        assert!(tree.insert((47, 88), "hello".to_owned()));
+        assert_eq!(
+            tree.get_value_by_point(&49).map(String::as_str),
+            Some("hello")
+        );
         assert_eq!(tree.get_interval_by_point(&3), Some((&1, &4)));
         assert_eq!(tree.get_interval_by_point(&7), Some((&4, &8)));
         assert_eq!(tree.get_interval_by_point(&90), None);

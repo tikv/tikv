@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
     result,
@@ -17,7 +17,7 @@ use crate::{
     errors::Error,
     metadata::StreamTask,
     metrics::SKIP_KV_COUNTER,
-    utils::{self, SlotMap},
+    utils::{self, SegmentMap, SlotMap},
 };
 
 use super::errors::Result;
@@ -232,7 +232,7 @@ pub struct RouterInner {
     /// It uses the `start_key` of range as the key.
     /// Given there isn't overlapping, we can simply use binary search to find
     /// which range a point belongs to.
-    ranges: SyncRwLock<BTreeMap<KeyRange, TaskRange>>,
+    ranges: SyncRwLock<SegmentMap<Vec<u8>, String>>,
     /// The temporary files associated to some task.
     tasks: Mutex<HashMap<String, Arc<StreamTaskInfo>>>,
     /// The temporary directory for all tasks.
@@ -257,7 +257,7 @@ impl std::fmt::Debug for RouterInner {
 impl RouterInner {
     pub fn new(prefix: PathBuf, scheduler: Scheduler<Task>, temp_file_size_limit: u64) -> Self {
         RouterInner {
-            ranges: SyncRwLock::new(BTreeMap::default()),
+            ranges: SyncRwLock::new(SegmentMap::default()),
             tasks: Mutex::new(HashMap::default()),
             prefix,
             scheduler,
@@ -277,18 +277,13 @@ impl RouterInner {
 
         let mut w = self.ranges.write().unwrap();
         for range in ranges {
-            let key_range = KeyRange(range.0);
-            let task_range = TaskRange {
-                end: range.1,
-                task_name: task_name.to_string(),
-            };
             debug!(
                 "backup stream register observe range";
                 "task_name" => task_name,
-                "start_key" => &log_wrappers::Value::key(&key_range.0),
-                "end_key" => &log_wrappers::Value::key(&task_range.end),
+                "start_key" => utils::redact(&range.0),
+                "end_key" => utils::redact(&range.1),
             );
-            w.insert(key_range, task_range);
+            w.insert(range, task_name.to_owned());
         }
     }
 
@@ -300,38 +295,24 @@ impl RouterInner {
     ) -> Result<()> {
         let task_name = task.info.take_name();
 
-        // register ragnes
-        self.register_ranges(&task_name, ranges);
-
         // register task info
         let prefix_path = self.prefix.join(&task_name);
         let stream_task = StreamTaskInfo::new(prefix_path, task).await?;
-
-        let _ = self
-            .tasks
+        self.tasks
             .lock()
             .await
-            .insert(task_name, Arc::new(stream_task));
+            .insert(task_name.clone(), Arc::new(stream_task));
+
+        // register ragnes
+        self.register_ranges(&task_name, ranges);
+
         Ok(())
     }
 
     /// get the task name by a key.
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
-        // TODO avoid key.to_vec()
         let r = self.ranges.read().unwrap();
-        let k = &KeyRange(key.to_vec());
-        r.range(..k)
-            .next_back()
-            .filter(|r| key <= &r.1.end[..] && key >= &r.0.0[..])
-            .map_or_else(
-                || {
-                    r.range(k..)
-                        .next()
-                        .filter(|r| key <= &r.1.end[..] && key >= &r.0.0[..])
-                        .map(|r| r.1.task_name.clone())
-                },
-                |r| Some(r.1.task_name.clone()),
-            )
+        r.get_value_by_point(key).cloned()
     }
 
     pub async fn get_task_info(&self, task_name: &str) -> Result<Arc<StreamTaskInfo>> {

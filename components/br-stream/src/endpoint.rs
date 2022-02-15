@@ -270,7 +270,8 @@ where
                             .register_task(task.clone(), ranges.clone())
                             .await
                         {
-                            err.report(format!("failed to register task {}", task.info.name))
+                            err.report(format!("failed to register task {}", task.info.name));
+                            return;
                         }
                         for (start_key, end_key) in ranges {
                             let init = init.clone();
