@@ -318,6 +318,10 @@ impl RouterInner {
         let task_name = task.info.take_name();
 
         if let Some(_) = self.tasks.lock().await.remove(&task_name) {
+            info!(
+                "backup stream unregister task";
+                "task" => ?task,
+            );
             self.unregister_ranges(&task_name);
         }
     }
