@@ -13,14 +13,14 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
-use raft::{eraftpb::Entry, GetEntriesContext, SnapshotStatus};
+use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
-use crate::store::SnapKey;
+use crate::store::{RaftlogFetchResult, SnapKey};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -306,7 +306,7 @@ where
     // Reports the result of asynchronous Raft logs fetching.
     RaftlogFetched {
         context: GetEntriesContext,
-        res: RaftlogFetchResult,
+        res: Box<RaftlogFetchResult>,
     },
     EnterForceLeaderState,
     ExitForceLeaderState,
@@ -327,7 +327,6 @@ pub enum RaftlogFetchResult {
         tried_cnt: usize,
         // the term when the task issued
         term: u64,
-    },
 }
 
 /// Message that will be sent to a peer.

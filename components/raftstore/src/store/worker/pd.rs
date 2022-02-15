@@ -1274,9 +1274,10 @@ where
                         "try to transfer leader";
                         "region_id" => region_id,
                         "from_peer" => ?peer,
-                        "to_peer" => ?transfer_leader.get_peer()
+                        "to_peer" => ?transfer_leader.get_peer(),
+                        "to_peers" => ?transfer_leader.get_peers(),
                     );
-                    let req = new_transfer_leader_request(transfer_leader.take_peer());
+                    let req = new_transfer_leader_request(transfer_leader.take_peer(), transfer_leader.take_peers().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
                 } else if resp.has_split_region() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -1821,10 +1822,11 @@ fn new_batch_split_region_request(
     req
 }
 
-fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
+fn new_transfer_leader_request(peer: metapb::Peer, peers: Vec<metapb::Peer>) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
+    req.mut_transfer_leader().set_peers(peers.into());
     req
 }
 
