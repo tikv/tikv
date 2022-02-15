@@ -77,11 +77,11 @@ where
 
 pub struct Sample {
     pub key: Vec<u8>,
-    // left means the number of key ranges located in the sample's left.
+    // left means the number of key ranges located on the sample's left.
     pub left: i32,
     // contained means the number of key ranges the sample locates inside.
     pub contained: i32,
-    // right means the number of key ranges located in the sample's right.
+    // right means the number of key ranges located on the sample's right.
     pub right: i32,
 }
 
