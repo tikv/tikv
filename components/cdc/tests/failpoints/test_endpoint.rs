@@ -1,18 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use cdc::recv_timeout;
+use cdc::{recv_timeout, OldValueCache, Task, Validate};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
+use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::debug;
-
-use kvproto::cdcpb::*;
+use tikv_util::worker::Scheduler;
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
@@ -366,4 +367,53 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
     drop(event_feed_0);
     drop(event_feed);
     suite.stop();
+}
+
+#[test]
+fn test_old_value_cache_without_downstreams() {
+    fn check_old_value_cache(scheduler: &Scheduler<Task>, updates: usize) {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let checker = move |c: &OldValueCache| tx.send(c.update_count()).unwrap();
+        scheduler
+            .schedule(Task::Validate(Validate::OldValueCache(Box::new(checker))))
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), updates);
+    }
+
+    let mutation = || {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = b"key".to_vec();
+        mutation.value = b"value".to_vec();
+        mutation
+    };
+
+    fail::cfg("cdc_flush_old_value_metrics", "return").unwrap();
+
+    let cluster = new_server_cluster(0, 1);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let scheduler = suite.endpoints[&1].scheduler();
+
+    // Add a subscription and then check old value cache.
+    let (mut req_tx, event_feed, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let req = suite.new_changedata_request(1);
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    receive_event(false); // Wait until the initialization finishes.
+
+    // Old value cache will be updated because there is 1 capture.
+    suite.must_kv_prewrite(1, vec![mutation()], b"key".to_vec(), 3.into());
+    suite.must_kv_commit(1, vec![b"key".to_vec()], 3.into(), 4.into());
+    check_old_value_cache(&scheduler, 1);
+
+    drop(req_tx);
+    drop(event_feed);
+    drop(receive_event);
+    sleep_ms(200);
+
+    // Old value cache won't be updated because there is no captures.
+    suite.must_kv_prewrite(1, vec![mutation()], b"key".to_vec(), 5.into());
+    suite.must_kv_commit(1, vec![b"key".to_vec()], 5.into(), 6.into());
+    check_old_value_cache(&scheduler, 1);
+
+    fail::remove("cdc_flush_old_value_metrics");
 }
