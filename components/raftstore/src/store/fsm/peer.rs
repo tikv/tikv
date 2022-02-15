@@ -267,8 +267,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
-		unsafe_recovery_target_commit_index: 0,
-		unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
+                unsafe_recovery_target_commit_index: 0,
+                unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
             }),
         ))
     }
@@ -322,8 +322,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
-		unsafe_recovery_target_commit_index: 0,
-		unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
+                unsafe_recovery_target_commit_index: 0,
+                unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
             }),
         ))
     }
