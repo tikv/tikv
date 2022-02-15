@@ -16,6 +16,7 @@ use engine_rocks::Compat;
 use engine_traits::Peekable;
 use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
+use raftstore::store::Callback;
 use test_raftstore::*;
 use tikv::storage::kv::SnapContext;
 use tikv::storage::kv::SnapshotExt;
