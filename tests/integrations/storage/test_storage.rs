@@ -864,7 +864,9 @@ fn test_txn_store_txnkv_api_version() {
         // config api_version = V1|V1ttl, for backward compatible.
         (ApiVersion::V1, ApiVersion::V1, TIDB_KEY_CASE, true),
         (ApiVersion::V1, ApiVersion::V1, TXN_KEY_CASE, true),
-        (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, true),
+        // This case is incomplete in v5.3.0. Txn read in V1ttl
+        // would successs but put will fail.
+        // (ApiVersion::V1ttl, ApiVersion::V1, TXN_KEY_CASE, false),
         // config api_version = V1, reject V2 request.
         (ApiVersion::V1, ApiVersion::V2, TIDB_KEY_CASE, false),
         // config api_version = V2.
