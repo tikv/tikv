@@ -60,7 +60,7 @@ impl ErrorCodeExt for errorpb::Error {
             PROPOSAL_IN_MERGING_MODE
         } else if self.has_data_is_not_ready() {
             DATA_IS_NOT_READY
-        } else if self.has_data_is_not_ready() {
+        } else if self.has_recovery_in_progress() {
             RECOVERY_IN_PROGRESS
         } else {
             UNKNOWN
