@@ -784,7 +784,8 @@ impl IndexScanExecutorImpl {
         match decode_pid {
             DecodePartitionIdOp::Nop => {}
             DecodePartitionIdOp::PID(pid) => {
-                // If need partition id, append partition id to the last column.
+                // If need partition id, append partition id to the last column
+                // before physical table id column if exists.
                 let pid = NumberCodec::decode_i64(pid);
                 let idx = columns.columns_len() - 1 - self.physical_table_id_column_cnt;
                 columns[idx].mut_decoded().push_int(Some(pid))
