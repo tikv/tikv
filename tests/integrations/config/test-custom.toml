@@ -182,10 +182,12 @@ local-read-batch-size = 33
 apply-max-batch-size = 22
 apply-pool-size = 4
 apply-reschedule-duration = "3s"
+apply-before-pause-wait-us = 123
 apply-yield-duration = "333ms"
 store-max-batch-size = 21
 store-pool-size = 3
 store-reschedule-duration = "2s"
+store-before-pause-wait-us = 123
 store-io-pool-size = 5
 store-io-notify-capacity = 123456
 future-poll-size = 2
@@ -200,7 +202,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-raft-msg-flush-interval-us = 2333
+raft-msg-flush-interval = "2333us"
 
 [coprocessor]
 split-region-on-table = false
