@@ -1525,13 +1525,11 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
 }
 
 #[test]
-fn test_merge_pessimistic_locks_when_gap_is_too_large() {
+fn test_retry_pending_prepare_merge_fail() {
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
-    // Set raft_entry_max_size to 64 KiB. We will try to make the gap larger than the limit later.
-    cluster.cfg.raft_store.raft_entry_max_size = ReadableSize::kb(64);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -1549,26 +1547,45 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 
     cluster.must_transfer_leader(right.id, new_peer(2, 2));
 
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
-        left.get_id(),
-        2,
-    )));
+    // Insert lock l1 into the left region
+    let snapshot = cluster.must_get_snapshot_of_region(left.id);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    let l1 = PessimisticLock {
+        primary: b"k1".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
+            .is_ok()
+    );
 
-    let large_bytes = vec![b'v'; 32 << 10]; // 32 KiB
-    // 4 * 32 KiB = 128 KiB > raft_entry_max_size
-    for _ in 0..4 {
-        cluster.async_put(b"k1", &large_bytes).unwrap();
-    }
+    // Pause apply and write some data to the left region
+    fail::cfg("on_handle_apply", "pause").unwrap();
+    let rx = cluster.async_put(b"k1", b"v11").unwrap();
 
+    // Then, start merging. PrepareMerge should become pending because applied_index is smaller
+    // than proposed_index.
     cluster.merge_region(left.id, right.id, Callback::None);
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(200));
+    assert!(txn_ext.pessimistic_locks.read().is_valid);
 
-    // The gap is too large, so the previous merge should fail. And this new put request
-    // should be allowed.
-    let res = cluster.async_put(b"k1", b"new_val").unwrap();
+    // Set disk full error to let PrepareMerge fail
+    fail::cfg("disk_already_full_peer_1", "return").unwrap();
+    fail::remove("on_handle_apply");
+    assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok());
 
-    cluster.clear_send_filters();
-    assert!(res.recv().is_ok());
+    thread::sleep(Duration::from_millis(200));
+    fail::remove("disk_already_full_peer_1");
 
-    assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
+    // Merge should not succeed because the disk is full.
+    assert_eq!(cluster.get_region(b"k1"), left);
+
+    let rx = cluster.async_put(b"k1", b"v12").unwrap();
+    assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok());
 }

@@ -1335,3 +1335,52 @@ fn test_propose_in_memory_pessimistic_locks() {
         Some(&(l2, false))
     );
 }
+
+#[test]
+fn test_merge_pessimistic_locks_when_gap_is_too_large() {
+    let mut cluster = new_server_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    // Set raft_entry_max_size to 64 KiB. We will try to make the gap larger than the limit later.
+    cluster.cfg.raft_store.raft_entry_max_size = ReadableSize::kb(64);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    cluster.must_transfer_leader(right.id, new_peer(2, 2));
+
+    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(
+        left.get_id(),
+        2,
+    )));
+
+    let large_bytes = vec![b'v'; 32 << 10]; // 32 KiB
+    // 4 * 32 KiB = 128 KiB > raft_entry_max_size
+    for _ in 0..4 {
+        cluster.async_put(b"k1", &large_bytes).unwrap();
+    }
+
+    cluster.merge_region(left.id, right.id, Callback::None);
+    thread::sleep(Duration::from_millis(150));
+
+    // The gap is too large, so the previous merge should fail. And this new put request
+    // should be allowed.
+    let res = cluster.async_put(b"k1", b"new_val").unwrap();
+
+    cluster.clear_send_filters();
+    assert!(res.recv().is_ok());
+
+    assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
+}

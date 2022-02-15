@@ -1508,19 +1508,7 @@ where
                 if self.fsm.peer.is_leader() {
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
-                    if self.fsm.peer.prepare_merge_fence > 0
-                        && applied_index >= self.fsm.peer.prepare_merge_fence
-                    {
-                        if let Some(pending_prepare_merge) =
-                            self.fsm.peer.pending_prepare_merge.take()
-                        {
-                            self.propose_raft_command_internal(
-                                pending_prepare_merge,
-                                Callback::None,
-                                DiskFullOpt::AllowedOnAlmostFull,
-                            );
-                        }
-                    }
+                    self.retry_pending_prepare_merge(applied_index);
                 }
             }
             ApplyTaskRes::Destroy {
@@ -1548,6 +1536,25 @@ where
                     *is_ready = true;
                 }
             }
+        }
+    }
+
+    fn retry_pending_prepare_merge(&mut self, applied_index: u64) {
+        if self.fsm.peer.prepare_merge_fence > 0
+            && applied_index >= self.fsm.peer.prepare_merge_fence
+        {
+            if let Some(pending_prepare_merge) = self.fsm.peer.pending_prepare_merge.take() {
+                self.propose_raft_command_internal(
+                    pending_prepare_merge,
+                    Callback::None,
+                    DiskFullOpt::AllowedOnAlmostFull,
+                );
+            }
+            // When applied index reaches prepare_merge_fence, always clear the fence.
+            // So, even if the PrepareMerge fails to propose (e.g. due to full disk),
+            // we can ensure the region will be able to serve again.
+            self.fsm.peer.prepare_merge_fence = 0;
+            assert!(self.fsm.peer.pending_prepare_merge.is_none());
         }
     }
 
