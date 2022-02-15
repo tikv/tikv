@@ -242,8 +242,7 @@ impl ArithmeticOp for IntUintMod {
             Ok(Some(((*lhs as u64) % (*rhs as u64)) as i64))
         } else {
             Ok(Some(
-                (0 as i64)
-                    .overflowing_sub(((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64)
+                0i64.overflowing_sub(((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64)
                     .0,
             ))
         }
