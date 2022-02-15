@@ -8,6 +8,7 @@ use pd_client::PdClient;
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
 
+#[allow(clippy::mutex_atomic)]
 #[test]
 fn test_unsafe_recover_send_report() {
     let mut cluster = new_server_cluster(0, 3);
