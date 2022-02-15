@@ -237,9 +237,16 @@ impl ArithmeticOp for IntUintMod {
         if *rhs == 0i64 {
             return Ok(None);
         }
-        Ok(Some(
-            ((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64,
-        ))
+
+        if *lhs > 0 {
+            Ok(Some(((*lhs as u64) % (*rhs as u64)) as i64))
+        } else {
+            Ok(Some(
+                (0 as i64)
+                    .overflowing_sub(((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64)
+                    .0,
+            ))
+        }
     }
 }
 
