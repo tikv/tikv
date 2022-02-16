@@ -1561,7 +1561,7 @@ fn test_retry_pending_prepare_merge_fail() {
         txn_ext
             .pessimistic_locks
             .write()
-            .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
+            .insert(vec![(Key::from_raw(b"k1"), l1)])
             .is_ok()
     );
 
