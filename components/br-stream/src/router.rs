@@ -314,15 +314,13 @@ impl RouterInner {
         Ok(())
     }
 
-    pub async fn unregister_task(&self, mut task: StreamTask) {
-        let task_name = task.info.take_name();
-
-        if let Some(_) = self.tasks.lock().await.remove(&task_name) {
+    pub async fn unregister_task(&self, task_name: &str) {
+        if let Some(_) = self.tasks.lock().await.remove(task_name) {
             info!(
                 "backup stream unregister task";
-                "task" => ?task,
+                "task" => task_name,
             );
-            self.unregister_ranges(&task_name);
+            self.unregister_ranges(task_name);
         }
     }
 

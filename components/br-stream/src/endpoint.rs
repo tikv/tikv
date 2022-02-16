@@ -169,9 +169,7 @@ where
                         scheduler.schedule(Task::WatchTask(TaskOp::AddTask(t)))?;
                     }
                     MetadataEvent::RemoveTask { task } => {
-                        // TODO implement remove task
-                        let t = meta_client.get_task(&task).await?;
-                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(t)))?;
+                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
                     }
                     MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
                 }
@@ -245,8 +243,8 @@ where
             TaskOp::AddTask(task) => {
                 self.on_register(task);
             }
-            TaskOp::RemoveTask(task) => {
-                self.on_unregister(task);
+            TaskOp::RemoveTask(task_name) => {
+                self.on_unregister(&task_name);
             }
         }
     }
@@ -348,7 +346,7 @@ where
         };
     }
 
-    pub fn on_unregister(&self, task: StreamTask) {
+    pub fn on_unregister(&self, task: &str) {
         let router = self.range_router.clone();
 
         self.pool.block_on(async move {
@@ -463,7 +461,7 @@ pub enum Task {
 #[derive(Debug)]
 pub enum TaskOp {
     AddTask(StreamTask),
-    RemoveTask(StreamTask),
+    RemoveTask(String),
 }
 
 #[derive(Debug)]
