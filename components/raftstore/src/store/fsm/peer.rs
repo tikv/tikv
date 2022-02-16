@@ -969,6 +969,7 @@ where
             "region_id" => self.region_id(),
         );
         self.fsm.tick_registry[tick as usize] = false;
+        self.fsm.peer.adjust_cfg_if_changed(self.ctx);
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),
@@ -2761,6 +2762,12 @@ where
                     if self.fsm.peer.is_leader() {
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
+                        // As `raft_max_inflight_msgs` may have been updated via online config
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
                     }
                 }
                 ConfChangeType::RemoveNode => {
