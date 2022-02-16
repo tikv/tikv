@@ -1569,8 +1569,6 @@ mod tests {
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
     }
-<<<<<<< HEAD
-=======
 
     #[test]
     fn test_gc_keys_scan_range_limit() {
@@ -1750,5 +1748,4 @@ mod tests {
         assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_ok());
         must_get_none(&engine, b"key", 30);
     }
->>>>>>> ddec01865... gc_worker: Limit the key range to scan for GcKeys tasks (#11922)
 }
