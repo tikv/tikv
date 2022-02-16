@@ -1,0 +1,15 @@
+[package]
+name = "tikv-phybr"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+futures = { version = "0.3", features = ["executor"] }
+grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+
+[dependencies.phybr]
+git = "https://github.com/hicqu/phybr"
+branch = "master"

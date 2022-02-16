@@ -213,6 +213,7 @@ members = [
   "tests",
   "cmd/tikv-server",
   "cmd/tikv-ctl",
+  "cmd/tikv-phybr",
   "components/test_backup",
   "components/test_raftstore",
   "components/test_storage",
@@ -263,7 +264,7 @@ members = [
   "components/resource_metering",
   "components/api_version",
 ]
-default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
+default-members = ["cmd/tikv-server", "cmd/tikv-ctl", "cmd/tikv-phybr"]
 
 [profile.dev]
 opt-level = 0

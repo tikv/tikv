@@ -3276,6 +3276,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "phybr"
+version = "0.0.1"
+source = "git+https://github.com/hicqu/phybr?branch=master#2baee409b52352cb51dc850605d418e4656a77e4"
+dependencies = [
+ "futures 0.3.15",
+ "grpcio",
+ "protobuf",
+ "protobuf-build",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5665,6 +5676,15 @@ checksum = "3c14a5a604eb8715bc5785018a37d00739b180bcf609916ddf4393d33d49ccdf"
 dependencies = [
  "libc 0.2.106",
  "tikv-jemalloc-sys",
+]
+
+[[package]]
+name = "tikv-phybr"
+version = "0.1.0"
+dependencies = [
+ "futures 0.3.15",
+ "grpcio",
+ "phybr",
 ]
 
 [[package]]
