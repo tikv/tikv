@@ -148,8 +148,8 @@ where
     /// To make sure the reported store/peer meta is up to date, each peer has to wait for the log
     /// at its target commit index to be applied. The last peer does so triggers the next procedure
     /// which is reporting the store/peer meta to PD.
-    unsafe_recovery_target_commit_index: u64,
-    unsafe_recovery_wait_apply_counter: Arc<AtomicUsize>,
+    unsafe_recovery_target_commit_index: Option<u64>,
+    unsafe_recovery_wait_apply_counter: Option<Arc<AtomicUsize>>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -267,8 +267,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
-                unsafe_recovery_target_commit_index: 0,
-                unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
+                unsafe_recovery_target_commit_index: None,
+                unsafe_recovery_wait_apply_counter: None,
             }),
         ))
     }
@@ -322,8 +322,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
-                unsafe_recovery_target_commit_index: 0,
-                unsafe_recovery_wait_apply_counter: Arc::new(AtomicUsize::new(0)),
+                unsafe_recovery_target_commit_index: None,
+                unsafe_recovery_wait_apply_counter: None,
             }),
         ))
     }
@@ -873,33 +873,45 @@ where
         self.register_raft_base_tick();
     }
 
+    fn finish_unsafe_recovery_wait_apply(&mut self) {
+        if self
+            .fsm
+            .unsafe_recovery_wait_apply_counter
+            .as_ref()
+            .unwrap()
+            .fetch_sub(1, Ordering::Relaxed)
+            == 1
+        {
+            let stats = StoreStats::default();
+            let store_info = StoreInfo {
+                kv_engine: self.ctx.engines.kv.clone(),
+                raft_engine: self.ctx.engines.raft.clone(),
+                capacity: self.ctx.cfg.capacity.0,
+            };
+            let task = PdTask::StoreHeartbeat {
+                stats,
+                store_info,
+                send_detailed_report: true,
+            };
+            if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                panic!("fail to send detailed report to pd {:?}", e);
+            }
+        }
+        self.fsm.unsafe_recovery_target_commit_index = None;
+        self.fsm.unsafe_recovery_wait_apply_counter = None;
+    }
+
     fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
-        // Checks the applied index here first, in case the log at the target index has been
-        // applied right before this peer msg is handled. If the log has not been applied here,
-        // further checks will be performed in on_apply_res().
+        self.fsm.unsafe_recovery_target_commit_index =
+            Some(self.fsm.peer.raft_group.store().commit_index());
+        self.fsm.unsafe_recovery_wait_apply_counter = Some(counter);
+        // If the applied index equals to the commit index, there is nothing to wait for, proceeds
+        // to the next step immediately. If they are not equal, further checks will be performed in
+        // on_apply_res().
         if self.fsm.peer.raft_group.store().applied_index()
             == self.fsm.peer.raft_group.store().commit_index()
         {
-            if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                let stats = StoreStats::default();
-                let store_info = StoreInfo {
-                    kv_engine: self.ctx.engines.kv.clone(),
-                    raft_engine: self.ctx.engines.raft.clone(),
-                    capacity: self.ctx.cfg.capacity.0,
-                };
-                let task = PdTask::StoreHeartbeat {
-                    stats,
-                    store_info,
-                    send_detailed_report: true,
-                };
-                if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                    panic!("fail to send detailed report to pd {:?}", e);
-                }
-            }
-        } else {
-            self.fsm.unsafe_recovery_target_commit_index =
-                self.fsm.peer.raft_group.store().commit_index();
-            self.fsm.unsafe_recovery_wait_apply_counter = counter;
+            self.finish_unsafe_recovery_wait_apply();
         }
     }
 
@@ -1583,32 +1595,10 @@ where
             }
         }
         // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
-        if self.fsm.unsafe_recovery_target_commit_index != 0
-            && self.fsm.peer.raft_group.store().applied_index()
-                >= self.fsm.unsafe_recovery_target_commit_index
-        {
-            if self
-                .fsm
-                .unsafe_recovery_wait_apply_counter
-                .fetch_sub(1, Ordering::Relaxed)
-                == 1
-            {
-                let stats = StoreStats::default();
-                let store_info = StoreInfo {
-                    kv_engine: self.ctx.engines.kv.clone(),
-                    raft_engine: self.ctx.engines.raft.clone(),
-                    capacity: self.ctx.cfg.capacity.0,
-                };
-                let task = PdTask::StoreHeartbeat {
-                    stats,
-                    store_info,
-                    send_detailed_report: true,
-                };
-                if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                    panic!("fail to send detailed report to pd {:?}", e);
-                }
+        if let Some(target_commit_index) = self.fsm.unsafe_recovery_target_commit_index {
+            if self.fsm.peer.raft_group.store().applied_index() >= target_commit_index {
+                self.finish_unsafe_recovery_wait_apply();
             }
-            self.fsm.unsafe_recovery_target_commit_index = 0;
         }
     }
 
@@ -2663,6 +2653,9 @@ where
         let region_id = self.region_id();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
+
+        // No need to wait for the apply anymore.
+        self.finish_unsafe_recovery_wait_apply();
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 

@@ -21,10 +21,12 @@ fn test_unsafe_recover_send_report() {
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     configure_for_lease_read(&mut cluster, None, None);
 
+    // Makes the leadership definite.
     let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
+    // Blocks the raft apply process on store 1 entirely .
     let apply_triggered_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let apply_triggered_pair2 = Arc::clone(&apply_triggered_pair);
     let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
@@ -45,6 +47,8 @@ fn test_unsafe_recover_send_report() {
         }
     })
     .unwrap();
+
+    // Mannually makes an update, and wait for the apply to be triggered, to simulate "some entries are commited but not applied" scenario.
     cluster.put(b"random_key2", b"random_val2").unwrap();
     {
         let (lock, cvar) = &*apply_triggered_pair;
@@ -54,21 +58,29 @@ fn test_unsafe_recover_send_report() {
         }
     }
 
+    // Makes the group lose its quorum.
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
 
+    // Triggers the unsafe recovery store reporting process.
     pd_client.must_set_require_report(true);
     cluster.must_send_store_heartbeat(nodes[0]);
+
+    // No store report is sent, since there are peers have unapplied entries.
     for _ in 0..20 {
         assert_eq!(pd_client.must_get_store_reported(), 0);
         sleep_ms(100);
     }
+
+    // Unblocks the apply process.
     {
         let (lock2, cvar2) = &*apply_released_pair;
         let mut released = lock2.lock().unwrap();
         *released = true;
-        cvar2.notify_one();
+        cvar2.notify_all();
     }
+
+    // Store reports are sent once the entries are applied.
     let mut reported = false;
     for _ in 0..20 {
         if pd_client.must_get_store_reported() > 0 {
