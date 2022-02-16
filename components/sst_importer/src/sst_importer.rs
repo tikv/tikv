@@ -135,33 +135,30 @@ impl SSTImporter {
     // Donwloads and apply a KV file from an external storage.
     pub fn apply<E: KvEngine>(
         &self,
+        meta: &KvMeta,
         backend: &StorageBackend,
-        name: &str,
         rewrite_rule: &RewriteRule,
-        cf: &str,
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
         debug!("apply start";
             "url" => ?backend,
-            "name" => name,
-            "cf" => cf,
+            "meta" => ?meta,
             "rewrite_rule" => ?rewrite_rule,
         );
         match self.do_download_and_apply::<E>(
+            meta,
             backend,
-            name,
             rewrite_rule,
-            cf,
             &speed_limiter,
             engine,
         ) {
             Ok(r) => {
-                info!("apply"; "name" => name, "range" => ?r);
+                info!("apply"; "meta" => ?meta, "range" => ?r);
                 Ok(r)
             }
             Err(e) => {
-                error!(%e; "apply failed"; "name" => name,);
+                error!(%e; "apply failed"; "meta" => ?meta,);
                 Err(e)
             }
         }
@@ -290,18 +287,19 @@ impl SSTImporter {
 
     fn do_download_and_apply<E: KvEngine>(
         &self,
+        meta: &KvMeta,
         backend: &StorageBackend,
-        name: &str,
         rewrite_rule: &RewriteRule,
-        cf: &str,
         speed_limiter: &Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
+        let name = meta.get_name();
+        let cf = meta.get_cf();
         let path = self.dir.get_import_path(name)?;
         let start = Instant::now();
         self.download_file_from_external_storage(
-            // don't check file length after download file for now.
-            0,
+            // current length is 0. which means won't check the file length.
+            meta.get_length(),
             name,
             path.temp.clone(),
             backend,
@@ -341,6 +339,14 @@ impl SSTImporter {
             }
             event_iter.next()?;
             let iter_key = event_iter.key().to_vec();
+
+            let ts = Key::decode_ts_from(&iter_key)?;
+            if ts > TimeStamp::new(meta.get_restore_ts()) {
+                // we assume the keys in file are sorted by ts. 
+                // so if we met the key not satisfy the ts. 
+                // we can easily filter the remain keys.
+                break
+            }
 
             smallest_key = smallest_key.map_or_else(
                 || Some(iter_key.clone()),

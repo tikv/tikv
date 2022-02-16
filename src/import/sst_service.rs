@@ -384,10 +384,9 @@ where
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let res = importer.apply::<E>(
+                req.get_meta(),
                 req.get_storage_backend(),
-                req.get_name(),
                 req.get_rewrite_rule(),
-                req.get_cf(),
                 limiter,
                 engine,
             );
