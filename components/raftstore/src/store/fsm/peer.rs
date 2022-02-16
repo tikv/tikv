@@ -1551,8 +1551,8 @@ where
                 );
             }
             // When applied index reaches prepare_merge_fence, always clear the fence.
-            // So, even if the PrepareMerge fails to propose (e.g. due to full disk),
-            // we can ensure the region will be able to serve again.
+            // So, even if the PrepareMerge fails to propose, we can ensure the region
+            // will be able to serve again.
             self.fsm.peer.prepare_merge_fence = 0;
             assert!(self.fsm.peer.pending_prepare_merge.is_none());
         }
