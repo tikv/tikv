@@ -61,6 +61,12 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b7
 page_size = "0.4"
 procfs = { version = "0.12", default-features = false }
 
+[build-dependencies.bindgen]
+version = "0.59"
+
+[build-dependencies.cc]
+version = "1.0"
+
 [dev-dependencies]
 gag = "1.0"
 panic_hook = { path = "../panic_hook" }

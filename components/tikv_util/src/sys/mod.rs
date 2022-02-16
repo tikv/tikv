@@ -27,6 +27,12 @@ lazy_static! {
     static ref SELF_CGROUP: cgroup::CGroupSys = cgroup::CGroupSys::new().unwrap_or_default();
 }
 
+#[allow(warnings)]
+#[cfg(target_os = "macos")]
+pub(crate) mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/macos_ios_binding.rs"));
+}
+
 pub struct SysQuota;
 impl SysQuota {
     #[cfg(target_os = "linux")]

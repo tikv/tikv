@@ -7,7 +7,7 @@
 use std::io;
 
 /// A cross-platform CPU statistics data structure.
-#[derive(Default, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub struct ThreadStat {
     // libc::clock_t is not used here because the definition of
     // clock_t is different on linux and bsd.
@@ -181,7 +181,112 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod imp {
+    use crate::sys::bindings::*;
+
+    use std::io;
+    use std::iter::FromIterator;
+    use std::mem::size_of;
+    use std::ptr::null_mut;
+    use std::slice;
+
+    pub type Pid = mach_port_t;
+
+    #[derive(Default)]
+    pub struct FullStat {
+        pub stime: i64,
+        pub utime: i64,
+        pub command: String,
+    }
+
+    #[inline]
+    pub fn clock_tick() -> i64 {
+        1_000_000
+    }
+
+    /// Gets the ID of the current process.
+    #[inline]
+    pub fn process_id() -> Pid {
+        unsafe { mach_task_self_ }
+    }
+
+    /// Gets the ID of the current thread.
+    #[inline]
+    pub fn thread_id() -> Pid {
+        unsafe { mach_thread_self() }
+    }
+
+    pub fn thread_ids<C: FromIterator<Pid>>(pid: Pid) -> io::Result<C> {
+        // https://www.gnu.org/software/hurd/gnumach-doc/Task-Information.html
+
+        unsafe {
+            let mut act_list: thread_act_array_t = null_mut();
+            let mut act_count: mach_msg_type_number_t = 0;
+            let ret = task_threads(
+                pid,
+                &mut act_list as *mut thread_act_array_t,
+                &mut act_count as *mut mach_msg_type_number_t,
+            );
+
+            if ret != KERN_SUCCESS as kern_return_t {
+                return Err(io::Error::from_raw_os_error(ret));
+            }
+
+            let pids = slice::from_raw_parts_mut(act_list, act_count as _)
+                .iter()
+                .copied()
+                .collect();
+
+            vm_deallocate(
+                pid,
+                act_list as vm_address_t,
+                size_of::<thread_act_t>() * act_count as usize,
+            );
+
+            Ok(pids)
+        }
+    }
+
+    pub fn full_thread_stat(_pid: Pid, tid: Pid) -> io::Result<FullStat> {
+        // https://www.gnu.org/software/hurd/gnumach-doc/Thread-Information.html
+
+        unsafe {
+            let flavor = THREAD_BASIC_INFO;
+            let mut info = thread_basic_info::default();
+            let mut thread_info_cnt =
+                (size_of::<thread_basic_info>() / size_of::<natural_t>()) as mach_msg_type_number_t;
+
+            let ret = thread_info(
+                tid,
+                flavor,
+                (&mut info as *mut thread_basic_info) as thread_info_t,
+                &mut thread_info_cnt,
+            );
+            if ret != KERN_SUCCESS as kern_return_t {
+                return Err(io::Error::from_raw_os_error(ret));
+            }
+
+            Ok(FullStat {
+                stime: info.system_time.seconds as i64 * 1_000_000
+                    + info.system_time.microseconds as i64,
+                utime: info.user_time.seconds as i64 * 1_000_000
+                    + info.user_time.microseconds as i64,
+                command: "".to_string(),
+            })
+        }
+    }
+
+    pub fn set_priority(_: i32) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub fn get_priority() -> io::Result<i32> {
+        Ok(0)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod imp {
     use std::io;
     use std::iter::FromIterator;
@@ -251,6 +356,10 @@ pub fn current_thread_stat() -> io::Result<ThreadStat> {
 mod tests {
     use super::*;
 
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
     #[test]
     fn test_thread_id() {
         let id = thread_id();
@@ -264,10 +373,43 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_thread_ids() {
-        let ids: std::io::Result<Vec<_>> = thread_ids(process_id());
-        assert!(ids.is_ok());
-        assert!(!ids.unwrap().is_empty());
+        let actual_tids = Arc::new(Mutex::new(vec![]));
+        let stop_threads = Arc::new(AtomicBool::new(false));
+
+        let threads = (0..10)
+            .map(|_| {
+                let actual_tids = actual_tids.clone();
+                let stop_threads = stop_threads.clone();
+                std::thread::spawn(move || {
+                    {
+                        actual_tids.lock().unwrap().push(thread_id());
+                    }
+                    while !stop_threads.load(Ordering::Relaxed) {}
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let ids: HashSet<_> = thread_ids(process_id()).unwrap();
+        {
+            let actual_tids = actual_tids.lock().unwrap();
+            for tid in &*actual_tids {
+                assert!(ids.contains(tid));
+            }
+        }
+
+        stop_threads.store(true, Ordering::Relaxed);
+        for thread in threads {
+            thread.join().unwrap();
+        }
+
+        let ids: HashSet<_> = thread_ids(process_id()).unwrap();
+        {
+            let actual_tids = actual_tids.lock().unwrap();
+            for tid in &*actual_tids {
+                assert!(!ids.contains(tid));
+            }
+        }
     }
 }
