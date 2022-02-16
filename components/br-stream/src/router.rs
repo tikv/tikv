@@ -797,7 +797,7 @@ impl MetadataInfo {
         let mut metadata = Metadata::new();
         metadata.set_files(self.files.into());
         metadata.set_store_id(self.store_id as _);
-        metadata.set_resloved_ts(self.min_resolved_ts as _);
+        metadata.set_resolved_ts(self.min_resolved_ts as _);
 
         metadata
             .write_to_bytes()
