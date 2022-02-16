@@ -3644,6 +3644,9 @@ where
         if pessimistic_locks.is_empty() {
             let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
             pessimistic_locks.is_valid = false;
+            // FIXME(sticnarf): if `PrepareMerge` fails to propose later, `is_valid` will remain false. Then,
+            // in-memory pessimistic locking will become not usable and the region will also reject merging.
+            // This will be fixed by introducing a tick that reactivates in-memory pessimistic locking.
             return Ok(());
         }
         // The proposed pessimistic locks here will also be carried in CommitMerge. Check the size
@@ -3684,6 +3687,8 @@ where
         {
             let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
             pessimistic_locks.is_valid = false;
+            // FIXME(sticnarf): Same as the FIXME comment above in this function. `is_valid` should be reset to true
+            // when the lock proposal or the PrepareMerge proposal fails to propose.
         }
         debug!("propose {} pessimistic locks before prepare merge", cmd.get_requests().len();
             "region_id" => self.region_id);
