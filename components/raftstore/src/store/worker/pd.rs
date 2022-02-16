@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Sender,Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
@@ -372,8 +372,8 @@ where
 {
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
-    timer: Option<Sender<bool>>,
-    sender: Option<Sender<ReadStats>>,
+    ticker_timer: Option<Sender<bool>>,
+    read_stats_sender: Option<Sender<ReadStats>>,
     collect_store_infos_interval: Duration,
     load_base_split_interval: Duration,
     collect_tick_interval: Duration,
@@ -388,8 +388,8 @@ where
         StatsMonitor {
             scheduler,
             handle: None,
-            timer: None,
-            sender: None,
+            ticker_timer: None,
+            read_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_interval: cmp::min(DEFAULT_LOAD_BASE_SPLIT_INTERVAL, interval),
             collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
@@ -418,10 +418,10 @@ where
             .div_duration_f64(tick_interval) as i32;
 
         let (tx, rx) = mpsc::channel();
-        self.timer = Some(tx);
+        self.ticker_timer = Some(tx);
 
         let (sender, receiver) = mpsc::channel();
-        self.sender = Some(sender);
+        self.read_stats_sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
@@ -508,8 +508,8 @@ where
 
     pub fn stop(&mut self) {
         if let Some(h) = self.handle.take() {
-            drop(self.timer.take());
-            drop(self.sender.take());
+            drop(self.ticker_timer.take());
+            drop(self.read_stats_sender.take());
             if let Err(e) = h.join() {
                 error!("join stats collector failed"; "err" => ?e);
             }
@@ -517,7 +517,7 @@ where
     }
 
     pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
-        &self.sender
+        &self.read_stats_sender
     }
 }
 
