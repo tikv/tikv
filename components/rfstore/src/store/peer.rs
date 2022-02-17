@@ -578,7 +578,7 @@ impl Peer {
 
         let mut raft_wb = rfengine::WriteBatch::new();
         self.mut_store().clear_meta(&mut raft_wb);
-        rfe.write(&raft_wb)?;
+        rfe.write(raft_wb)?;
         self.pending_reads.clear_all(Some(region.get_id()));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {

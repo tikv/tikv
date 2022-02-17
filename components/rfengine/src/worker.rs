@@ -1,9 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fs,
     io::Write,
+    mem,
     path::Path,
     path::PathBuf,
     sync::mpsc::Receiver,
@@ -14,37 +17,31 @@ use slog_global::*;
 
 use crate::*;
 
-#[derive(PartialEq, PartialOrd, Eq, Ord, Clone)]
-pub(crate) struct StateKey {
-    pub(crate) region_id: u64,
-    pub(crate) key: Bytes,
-}
-
-impl StateKey {
-    pub(crate) fn new(region_id: u64, key: &[u8]) -> Self {
-        Self {
-            region_id,
-            key: Bytes::copy_from_slice(key),
-        }
-    }
-}
-
 pub(crate) struct Worker {
     dir: PathBuf,
     epoches: Vec<Epoch>,
+    region_data: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
     truncated_idx: HashMap<u64, u64>,
     buf: BytesMut,
     task_rx: Receiver<Task>,
+    all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
 }
 
 impl Worker {
-    pub(crate) fn new(dir: PathBuf, epoches: Vec<Epoch>, task_rx: Receiver<Task>) -> Self {
+    pub(crate) fn new(
+        dir: PathBuf,
+        epoches: Vec<Epoch>,
+        task_rx: Receiver<Task>,
+        region_data: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
+    ) -> Self {
         Self {
             dir,
             epoches,
+            region_data,
             truncated_idx: HashMap::new(),
             buf: BytesMut::new(),
             task_rx,
+            all_states: HashMap::default(),
         }
     }
 
@@ -56,25 +53,20 @@ impl Worker {
             }
             let task = res.unwrap();
             match task {
-                Task::Rotate { epoch_id, states } => {
-                    self.handle_rotate_task(epoch_id, &states);
+                Task::Rotate { epoch_id } => {
+                    self.handle_rotate_task(epoch_id);
                 }
-                Task::Truncate { region_id, index } => {
-                    self.handle_truncate_task(region_id, index);
+                Task::Truncate { region_id } => {
+                    self.handle_truncate_task(region_id);
                 }
                 Task::Close => return,
             }
         }
     }
 
-    fn handle_rotate_task(&mut self, epoch_id: u32, states: &BTreeMap<StateKey, Bytes>) {
+    fn handle_rotate_task(&mut self, epoch_id: u32) {
         let mut epoch = Epoch::new(epoch_id);
         epoch.has_wal_file = true;
-        if let Err(err) = self.write_states(epoch_id, states) {
-            error!("failed to write states {:?}", err);
-        } else {
-            epoch.has_state_file = true;
-        }
         self.epoches.push(epoch);
         if self.epoches.len() >= 2 {
             let idx = self.epoches.len() - 2;
@@ -85,14 +77,16 @@ impl Worker {
         }
     }
 
-    fn write_states(&mut self, epoch_id: u32, states: &BTreeMap<StateKey, Bytes>) -> Result<()> {
+    fn write_all_states(&mut self, epoch_id: u32) -> Result<()> {
         self.buf.truncate(0);
-        for (k, v) in states {
-            self.buf.put_u64_le(k.region_id);
-            self.buf.put_u16_le(k.key.len() as u16);
-            self.buf.extend_from_slice(k.key.chunk());
-            self.buf.put_u32_le(v.len() as u32);
-            self.buf.extend_from_slice(v.chunk());
+        for (id, region_states) in &self.all_states {
+            for (k, v) in region_states {
+                self.buf.put_u64_le(*id);
+                self.buf.put_u16_le(k.len() as u16);
+                self.buf.extend_from_slice(k.chunk());
+                self.buf.put_u32_le(v.len() as u32);
+                self.buf.extend_from_slice(v.chunk());
+            }
         }
         let checksum = crc32c::crc32c(self.buf.chunk());
         self.buf.put_u32_le(checksum);
@@ -113,54 +107,55 @@ impl Worker {
         Ok(())
     }
 
+    fn get_region_states(&mut self, region_id: u64) -> &mut BTreeMap<Bytes, Bytes> {
+        if !self.all_states.contains_key(&region_id) {
+            self.all_states.insert(region_id, BTreeMap::new());
+        }
+        self.all_states.get_mut(&region_id).unwrap()
+    }
+
     fn compact(&mut self, epoch_idx: usize) -> Result<()> {
         let epoch_id = self.epoches[epoch_idx].id;
-        let mut entries_map = HashMap::new();
+        let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
-        it.iterate(|tp, entry| {
-            if tp != TYPE_RAFT_LOG {
-                return;
-            }
-            let op = parse_log(entry);
-            if let Some(truncated_idx) = self.truncated_idx.get(&op.region_id) {
-                if *truncated_idx > op.index {
-                    return;
-                }
-            }
-            let entries = get_region_raft_logs(&mut entries_map, op.region_id);
-            entries.append(op);
+        it.iterate(|region_data| {
+            batch.merge_region(region_data);
         })?;
         info!(
             "epoch {} compact wal file generated {} files",
             epoch_id,
-            entries_map.len()
+            batch.regions.len()
         );
-        for (region_id, entries) in entries_map {
-            self.write_raft_log_file(epoch_idx, region_id, &entries)?;
+        for (_, mut region_data) in batch.regions {
+            let new_states = mem::replace(&mut region_data.states, BTreeMap::default());
+            let region_states = self.get_region_states(region_data.region_id);
+            for (k, v) in &new_states {
+                if v.len() == 0 {
+                    region_states.remove(k);
+                } else {
+                    region_states.insert(k.clone(), v.clone());
+                }
+            }
+            self.write_raft_log_file(epoch_idx, &region_data)?;
         }
+        self.write_all_states(epoch_id)?;
         let wal_filename = wal_file_name(&self.dir, epoch_id);
         let recycle_filename = recycle_file_name(&self.dir, epoch_id);
         fs::rename(wal_filename, recycle_filename)?;
         Ok(())
     }
 
-    fn write_raft_log_file(
-        &mut self,
-        epoch_idx: usize,
-        region_id: u64,
-        entries: &RegionRaftLogs,
-    ) -> Result<()> {
+    fn write_raft_log_file(&mut self, epoch_idx: usize, region_data: &RegionData) -> Result<()> {
         let epoch_id = self.epoches[epoch_idx].id;
-        let filename = raft_log_file_name(&self.dir, epoch_id, region_id, entries.range);
+        let filename = raft_log_file_name(
+            &self.dir,
+            epoch_id,
+            region_data.region_id,
+            region_data.range,
+        );
         let mut file = fs::File::create(filename)?;
         self.buf.truncate(0);
-        for op in &entries.raft_logs {
-            self.buf.put_u32_le(6 + op.data.len() as u32);
-            self.buf.put_u32_le(op.term);
-            self.buf.put_u8(op.e_type);
-            self.buf.put_u8(op.context);
-            self.buf.extend_from_slice(op.data.chunk());
-        }
+        region_data.encode_to(&mut self.buf);
         let checksum = crc32c::crc32c(self.buf.chunk());
         self.buf.put_u32_le(checksum);
         file.write_all(self.buf.chunk())?;
@@ -169,11 +164,20 @@ impl Worker {
             .raft_log_files
             .lock()
             .unwrap()
-            .insert(region_id, entries.range);
+            .insert(region_data.region_id, region_data.range);
         Ok(())
     }
 
-    fn handle_truncate_task(&mut self, region_id: u64, index: u64) {
+    fn handle_truncate_task(&mut self, region_id: u64) {
+        let map_ref = self.region_data.get(&region_id);
+        if map_ref.is_none() {
+            return;
+        }
+        let map_ref = map_ref.unwrap();
+        let mut region_data = map_ref.write().unwrap();
+        let index = region_data.truncated_idx;
+        region_data.truncate(index);
+        drop(region_data);
         self.truncated_idx.insert(region_id, index);
         let mut removed_epoch_ids = HashSet::new();
         for ep in &mut self.epoches {
@@ -233,13 +237,7 @@ pub(crate) fn recycle_file_name(dir: &PathBuf, epoch_id: u32) -> PathBuf {
 }
 
 pub(crate) enum Task {
-    Rotate {
-        epoch_id: u32,
-        states: BTreeMap<StateKey, Bytes>,
-    },
-    Truncate {
-        region_id: u64,
-        index: u64,
-    },
+    Rotate { epoch_id: u32 },
+    Truncate { region_id: u64 },
     Close,
 }

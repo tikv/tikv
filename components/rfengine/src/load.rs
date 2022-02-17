@@ -129,32 +129,11 @@ impl RFEngine {
 
     pub(crate) fn load_wal_file(&mut self, epoch_id: u32) -> Result<u64> {
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
-        let mut states = self.states.write().unwrap();
-        let mut entries_map = self.entries_map.write().unwrap();
-        it.iterate(|tp, entry| match tp {
-            TYPE_STATE => {
-                let (region_id, key, val) = parse_state(entry);
-                let key = StateKey::new(region_id, key);
-                if val.len() > 0 {
-                    states.insert(key, Bytes::copy_from_slice(val));
-                } else {
-                    states.remove(&key);
-                }
-            }
-            TYPE_RAFT_LOG => {
-                let log_op = parse_log(entry);
-                let entries = get_region_raft_logs(&mut entries_map, log_op.region_id);
-                entries.append(log_op);
-            }
-            TYPE_TRUNCATE => {
-                let (region_id, index) = parse_truncate(entry);
-                let entries = get_region_raft_logs(&mut entries_map, region_id);
-                let empty = entries.truncate(index);
-                if empty {
-                    entries_map.remove(&region_id);
-                }
-            }
-            _ => panic!("unknown state"),
+        it.iterate(|new_data| {
+            let map_ref = self.get_or_init_region_data(new_data.region_id);
+            let mut region_data = map_ref.write().unwrap();
+            region_data.merge(new_data);
+            region_data.truncate_self()
         })?;
         Ok(it.offset)
     }
@@ -169,7 +148,6 @@ impl RFEngine {
         if crc32c::crc32c(data) != checksum {
             return Err(Error::Checksum);
         }
-        let mut states = self.states.write().unwrap();
         while data.len() > 0 {
             let region_id = LittleEndian::read_u64(data);
             data = &data[8..];
@@ -181,8 +159,11 @@ impl RFEngine {
             data = &data[4..];
             let val = &data[..val_len];
             data = &data[val_len..];
-            let state_key = StateKey::new(region_id, key);
-            states.insert(state_key, Bytes::copy_from_slice(val));
+            let map_ref = self.get_or_init_region_data(region_id);
+            let mut region_data = map_ref.write().unwrap();
+            region_data
+                .states
+                .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(val));
         }
         Ok(())
     }
@@ -195,33 +176,11 @@ impl RFEngine {
     ) -> Result<()> {
         let rlog_filename = raft_log_file_name(&self.dir, epoch_id, region_id, raft_log_range);
         let bin = read_checksum_file(&rlog_filename)?;
-        let mut data = bin.as_slice();
-        let mut index = raft_log_range.start_index;
-        let mut entries_map = self.entries_map.write().unwrap();
-        while data.len() > 0 {
-            let length = LittleEndian::read_u32(data) as usize;
-            data = &data[4..];
-            let mut entry = &data[..length];
-            data = &data[length..];
-            let term = LittleEndian::read_u32(entry);
-            entry = &entry[4..];
-            let e_type = entry[0];
-            entry = &entry[1..];
-            let context = entry[0];
-            entry = &entry[1..];
-            let op = RaftLogOp {
-                region_id,
-                index,
-                term,
-                e_type,
-                context,
-                data: Bytes::copy_from_slice(entry),
-            };
-            let entries = get_region_raft_logs(&mut entries_map, region_id);
-            entries.append(op);
-            index += 1;
-        }
-        assert_eq!(index, raft_log_range.end_index);
+        let new_data = RegionData::decode(&bin);
+        let map_ref = self.get_or_init_region_data(new_data.region_id);
+        let mut old_data = map_ref.write().unwrap();
+        old_data.merge(new_data);
+        old_data.truncate_self();
         Ok(())
     }
 }
@@ -237,7 +196,3 @@ fn read_checksum_file(filename: &PathBuf) -> Result<Vec<u8>> {
     bin.truncate(checksum_off);
     Ok(bin)
 }
-
-pub(crate) const TYPE_STATE: u32 = 1;
-pub(crate) const TYPE_RAFT_LOG: u32 = 2;
-pub(crate) const TYPE_TRUNCATE: u32 = 3;

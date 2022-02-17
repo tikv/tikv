@@ -10,18 +10,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bytes::{Buf, BufMut};
+use bytes::BufMut;
 
-pub const ENTRY_HEADER_SIZE: usize = 8;
 pub const BATCH_HEADER_SIZE: usize = 12;
 pub(crate) const ALIGN_SIZE: usize = 4096;
 pub(crate) const ALIGN_MASK: u64 = 0xffff_f000;
 pub(crate) const INITIAL_BUF_SIZE: usize = 8 * 1024 * 1024;
 pub(crate) const RECYCLE_DIR: &str = "recycle";
 
-const O_DIRECT: i32 = 0o0040000;
-
-#[repr(C, align(64))]
+#[repr(C, align(4096))]
 struct AlignTo4K([u8; ALIGN_SIZE]);
 
 pub fn alloc_aligned(n_bytes: usize) -> Vec<u8> {
@@ -69,10 +66,6 @@ impl WALWriter {
         self.file_off = file_offset;
     }
 
-    pub(crate) fn offset(&self) -> u64 {
-        self.buf.len() as u64 + self.file_off
-    }
-
     pub(crate) fn reallocate(&mut self) {
         let new_cap = self.buf.capacity() * 2;
         let mut new_buf = alloc_aligned(new_cap);
@@ -85,66 +78,37 @@ impl WALWriter {
         ((self.buf.len() + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
     }
 
-    pub(crate) fn append_header(&mut self, tp: u32, length: usize) {
-        self.buf.put_u32_le(tp);
-        self.buf.put_u32_le(length as u32);
-    }
-
-    pub(crate) fn append_raft_log(&mut self, op: RaftLogOp) {
-        let size = raft_log_size(&op);
-        if self.buf.len() + size > self.buf.capacity() {
+    pub(crate) fn append_region_data(&mut self, region_data: &RegionData) {
+        if self.buf.len() + region_data.encoded_len() > self.buf.capacity() {
             self.reallocate();
         }
-        self.append_header(TYPE_RAFT_LOG, size - ENTRY_HEADER_SIZE);
-        self.buf.put_u64_le(op.region_id);
-        self.buf.put_u64_le(op.index);
-        self.buf.put_u32_le(op.term);
-        self.buf.push(op.e_type);
-        self.buf.push(op.context);
-        self.buf.extend_from_slice(op.data.chunk());
+        region_data.encode_to(&mut self.buf);
     }
 
-    pub(crate) fn append_state(&mut self, region_id: u64, key: &[u8], val: &[u8]) {
-        let size = state_size(key, val);
-        if self.buf.len() + size > self.buf.capacity() {
-            self.reallocate();
+    pub(crate) fn flush(&mut self) -> Result<bool> {
+        let mut rotated = false;
+        if self.aligned_buf_len() + self.file_off as usize > self.wal_size {
+            self.rotate()?;
+            rotated = true;
         }
-        self.append_header(TYPE_STATE, size - ENTRY_HEADER_SIZE);
-        self.buf.put_u64_le(region_id);
-        self.buf.put_u16_le(key.len() as u16);
-        self.buf.extend_from_slice(key);
-        self.buf.extend_from_slice(val);
-    }
-
-    pub(crate) fn append_truncate(&mut self, region_id: u64, index: u64) {
-        let size = ENTRY_HEADER_SIZE + 16;
-        if self.buf.len() + size > self.buf.capacity() {
-            self.reallocate();
-        }
-        self.append_header(TYPE_TRUNCATE, size - ENTRY_HEADER_SIZE);
-        self.buf.put_u64_le(region_id);
-        self.buf.put_u64_le(index);
-    }
-
-    pub(crate) fn flush(&mut self) -> Result<()> {
         let batch = &mut self.buf[..];
         let (mut batch_header, batch_payload) = batch.split_at_mut(BATCH_HEADER_SIZE);
-        batch_header.put_u32_le(self.epoch_id);
         let checksum = crc32c::crc32c(batch_payload);
+        batch_header.put_u32_le(self.epoch_id);
         batch_header.put_u32_le(checksum);
         batch_header.put_u32_le(batch_payload.len() as u32);
         self.buf.resize(self.aligned_buf_len(), 0);
         self.fd.write_all_at(&self.buf[..], self.file_off)?;
         self.file_off += self.aligned_buf_len() as u64;
         self.reset_batch();
-        Ok(())
+        Ok(rotated)
     }
 
     pub(crate) fn reset_batch(&mut self) {
         self.buf.truncate(BATCH_HEADER_SIZE);
     }
 
-    pub(crate) fn rotate(&mut self) -> Result<()> {
+    fn rotate(&mut self) -> Result<()> {
         self.epoch_id += 1;
         self.open_file()
     }
@@ -152,7 +116,6 @@ impl WALWriter {
     pub(crate) fn open_file(&mut self) -> Result<()> {
         let file = open_direct_file(&self.dir, self.epoch_id, self.wal_size)?;
         self.fd = file;
-        self.reset_batch();
         self.file_off = 0;
         Ok(())
     }
@@ -169,8 +132,7 @@ pub(crate) fn open_direct_file(dir: &Path, epoch_id: u32, wal_size: usize) -> Re
         .read(true)
         .write(true)
         .create(true)
-        .custom_flags(O_DIRECT)
-        .custom_flags(libc::O_DSYNC)
+        .custom_flags(o_direct_flag() | libc::O_DSYNC)
         .open(filename)?;
     file.set_len(wal_size as u64)?;
     Ok(file)
@@ -189,10 +151,13 @@ pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(recycle_file)
 }
 
-pub(crate) fn raft_log_size(op: &RaftLogOp) -> usize {
-    ENTRY_HEADER_SIZE + 16 + 4 + 1 + 1 + op.data.len()
-}
-
-pub(crate) fn state_size(key: &[u8], val: &[u8]) -> usize {
-    ENTRY_HEADER_SIZE + 8 + 2 + key.len() + val.len()
+pub(crate) fn o_direct_flag() -> i32 {
+    if std::env::consts::OS != "linux" {
+        return 0;
+    }
+    if std::env::consts::ARCH == "aarch64" {
+        0x10000
+    } else {
+        0x4000
+    }
 }

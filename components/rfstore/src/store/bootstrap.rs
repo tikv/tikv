@@ -47,7 +47,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     let bin = ident.write_to_bytes().unwrap();
     let mut wb = rfengine::WriteBatch::new();
     wb.set_state(0, STORE_IDENT_KEY, bin.as_slice());
-    engines.raft.write(&wb)?;
+    engines.raft.write(wb)?;
     Ok(())
 }
 
@@ -78,7 +78,7 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let ingest_tree = initial_ingest_tree(region.get_id(), epoch.get_version());
     let cs_bin = ingest_tree.change_set.write_to_bytes().unwrap();
     raft_wb.set_state(region.get_id(), KV_ENGINE_META_KEY, &cs_bin);
-    engines.raft.write(&raft_wb)?;
+    engines.raft.write(raft_wb)?;
     engines.kv.ingest(ingest_tree)?;
     Ok(())
 }
@@ -123,7 +123,7 @@ pub fn clear_prepare_bootstrap_cluster(
     wb.set_state(region_id, state_key.chunk(), &[]);
     let raft_state_key = raft_state_key(region_ver);
     wb.set_state(region_id, raft_state_key.chunk(), &[]);
-    engines.raft.write(&wb)?;
+    engines.raft.write(wb)?;
     engines.kv.remove_shard(region_id);
     Ok(())
 }
@@ -131,6 +131,6 @@ pub fn clear_prepare_bootstrap_cluster(
 pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
     let mut wb = rfengine::WriteBatch::new();
     wb.set_state(0, PREPARE_BOOTSTRAP_KEY, &[]);
-    engines.raft.write(&wb)?;
+    engines.raft.write(wb)?;
     Ok(())
 }

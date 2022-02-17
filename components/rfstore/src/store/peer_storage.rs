@@ -447,7 +447,7 @@ fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) ->
             rs.commit = RAFT_INIT_LOG_INDEX;
             let mut wb = rfengine::WriteBatch::new();
             wb.set_state(region.id, rs_key.chunk(), rs.marshal().chunk());
-            raft_engine.write(&wb)?;
+            raft_engine.write(wb)?;
         }
     } else {
         rs.unmarshal(&rs_val.unwrap())

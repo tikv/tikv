@@ -4513,6 +4513,7 @@ dependencies = [
  "byteorder",
  "bytes 1.1.0",
  "crc32c",
+ "dashmap",
  "engine_traits",
  "error_code",
  "kvproto",

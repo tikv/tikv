@@ -6,18 +6,10 @@ license = "Apache-2.0"
 edition = "2018"
 publish = false
 
-
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "kvproto/protobuf-codec",
-  "raft/protobuf-codec",
-]
-
 [dependencies]
 bytes = "1.0"
 byteorder = "1.2"
+dashmap = "4.0"
 error_code = { path = "../error_code", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 protobuf = "2.8"

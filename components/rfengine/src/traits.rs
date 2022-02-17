@@ -14,13 +14,13 @@ impl RaftEngineReadOnly for RFEngine {
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
-        let map = self.entries_map.read().unwrap();
-        let res = map.get(&raft_group_id);
-        if res.is_none() {
+        let map_ref = self.regions.get(&raft_group_id);
+        if map_ref.is_none() {
             return Ok(None);
         }
-        let region_logs = res.unwrap();
-        Ok(region_logs.get(index))
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
+        Ok(region_data.get(index))
     }
 
     fn fetch_entries_to(
@@ -32,14 +32,14 @@ impl RaftEngineReadOnly for RFEngine {
         buf: &mut Vec<Entry>,
     ) -> Result<usize> {
         let old_len = buf.len();
-        let map = self.entries_map.read().unwrap();
-        let res = map.get(&region_id);
-        if res.is_none() {
-            return Err(EntriesUnavailable);
+        let map_ref = self.regions.get(&region_id);
+        if map_ref.is_none() {
+            return Ok(0);
         }
-        let region_logs = res.unwrap();
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
         for i in low..high {
-            let res = region_logs.get(i);
+            let res = region_data.get(i);
             if res.is_none() {
                 return Err(EntriesUnavailable);
             }

@@ -190,11 +190,10 @@ impl RaftWorker {
         if self.ctx.global.trans.need_flush() {
             self.ctx.global.trans.flush();
         }
-        let raft_wb = &mut self.ctx.raft_wb;
+        let raft_wb = mem::replace(&mut self.ctx.raft_wb, rfengine::WriteBatch::new());
         if !raft_wb.is_empty() {
             self.ctx.global.engines.raft.write(raft_wb).unwrap()
         }
-        raft_wb.reset();
     }
 
     fn handle_post_persist_tasks(&mut self, inboxes: &mut Inboxes) {

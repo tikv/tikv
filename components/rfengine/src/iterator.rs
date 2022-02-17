@@ -8,7 +8,7 @@ use std::{
 
 use crate::*;
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 
 pub(crate) struct WALIterator {
     dir: PathBuf,
@@ -31,7 +31,7 @@ impl WALIterator {
 
     pub(crate) fn iterate<F>(&mut self, mut f: F) -> Result<()>
     where
-        F: FnMut(u32, &[u8]),
+        F: FnMut(RegionData),
     {
         let filename = wal_file_name(&self.dir, self.epoch_id);
         let fd = fs::File::open(filename)?;
@@ -50,13 +50,9 @@ impl WALIterator {
                         return Ok(());
                     }
                     while batch.len() > 0 {
-                        let tp = LittleEndian::read_u32(batch);
-                        batch = &batch[4..];
-                        let length = LittleEndian::read_u32(batch) as usize;
-                        batch = &batch[4..];
-                        let entry = &batch[..length];
-                        batch = &batch[length..];
-                        f(tp, entry);
+                        let region_data = RegionData::decode(batch);
+                        batch = &batch[region_data.encoded_len()..];
+                        f(region_data);
                     }
                 }
             }
@@ -86,44 +82,4 @@ impl WALIterator {
         self.offset += aligned_length;
         Ok(batch)
     }
-}
-
-pub(crate) fn parse_state(entry: &[u8]) -> (u64, &[u8], &[u8]) {
-    let mut entry = entry;
-    let region_id = LittleEndian::read_u64(entry);
-    entry = &entry[8..];
-    let key_len = LittleEndian::read_u16(entry) as usize;
-    entry = &entry[2..];
-    let key = &entry[..key_len];
-    let val = &entry[key_len..];
-    (region_id, key, val)
-}
-
-pub(crate) fn parse_log(entry: &[u8]) -> RaftLogOp {
-    let mut entry = entry;
-    let region_id = LittleEndian::read_u64(entry);
-    entry = &entry[8..];
-    let index = LittleEndian::read_u64(entry);
-    entry = &entry[8..];
-    let term = LittleEndian::read_u32(entry);
-    entry = &entry[4..];
-    let e_type = entry[0];
-    entry = &entry[1..];
-    let context = entry[0];
-    entry = &entry[1..];
-    let data = Bytes::copy_from_slice(entry);
-    RaftLogOp {
-        region_id,
-        index,
-        term,
-        e_type,
-        context,
-        data,
-    }
-}
-
-pub(crate) fn parse_truncate(entry: &[u8]) -> (u64, u64) {
-    let region_id = LittleEndian::read_u64(entry);
-    let index = LittleEndian::read_u64(&entry[8..]);
-    (region_id, index)
 }
