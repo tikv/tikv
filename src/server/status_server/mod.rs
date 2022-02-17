@@ -349,7 +349,18 @@ where
         match start_one_cpu_profile(end, frequency, output_protobuf).await {
             Ok(body) => {
                 info!("dump cpu profile successfully");
-                Ok(make_response(StatusCode::OK, body))
+                let mut response = Response::builder()
+                    .header(
+                        "Content-Disposition",
+                        "attachment; filename=\"cpu_profile\"",
+                    )
+                    .header("Content-Length", body.len());
+                response = if output_protobuf {
+                    response.header("Content-Type", mime::APPLICATION_OCTET_STREAM.to_string())
+                } else {
+                    response.header("Content-Type", mime::IMAGE_SVG.to_string())
+                };
+                Ok(response.body(body.into()).unwrap())
             }
             Err(e) => {
                 info!("dump cpu profile fail: {}", e);
@@ -1278,6 +1289,10 @@ mod tests {
             .spawn(async move { client.get(uri).await.unwrap() });
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("Content-Type").unwrap(),
+            &mime::IMAGE_SVG.to_string()
+        );
         status_server.stop();
     }
 

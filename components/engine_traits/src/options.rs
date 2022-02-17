@@ -29,7 +29,7 @@ impl Default for ReadOptions {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WriteOptions {
     sync: bool,
     no_slowdown: bool,
@@ -57,15 +57,6 @@ impl WriteOptions {
 
     pub fn no_slowdown(&self) -> bool {
         self.no_slowdown
-    }
-}
-
-impl Default for WriteOptions {
-    fn default() -> WriteOptions {
-        WriteOptions {
-            sync: false,
-            no_slowdown: false,
-        }
     }
 }
 

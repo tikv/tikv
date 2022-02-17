@@ -929,8 +929,14 @@ fn test_split_with_in_memory_pessimistic_locks() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        locks.insert(Key::from_raw(b"a"), lock_a.clone());
-        locks.insert(Key::from_raw(b"c"), lock_c.clone());
+        assert!(
+            locks
+                .insert(vec![
+                    (Key::from_raw(b"a"), lock_a.clone()),
+                    (Key::from_raw(b"c"), lock_c.clone())
+                ])
+                .is_ok()
+        );
     }
 
     let region = cluster.get_region(b"");
@@ -945,13 +951,8 @@ fn test_split_with_in_memory_pessimistic_locks() {
         .get_txn_ext()
         .unwrap()
         .clone();
-    assert_eq!(txn_ext.pessimistic_locks.read().map.len(), 1);
     assert_eq!(
-        txn_ext
-            .pessimistic_locks
-            .read()
-            .map
-            .get(&Key::from_raw(b"a")),
+        txn_ext.pessimistic_locks.read().get(&Key::from_raw(b"a")),
         Some(&(lock_a, false))
     );
 
@@ -962,13 +963,8 @@ fn test_split_with_in_memory_pessimistic_locks() {
         .get_txn_ext()
         .unwrap()
         .clone();
-    assert_eq!(txn_ext.pessimistic_locks.read().map.len(), 1);
     assert_eq!(
-        txn_ext
-            .pessimistic_locks
-            .read()
-            .map
-            .get(&Key::from_raw(b"c")),
+        txn_ext.pessimistic_locks.read().get(&Key::from_raw(b"c")),
         Some(&(lock_c, false))
     );
 }
