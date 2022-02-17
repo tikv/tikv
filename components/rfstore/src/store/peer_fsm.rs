@@ -26,7 +26,9 @@ use tikv_util::{box_err, debug, error, info, trace, warn};
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::Callback;
 use crate::store::peer::Peer;
-use crate::store::{notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask};
+use crate::store::{
+    notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask, PersistReady,
+};
 use crate::store::{
     raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
     PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
@@ -196,9 +198,8 @@ impl<'a> PeerMsgHandler<'a> {
                 PeerMsg::ApplyChangeSetResult(res) => {
                     self.on_apply_change_set_result(res);
                 }
-                PeerMsg::CommittedEntries(committed) => {
-                    assert!(self.peer.unhandled_committed.is_none());
-                    self.peer.unhandled_committed = Some(committed);
+                PeerMsg::Persisted(ready) => {
+                    self.on_persisted(ready);
                 }
             }
         }
@@ -596,7 +597,7 @@ impl<'a> PeerMsgHandler<'a> {
             );
         }
         let is_initialized = self.fsm.peer.is_initialized();
-        if let Err(e) = self.fsm.peer.destroy(&self.ctx.global.engines.raft) {
+        if let Err(e) = self.fsm.peer.destroy(&mut self.ctx.raft_wb) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
@@ -1330,6 +1331,20 @@ impl<'a> PeerMsgHandler<'a> {
             );
             self.peer.mut_store().split_stage = change.get_stage();
         }
+    }
+
+    fn on_persisted(&mut self, ready: PersistReady) {
+        if ready.peer_id != self.fsm.peer_id() {
+            error!(
+                "peer id not match";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "persisted_peer_id" => ready.peer_id,
+                "persisted_number" => ready.ready_number,
+            );
+            return;
+        }
+        self.peer.raft_group.on_persist_ready(ready.ready_number);
     }
 }
 

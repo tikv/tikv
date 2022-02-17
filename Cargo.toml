@@ -262,7 +262,7 @@ members = [
   "components/rfstore",
   "components/cloud_server",
 ]
-default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
+default-members = ["cmd/tikv-server"]
 
 [profile.dev]
 opt-level = 0

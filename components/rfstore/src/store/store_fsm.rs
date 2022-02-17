@@ -163,10 +163,24 @@ impl RaftBatchSystem {
         self.workers = Some(workers);
         self.ctx = Some(ctx);
         let peer_receiver = self.peer_receiver.take().unwrap();
+
+        let (mut io_worker, io_sender) = IOWorker::new(
+            self.ctx.as_ref().unwrap().engines.raft.clone(),
+            self.router.clone(),
+            self.ctx.as_ref().unwrap().trans.clone(),
+        );
+        std::thread::Builder::new()
+            .name("raft_io".to_string())
+            .spawn(move || {
+                io_worker.run();
+            })
+            .unwrap();
+
         let (mut rw, apply_receivers) = RaftWorker::new(
             self.ctx.clone().unwrap(),
             peer_receiver,
             self.router.clone(),
+            io_sender,
         );
         std::thread::Builder::new()
             .name("raft".to_string())
@@ -174,6 +188,7 @@ impl RaftBatchSystem {
                 rw.run();
             })
             .unwrap();
+
         for apply_receiver in apply_receivers {
             let mut aw = ApplyWorker::new(
                 self.ctx.as_ref().unwrap().engines.kv.clone(),
@@ -388,7 +403,7 @@ pub(crate) struct GlobalContext {
 pub(crate) struct RaftContext {
     pub(crate) global: GlobalContext,
     pub(crate) apply_msgs: ApplyMsgs,
-    pub(crate) post_persist_tasks: Vec<PostPersistTask>,
+    pub(crate) persist_readies: Vec<PersistReady>,
     pub(crate) raft_wb: rfengine::WriteBatch,
     pub(crate) current_time: Option<Timespec>,
     pub(crate) raft_metrics: RaftMetrics,
@@ -406,7 +421,7 @@ impl RaftContext {
         Self {
             global,
             apply_msgs: ApplyMsgs { msgs: vec![] },
-            post_persist_tasks: vec![],
+            persist_readies: vec![],
             raft_wb: rfengine::WriteBatch::new(),
             current_time: None,
             raft_metrics: RaftMetrics::new(false),

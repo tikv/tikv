@@ -10,6 +10,7 @@ use crate::store::{ExecResult, Proposal, RegionSnapshot};
 use bytes::Bytes;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::{metapb, pdpb, raft_serverpb as rspb};
 use raft_proto::eraftpb;
 use raftstore::store::util::KeysInfoFormatter;
@@ -30,7 +31,7 @@ pub enum PeerMsg {
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
     WaitFollowerSplitFiles(MsgWaitFollowerSplitFiles),
     ApplyChangeSetResult(MsgApplyChangeSetResult),
-    CommittedEntries(Vec<eraftpb::Entry>),
+    Persisted(PersistReady),
 }
 
 impl PeerMsg {
@@ -56,6 +57,21 @@ pub enum StoreMsg {
     StoreUnreachable { store_id: u64 },
     RaftMessage(rspb::RaftMessage),
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
+}
+
+#[derive(Debug)]
+pub struct PersistReady {
+    pub(crate) region_id: u64,
+    pub(crate) peer_id: u64,
+    pub(crate) ready_number: u64,
+    pub(crate) commit_idx: u64,
+    pub(crate) raft_messages: Vec<RaftMessage>,
+}
+
+/// IOTask contains I/O tasks which need to be persisted to raft db.
+pub(crate) struct IOTask {
+    pub(crate) readies: Vec<PersistReady>,
+    pub(crate) raft_wb: rfengine::WriteBatch,
 }
 
 #[derive(Debug)]

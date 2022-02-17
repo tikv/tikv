@@ -9,7 +9,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::PeerRole;
+use kvproto::metapb::{PeerRole, Region};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
@@ -445,7 +445,6 @@ pub(crate) struct Peer {
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker,
-    pub(crate) unhandled_committed: Option<Vec<eraftpb::Entry>>,
 }
 
 impl Peer {
@@ -516,7 +515,6 @@ impl Peer {
             followers_split_files_done: Default::default(),
             cmd_epoch_checker: Default::default(),
             pending_split: false,
-            unhandled_committed: None,
         };
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -566,7 +564,7 @@ impl Peer {
         true
     }
 
-    pub(crate) fn destroy(&mut self, rfe: &rfengine::RFEngine) -> Result<()> {
+    pub(crate) fn destroy(&mut self, raft_wb: &mut rfengine::WriteBatch) -> Result<()> {
         let t = Instant::now();
 
         let region = self.region().clone();
@@ -575,10 +573,7 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
-
-        let mut raft_wb = rfengine::WriteBatch::new();
-        self.mut_store().clear_meta(&mut raft_wb);
-        rfe.write(raft_wb)?;
+        self.mut_store().clear_meta(raft_wb);
         self.pending_reads.clear_all(Some(region.get_id()));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
@@ -1192,12 +1187,6 @@ impl Peer {
             // to full message queue under high load.
             return;
         }
-        if self.unhandled_committed.is_some() {
-            let entries = self.unhandled_committed.take().unwrap();
-            let committed_index = entries.last().unwrap().index;
-            self.handle_raft_committed_entries(ctx, entries, None);
-            self.mut_store().update_commit_index(ctx, committed_index);
-        }
         if !self.raft_group.has_ready() {
             return;
         }
@@ -1245,11 +1234,15 @@ impl Peer {
                 self.heartbeat_pd(ctx)
             }
         }
-        let task = PostPersistTask {
+        let persist_messages = self.build_raft_messages(ctx, ready.take_persisted_messages());
+        ctx.persist_readies.push(PersistReady {
             region_id: self.region_id,
-            ready,
-        };
-        ctx.post_persist_tasks.push(task);
+            ready_number: ready.number(),
+            peer_id: self.peer_id(),
+            commit_idx: self.get_store().commit_index(),
+            raft_messages: persist_messages,
+        });
+        self.raft_group.advance_append_async(ready)
     }
 
     pub(crate) fn handle_raft_committed_entries(
@@ -1422,6 +1415,7 @@ impl Peer {
         entry: &Entry,
         splits: &BatchSplitRequest,
     ) {
+        self.last_committed_split_idx = entry.index;
         let regions = split_gen_new_region_metas(self.region(), splits).unwrap();
         let change_set = build_split_change_set(self.region(), &regions, entry.index, entry.term);
         let shard_meta = self.mut_store().mut_engine_meta();
@@ -2621,26 +2615,6 @@ impl Peer {
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
-    }
-
-    pub(crate) fn handle_post_persist_task(
-        &mut self,
-        ctx: &mut RaftContext,
-        mut task: PostPersistTask,
-    ) {
-        let persisted_messages = task.ready.take_persisted_messages();
-        let raft_messages = self.build_raft_messages(ctx, persisted_messages);
-        self.send_raft_messages(ctx, raft_messages);
-        let mut light_ready = self.raft_group.advance_append(task.ready);
-        if light_ready.committed_entries().len() > 0 {
-            ctx.global
-                .router
-                .send(
-                    self.region_id,
-                    PeerMsg::CommittedEntries(light_ready.take_committed_entries()),
-                )
-                .unwrap();
-        }
     }
 
     /// Pings if followers are still connected.

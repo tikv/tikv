@@ -132,7 +132,7 @@ impl RFEngine {
         it.iterate(|new_data| {
             let map_ref = self.get_or_init_region_data(new_data.region_id);
             let mut region_data = map_ref.write().unwrap();
-            region_data.merge(new_data);
+            region_data.merge(&new_data);
             region_data.truncate_self()
         })?;
         Ok(it.offset)
@@ -179,7 +179,7 @@ impl RFEngine {
         let new_data = RegionData::decode(&bin);
         let map_ref = self.get_or_init_region_data(new_data.region_id);
         let mut old_data = map_ref.write().unwrap();
-        old_data.merge(new_data);
+        old_data.merge(&new_data);
         old_data.truncate_self();
         Ok(())
     }

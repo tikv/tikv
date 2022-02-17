@@ -6,7 +6,6 @@ use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
-use slog_global::info;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{
@@ -78,7 +77,7 @@ impl WriteBatch {
         return self.regions.is_empty();
     }
 
-    pub(crate) fn merge_region(&mut self, region_data: RegionData) {
+    pub(crate) fn merge_region(&mut self, region_data: &RegionData) {
         self.get_region(region_data.region_id).merge(region_data);
     }
 }
@@ -167,6 +166,11 @@ impl RFEngine {
     }
 
     pub fn write(&self, wb: WriteBatch) -> Result<()> {
+        self.apply(&wb);
+        self.persist(wb)
+    }
+
+    pub fn persist(&self, wb: WriteBatch) -> Result<()> {
         let mut writer = self.writer.lock().unwrap();
         let epoch_id = writer.epoch_id;
         for (_, data) in &wb.regions {
@@ -177,7 +181,15 @@ impl RFEngine {
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
         }
-        for (region_id, batch_data) in wb.regions {
+        Ok(())
+    }
+
+    // apply applies the write batch to the memory before persist, so it can be retrieved
+    // before persist.
+    // It is used for async I/O that persist the write batch in another thread.
+    pub fn apply(&self, wb: &WriteBatch) {
+        for (region_id, batch_data) in &wb.regions {
+            let region_id = *region_id;
             let data_ref = self.get_or_init_region_data(region_id);
             let mut region_data = data_ref.write().unwrap();
             region_data.merge(batch_data);
@@ -186,7 +198,6 @@ impl RFEngine {
                 self.task_sender.send(Task::Truncate { region_id }).unwrap();
             }
         }
-        Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -495,11 +506,11 @@ impl RegionData {
         data
     }
 
-    pub(crate) fn merge(&mut self, other: RegionData) {
+    pub(crate) fn merge(&mut self, other: &RegionData) {
         if self.truncated_idx < other.truncated_idx {
             self.truncated_idx = other.truncated_idx;
         }
-        for (key, val) in other.states {
+        for (key, val) in &other.states {
             self.states.insert(key.clone(), val.clone());
         }
         if other.raft_logs.len() == 0 {
@@ -507,12 +518,12 @@ impl RegionData {
         }
         if self.raft_logs.len() == 0 {
             self.range = other.range;
-            self.raft_logs = other.raft_logs;
+            self.raft_logs = other.raft_logs.clone();
             return;
         }
         self.prepare_append(other.range.start_index);
-        for log_op in other.raft_logs {
-            self.raft_logs.push_back(log_op);
+        for log_op in &other.raft_logs {
+            self.raft_logs.push_back(log_op.clone());
         }
         self.range.end_index = other.range.end_index;
     }

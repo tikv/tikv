@@ -119,7 +119,7 @@ impl Worker {
         let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
         it.iterate(|region_data| {
-            batch.merge_region(region_data);
+            batch.merge_region(&region_data);
         })?;
         info!(
             "epoch {} compact wal file generated {} files",

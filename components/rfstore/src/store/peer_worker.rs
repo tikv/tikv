@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::RaftRouter;
-use crossbeam::channel::RecvTimeoutError;
+use crossbeam::channel::{RecvError, RecvTimeoutError};
+use raftstore::store::util;
 use std::collections::HashMap;
 use std::mem;
 use std::sync::atomic::AtomicBool;
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::worker::Scheduler;
+use tikv_util::{debug, error, info};
 
 #[derive(Clone)]
 pub(crate) struct PeerStates {
@@ -70,6 +72,7 @@ pub(crate) struct RaftWorker {
     receiver: Receiver<(u64, PeerMsg)>,
     router: RaftRouter,
     apply_senders: Vec<Sender<ApplyBatch>>,
+    io_sender: Sender<IOTask>,
     last_tick: Instant,
     tick_millis: u64,
 }
@@ -79,6 +82,7 @@ impl RaftWorker {
         ctx: GlobalContext,
         receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
+        io_sender: Sender<IOTask>,
     ) -> (Self, Vec<Receiver<ApplyBatch>>) {
         let apply_pool_size = ctx.cfg.value().apply_pool_size;
         let mut apply_senders = Vec::with_capacity(apply_pool_size);
@@ -96,6 +100,7 @@ impl RaftWorker {
                 receiver,
                 router,
                 apply_senders,
+                io_sender,
                 last_tick: Instant::now(),
                 tick_millis,
             },
@@ -112,9 +117,11 @@ impl RaftWorker {
             inboxes.inboxes.iter_mut().for_each(|(_, inbox)| {
                 self.process_inbox(inbox);
             });
+            if self.ctx.global.trans.need_flush() {
+                self.ctx.global.trans.flush();
+            }
             self.persist_state();
-            self.handle_post_persist_tasks(&mut inboxes);
-            self.round_end();
+            self.ctx.current_time = None;
         }
     }
 
@@ -187,29 +194,14 @@ impl RaftWorker {
     }
 
     fn persist_state(&mut self) {
-        if self.ctx.global.trans.need_flush() {
-            self.ctx.global.trans.flush();
+        if self.ctx.persist_readies.is_empty() && self.ctx.raft_wb.is_empty() {
+            return;
         }
-        let raft_wb = mem::replace(&mut self.ctx.raft_wb, rfengine::WriteBatch::new());
-        if !raft_wb.is_empty() {
-            self.ctx.global.engines.raft.write(raft_wb).unwrap()
-        }
-    }
-
-    fn handle_post_persist_tasks(&mut self, inboxes: &mut Inboxes) {
-        let tasks = mem::take(&mut self.ctx.post_persist_tasks);
-        for task in tasks {
-            let inbox = inboxes.inboxes.get_mut(&task.region_id).unwrap();
-            let peer = &mut inbox.peer.peer_fsm.lock().unwrap().peer;
-            peer.handle_post_persist_task(&mut self.ctx, task);
-        }
-    }
-
-    fn round_end(&mut self) {
-        if self.ctx.global.trans.need_flush() {
-            self.ctx.global.trans.flush();
-        }
-        self.ctx.current_time = None;
+        let raft_wb = mem::take(&mut self.ctx.raft_wb);
+        self.ctx.global.engines.raft.apply(&raft_wb);
+        let readies = mem::take(&mut self.ctx.persist_readies);
+        let io_task = IOTask { raft_wb, readies };
+        self.io_sender.send(io_task).unwrap();
     }
 }
 
@@ -286,6 +278,72 @@ impl StoreWorker {
                 self.handler.handle_msg(StoreMsg::Tick);
                 self.last_tick = now;
             }
+        }
+    }
+}
+
+pub(crate) struct IOWorker {
+    engine: rfengine::RFEngine,
+    receiver: Receiver<IOTask>,
+    router: RaftRouter,
+    trans: Box<dyn Transport>,
+}
+
+impl IOWorker {
+    pub(crate) fn new(
+        engine: rfengine::RFEngine,
+        router: RaftRouter,
+        trans: Box<dyn Transport>,
+    ) -> (Self, Sender<IOTask>) {
+        let (sender, receiver) = tikv_util::mpsc::bounded(0);
+        (
+            Self {
+                engine,
+                receiver,
+                router,
+                trans,
+            },
+            sender,
+        )
+    }
+
+    pub(crate) fn run(&mut self) {
+        loop {
+            let res = self.receiver.recv_timeout(Duration::from_secs(1));
+            match res {
+                Ok(msg) => self.handle_msg(msg),
+                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
+
+    fn handle_msg(&mut self, task: IOTask) {
+        if !task.raft_wb.is_empty() {
+            self.engine.persist(task.raft_wb).unwrap();
+        }
+        for mut ready in task.readies {
+            let raft_messages = mem::take(&mut ready.raft_messages);
+            for msg in raft_messages {
+                debug!(
+                    "follower send raft message";
+                    "region_id" => msg.region_id,
+                    "message_type" => %util::MsgType(&msg),
+                    "from_peer_id" => msg.get_from_peer().get_id(),
+                    "to_peer_id" => msg.get_to_peer().get_id(),
+                );
+                if let Err(err) = self.trans.send(msg) {
+                    error!("failed to send persist raft message {:?}", err);
+                }
+            }
+            let region_id = ready.region_id;
+            let msg = PeerMsg::Persisted(ready);
+            if let Err(err) = self.router.send(region_id, msg) {
+                error!("failed to send persisted message {:?}", err);
+            }
+        }
+        if self.trans.need_flush() {
+            self.trans.flush();
         }
     }
 }
