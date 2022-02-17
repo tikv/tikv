@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-// use std::lazy::Lazy;
 use std::time::Duration;
+use std::time::UNIX_EPOCH;
 
 use arc_swap::ArcSwap;
 use chrono::{DateTime, Local};
@@ -12,7 +12,6 @@ use kvproto::tracepb;
 use minitrace::prelude::*;
 use online_config::{ConfigChange, OnlineConfig};
 use serde_json::json;
-use std::time::UNIX_EPOCH;
 use tikv_util::time::{duration_to_sec, Instant};
 
 use crate::server::metrics::{GrpcTypeKind, GRPC_MSG_HISTOGRAM_STATIC};
@@ -44,7 +43,7 @@ pub struct TracingService {
 impl TracingService {
     // TODO (andylokandy): implement a real pubsub service
     pub fn register_service(self) {
-        std::thread::spawn(move || {
+        let service_task = move || {
             let print_to_slow_log = self.rx.for_each_concurrent(
                 None,
                 |(collector, remote_parent_spans, total_duration)| async move {
@@ -60,7 +59,12 @@ impl TracingService {
                 },
             );
             futures::executor::block_on(print_to_slow_log);
-        });
+        };
+
+        thread::Builder::new()
+            .name(thd_name!("tracing-service"))
+            .spawn(service_task)
+            .unwrap();
     }
 }
 
