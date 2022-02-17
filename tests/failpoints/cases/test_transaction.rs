@@ -556,10 +556,13 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    txn_ext
-        .pessimistic_locks
-        .write()
-        .insert(vec![(Key::from_raw(b"key"), lock.clone())]);
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+            .is_ok()
+    );
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
