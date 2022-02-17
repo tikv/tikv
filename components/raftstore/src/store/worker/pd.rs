@@ -372,7 +372,7 @@ where
 {
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
-    ticker: Option<Sender<bool>>,
+    timer: Option<Sender<bool>>,
     read_stats_sender: Option<Sender<ReadStats>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
@@ -388,7 +388,7 @@ where
         StatsMonitor {
             scheduler,
             handle: None,
-            ticker: None,
+            timer: None,
             read_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL, interval),
@@ -418,7 +418,7 @@ where
             .div_duration_f64(tick_interval) as i32;
 
         let (tx, rx) = mpsc::channel();
-        self.ticker = Some(tx);
+        self.timer = Some(tx);
 
         let (sender, receiver) = mpsc::channel();
         self.read_stats_sender = Some(sender);
@@ -508,7 +508,7 @@ where
 
     pub fn stop(&mut self) {
         if let Some(h) = self.handle.take() {
-            drop(self.ticker.take());
+            drop(self.timer.take());
             drop(self.read_stats_sender.take());
             if let Err(e) = h.join() {
                 error!("join stats collector failed"; "err" => ?e);
