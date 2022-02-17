@@ -11,12 +11,6 @@ pub struct Config {
     pub pool_size: usize,
     pub reschedule_duration: ReadableDuration,
     pub low_priority_pool_size: usize,
-<<<<<<< HEAD
-    #[doc(hidden)]
-    #[serde(skip)]
-    pub before_pause_wait: Option<Duration>,
-=======
->>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
 }
 
 impl Config {

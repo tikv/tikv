@@ -4879,17 +4879,6 @@ mod tests {
         rx.recv().unwrap();
 
         for &(ref key, _, ttl) in &test_data {
-<<<<<<< HEAD
-            let res =
-                block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
-                    .unwrap();
-            if ttl != 0 {
-                if ttl > u64::MAX - current_ts() {
-                    assert_eq!(res, Some(u64::MAX - current_ts()));
-                } else {
-                    assert_eq!(res, Some(ttl));
-                }
-=======
             let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))
                 .unwrap()
                 .unwrap();
@@ -4902,7 +4891,6 @@ mod tests {
                     res,
                     ttl
                 );
->>>>>>> 74cd8ae2a... raftclient: delay flush (#11705)
             } else {
                 assert_eq!(res, 0);
             }
