@@ -391,7 +391,10 @@ where
             timer: None,
             read_stats_sender: None,
             collect_store_infos_interval: interval,
-            load_base_split_check_interval: cmp::min(DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL, interval),
+            load_base_split_check_interval: cmp::min(
+                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
+                interval,
+            ),
             collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
         }
     }
@@ -405,7 +408,9 @@ where
         if self.collect_tick_interval < default_collect_tick_interval()
             || self.collect_store_infos_interval < self.collect_tick_interval
         {
-            info!("interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed.");
+            info!(
+                "interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed."
+            );
             return Ok(());
         }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
@@ -444,8 +449,8 @@ where
                         );
                     }
                     // modules timer_cnt with the least common multiple of intervals to avoid overflow
-                    timer_cnt =
-                        (timer_cnt + 1) % (load_base_split_check_interval * collect_store_infos_interval);
+                    timer_cnt = (timer_cnt + 1)
+                        % (load_base_split_check_interval * collect_store_infos_interval);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
