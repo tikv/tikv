@@ -91,3 +91,32 @@ fn test_dynamic_change_advance_ts_interval() {
 
     suite.stop();
 }
+
+#[test]
+fn test_report_min_resolved_ts() {
+    fail::cfg("mock_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
+    let mut suite = TestSuite::new(1);
+    let region = suite.cluster.get_region(&[]);
+    let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
+
+    // Prewrite
+    let (k, v) = (b"k1", b"v");
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.to_vec();
+    mutation.value = v.to_vec();
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
+
+    // Commit
+    let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
+
+    sleep_ms(1000);
+    let ts2 = suite.cluster.pd_client.get_min_resolved_ts();
+    assert!(ts2 > ts1);
+    fail::remove("mock_tick_interval");
+    fail::remove("mock_collect_tick_interval");
+    suite.stop();
+}
