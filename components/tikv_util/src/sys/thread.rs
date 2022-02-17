@@ -215,7 +215,7 @@ mod imp {
         pub command: String,
     }
 
-    /// The time unit of `stime` and `utime` is in microseconds.
+    /// Unlike Linux, the unit of `stime` and `utime` is microseconds instead of ticks.
     /// See [`full_thread_stat()`]
     #[inline]
     pub fn ticks_per_second() -> i64 {
