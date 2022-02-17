@@ -1,11 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
-use super::worker::{RaftStoreThreadPool, RefreshConfigTask};
+use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use engine_traits::perf_level_serde;
@@ -532,13 +533,11 @@ impl Config {
                 limit
             ));
         }
-        if let Some(size) = self.apply_batch_system.max_batch_size {
-            if size == 0 {
-                return Err(box_err!("apply-max-batch-size should be greater than 0"));
-            }
-        } else {
-            self.apply_batch_system.max_batch_size = Some(256);
+
+        if self.apply_batch_system.max_batch_size == 0 {
+            self.apply_batch_system.max_batch_size = 256;
         }
+
         if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > limit {
             return Err(box_err!(
                 "store-pool-size should be greater than 0 and less than or equal to: {}",
@@ -549,14 +548,12 @@ impl Config {
             // The store thread pool doesn't need a low-priority thread currently.
             self.store_batch_system.low_priority_pool_size = 0;
         }
-        if let Some(size) = self.store_batch_system.max_batch_size {
-            if size == 0 {
-                return Err(box_err!("store-max-batch-size should be greater than 0"));
+        if self.store_batch_system.max_batch_size == 0 {
+            if self.hibernate_regions {
+                self.store_batch_system.max_batch_size = 256;
+            } else {
+                self.store_batch_system.max_batch_size = 1024;
             }
-        } else if self.hibernate_regions {
-            self.store_batch_system.max_batch_size = Some(256);
-        } else {
-            self.store_batch_system.max_batch_size = Some(1024);
         }
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
@@ -827,6 +824,25 @@ impl RaftstoreConfigManager {
     ) -> RaftstoreConfigManager {
         RaftstoreConfigManager { scheduler, config }
     }
+
+    fn schedule_config_change(
+        &self,
+        pool: RaftStoreBatchComponent,
+        cfg_change: &HashMap<String, ConfigValue>,
+    ) {
+        if let Some(pool_size) = cfg_change.get("pool_size") {
+            let scale_pool = RefreshConfigTask::ScalePool(pool, pool_size.into());
+            if let Err(e) = self.scheduler.schedule(scale_pool) {
+                error!("raftstore configuration manager schedule scale {} pool_size work task failed", pool; "err"=> ?e);
+            }
+        }
+        if let Some(size) = cfg_change.get("max_batch_size") {
+            let scale_batch = RefreshConfigTask::ScaleBatchSize(pool, size.into());
+            if let Err(e) = self.scheduler.schedule(scale_batch) {
+                error!("raftstore configuration manager schedule scale {} max_batch_size work task failed", pool; "err"=> ?e);
+            }
+        }
+    }
 }
 
 impl ConfigManager for RaftstoreConfigManager {
@@ -842,24 +858,12 @@ impl ConfigManager for RaftstoreConfigManager {
         if let Some(ConfigValue::Module(raft_batch_system_change)) =
             change.get("store_batch_system")
         {
-            if let Some(pool_size) = raft_batch_system_change.get("pool_size") {
-                let scale_pool =
-                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Store, pool_size.into());
-                if let Err(e) = self.scheduler.schedule(scale_pool) {
-                    error!("raftstore configuration manager schedule scale raft pool work task failed"; "err"=> ?e);
-                }
-            }
+            self.schedule_config_change(RaftStoreBatchComponent::Store, raft_batch_system_change);
         }
         if let Some(ConfigValue::Module(apply_batch_system_change)) =
             change.get("apply_batch_system")
         {
-            if let Some(pool_size) = apply_batch_system_change.get("pool_size") {
-                let scale_pool =
-                    RefreshConfigTask::ScalePool(RaftStoreThreadPool::Apply, pool_size.into());
-                if let Err(e) = self.scheduler.schedule(scale_pool) {
-                    error!("raftstore configuration manager schedule scale apply pool work task failed"; "err"=> ?e);
-                }
-            }
+            self.schedule_config_change(RaftStoreBatchComponent::Apply, apply_batch_system_change);
         }
         info!(
             "raftstore config changed";
@@ -950,15 +954,7 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.apply_batch_system.max_batch_size = Some(0);
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
         cfg.apply_batch_system.pool_size = 0;
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
-        cfg.store_batch_system.max_batch_size = Some(0);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
@@ -968,22 +964,22 @@ mod tests {
         cfg = Config::new();
         cfg.hibernate_regions = true;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.store_batch_system.max_batch_size, 256);
+        assert_eq!(cfg.apply_batch_system.max_batch_size, 256);
 
         cfg = Config::new();
         cfg.hibernate_regions = false;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.store_batch_system.max_batch_size, 1024);
+        assert_eq!(cfg.apply_batch_system.max_batch_size, 256);
 
         cfg = Config::new();
         cfg.hibernate_regions = true;
-        cfg.store_batch_system.max_batch_size = Some(123);
-        cfg.apply_batch_system.max_batch_size = Some(234);
+        cfg.store_batch_system.max_batch_size = 123;
+        cfg.apply_batch_system.max_batch_size = 234;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(123));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(234));
+        assert_eq!(cfg.store_batch_system.max_batch_size, 123);
+        assert_eq!(cfg.apply_batch_system.max_batch_size, 234);
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
