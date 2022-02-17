@@ -365,6 +365,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_with_ctx_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
+        ScalarFuncSig::ModIntUnsignedUnsigned => arithmetic_fn_meta::<UintUintMod>(),
+        ScalarFuncSig::ModIntUnsignedSigned => arithmetic_fn_meta::<UintIntMod>(),
+        ScalarFuncSig::ModIntSignedUnsigned => arithmetic_fn_meta::<IntUintMod>(),
+        ScalarFuncSig::ModIntSignedSigned => arithmetic_fn_meta::<IntIntMod>(),
+                
         // impl_cast
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
@@ -711,6 +716,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::Date => date_fn_meta(),
+        ScalarFuncSig::SysDateWithFsp => sysdate_with_fsp_fn_meta(),
+        ScalarFuncSig::SysDateWithoutFsp => sysdate_without_fsp_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::DayOfWeek => day_of_week_fn_meta(),
