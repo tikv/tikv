@@ -25,7 +25,7 @@ impl ThreadStat {
 
 #[inline]
 fn cpu_total(sys_time: i64, user_time: i64) -> f64 {
-    (sys_time + user_time) as f64 / clock_tick() as f64
+    (sys_time + user_time) as f64 / ticks_per_second() as f64
 }
 
 #[cfg(target_os = "linux")]
@@ -58,7 +58,7 @@ mod imp {
     }
 
     #[inline]
-    pub fn clock_tick() -> i64 {
+    pub fn ticks_per_second() -> i64 {
         *CLOCK_TICK
     }
 
@@ -206,9 +206,6 @@ mod imp {
         ) -> kern_return_t;
     }
 
-    const THREAD_BASIC_INFO_COUNT: mach_msg_type_number_t =
-        (size_of::<thread_basic_info>() / size_of::<natural_t>()) as _;
-
     const MICRO_SEC_PER_SEC: i64 = 1_000_000;
 
     #[derive(Default)]
@@ -221,7 +218,7 @@ mod imp {
     /// The time unit of `stime` and `utime` is in microseconds.
     /// See [`full_thread_stat()`]
     #[inline]
-    pub fn clock_tick() -> i64 {
+    pub fn ticks_per_second() -> i64 {
         MICRO_SEC_PER_SEC
     }
 
@@ -319,7 +316,7 @@ mod imp {
     }
 
     #[inline]
-    pub fn clock_tick() -> i64 {
+    pub fn ticks_per_second() -> i64 {
         1
     }
 
