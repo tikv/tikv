@@ -9,6 +9,7 @@ use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, Write
 
 use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
+use crate::storage::mvcc::ErrorInner::WriteConflict;
 use crate::storage::mvcc::{NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Snapshot, Statistics};
@@ -137,7 +138,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             default: default_cursor,
         };
         ForwardScanner {
-            met_newer_ts_data: if cfg.check_has_newer_ts_data {
+            met_newer_ts_data: if cfg.check_has_newer_ts_data
+                || cfg.isolation_level == IsolationLevel::RcCheckTs
+            {
                 NewerTsCheckState::NotMetYet
             } else {
                 NewerTsCheckState::Unknown
@@ -328,12 +331,23 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Meet another key.
                     return Ok(false);
                 }
-                if Key::decode_ts_from(current_key)? <= self.cfg.ts {
+                let key_commit_ts = Key::decode_ts_from(current_key)?;
+                if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
                 } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
+                }
+                if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
+                    return Err(WriteConflict {
+                        start_ts: self.cfg.ts,
+                        conflict_start_ts: Default::default(),
+                        conflict_commit_ts: key_commit_ts,
+                        key: current_key.into(),
+                        primary: vec![],
+                    }
+                    .into());
                 }
             }
         }

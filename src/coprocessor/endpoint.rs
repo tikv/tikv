@@ -112,7 +112,9 @@ impl<E: Engine> Endpoint<E> {
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager.update_max_ts(start_ts);
         }
-        if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+        if req_ctx.context.get_isolation_level() == IsolationLevel::Si
+            || req_ctx.context.get_isolation_level() == IsolationLevel::RcCheckTs
+        {
             let begin_instant = Instant::now();
             for range in &req_ctx.ranges {
                 let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());

@@ -9,6 +9,7 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::ErrorInner::WriteConflict;
 use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
 
 // When there are many versions for the user key, after several tries,
@@ -153,7 +154,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             if has_lock {
                 match self.cfg.isolation_level {
-                    IsolationLevel::Si => {
+                    IsolationLevel::Si | IsolationLevel::RcCheckTs => {
                         let lock = {
                             let lock_value = self
                                 .lock_cursor
@@ -262,6 +263,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     is_done = true;
                     if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                         self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
+                        return Err(WriteConflict {
+                            start_ts: self.cfg.ts,
+                            conflict_start_ts: Default::default(),
+                            conflict_commit_ts: last_checked_commit_ts,
+                            key: current_key.into(),
+                            primary: vec![],
+                        }
+                        .into());
                     }
                 }
             }

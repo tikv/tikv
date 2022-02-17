@@ -195,7 +195,9 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
     fn build_lock_cursor(&mut self) -> Result<Option<Cursor<S::Iter>>> {
         Ok(match self.0.isolation_level {
-            IsolationLevel::Si => Some(self.0.create_cf_cursor(CF_LOCK)?),
+            IsolationLevel::Si | IsolationLevel::RcCheckTs => {
+                Some(self.0.create_cf_cursor(CF_LOCK)?)
+            }
             IsolationLevel::Rc => None,
         })
     }
