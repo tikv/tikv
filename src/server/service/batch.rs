@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::new_request_tracer;
 // #[PerformanceCriticalPath]
+use crate::new_request_tracer;
 use crate::server::metrics::REQUEST_BATCH_SIZE_HISTOGRAM_VEC;
 use crate::server::service::kv::{batch_commands_response, TracedSingleResponse};
 use crate::server::service::tracing::{RequestTracer, TracerFactory};

@@ -661,6 +661,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
 
+        let span = Span::enter_with_local_parent("Scheduler::process_by_worker");
         let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
         async {
             let tag = task.cmd.tag();
@@ -705,9 +706,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
             tls_collect_read_duration(tag.get_str(), elapsed);
         }
-        .in_span(Span::enter_with_local_parent(
-            "Scheduler::process_by_worker",
-        ))
+        .in_span(span)
         .in_resource_metering_tag(resource_tag)
         .await;
     }

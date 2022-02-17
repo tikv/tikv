@@ -363,8 +363,9 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Vec<u8>>,
     ) -> Result<Vec<Option<Vec<u8>>>> {
         let mut ids = vec![];
+        let len = keys.len();
         let requests: Vec<RawGetRequest> = keys
-            .iter()
+            .into_iter()
             .map(|key| {
                 let mut req = RawGetRequest::default();
                 req.set_context(ctx.clone());
@@ -378,7 +379,7 @@ impl<E: Engine> SyncTestStorage<E> {
         block_on(self.store.raw_batch_get_command(
             requests,
             ids,
-            vec![RequestTracer::new_noop(); keys.len()],
+            vec![RequestTracer::new_noop(); len],
             p.clone(),
         ))?;
         let mut values = vec![];

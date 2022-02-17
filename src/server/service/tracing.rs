@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
@@ -72,15 +73,12 @@ impl TracingService {
 macro_rules! new_request_tracer {
     ($req_name: ident, $req: expr, $factory: expr) => {{
         let trace_ctx = $req.mut_context().take_trace_context();
-        let factory = $factory;
-        let config = factory.config.load();
 
         TracerFactory::new_tracer(
             stringify!($req_name),
             $crate::server::metrics::GrpcTypeKind::$req_name,
             trace_ctx,
-            factory.tx.clone(),
-            &config,
+            $factory,
         )
     }};
 }
@@ -96,9 +94,9 @@ impl TracerFactory {
         req_name: &'static str,
         req_tag: GrpcTypeKind,
         trace_ctx: tracepb::TraceContext,
-        tx: Sender<CollectTask>,
-        config: &TracingConfig,
+        factory: &TracerFactory,
     ) -> RequestTracer {
+        let config = factory.config.load();
         let global_enabled = config.enable;
         let client_enabled = !trace_ctx.remote_parent_spans.is_empty();
         let begin_instant = Instant::now_coarse();
@@ -112,7 +110,7 @@ impl TracerFactory {
             let inner = RequestTracerInner {
                 remote_parent_spans: trace_ctx.remote_parent_spans.into_vec(),
                 duration_threshold: Duration::from_millis(trace_ctx.duration_threshold_ms.into()),
-                tx,
+                tx: factory.tx.clone(),
                 collector,
             };
             RequestTracer {
