@@ -70,12 +70,11 @@ mod imp {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(bad_style)]
 mod imp {
-    use crate::sys::bindings::*;
-
     use std::io;
     use std::ptr;
+
+    use libc::*;
 
     pub fn current() -> io::Result<super::LiunxStyleCpuTime> {
         // There's scant little documentation on `host_processor_info`

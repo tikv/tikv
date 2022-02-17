@@ -182,16 +182,29 @@ mod imp {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(bad_style)]
 mod imp {
-    use crate::sys::bindings::*;
-
     use std::io;
     use std::iter::FromIterator;
     use std::mem::size_of;
     use std::ptr::null_mut;
     use std::slice;
 
+    use libc::*;
+
     pub type Pid = mach_port_t;
+
+    type task_inspect_t = mach_port_t;
+    type thread_act_t = mach_port_t;
+    type thread_act_array_t = *mut thread_act_t;
+
+    extern "C" {
+        fn task_threads(
+            target_task: task_inspect_t,
+            act_list: *mut thread_act_array_t,
+            act_listCnt: *mut mach_msg_type_number_t,
+        ) -> kern_return_t;
+    }
 
     #[derive(Default)]
     pub struct FullStat {
@@ -253,13 +266,13 @@ mod imp {
 
         unsafe {
             let flavor = THREAD_BASIC_INFO;
-            let mut info = thread_basic_info::default();
+            let mut info = std::mem::zeroed::<thread_basic_info>();
             let mut thread_info_cnt =
                 (size_of::<thread_basic_info>() / size_of::<natural_t>()) as mach_msg_type_number_t;
 
             let ret = thread_info(
                 tid,
-                flavor,
+                flavor as task_flavor_t,
                 (&mut info as *mut thread_basic_info) as thread_info_t,
                 &mut thread_info_cnt,
             );
@@ -272,7 +285,7 @@ mod imp {
                     + info.system_time.microseconds as i64,
                 utime: info.user_time.seconds as i64 * 1_000_000
                     + info.user_time.microseconds as i64,
-                command: "".to_string(),
+                ..Default::default()
             })
         }
     }
