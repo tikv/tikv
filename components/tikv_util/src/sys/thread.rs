@@ -206,6 +206,8 @@ mod imp {
         ) -> kern_return_t;
     }
 
+    const MICRO_SEC_PER_SEC: i64 = 1_000_000;
+
     #[derive(Default)]
     pub struct FullStat {
         pub stime: i64,
@@ -213,9 +215,11 @@ mod imp {
         pub command: String,
     }
 
+    /// The time unit of `stime` and `utime` is in microseconds.
+    /// See [`full_thread_stat()`]
     #[inline]
     pub fn clock_tick() -> i64 {
-        1_000_000
+        MICRO_SEC_PER_SEC
     }
 
     /// Gets the ID of the current process.
@@ -366,7 +370,7 @@ mod tests {
 
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     #[test]
     fn test_thread_id() {
@@ -383,28 +387,25 @@ mod tests {
     #[test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_thread_ids() {
-        let actual_tids = Arc::new(Mutex::new(vec![]));
+        const THREAD_COUNT: usize = 10;
+        let (tx, rx) = crossbeam::channel::bounded(THREAD_COUNT);
         let stop_threads = Arc::new(AtomicBool::new(false));
 
-        let threads = (0..10)
+        let threads = (0..THREAD_COUNT)
             .map(|_| {
-                let actual_tids = actual_tids.clone();
+                let tx = tx.clone();
                 let stop_threads = stop_threads.clone();
                 std::thread::spawn(move || {
-                    {
-                        actual_tids.lock().unwrap().push(thread_id());
-                    }
+                    tx.send(thread_id()).unwrap();
                     while !stop_threads.load(Ordering::Relaxed) {}
                 })
             })
             .collect::<Vec<_>>();
 
-        let ids: HashSet<_> = thread_ids(process_id()).unwrap();
-        {
-            let actual_tids = actual_tids.lock().unwrap();
-            for tid in &*actual_tids {
-                assert!(ids.contains(tid));
-            }
+        let actual_tids = rx.iter().take(THREAD_COUNT).collect::<Vec<_>>();
+        let ids = thread_ids::<HashSet<_>>(process_id()).unwrap();
+        for tid in &actual_tids {
+            assert!(ids.contains(tid));
         }
 
         stop_threads.store(true, Ordering::Relaxed);
@@ -412,12 +413,10 @@ mod tests {
             thread.join().unwrap();
         }
 
-        let ids: HashSet<_> = thread_ids(process_id()).unwrap();
-        {
-            let actual_tids = actual_tids.lock().unwrap();
-            for tid in &*actual_tids {
-                assert!(!ids.contains(tid));
-            }
+        let stopped_tids = actual_tids;
+        let ids = thread_ids::<HashSet<_>>(process_id()).unwrap();
+        for tid in &stopped_tids {
+            assert!(!ids.contains(tid));
         }
     }
 }
