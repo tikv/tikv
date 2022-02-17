@@ -236,13 +236,8 @@ mod imp {
         unsafe {
             let mut act_list: thread_act_array_t = null_mut();
             let mut act_count: mach_msg_type_number_t = 0;
-            let ret = task_threads(
-                pid,
-                &mut act_list as *mut thread_act_array_t,
-                &mut act_count as *mut mach_msg_type_number_t,
-            );
-
-            if ret != KERN_SUCCESS as kern_return_t {
+            let ret = task_threads(pid, &mut act_list, &mut act_count);
+            if ret != KERN_SUCCESS {
                 return Err(io::Error::from_raw_os_error(ret));
             }
 
@@ -273,10 +268,10 @@ mod imp {
             let ret = thread_info(
                 tid,
                 flavor as task_flavor_t,
-                (&mut info as *mut thread_basic_info) as thread_info_t,
+                (&mut info as *mut _) as thread_info_t,
                 &mut thread_info_cnt,
             );
-            if ret != KERN_SUCCESS as kern_return_t {
+            if ret != KERN_SUCCESS {
                 return Err(io::Error::from_raw_os_error(ret));
             }
 

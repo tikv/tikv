@@ -92,7 +92,7 @@ mod imp {
                 &mut cpu_info,
                 &mut msg_type,
             );
-            if ret != KERN_SUCCESS as kern_return_t {
+            if ret != KERN_SUCCESS {
                 return Err(io::Error::from_raw_os_error(ret));
             }
 
