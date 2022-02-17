@@ -2655,7 +2655,9 @@ where
         assert!(!self.fsm.peer.is_handling_snapshot());
 
         // No need to wait for the apply anymore.
-        self.finish_unsafe_recovery_wait_apply();
+        if self.fsm.unsafe_recovery_target_commit_index.is_some() {
+            self.finish_unsafe_recovery_wait_apply();
+        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
