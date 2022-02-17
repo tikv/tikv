@@ -190,6 +190,13 @@ pub unsafe fn run_proxy(
                 .required(false)
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("engine-label")
+                .long("engine-label")
+                .help("Set engine label")
+                .required(true)
+                .takes_value(true),
+        )
         .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {
@@ -214,6 +221,7 @@ pub unsafe fn run_proxy(
             )
         });
 
+    check_engine_label(&matches);
     crate::setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
     if is_config_check {
@@ -225,4 +233,15 @@ pub unsafe fn run_proxy(
 
     config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
     crate::server::run_tikv(config, engine_store_server_helper);
+}
+
+fn check_engine_label(matches: &clap::ArgMatches<'_>) {
+    let engine_label = matches.value_of("engine-label").unwrap();
+    let expect_engine_label = option_env!("ENGINE_LABEL_VALUE").unwrap();
+    if (engine_label != expect_engine_label) {
+        panic!(
+            "`engine-label` is `{}`, expect `{}`",
+            engine_label, expect_engine_label
+        );
+    }
 }

@@ -269,10 +269,10 @@ unsafe extern "C" fn ffi_handle_destroy(
     (*store.engine_store_server).kvstore.remove(&arg2);
 }
 
-type TiFlashRaftProxyHelper = RaftStoreProxyFFIHelper;
+type MockRaftProxyHelper = RaftStoreProxyFFIHelper;
 
 pub struct SSTReader<'a> {
-    proxy_helper: &'a TiFlashRaftProxyHelper,
+    proxy_helper: &'a MockRaftProxyHelper,
     inner: ffi_interfaces::SSTReaderPtr,
     type_: ffi_interfaces::ColumnFamilyType,
 }
@@ -290,7 +290,7 @@ impl<'a> Drop for SSTReader<'a> {
 
 impl<'a> SSTReader<'a> {
     pub unsafe fn new(
-        proxy_helper: &'a TiFlashRaftProxyHelper,
+        proxy_helper: &'a MockRaftProxyHelper,
         view: &'a ffi_interfaces::SSTView,
     ) -> Self {
         SSTReader {
