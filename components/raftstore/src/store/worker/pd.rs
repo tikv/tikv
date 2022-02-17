@@ -342,7 +342,7 @@ where
     }
 }
 
-const DEFAULT_LOAD_BASE_SPLIT_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn default_collect_tick_interval() -> Duration {
@@ -372,10 +372,10 @@ where
 {
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
-    ticker_timer: Option<Sender<bool>>,
+    ticker: Option<Sender<bool>>,
     read_stats_sender: Option<Sender<ReadStats>>,
     collect_store_infos_interval: Duration,
-    load_base_split_interval: Duration,
+    load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
 }
 
@@ -388,10 +388,10 @@ where
         StatsMonitor {
             scheduler,
             handle: None,
-            ticker_timer: None,
+            ticker: None,
             read_stats_sender: None,
             collect_store_infos_interval: interval,
-            load_base_split_interval: cmp::min(DEFAULT_LOAD_BASE_SPLIT_INTERVAL, interval),
+            load_base_split_check_interval: cmp::min(DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL, interval),
             collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
         }
     }
@@ -405,7 +405,7 @@ where
         if self.collect_tick_interval < default_collect_tick_interval()
             || self.collect_store_infos_interval < self.collect_tick_interval
         {
-            info!("it seems we are running tests, skip stats monitoring.");
+            info!("interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed.");
             return Ok(());
         }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
@@ -413,12 +413,12 @@ where
         let collect_store_infos_interval = self
             .collect_store_infos_interval
             .div_duration_f64(tick_interval) as i32;
-        let load_base_split_interval = self
-            .load_base_split_interval
+        let load_base_split_check_interval = self
+            .load_base_split_check_interval
             .div_duration_f64(tick_interval) as i32;
 
         let (tx, rx) = mpsc::channel();
-        self.ticker_timer = Some(tx);
+        self.ticker = Some(tx);
 
         let (sender, receiver) = mpsc::channel();
         self.read_stats_sender = Some(sender);
@@ -436,7 +436,7 @@ where
                     if timer_cnt % collect_store_infos_interval == 0 {
                         StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
-                    if timer_cnt % load_base_split_interval == 0 {
+                    if timer_cnt % load_base_split_check_interval == 0 {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
                             &receiver,
@@ -445,7 +445,7 @@ where
                     }
                     // modules timer_cnt with the least common multiple of intervals to avoid overflow
                     timer_cnt =
-                        (timer_cnt + 1) % (load_base_split_interval * collect_store_infos_interval);
+                        (timer_cnt + 1) % (load_base_split_check_interval * collect_store_infos_interval);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
@@ -508,7 +508,7 @@ where
 
     pub fn stop(&mut self) {
         if let Some(h) = self.handle.take() {
-            drop(self.ticker_timer.take());
+            drop(self.ticker.take());
             drop(self.read_stats_sender.take());
             if let Err(e) = h.join() {
                 error!("join stats collector failed"; "err" => ?e);
