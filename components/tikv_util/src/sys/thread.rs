@@ -206,6 +206,9 @@ mod imp {
         ) -> kern_return_t;
     }
 
+    const THREAD_BASIC_INFO_COUNT: mach_msg_type_number_t =
+        (size_of::<thread_basic_info>() / size_of::<natural_t>()) as _;
+
     const MICRO_SEC_PER_SEC: i64 = 1_000_000;
 
     #[derive(Default)]
@@ -266,8 +269,7 @@ mod imp {
         unsafe {
             let flavor = THREAD_BASIC_INFO;
             let mut info = std::mem::zeroed::<thread_basic_info>();
-            let mut thread_info_cnt =
-                (size_of::<thread_basic_info>() / size_of::<natural_t>()) as mach_msg_type_number_t;
+            let mut thread_info_cnt = THREAD_BASIC_INFO_COUNT;
 
             let ret = thread_info(
                 tid,
@@ -369,8 +371,7 @@ mod tests {
     use super::*;
 
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Condvar, Mutex};
 
     #[test]
     fn test_thread_id() {
@@ -389,15 +390,21 @@ mod tests {
     fn test_thread_ids() {
         const THREAD_COUNT: usize = 10;
         let (tx, rx) = crossbeam::channel::bounded(THREAD_COUNT);
-        let stop_threads = Arc::new(AtomicBool::new(false));
+
+        #[allow(clippy::mutex_atomic)]
+        let stop_threads_cvar = Arc::new((Mutex::new(false), Condvar::new()));
 
         let threads = (0..THREAD_COUNT)
             .map(|_| {
                 let tx = tx.clone();
-                let stop_threads = stop_threads.clone();
+                let stop_threads_cvar = stop_threads_cvar.clone();
                 std::thread::spawn(move || {
                     tx.send(thread_id()).unwrap();
-                    while !stop_threads.load(Ordering::Relaxed) {}
+
+                    let (lock, cvar) = &*stop_threads_cvar;
+                    let _guard = cvar
+                        .wait_while(lock.lock().unwrap(), |stop| !*stop)
+                        .unwrap();
                 })
             })
             .collect::<Vec<_>>();
@@ -408,7 +415,11 @@ mod tests {
             assert!(ids.contains(tid));
         }
 
-        stop_threads.store(true, Ordering::Relaxed);
+        {
+            let (lock, cvar) = &*stop_threads_cvar;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
         for thread in threads {
             thread.join().unwrap();
         }
