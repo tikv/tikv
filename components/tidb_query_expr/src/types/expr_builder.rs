@@ -402,8 +402,9 @@ fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_uint64_from_bits(val: Vec<u8>) -> Result<ScalarValue> {
     debug_assert!(val.len() <= 8);
     let mut res = 0;
-    for (i, v) in val.iter().enumerate() {
-        res |= (*v as u64) << ((val.len() - i - 1) * 8);
+    for v in val {
+        res <<= 8;
+        res |= v as u64;
     }
     Ok(ScalarValue::Int(Some(res as i64)))
 }
