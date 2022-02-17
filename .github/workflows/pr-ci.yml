@@ -33,17 +33,17 @@ jobs:
           export PATH=~/.cargo/bin/:$PATH
           rustup self update && rustup set profile minimal && rustup default $(cat "rust-toolchain")
           # cargo install sccache
-      - name: cache build target
-        uses: actions/cache@v2
-        env:
-          cache-name: cargo-target
-        with:
-          path: |
-            target/
-            # ~/.cache/sccache/
-          key: ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-
+      # - name: cache build target
+      #   uses: actions/cache@v2
+      #   env:
+      #     cache-name: cargo-target
+      #   with:
+      #     path: |
+      #       target/
+      #       # ~/.cache/sccache/
+      #     key: ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-${{ hashFiles('**/Cargo.lock') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-
       - name: format check
         run: |
           cd ${{github.workspace}}
