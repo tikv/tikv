@@ -906,4 +906,14 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_extract_scalar_value_uint64_from_bits() {
+        let mut res = extract_scalar_value_uint64_from_bits(vec![0x01, 0x56, 0x12, 0x34]).unwrap();
+        assert_eq!(ScalarValue::Int(Some(0x1561234)), res);
+        res = extract_scalar_value_uint64_from_bits(vec![0x56, 0x34, 0x12, 0x78]).unwrap();
+        assert_eq!(ScalarValue::Int(Some(0x56341278)), res);
+        res = extract_scalar_value_uint64_from_bits(vec![0x78]).unwrap();
+        assert_eq!(ScalarValue::Int(Some(0x78)), res);
+    }
 }
