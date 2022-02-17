@@ -2,6 +2,7 @@
 pub mod interfaces;
 
 mod read_index_helper;
+mod utils;
 
 use encryption::DataKeyManager;
 use engine_rocks::encryption::get_env;
@@ -25,12 +26,12 @@ pub use crate::engine_store_ffi::interfaces::root::DB::{
 };
 use crate::engine_store_ffi::interfaces::root::DB::{
     ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawCppStringPtr,
-    SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
+    RawRustPtr, SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
     RAFT_STORE_PROXY_VERSION,
 };
 use crate::store::LockCFFileReader;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {
@@ -81,7 +82,6 @@ impl From<&RaftStoreProxy> for RaftStoreProxyPtr {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> RaftProxyStatus {
     unsafe {
         let r = proxy_ptr.as_ref().status.load(Ordering::SeqCst);
@@ -89,12 +89,10 @@ pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> R
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_is_encryption_enabled(proxy_ptr: RaftStoreProxyPtr) -> u8 {
     unsafe { proxy_ptr.as_ref().key_manager.is_some().into() }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_encryption_method(
     proxy_ptr: RaftStoreProxyPtr,
 ) -> interfaces::root::DB::EncryptionMethod {
@@ -108,7 +106,6 @@ pub extern "C" fn ffi_encryption_method(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_batch_read_index(
     proxy_ptr: RaftStoreProxyPtr,
     view: CppStrVecView,
@@ -132,12 +129,147 @@ pub extern "C" fn ffi_batch_read_index(
         let resp = proxy_ptr
             .as_ref()
             .read_index_client
-            .batch_read_index(req_vec, Duration::from_millis(timeout_ms));
+            .batch_read_index(req_vec, time::Duration::from_millis(timeout_ms));
         assert_ne!(res, std::ptr::null_mut());
         for (r, region_id) in &resp {
             get_engine_store_server_helper().insert_batch_read_index_resp(res, r, *region_id);
         }
     }
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum RawRustPtrType {
+    None = 0,
+    ReadIndexTask = 1,
+    ArcFutureWaker = 2,
+    TimerTask = 3,
+}
+
+impl From<u32> for RawRustPtrType {
+    fn from(x: u32) -> Self {
+        unsafe { std::mem::transmute(x) }
+    }
+}
+
+impl Into<u32> for RawRustPtrType {
+    fn into(self) -> u32 {
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+pub extern "C" fn ffi_gc_rust_ptr(
+    data: RawVoidPtr,
+    type_: crate::engine_store_ffi::interfaces::root::DB::RawRustPtrType,
+) {
+    if data.is_null() {
+        return;
+    }
+    let type_: RawRustPtrType = type_.into();
+    match type_ {
+        RawRustPtrType::ReadIndexTask => unsafe {
+            Box::from_raw(data as *mut read_index_helper::ReadIndexTask);
+        },
+        RawRustPtrType::ArcFutureWaker => unsafe {
+            Box::from_raw(data as *mut utils::ArcNotifyWaker);
+        },
+        RawRustPtrType::TimerTask => unsafe {
+            Box::from_raw(data as *mut utils::TimerTask);
+        },
+        _ => unreachable!(),
+    }
+}
+
+impl Default for RawRustPtr {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            type_: RawRustPtrType::None.into(),
+        }
+    }
+}
+
+impl RawRustPtr {
+    pub fn is_null(&self) -> bool {
+        self.ptr.is_null()
+    }
+}
+
+pub extern "C" fn ffi_make_read_index_task(
+    proxy_ptr: RaftStoreProxyPtr,
+    req_view: BaseBuffView,
+) -> RawRustPtr {
+    assert!(!proxy_ptr.is_null());
+    let mut req = kvrpcpb::ReadIndexRequest::default();
+    req.merge_from_bytes(req_view.to_slice()).unwrap();
+    let task = unsafe {
+        proxy_ptr
+            .as_ref()
+            .read_index_client
+            .make_read_index_task(req)
+    };
+    return match task {
+        None => {
+            RawRustPtr::default() // Full or Disconnected
+        }
+        Some(task) => RawRustPtr {
+            ptr: Box::into_raw(Box::new(task)) as *mut _,
+            type_: RawRustPtrType::ReadIndexTask.into(),
+        },
+    };
+}
+
+pub extern "C" fn ffi_make_async_waker(
+    wake_fn: Option<unsafe extern "C" fn(RawVoidPtr)>,
+    data: RawCppPtr,
+) -> RawRustPtr {
+    debug_assert!(wake_fn.is_some());
+
+    struct RawCppPtrWrap(RawCppPtr);
+    // This pointer should be thread safe, just wrap it.
+    unsafe impl Sync for RawCppPtrWrap {}
+
+    let data = RawCppPtrWrap(data);
+    let res: utils::ArcNotifyWaker = (|| {
+        Arc::new(utils::NotifyWaker {
+            inner: Box::new(move || unsafe {
+                wake_fn.into_inner()(data.0.ptr);
+            }),
+        })
+    })();
+
+    RawRustPtr {
+        ptr: Box::into_raw(Box::new(res)) as _,
+        type_: RawRustPtrType::ArcFutureWaker.into(),
+    }
+}
+
+pub extern "C" fn ffi_poll_read_index_task(
+    proxy_ptr: RaftStoreProxyPtr,
+    task_ptr: RawVoidPtr,
+    resp_data: RawVoidPtr,
+    waker: RawVoidPtr,
+) -> u8 {
+    assert!(!proxy_ptr.is_null());
+    let task = unsafe {
+        &mut *(task_ptr as *mut crate::engine_store_ffi::read_index_helper::ReadIndexTask)
+    };
+    let waker = if std::ptr::null_mut() == waker {
+        None
+    } else {
+        Some(unsafe { &*(waker as *mut utils::ArcNotifyWaker) })
+    };
+    return if let Some(res) = unsafe {
+        proxy_ptr
+            .as_ref()
+            .read_index_client
+            .poll_read_index_task(task, waker)
+    } {
+        get_engine_store_server_helper().set_read_index_resp(resp_data, &res);
+        1
+    } else {
+        0
+    };
 }
 
 impl From<EncryptionMethod> for interfaces::root::DB::EncryptionMethod {
@@ -178,7 +310,6 @@ impl FileEncryptionInfoRaw {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_handle_get_file(
     proxy_ptr: RaftStoreProxyPtr,
     name: BaseBuffView,
@@ -203,7 +334,6 @@ pub extern "C" fn ffi_handle_get_file(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_handle_new_file(
     proxy_ptr: RaftStoreProxyPtr,
     name: BaseBuffView,
@@ -228,7 +358,6 @@ pub extern "C" fn ffi_handle_new_file(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_handle_delete_file(
     proxy_ptr: RaftStoreProxyPtr,
     name: BaseBuffView,
@@ -254,7 +383,6 @@ pub extern "C" fn ffi_handle_delete_file(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_handle_link_file(
     proxy_ptr: RaftStoreProxyPtr,
     src: BaseBuffView,
@@ -299,8 +427,7 @@ impl From<RawVoidPtr> for SSTReaderPtr {
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn ffi_get_sst_reader(
+unsafe extern "C" fn ffi_make_sst_reader(
     view: SSTView,
     proxy_ptr: RaftStoreProxyPtr,
 ) -> SSTReaderPtr {
@@ -314,40 +441,44 @@ unsafe extern "C" fn ffi_get_sst_reader(
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn ffi_remained(mut reader: SSTReaderPtr, type_: ColumnFamilyType) -> u8 {
+unsafe extern "C" fn ffi_sst_reader_remained(
+    mut reader: SSTReaderPtr,
+    type_: ColumnFamilyType,
+) -> u8 {
     match type_ {
         ColumnFamilyType::Lock => reader.as_mut_lock().ffi_remained(),
         _ => reader.as_mut().ffi_remained(),
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn ffi_key(mut reader: SSTReaderPtr, type_: ColumnFamilyType) -> BaseBuffView {
+unsafe extern "C" fn ffi_sst_reader_key(
+    mut reader: SSTReaderPtr,
+    type_: ColumnFamilyType,
+) -> BaseBuffView {
     match type_ {
         ColumnFamilyType::Lock => reader.as_mut_lock().ffi_key(),
         _ => reader.as_mut().ffi_key(),
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn ffi_val(mut reader: SSTReaderPtr, type_: ColumnFamilyType) -> BaseBuffView {
+unsafe extern "C" fn ffi_sst_reader_val(
+    mut reader: SSTReaderPtr,
+    type_: ColumnFamilyType,
+) -> BaseBuffView {
     match type_ {
         ColumnFamilyType::Lock => reader.as_mut_lock().ffi_val(),
         _ => reader.as_mut().ffi_val(),
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn ffi_next(mut reader: SSTReaderPtr, type_: ColumnFamilyType) {
+unsafe extern "C" fn ffi_sst_reader_next(mut reader: SSTReaderPtr, type_: ColumnFamilyType) {
     match type_ {
         ColumnFamilyType::Lock => reader.as_mut_lock().ffi_next(),
         _ => reader.as_mut().ffi_next(),
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn ffi_gc(reader: SSTReaderPtr, type_: ColumnFamilyType) {
+unsafe extern "C" fn ffi_gc_sst_reader(reader: SSTReaderPtr, type_: ColumnFamilyType) {
     match type_ {
         ColumnFamilyType::Lock => {
             Box::from_raw(reader.inner as *mut LockCFFileReader);
@@ -371,14 +502,20 @@ impl RaftStoreProxyFFIHelper {
             fn_handle_link_file: Some(ffi_handle_link_file),
             fn_handle_batch_read_index: Some(ffi_batch_read_index),
             sst_reader_interfaces: SSTReaderInterfaces {
-                fn_get_sst_reader: Some(ffi_get_sst_reader),
-                fn_remained: Some(ffi_remained),
-                fn_key: Some(ffi_key),
-                fn_value: Some(ffi_val),
-                fn_next: Some(ffi_next),
-                fn_gc: Some(ffi_gc),
+                fn_get_sst_reader: Some(ffi_make_sst_reader),
+                fn_remained: Some(ffi_sst_reader_remained),
+                fn_key: Some(ffi_sst_reader_key),
+                fn_value: Some(ffi_sst_reader_val),
+                fn_next: Some(ffi_sst_reader_next),
+                fn_gc: Some(ffi_gc_sst_reader),
             },
             fn_server_info: None,
+            fn_make_read_index_task: Some(ffi_make_read_index_task),
+            fn_make_async_waker: Some(ffi_make_async_waker),
+            fn_poll_read_index_task: Some(ffi_poll_read_index_task),
+            fn_gc_rust_ptr: Some(ffi_gc_rust_ptr),
+            fn_make_timer_task: Some(ffi_make_timer_task),
+            fn_poll_timer_task: Some(ffi_poll_timer_task),
         }
     }
 }
@@ -527,6 +664,10 @@ impl RawCppPtr {
         self.ptr == std::ptr::null_mut()
     }
 }
+
+unsafe impl Send for RawCppPtr {}
+// Do not guarantee raw pointer could be accessed between threads safely
+// unsafe impl Sync for RawCppPtr {}
 
 impl Drop for RawCppPtr {
     fn drop(&mut self) {
@@ -735,6 +876,12 @@ impl EngineStoreServerHelper {
         }
     }
 
+    fn set_read_index_resp(&self, data: RawVoidPtr, r: &kvrpcpb::ReadIndexResponse) {
+        debug_assert!(self.fn_set_read_index_resp.is_some());
+        let r = ProtoMsgBaseBuff::new(r);
+        unsafe { (self.fn_set_read_index_resp.into_inner())(data, Pin::new(&r).into()) }
+    }
+
     pub fn handle_http_request(
         &self,
         path: &str,
@@ -833,6 +980,8 @@ impl Clone for RaftStoreProxyPtr {
     }
 }
 
+impl Copy for RaftStoreProxyPtr {}
+
 impl From<usize> for ColumnFamilyType {
     fn from(i: usize) -> Self {
         match i {
@@ -842,4 +991,26 @@ impl From<usize> for ColumnFamilyType {
             _ => unreachable!(),
         }
     }
+}
+
+pub extern "C" fn ffi_make_timer_task(millis: u64) -> RawRustPtr {
+    let task = utils::make_timer_task(millis);
+    RawRustPtr {
+        ptr: Box::into_raw(Box::new(task)) as *mut _,
+        type_: RawRustPtrType::TimerTask.into(),
+    }
+}
+
+pub unsafe extern "C" fn ffi_poll_timer_task(task_ptr: RawVoidPtr, waker: RawVoidPtr) -> u8 {
+    let task = &mut *(task_ptr as *mut utils::TimerTask);
+    let waker = if std::ptr::null_mut() == waker {
+        None
+    } else {
+        Some(&*(waker as *mut utils::ArcNotifyWaker))
+    };
+    return if let Some(_) = { utils::poll_timer_task(task, waker) } {
+        1
+    } else {
+        0
+    };
 }

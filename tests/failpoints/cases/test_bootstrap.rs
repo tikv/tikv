@@ -4,7 +4,6 @@ use std::sync::{Arc, RwLock};
 
 use engine_traits::Peekable;
 use kvproto::{metapb, raft_serverpb};
-use mock_engine_store;
 use test_raftstore::*;
 
 fn test_bootstrap_half_way_failure(fp: &str) {

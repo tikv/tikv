@@ -70,3 +70,4 @@ jobs:
           cargo test --package tests --test failpoints cases::test_merge
           cargo test --package tests --test failpoints cases::test_stale_peer
           cargo test --package tests --test failpoints cases::test_import_service
+          cargo test --package tests --test failpoints cases::test_proxy_replica_read

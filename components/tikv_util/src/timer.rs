@@ -258,5 +258,5 @@ mod tests {
 }
 
 lazy_static! {
-    pub static ref READ_INDEX_TIMER_HANDLE: Handle = start_global_timer("readindex-timer");
+    pub static ref PROXY_TIMER_HANDLE: Handle = start_global_timer("proxy-timer");
 }

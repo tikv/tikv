@@ -116,6 +116,13 @@ pub mod root {
             Terminated = 3,
         }
         pub type RawCppPtrType = u32;
+        pub type RawRustPtrType = u32;
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RawRustPtr {
+            pub ptr: root::DB::RawVoidPtr,
+            pub type_: root::DB::RawRustPtrType,
+        }
         #[repr(C)]
         #[derive(Debug)]
         pub struct RawCppPtr {
@@ -266,6 +273,34 @@ pub mod root {
                     arg3: root::DB::RawVoidPtr,
                 ) -> u32,
             >,
+            pub fn_make_read_index_task: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RaftStoreProxyPtr,
+                    arg2: root::DB::BaseBuffView,
+                ) -> root::DB::RawRustPtr,
+            >,
+            pub fn_make_async_waker: ::std::option::Option<
+                unsafe extern "C" fn(
+                    wake_fn: ::std::option::Option<unsafe extern "C" fn(arg1: root::DB::RawVoidPtr)>,
+                    data: root::DB::RawCppPtr,
+                ) -> root::DB::RawRustPtr,
+            >,
+            pub fn_poll_read_index_task: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RaftStoreProxyPtr,
+                    task: root::DB::RawVoidPtr,
+                    resp: root::DB::RawVoidPtr,
+                    waker: root::DB::RawVoidPtr,
+                ) -> u8,
+            >,
+            pub fn_gc_rust_ptr: ::std::option::Option<
+                unsafe extern "C" fn(arg1: root::DB::RawVoidPtr, arg2: root::DB::RawRustPtrType),
+            >,
+            pub fn_make_timer_task:
+                ::std::option::Option<unsafe extern "C" fn(millis: u64) -> root::DB::RawRustPtr>,
+            pub fn_poll_timer_task: ::std::option::Option<
+                unsafe extern "C" fn(task: root::DB::RawVoidPtr, waker: root::DB::RawVoidPtr) -> u8,
+            >,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -354,6 +389,9 @@ pub mod root {
                     arg3: u64,
                 ),
             >,
+            pub fn_set_read_index_resp: ::std::option::Option<
+                unsafe extern "C" fn(arg1: root::DB::RawVoidPtr, arg2: root::DB::BaseBuffView),
+            >,
             pub fn_set_server_info_resp: ::std::option::Option<
                 unsafe extern "C" fn(arg1: root::DB::BaseBuffView, arg2: root::DB::RawVoidPtr),
             >,
@@ -370,7 +408,7 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 2676036121052655811;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 7432805842186575727;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

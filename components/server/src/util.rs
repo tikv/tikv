@@ -60,7 +60,6 @@ fn server_info_for_ffi(req: ServerInfoRequest) -> ServerInfoResponse {
     block_on(collect)
 }
 
-#[no_mangle]
 pub extern "C" fn ffi_server_info(
     proxy_ptr: RaftStoreProxyPtr,
     view: BaseBuffView,
