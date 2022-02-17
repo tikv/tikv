@@ -369,7 +369,7 @@ impl<E: Engine> SyncTestStorage<E> {
             .map(|key| {
                 let mut req = RawGetRequest::default();
                 req.set_context(ctx.clone());
-                req.set_key(key.clone());
+                req.set_key(key);
                 req.set_cf(cf.to_owned());
                 ids.push(ids.len() as u64);
                 req
