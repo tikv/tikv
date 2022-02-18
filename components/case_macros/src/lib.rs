@@ -53,7 +53,7 @@ fn to_snake(s: &str) -> String {
 /// e.g. `HelloWorld` -> `hello-world`
 #[proc_macro]
 pub fn kebab_case(stream: TokenStream) -> TokenStream {
-    transform_idents_in_stream_to_string!(stream, &|s: String| to_kebab(&s))
+    transform_idents_in_stream_to_string!(stream, |s: String| to_kebab(&s))
 }
 
 /// Expands idents in the input stream as snake-case string literal
@@ -61,5 +61,5 @@ pub fn kebab_case(stream: TokenStream) -> TokenStream {
 /// e.g. `HelloWorld` -> `hello_world`
 #[proc_macro]
 pub fn snake_case(stream: TokenStream) -> TokenStream {
-    transform_idents_in_stream_to_string!(stream, &|s: String| to_snake(&s))
+    transform_idents_in_stream_to_string!(stream, |s: String| to_snake(&s))
 }

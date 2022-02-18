@@ -328,6 +328,8 @@ fn test_read_index_retry_lock_checking() {
 
     let rid = cluster.run_conf_change();
     pd_client.must_add_peer(rid, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));

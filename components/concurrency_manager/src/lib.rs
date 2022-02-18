@@ -79,6 +79,7 @@ impl ConcurrencyManager {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
         #[allow(clippy::unsound_collection_transmute)]
+        #[allow(clippy::transmute_undefined_repr)]
         unsafe {
             mem::transmute(result)
         }
