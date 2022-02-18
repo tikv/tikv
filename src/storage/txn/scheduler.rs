@@ -1039,7 +1039,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         {
             return false;
         }
-        pessimistic_locks.insert(mem::take(&mut to_be_write.modifies))
+        match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
+            Ok(()) => true,
+            Err(modifies) => {
+                to_be_write.modifies = modifies;
+                false
+            }
+        }
     }
 
     /// If the task has expired, return `true` and call the callback of

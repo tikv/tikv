@@ -3,6 +3,7 @@
 use std::ops::Deref;
 
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
+use getset::CopyGetters;
 use tikv::storage::mvcc::near_load_data_by_write;
 use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_kv::Iterator;
@@ -44,11 +45,17 @@ impl SizePolicy<Key, (OldValue, Option<MutationType>)> for OldValueCacheSizePoli
     }
 }
 
+#[derive(CopyGetters)]
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizePolicy>,
-    pub access_count: usize,
-    pub miss_count: usize,
-    pub miss_none_count: usize,
+    cache: LruCache<Key, (OldValue, Option<MutationType>), OldValueCacheSizePolicy>,
+    #[getset(get_copy = "pub")]
+    access_count: usize,
+    #[getset(get_copy = "pub")]
+    miss_count: usize,
+    #[getset(get_copy = "pub")]
+    miss_none_count: usize,
+    #[getset(get_copy = "pub")]
+    update_count: usize,
 }
 
 impl OldValueCache {
@@ -63,12 +70,31 @@ impl OldValueCache {
             access_count: 0,
             miss_count: 0,
             miss_none_count: 0,
+            update_count: 0,
         }
     }
 
-    pub(crate) fn resize(&mut self, new_capacity: ReadableSize) {
+    pub fn insert(&mut self, key: Key, old_value: (OldValue, Option<MutationType>)) {
+        self.cache.insert(key, old_value);
+        self.update_count += 1;
+    }
+
+    pub fn resize(&mut self, new_capacity: ReadableSize) {
         CDC_OLD_VALUE_CACHE_MEMORY_QUOTA.set(new_capacity.0 as i64);
         self.cache.resize(new_capacity.0 as usize);
+    }
+
+    pub fn flush_metrics(&mut self) {
+        fail::fail_point!("cdc_flush_old_value_metrics", |_| {});
+        CDC_OLD_VALUE_CACHE_BYTES.set(self.cache.size() as i64);
+        CDC_OLD_VALUE_CACHE_LEN.set(self.cache.len() as i64);
+        CDC_OLD_VALUE_CACHE_ACCESS.add(self.access_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS.add(self.miss_count as i64);
+        CDC_OLD_VALUE_CACHE_MISS_NONE.add(self.miss_none_count as i64);
+        self.access_count = 0;
+        self.miss_count = 0;
+        self.miss_none_count = 0;
+        self.update_count = 0;
     }
 
     #[cfg(test)]

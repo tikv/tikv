@@ -70,9 +70,7 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 Err(
-                    e
-                    @
-                    Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
                         ..
                     }))),
                 ) => {
@@ -175,7 +173,7 @@ impl TxnEntry {
                     let v = WriteRef::parse(&write.1)
                         .map_err(MvccError::from)?
                         .to_owned();
-                    let v = v.short_value.unwrap_or_else(Vec::default);
+                    let v = v.short_value.unwrap_or_default();
                     Ok((k, v))
                 }
             }
