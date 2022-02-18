@@ -495,7 +495,7 @@ fn init_applied_index_term<EK: KvEngine, ER: RaftEngine>(
     }
 }
 
-fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
+pub fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
 ) -> Result<RaftLocalState> {
@@ -514,7 +514,7 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
     Ok(raft_state)
 }
 
-fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
+pub fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
 ) -> Result<RaftApplyState> {

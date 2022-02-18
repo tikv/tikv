@@ -7,8 +7,20 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+encryption = { path = "../../components/encryption", default-features = false }
+encryption_export = { path = "../../components/encryption/export", default-features = false }
+engine_rocks = { path = "../../components/engine_rocks", default-features = false }
+engine_traits = { path = "../../components/engine_traits", default-features = false }
 futures = { version = "0.3", features = ["executor"] }
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+keys = { path = "../../components/keys", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+protobuf = { version = "2.8", features = ["bytes"] }
+raftstore = { path = "../../components/raftstore", default-features = false }
+tikv = { path = "../../" }
+tikv_util = { path = "../../components/tikv_util", default-features = false }
+structopt = "0.3"
+toml = "0.5"
 
 [dependencies.phybr]
 git = "https://github.com/hicqu/phybr"

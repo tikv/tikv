@@ -5682,9 +5682,21 @@ dependencies = [
 name = "tikv-phybr"
 version = "0.1.0"
 dependencies = [
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
  "futures 0.3.15",
  "grpcio",
+ "keys",
+ "kvproto",
  "phybr",
+ "protobuf",
+ "raftstore",
+ "structopt",
+ "tikv",
+ "tikv_util",
+ "toml",
 ]
 
 [[package]]
