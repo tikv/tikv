@@ -1017,9 +1017,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             }
             let lag_millis = min_ts_pd.physical().saturating_sub(min_ts.physical());
             if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-                warn!("cdc min_ts";
-                    "min_ts" => min_ts,
-                    "min_ts_pd" => min_ts_pd,
+                warn!("cdc min_ts lag too large";
+                    "min_ts" => min_ts, "min_ts_pd" => min_ts_pd,
                     "min_ts_min_lock" => min_ts_min_lock);
             }
         };
