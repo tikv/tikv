@@ -1,5 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Reverse;
+use std::cmp::{Ord, Ordering as CmpOrdering, PartialOrd};
+use std::collections::BinaryHeap;
 use std::fmt;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -60,6 +63,10 @@ use crate::service::{Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+// 10 minutes, it's the default gc life time of TiDB
+// and is long enough for most transactions.
+const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 
 pub enum Deregister {
     Downstream {
@@ -224,7 +231,66 @@ impl fmt::Debug for Task {
     }
 }
 
-const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+#[derive(PartialEq, Eq)]
+struct ResolvedRegion {
+    region_id: u64,
+    resolved_ts: TimeStamp,
+}
+
+impl PartialOrd for ResolvedRegion {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ResolvedRegion {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.resolved_ts.cmp(&other.resolved_ts)
+    }
+}
+
+struct ResolvedRegionHeap {
+    // BinaryHeap is max heap, so we reverse order to get a min heap.
+    heap: BinaryHeap<Reverse<ResolvedRegion>>,
+}
+
+impl ResolvedRegionHeap {
+    fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
+        self.heap.push(Reverse(ResolvedRegion {
+            region_id,
+            resolved_ts,
+        }))
+    }
+
+    // Pops outlier regions and the minimum resolved ts among them.
+    fn pop_outliers(&mut self, count: usize) -> (TimeStamp, HashSet<u64>) {
+        let mut min_resolved_ts = TimeStamp::max();
+        let mut outliers = HashSet::with_capacity_and_hasher(count, Default::default());
+        for _ in 0..count {
+            if let Some(resolved_region) = self.heap.pop() {
+                outliers.insert(resolved_region.0.region_id);
+                if min_resolved_ts > resolved_region.0.resolved_ts {
+                    min_resolved_ts = resolved_region.0.resolved_ts;
+                }
+            } else {
+                break;
+            }
+        }
+        (min_resolved_ts, outliers)
+    }
+
+    fn into_hash_set(self) -> (TimeStamp, HashSet<u64>) {
+        let mut min_resolved_ts = TimeStamp::max();
+        let mut regions = HashSet::with_capacity_and_hasher(self.heap.len(), Default::default());
+        for resolved_region in self.heap {
+            regions.insert(resolved_region.0.region_id);
+            if min_resolved_ts > resolved_region.0.resolved_ts {
+                min_resolved_ts = resolved_region.0.resolved_ts;
+            }
+        }
+        (min_resolved_ts, regions)
+    }
+}
 
 pub struct Endpoint<T, E> {
     cluster_id: u64,
@@ -710,29 +776,75 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
         let total_region_count = regions.len();
-        // TODO: figure out how to avoid create a hashset every time,
-        //       saving some CPU.
-        let mut resolved_regions =
-            HashSet::with_capacity_and_hasher(regions.len(), Default::default());
+        // TODO: figure out how to avoid create binary heap and hashset
+        //       every time, saving some CPU.
+        let mut resolved_regions = ResolvedRegionHeap {
+            heap: BinaryHeap::with_capacity(regions.len()),
+        };
         self.min_resolved_ts = TimeStamp::max();
+        let mut advance_ok = 0;
+        let mut advance_failed_none = 0;
+        let mut advance_failed_same = 0;
+        let mut advance_failed_stale = 0;
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                let old_resolved_ts = delegate
+                    .resolver
+                    .as_ref()
+                    .map_or(TimeStamp::zero(), |r| r.resolved_ts());
+                if old_resolved_ts > min_ts {
+                    advance_failed_stale += 1;
+                }
                 if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
                     if resolved_ts < self.min_resolved_ts {
                         self.min_resolved_ts = resolved_ts;
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.insert(region_id);
+                    resolved_regions.push(region_id, resolved_ts);
+
+                    if resolved_ts == old_resolved_ts {
+                        advance_failed_same += 1;
+                    } else {
+                        advance_ok += 1;
+                    }
+                } else {
+                    advance_failed_none += 1;
                 }
             }
         }
-        self.resolved_region_count = resolved_regions.len();
+        let lag_millis = min_ts
+            .physical()
+            .saturating_sub(self.min_resolved_ts.physical());
+        if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
+            warn!("cdc resolved ts lag too large";
+                "min_resolved_ts" => self.min_resolved_ts,
+                "min_ts_region_id" => self.min_ts_region_id,
+                "min_ts" => min_ts,
+                "ok" => advance_ok,
+                "none" => advance_failed_none,
+                "stale" => advance_failed_stale,
+                "same" => advance_failed_same);
+        }
+        self.resolved_region_count = resolved_regions.heap.len();
         self.unresolved_region_count = total_region_count - self.resolved_region_count;
-        self.broadcast_resolved_ts(resolved_regions);
+
+        // Separate broadcasing outlier regions and normal regions,
+        // so 1) downstreams know where they should send resolve lock requests,
+        // and 2) resolved ts of normal regions does not fallback.
+        //
+        // Max number of outliers, in most cases, only a few regions are outliers.
+        let max_outlier_count = 32;
+        let (outlier_min_resolved_ts, outlier_regions) =
+            resolved_regions.pop_outliers(max_outlier_count);
+        self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
+        if !resolved_regions.heap.is_empty() {
+            let (min_resolved_ts, regions) = resolved_regions.into_hash_set();
+            self.broadcast_resolved_ts(min_resolved_ts, regions);
+        }
     }
 
-    fn broadcast_resolved_ts(&self, regions: HashSet<u64>) {
-        let min_resolved_ts = self.min_resolved_ts.into_inner();
+    fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
+        let min_resolved_ts = min_resolved_ts.into_inner();
         let send_cdc_event = |regions: &HashSet<u64>, min_resolved_ts: u64, conn: &Conn| {
             let downstream_regions = conn.get_downstreams();
             let mut resolved_ts = ResolvedTs::default();
@@ -847,7 +959,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let fut = async move {
             let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+            let min_ts_pd = pd_client.get_tso().await.unwrap_or_default();
+            let mut min_ts = min_ts_pd;
+            let mut min_ts_min_lock = min_ts_pd;
 
             // Sync with concurrency manager so that it can work correctly when optimizations
             // like async commit is enabled.
@@ -858,6 +972,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
                 }
+                min_ts_min_lock = min_mem_lock_ts;
             }
 
             match scheduler.schedule(Task::RegisterMinTsEvent) {
@@ -899,6 +1014,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     // advance normally.
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
+            }
+            let lag_millis = min_ts_pd.physical().saturating_sub(min_ts.physical());
+            if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
+                warn!("cdc min_ts";
+                    "min_ts" => min_ts,
+                    "min_ts_pd" => min_ts_pd,
+                    "min_ts_min_lock" => min_ts_min_lock);
             }
         };
         self.tso_worker.spawn(fut);
@@ -2723,5 +2845,58 @@ mod tests {
             "{:?}",
             event
         );
+    }
+
+    #[test]
+    fn test_resolved_region_heap() {
+        let mut heap = ResolvedRegionHeap {
+            heap: BinaryHeap::new(),
+        };
+        heap.push(5, 5.into());
+        heap.push(4, 4.into());
+        heap.push(6, 6.into());
+        heap.push(3, 3.into());
+
+        let (ts, regions) = heap.pop_outliers(0);
+        assert_eq!(ts, TimeStamp::max());
+        assert!(regions.is_empty());
+
+        let (ts, regions) = heap.pop_outliers(2);
+        assert_eq!(ts, 3.into());
+        assert_eq!(regions.len(), 2);
+        assert!(regions.contains(&3));
+        assert!(regions.contains(&4));
+
+        // Pop outliers more then it has.
+        let (ts, regions) = heap.pop_outliers(3);
+        assert_eq!(ts, 5.into());
+        assert_eq!(regions.len(), 2);
+        assert!(regions.contains(&5));
+        assert!(regions.contains(&6));
+
+        // Empty regions
+        let (ts, regions) = heap.into_hash_set();
+        assert_eq!(ts, TimeStamp::max());
+        assert!(regions.is_empty());
+
+        let mut heap1 = ResolvedRegionHeap {
+            heap: BinaryHeap::new(),
+        };
+        heap1.push(5, 5.into());
+        heap1.push(4, 4.into());
+        heap1.push(6, 6.into());
+        heap1.push(3, 3.into());
+
+        let (ts, regions) = heap1.pop_outliers(1);
+        assert_eq!(ts, 3.into());
+        assert_eq!(regions.len(), 1);
+        assert!(regions.contains(&3));
+
+        let (ts, regions) = heap1.into_hash_set();
+        assert_eq!(ts, 4.into());
+        assert_eq!(regions.len(), 3);
+        assert!(regions.contains(&4));
+        assert!(regions.contains(&5));
+        assert!(regions.contains(&6));
     }
 }
