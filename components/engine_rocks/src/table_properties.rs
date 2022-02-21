@@ -25,7 +25,7 @@ impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
     where
         F: FnMut(&Self::UserCollectedProperties) -> bool,
     {
-        for (_, props) in (&self.0).into_iter() {
+        for (_, props) in self.0.into_iter() {
             let props = unsafe { std::mem::transmute(props.user_collected_properties()) };
             if !f(props) {
                 break;
