@@ -282,6 +282,12 @@ pub async fn region_resolved_ts_store(
             .boxed()
         })
         .collect();
+    let start = Instant::now_coarse();
+    defer!({
+        RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+            .with_label_values(&["all"])
+            .observe(start.saturating_elapsed_secs());
+    });
     for _ in 0..store_count {
         // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
         let (res, _, remains) = select_all(stores).await;
