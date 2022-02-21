@@ -8,6 +8,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
 use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
+use protobuf::ProtobufEnum;
 use slog_global::{info, warn};
 
 impl Engine {
@@ -27,7 +28,7 @@ impl Engine {
     pub fn pre_split(&self, cs: pb::ChangeSet) -> Result<()> {
         let shard = self.get_shard_with_ver(cs.shard_id, cs.shard_ver)?;
         if !shard.set_split_keys(cs.get_pre_split().get_keys()) {
-            return Err(Error::WrongSplitStage);
+            return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
         }
         let version = shard.base_version + cs.sequence;
         let mem_tbl = self.switch_mem_table(&shard, version);
@@ -38,7 +39,7 @@ impl Engine {
     pub fn split_shard_files(&self, shard_id: u64, shard_ver: u64) -> Result<pb::ChangeSet> {
         let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
         if !shard.is_splitting() {
-            return Err(Error::WrongSplitStage);
+            return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
         }
         let mut cs = new_change_set(shard_id, shard_ver, pb::SplitStage::SplitFileDone);
 
@@ -277,7 +278,7 @@ impl Engine {
     pub fn finish_split(&self, cs: pb::ChangeSet, initial_seq: u64) -> Result<()> {
         let shard = self.get_shard_with_ver(cs.shard_id, cs.shard_ver)?;
         if shard.get_split_stage() != pb::SplitStage::SplitFileDone {
-            return Err(Error::WrongSplitStage);
+            return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
         }
         let split = cs.get_split();
         let split_ctx = shard.get_split_ctx();

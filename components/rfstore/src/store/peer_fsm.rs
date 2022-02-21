@@ -26,18 +26,13 @@ use tikv_util::{box_err, debug, error, info, trace, warn};
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::Callback;
 use crate::store::peer::Peer;
-use crate::store::{
-    notify_req_region_removed, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask, PersistReady,
-};
+use crate::store::{notify_req_region_removed, CustomBuilder, PdTask, PeerStorage, PersistReady};
 use crate::store::{
     raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
     PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
 };
 use crate::store::{util as _util, CasualMessage, Config, PeerMsg, SignificantMsg};
-use crate::store::{
-    write_peer_state, ChangePeer, ExecResult, MsgApplyChangeSetResult, SnapState,
-    EXTRA_CTX_SPLIT_FILE_DONE,
-};
+use crate::store::{write_peer_state, ChangePeer, ExecResult, MsgApplyChangeSetResult, SnapState};
 use crate::store::{SplitMethod, SplitTask};
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
@@ -192,9 +187,6 @@ impl<'a> PeerMsgHandler<'a> {
                 PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
                 PeerMsg::Start => self.start(),
                 PeerMsg::GenerateEngineChangeSet(cs) => self.on_generate_engine_change_set(cs),
-                PeerMsg::WaitFollowerSplitFiles(msg) => {
-                    self.on_wait_follower_split_files(msg);
-                }
                 PeerMsg::ApplyChangeSetResult(res) => {
                     self.on_apply_change_set_result(res);
                 }
@@ -414,11 +406,6 @@ impl<'a> PeerMsgHandler<'a> {
         if result.is_err() {
             return result;
         }
-        self.update_follower_split_file_done(
-            from_peer_id,
-            msg.get_extra_ctx(),
-            msg.get_region_epoch().version,
-        );
         Ok(())
     }
 
@@ -689,7 +676,6 @@ impl<'a> PeerMsgHandler<'a> {
                             .retain(|&(p, _)| p != peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
-                    self.peer.followers_split_files_done.remove(&peer_id);
                     // We only care remove itself now.
                     if self.store_id() == store_id {
                         if self.fsm.peer.peer_id() == peer_id {
@@ -901,6 +887,9 @@ impl<'a> PeerMsgHandler<'a> {
                 self.propose_change_set(cs);
             }
         }
+        if let Some(callback) = self.peer.split_callback.take() {
+            callback.invoke_with_response(RaftCmdResponse::default());
+        }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
 
@@ -1098,7 +1087,6 @@ impl<'a> PeerMsgHandler<'a> {
             let task = SplitTask::new(
                 self.region().clone(),
                 self.peer.peer.clone(),
-                Callback::None,
                 SplitMethod::MaxSize(cfg_split_size),
             );
             if let Err(e) = self.ctx.global.split_scheduler.schedule(task) {
@@ -1131,12 +1119,12 @@ impl<'a> PeerMsgHandler<'a> {
             cb.invoke_with_response(new_error(e));
             return;
         }
+        self.peer.split_callback = Some(cb);
         let region = self.fsm.peer.region();
         let peer = &self.fsm.peer.peer;
         let split_task = SplitTask::new(
             region.clone(),
             peer.clone(),
-            cb,
             SplitMethod::Keys(split_keys.clone()),
         );
         self.ctx
@@ -1151,6 +1139,17 @@ impl<'a> PeerMsgHandler<'a> {
         epoch: &metapb::RegionEpoch,
         split_keys: &[Vec<u8>],
     ) -> Result<()> {
+        let split_stage = self.peer.get_store().split_stage;
+        if self.peer.split_callback.is_some() {
+            return Err(Error::KVEngineError(kvengine::Error::WrongSplitStage(
+                split_stage.value(),
+            )));
+        }
+        if split_stage != kvenginepb::SplitStage::Initial {
+            return Err(Error::KVEngineError(kvengine::Error::WrongSplitStage(
+                split_stage.value(),
+            )));
+        }
         if split_keys.is_empty() {
             error!(
                 "no split key is specified.";
@@ -1260,24 +1259,6 @@ impl<'a> PeerMsgHandler<'a> {
         self.propose_raft_command(req, cb);
     }
 
-    fn update_follower_split_file_done(
-        &mut self,
-        from_peer: u64,
-        extra_ctx: &[u8],
-        epoch_ver: u64,
-    ) {
-        if extra_ctx.len() != 1 || extra_ctx[0] != EXTRA_CTX_SPLIT_FILE_DONE {
-            return;
-        }
-        if from_peer == self.peer_id() {
-            return;
-        }
-        info!("follower {} split file done ", from_peer; "region" => self.peer.tag());
-        self.peer
-            .followers_split_files_done
-            .insert(from_peer, epoch_ver);
-    }
-
     fn new_raft_cmd_request(&self) -> RaftCmdRequest {
         let mut req = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -1287,10 +1268,6 @@ impl<'a> PeerMsgHandler<'a> {
         header.set_term(self.peer.term());
         req.set_header(header);
         req
-    }
-
-    fn on_wait_follower_split_files(&mut self, msg: MsgWaitFollowerSplitFiles) {
-        self.peer.wait_follower_split_files = Some(msg);
     }
 
     fn on_apply_change_set_result(&mut self, mut msg: MsgApplyChangeSetResult) {
@@ -1323,7 +1300,8 @@ impl<'a> PeerMsgHandler<'a> {
             })
         }
         let split_stage = self.peer.get_store().split_stage;
-        if change.get_stage().value() > split_stage.value() {
+        if change.get_stage().value() > split_stage.value() && self.peer.get_store().initial_flushed
+        {
             info!("peer storage split stage changed";
                 "region" => tag,
                 "from" => split_stage.value(),

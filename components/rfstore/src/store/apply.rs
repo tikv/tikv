@@ -1130,7 +1130,7 @@ impl Applier {
             ctx.exec_log_term,
         );
         let mut resp = AdminResponse::default();
-        if let Err(kvengine::Error::WrongSplitStage) =
+        if let Err(kvengine::Error::WrongSplitStage(_)) =
             ctx.engine.finish_split(cs, RAFT_INIT_LOG_INDEX)
         {
             // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
@@ -1249,39 +1249,13 @@ impl Applier {
 
     fn on_role_changed(&mut self, ctx: &mut ApplyContext, new_role: StateRole) {
         if let Some(shard) = ctx.engine.get_shard(self.region.get_id()) {
-            info!("shard set passive on role changed";
+            info!("shard set active {} on role changed", new_role == StateRole::Leader;
                 "region" => self.tag());
             shard.set_active(new_role == StateRole::Leader);
             if new_role == StateRole::Leader {
                 ctx.engine.trigger_flush(&shard);
-                if shard.get_split_stage() != kvenginepb::SplitStage::Initial {
-                    self.handle_recover_split(ctx);
-                }
             }
         }
-    }
-
-    fn handle_recover_split(&mut self, ctx: &mut ApplyContext) {
-        let shard = ctx.engine.get_shard(self.region.get_id()).unwrap();
-        let method = match shard.get_split_stage() {
-            SplitStage::Initial => {
-                return;
-            }
-            SplitStage::PreSplit | SplitStage::PreSplitFlushDone => SplitMethod::SplitFiles,
-            SplitStage::SplitFileDone => SplitMethod::Finish,
-        };
-        info!("shard recover split"; "region" => self.tag());
-        let split_task = SplitTask::new(
-            self.region.clone(),
-            self.get_peer().clone(),
-            Callback::None,
-            method,
-        );
-        ctx.split_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(split_task)
-            .unwrap();
     }
 
     fn handle_apply(&mut self, ctx: &mut ApplyContext, mut apply: MsgApply) {
@@ -1356,6 +1330,7 @@ impl Applier {
     pub(crate) fn handle_msg(&mut self, ctx: &mut ApplyContext, msg: ApplyMsg) {
         if let ApplyMsg::Resume { region_id } = &msg {
             if let Some(yield_state) = self.yield_state.take() {
+                info!("{} resume paused apply", self.tag());
                 for msg in yield_state.pending_msgs {
                     self.handle_msg(ctx, msg);
                 }

@@ -29,7 +29,6 @@ pub enum PeerMsg {
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
-    WaitFollowerSplitFiles(MsgWaitFollowerSplitFiles),
     ApplyChangeSetResult(MsgApplyChangeSetResult),
     Persisted(PersistReady),
 }
@@ -122,21 +121,6 @@ impl MsgRegistration {
             apply_state: peer.get_store().apply_state(),
             region: peer.get_store().region().clone(),
         }
-    }
-}
-
-pub struct MsgWaitFollowerSplitFiles {
-    pub(crate) split_keys: Vec<Bytes>,
-    pub(crate) callback: Callback,
-}
-
-impl Debug for MsgWaitFollowerSplitFiles {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "wait follower split files split keys: {:?}",
-            self.split_keys,
-        )
     }
 }
 

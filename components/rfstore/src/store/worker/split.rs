@@ -9,9 +9,7 @@ use std::thread::sleep;
 use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
-use crate::store::{
-    Callback, CustomBuilder, MsgWaitFollowerSplitFiles, PdTask, PeerMsg, RegionIDVer,
-};
+use crate::store::{Callback, CustomBuilder, PdTask, PeerMsg, RegionIDVer};
 use crate::{RaftRouter, RaftStoreRouter};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, Scheduler};
@@ -22,7 +20,6 @@ use txn_types::Key;
 pub struct SplitTask {
     region: metapb::Region,
     peer: metapb::Peer,
-    callback: Callback,
     pub method: SplitMethod,
 }
 
@@ -31,7 +28,7 @@ pub enum SplitMethod {
     MaxSize(u64),
     Keys(Vec<Vec<u8>>),
     SplitFiles,
-    Finish,
+    Finish(Callback),
 }
 
 impl Display for SplitTask {
@@ -46,16 +43,10 @@ impl Display for SplitTask {
 }
 
 impl SplitTask {
-    pub fn new(
-        region: metapb::Region,
-        peer: metapb::Peer,
-        callback: Callback,
-        method: SplitMethod,
-    ) -> SplitTask {
+    pub fn new(region: metapb::Region, peer: metapb::Peer, method: SplitMethod) -> SplitTask {
         Self {
             region,
             peer,
-            callback,
             method,
         }
     }
@@ -86,21 +77,13 @@ impl SplitRunner {
         }
     }
 
-    fn pre_split(
-        &self,
-        region: metapb::Region,
-        peer: metapb::Peer,
-        keys: Vec<Bytes>,
-        callback: Callback,
-    ) {
+    fn pre_split(&self, region: metapb::Region, peer: metapb::Peer, keys: Vec<Bytes>) {
         let mut shard_opt;
         let tag = RegionIDVer::from_region(&region);
         loop {
             shard_opt = self.kv.get_shard(region.get_id());
             if shard_opt.is_none() {
-                let err = box_err!("shard {} not found maybe removed", tag);
-                error!("{:?}", &err);
-                callback.invoke_with_response(new_error(err));
+                error!("shard {} not found maybe removed", tag);
                 return;
             }
             if shard_opt.as_ref().unwrap().get_initial_flushed() {
@@ -112,10 +95,6 @@ impl SplitRunner {
         let shard = shard_opt.unwrap();
         if shard.get_split_stage() != kvenginepb::SplitStage::Initial {
             warn!("wrong split stage"; "region" => tag, "stage" => shard.get_split_stage().value());
-            callback.invoke_with_response(new_error(box_err!(
-                "wrong split stage {}",
-                shard.get_split_stage().value()
-            )));
             return;
         }
         let mut request = new_request(&region, &peer);
@@ -130,37 +109,19 @@ impl SplitRunner {
         let mut custom_builder = CustomBuilder::new();
         custom_builder.set_change_set(change_set);
         request.set_custom_request(custom_builder.build());
-        let cb_split_scheduler = self.split_scheduler.clone();
-        let cmd_cb = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                let err_msg = resp.response.get_header().get_error().get_message();
-                warn!("split runner pre-split failed {:?}", err_msg);
-                callback.invoke_with_response(resp.response);
-            } else {
-                let task = SplitTask {
-                    region,
-                    peer,
-                    callback,
-                    method: SplitMethod::SplitFiles,
-                };
-                debug!("split runner schedule split files task for {:?}", tag);
-                cb_split_scheduler.schedule(task).unwrap();
-            }
-        }));
         debug!(
             "split runner send pre-split command for {:?}, keys: {:?}",
             tag, &keys
         );
-        self.router.send_command(request, cmd_cb).unwrap()
+        self.router.send_command(request, Callback::None).unwrap()
     }
 
-    fn split_files(&self, region: metapb::Region, peer: metapb::Peer, callback: Callback) {
+    fn split_files(&self, region: metapb::Region, peer: metapb::Peer) {
         let res = self
             .kv
             .split_shard_files(region.get_id(), region.get_region_epoch().get_version());
         if let Err(err) = res {
             error!("failed to split files {:?}", &err);
-            callback.invoke_with_response(new_error(err.into()));
             return;
         }
         let cs = res.unwrap();
@@ -168,23 +129,7 @@ impl SplitRunner {
         let mut builder = CustomBuilder::new();
         builder.set_change_set(cs);
         request.set_custom_request(builder.build());
-        let id_ver = RegionIDVer::from_region(&region);
-        let split_keys = self.kv.get_shard(region.get_id()).unwrap().get_split_keys();
-        let cb_router = self.router.clone();
-        let cmd_cb = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                let err_msg = resp.response.get_header().get_error().get_message();
-                error!("failed to execute split files command {}", err_msg);
-                callback.invoke_with_response(resp.response);
-            } else {
-                let msg = PeerMsg::WaitFollowerSplitFiles(MsgWaitFollowerSplitFiles {
-                    split_keys,
-                    callback,
-                });
-                cb_router.send(id_ver.id(), msg).unwrap();
-            }
-        }));
-        self.router.send_command(request, cmd_cb).unwrap();
+        self.router.send_command(request, Callback::None).unwrap();
     }
 
     fn finish_split(&self, region: metapb::Region, peer: metapb::Peer, callback: Callback) {
@@ -192,7 +137,7 @@ impl SplitRunner {
         debug!("split worker finish split for {:?}", id_ver);
         let shard_res = self.kv.get_shard_with_ver(id_ver.id(), id_ver.ver());
         if let Err(err) = shard_res {
-            callback.invoke_with_response(new_error(err.into()));
+            error!("failed finish split for {}, err:{:?}", id_ver, err);
             return;
         }
         let shard = shard_res.unwrap();
@@ -231,8 +176,6 @@ impl Runnable for SplitRunner {
         let tag = RegionIDVer::from_region(&region);
         if shard.is_none() {
             warn!("split check shard not found"; "region" => tag);
-            task.callback
-                .invoke_with_response(new_error(box_err!("shard {} not found", tag)));
             return;
         }
         let shard = shard.unwrap();
@@ -247,7 +190,7 @@ impl Runnable for SplitRunner {
                     warn!("split check got empty split keys"; "region" => tag);
                     return;
                 }
-                self.pre_split(region, peer, keys, Callback::None);
+                self.pre_split(region, peer, keys);
             }
             SplitMethod::Keys(ks) => {
                 let keys = ks
@@ -257,13 +200,13 @@ impl Runnable for SplitRunner {
                         Bytes::from(raw_key)
                     })
                     .collect();
-                self.pre_split(region, peer, keys, task.callback);
+                self.pre_split(region, peer, keys);
             }
             SplitMethod::SplitFiles => {
-                self.split_files(region, peer, task.callback);
+                self.split_files(region, peer);
             }
-            SplitMethod::Finish => {
-                self.finish_split(region, peer, task.callback);
+            SplitMethod::Finish(callback) => {
+                self.finish_split(region, peer, callback);
             }
         };
     }

@@ -3,6 +3,7 @@
 use crate::errors::*;
 use byteorder::{ByteOrder, LittleEndian};
 use kvproto::*;
+use std::time::Instant;
 
 use super::keys::raft_state_key;
 use crate::store::{
@@ -79,6 +80,9 @@ pub(crate) struct PeerStorage {
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
     pub(crate) split_stage: kvenginepb::SplitStage,
     pub(crate) pending_flush: Option<kvenginepb::ChangeSet>,
+    pub(crate) scheduled_split_file_time: Option<Instant>,
+    pub(crate) split_file_done_time: Option<Instant>,
+    pub(crate) scheduled_finish_split: bool,
 }
 
 impl raft::Storage for PeerStorage {
@@ -215,6 +219,9 @@ impl PeerStorage {
             shard_meta,
             split_stage: kvenginepb::SplitStage::Initial,
             pending_flush: None,
+            scheduled_split_file_time: None,
+            split_file_done_time: None,
+            scheduled_finish_split: false,
         })
     }
 

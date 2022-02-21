@@ -174,7 +174,7 @@ impl RaftWorker {
         PeerMsgHandler::new(&mut peer_fsm, &mut self.ctx).handle_msgs(&mut inbox.msgs);
         peer_fsm.peer.handle_raft_ready(&mut self.ctx);
         self.maybe_send_apply(&inbox.peer.applier, &peer_fsm);
-        peer_fsm.peer.maybe_finish_split(&mut self.ctx);
+        peer_fsm.peer.maybe_recover_split(&mut self.ctx);
     }
 
     fn maybe_send_apply(&mut self, applier: &Arc<Mutex<Applier>>, peer_fsm: &PeerFsm) {

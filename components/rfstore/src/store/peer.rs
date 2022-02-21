@@ -7,6 +7,7 @@ use bitflags::bitflags;
 use collections::{HashMap, HashSet};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use kvenginepb::SplitStage;
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{PeerRole, Region};
@@ -34,6 +35,7 @@ use raftstore::store::{local_metrics::*, metrics::*, QueryStats, TxnExt};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::VecDeque;
+use std::ops::{Add, Sub};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -45,7 +47,6 @@ use uuid::Uuid;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
-pub(crate) const EXTRA_CTX_SPLIT_FILE_DONE: u8 = 8;
 pub(crate) const PENDING_CONF_CHANGE_ERR_MSG: &str = "pending conf change";
 
 /// The returned states of the peer after checking whether it is stale
@@ -440,8 +441,7 @@ pub(crate) struct Peer {
     /// marking the lowest bit.
     pub max_ts_sync_status: Arc<AtomicU64>,
 
-    pub(crate) wait_follower_split_files: Option<MsgWaitFollowerSplitFiles>,
-    pub(crate) followers_split_files_done: HashMap<u64, u64>,
+    pub(crate) split_callback: Option<Callback>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker,
@@ -511,8 +511,7 @@ impl Peer {
             peer_stat: PeerStat::default(),
             txn_ext: Arc::new(TxnExt::default()),
             max_ts_sync_status: Arc::new(Default::default()),
-            wait_follower_split_files: None,
-            followers_split_files_done: Default::default(),
+            split_callback: None,
             cmd_epoch_checker: Default::default(),
             pending_split: false,
         };
@@ -1171,12 +1170,6 @@ impl Peer {
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         send_msg.set_from_peer(self.peer.clone());
-        if !self.is_leader()
-            && self.get_store().split_stage == kvenginepb::SplitStage::SplitFileDone
-        {
-            send_msg.mut_extra_ctx().push(EXTRA_CTX_SPLIT_FILE_DONE);
-            info!("follower add extra ctx split files done"; "region" => self.tag());
-        }
         send_msg
     }
 
@@ -1407,6 +1400,9 @@ impl Peer {
                 .truncate_raft_log(region_id, shard_meta.write_sequence);
             self.mut_store().initial_flushed = true;
         }
+        if cs.has_split_files() {
+            self.mut_store().split_file_done_time = Some(Instant::now());
+        }
     }
 
     pub(crate) fn preprocess_pending_splits(
@@ -1428,6 +1424,9 @@ impl Peer {
                 store.shard_meta = Some(new_meta);
                 store.split_stage = kvenginepb::SplitStage::Initial;
                 store.initial_flushed = false;
+                store.scheduled_split_file_time = None;
+                store.split_file_done_time = None;
+                store.scheduled_finish_split = false;
                 // The raft state key changed when region version change, we need to set it here.
                 store.write_raft_state(ctx);
             } else {
@@ -2627,27 +2626,58 @@ impl Peer {
         }
     }
 
-    pub(crate) fn maybe_finish_split(&mut self, ctx: &mut RaftContext) {
-        if self.wait_follower_split_files.is_some() {
-            if self.get_store().split_stage == kvenginepb::SplitStage::SplitFileDone {
-                let epoch_ver = self.region().get_region_epoch().get_version();
-                let mut match_cnt = 0usize;
-                for (_, follower_ver) in &self.followers_split_files_done {
-                    if *follower_ver == epoch_ver {
-                        match_cnt += 1;
+    pub(crate) fn maybe_recover_split(&mut self, ctx: &mut RaftContext) {
+        if self.is_leader() {
+            match self.get_store().split_stage {
+                SplitStage::PreSplitFlushDone => {
+                    self.maybe_schedule_split_file(ctx);
+                }
+                SplitStage::SplitFileDone => {
+                    self.maybe_schedule_split_file(ctx);
+                    self.maybe_schedule_finish_split(ctx);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn maybe_schedule_split_file(&mut self, ctx: &mut RaftContext) {
+        if self.get_store().scheduled_split_file_time.is_none() {
+            info!("leader schedule split files";
+                "region" => self.tag());
+            let split_task = SplitTask::new(
+                self.region().clone(),
+                self.peer.clone(),
+                SplitMethod::SplitFiles,
+            );
+            ctx.global.split_scheduler.schedule(split_task).unwrap();
+            self.mut_store().scheduled_split_file_time = Some(Instant::now());
+        }
+    }
+
+    pub(crate) fn maybe_schedule_finish_split(&mut self, ctx: &mut RaftContext) {
+        if !self.get_store().scheduled_finish_split {
+            let mut wait_enough_time = true;
+            if let Some(schedule_split_file_time) =
+                self.get_store().scheduled_split_file_time.as_ref()
+            {
+                if let Some(split_file_done_time) = self.get_store().split_file_done_time.as_ref() {
+                    let split_file_duration = split_file_done_time.sub(*schedule_split_file_time);
+                    if Instant::now() < split_file_done_time.add(split_file_duration) {
+                        wait_enough_time = false;
                     }
                 }
-                if match_cnt == self.region().get_peers().len() - 1 {
-                    info!("leader schedule finish split"; "region" => self.tag());
-                    let wait = self.wait_follower_split_files.take().unwrap();
-                    let split_task = SplitTask::new(
-                        self.region().clone(),
-                        self.peer.clone(),
-                        wait.callback,
-                        SplitMethod::Finish,
-                    );
-                    ctx.global.split_scheduler.schedule(split_task).unwrap();
-                }
+            }
+            if wait_enough_time {
+                info!("leader schedule finish split"; "region" => self.tag());
+                let callback = self.split_callback.take();
+                let split_task = SplitTask::new(
+                    self.region().clone(),
+                    self.peer.clone(),
+                    SplitMethod::Finish(callback.unwrap_or(Callback::None)),
+                );
+                ctx.global.split_scheduler.schedule(split_task).unwrap();
+                self.mut_store().scheduled_finish_split = true;
             }
         }
     }

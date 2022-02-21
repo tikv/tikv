@@ -6,6 +6,7 @@ use crate::{
     table::sstable::{self, SSTable},
 };
 use kvenginepb as pb;
+use protobuf::ProtobufEnum;
 use std::collections::HashSet;
 
 impl Engine {
@@ -209,7 +210,7 @@ impl Engine {
                 "wrong split stage for apply split files {:?}",
                 shard.get_split_stage()
             );
-            return Err(Error::WrongSplitStage);
+            return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
         }
         let split_files = cs.get_split_files();
         let old_l0s = shard.get_l0_tbls();

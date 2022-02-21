@@ -12,8 +12,8 @@ pub enum Error {
     ShardNotFound,
     #[error("key not match")]
     ShardNotMatch,
-    #[error("wrong split stage")]
-    WrongSplitStage,
+    #[error("wrong split stage {0}")]
+    WrongSplitStage(i32),
     #[error("alloc id error {0}")]
     ErrAllocID(String),
     #[error("open error {0}")]

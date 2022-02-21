@@ -262,7 +262,7 @@ impl ErrorCodeExt for Error {
                 kvengine::Error::KeyNotFound => error_code::raftstore::UNKNOWN,
                 kvengine::Error::ShardNotFound => error_code::raftstore::UNKNOWN,
                 kvengine::Error::ShardNotMatch => error_code::raftstore::UNKNOWN,
-                kvengine::Error::WrongSplitStage => error_code::raftstore::UNKNOWN,
+                kvengine::Error::WrongSplitStage(_) => error_code::raftstore::UNKNOWN,
                 kvengine::Error::ErrAllocID(_) => error_code::raftstore::UNKNOWN,
                 kvengine::Error::ErrOpen(_) => error_code::raftstore::UNKNOWN,
                 kvengine::Error::TableError(_) => error_code::raftstore::UNKNOWN,
