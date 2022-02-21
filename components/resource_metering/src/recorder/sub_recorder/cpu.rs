@@ -121,6 +121,7 @@ mod tests {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"abc".to_vec(),
         });
         let store = LocalStorage {
