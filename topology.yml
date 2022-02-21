@@ -1,0 +1,68 @@
+---
+
+global:
+  user: "qupeng"
+  deploy_dir: /home/qupeng/clusters/four-tikv/deploy
+  data_dir: /home/qupeng/clusters/four-tikv/data
+
+monitored:
+
+grafana_servers:
+  - host: 192.168.101.2
+
+monitoring_servers:
+  - host: 192.168.101.2
+
+##########################################
+
+pd_servers:
+  - host: 192.168.101.2
+
+tikv_servers:
+  - host: 192.168.101.2
+    port: 20160
+    status_port: 20180
+    config:
+      server.labels: { host: "host1" }
+    resource_control:
+      memory_limit: 8G
+      cpu_quota: 300%
+  - host: 192.168.101.2
+    port: 20260
+    status_port: 20280
+    config:
+      server.labels: { host: "host2" }
+    resource_control:
+      memory_limit: 8G
+      cpu_quota: 300%
+  - host: 192.168.101.2
+    port: 20360
+    status_port: 20380
+    config:
+      server.labels: { host: "host3" }
+    resource_control:
+      memory_limit: 8G
+      cpu_quota: 300%
+  - host: 192.168.101.2
+    port: 20460
+    status_port: 20480
+    config:
+      server.labels: { host: "host4" }
+    resource_control:
+      memory_limit: 8G
+      cpu_quota: 300%
+
+tidb_servers:
+  - host: 192.168.101.2
+
+cdc_servers:
+
+server_configs:
+  pd:
+    replication.max-replicas: 3
+    replication.location-labels: ["host"]
+  tidb:
+    performance:
+      run-auto-analyze: false
+  tikv:
+    raft-engine.enable: false
