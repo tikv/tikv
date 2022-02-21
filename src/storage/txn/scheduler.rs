@@ -1029,11 +1029,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             None => return false,
         };
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-        // When `is_valid` is false, it only means we cannot write locks to the in-memory lock table,
+        // When not writable, it only means we cannot write locks to the in-memory lock table,
         // but it is still possible for the region to propose request.
         // When term or epoch version has changed, the request must fail. To be simple, here we just
         // let the request fallback to propose and let raftstore generate an appropriate error.
-        if !pessimistic_locks.is_valid
+        if !pessimistic_locks.is_writable()
             || pessimistic_locks.term != context.get_term()
             || pessimistic_locks.version != context.get_region_epoch().get_version()
         {

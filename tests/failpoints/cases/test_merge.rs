@@ -1510,7 +1510,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     // Then, start merging. PrepareMerge should wait until prewrite is done.
     cluster.merge_region(left.id, right.id, Callback::None);
     thread::sleep(Duration::from_millis(150));
-    assert!(txn_ext.pessimistic_locks.read().is_valid);
+    assert!(txn_ext.pessimistic_locks.read().is_writable());
 
     // But a later prewrite request should fail because we have already banned all later proposals.
     req.mut_mutations()[0].set_key(b"k1".to_vec());
@@ -1574,7 +1574,7 @@ fn test_retry_pending_prepare_merge_fail() {
     // than proposed_index.
     cluster.merge_region(left.id, right.id, Callback::None);
     thread::sleep(Duration::from_millis(200));
-    assert!(txn_ext.pessimistic_locks.read().is_valid);
+    assert!(txn_ext.pessimistic_locks.read().is_writable());
 
     // Set disk full error to let PrepareMerge fail. (Set both peer to full to avoid transferring leader)
     fail::cfg("disk_already_full_peer_1", "return").unwrap();
