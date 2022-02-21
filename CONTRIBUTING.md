@@ -92,11 +92,11 @@ Please follow this style to make TiKV easy to review, maintain, and develop.
 
 ### Build issues
 
-To reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include line numbers only. The easiest way to enable debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
+To reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include full debug. To decrease compilation time with another ~5% (around 10 seconds for a 4 min build time), change the `debug = true` to `debug = 1` in the Cargo.toml file to only include line numbers for `dev` and `test`. Another way to change debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
 
 ```bash
-RUSTFLAGS=-Cdebuginfo=2 make dev
-RUSTFLAGS=-Cdebuginfo=2 cargo build
+RUSTFLAGS=-Cdebuginfo=1 make dev
+RUSTFLAGS=-Cdebuginfo=1 cargo build
 ```
 
 When building with make, cargo will automatically use [pipelined][p] compilation to increase the parallelism of the build. To turn on pipelining while using cargo directly, set `CARGO_BUILD_PIPELINING=true`.

@@ -20950,18 +20950,32 @@
               "refId": "E"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
-              "format": "time_series",
-              "intervalFactor": 1,
-              "legendFormat": "mvcc-deletion-handled",
-              "refId": "F"
-            },
-            {
               "expr": "sum(rate(tikv_gc_compaction_failure{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "failure-{{type}}",
+              "refId": "F"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "mvcc-deletion-met",
               "refId": "G"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "mvcc-deletion-handled",
+              "refId": "H"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "mvcc-deletion-wasted",
+              "refId": "I"
             }
           ],
           "thresholds": [],
@@ -29264,7 +29278,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 38
       },
       "id": 12802,
       "panels": [
@@ -30300,7 +30314,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 39
       },
       "id": 3301,
       "panels": [
@@ -33309,7 +33323,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 40
       },
       "id": 2820,
       "panels": [
@@ -34038,7 +34052,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 41
       },
       "id": 8389,
       "panels": [
@@ -35561,7 +35575,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 42
       },
       "id": 2763,
       "panels": [
@@ -35666,7 +35680,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 43
       },
       "id": 3922,
       "panels": [
@@ -38502,7 +38516,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 44
       },
       "id": 4466,
       "panels": [
