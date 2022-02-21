@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{codec::Result, Either};
+use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
 use std::io::prelude::*;
 use std::io::Cursor;
@@ -15,54 +16,57 @@ pub trait Iterator {
 }
 
 pub struct EventIterator {
-    buf: Cursor<Vec<u8>>,
-    index: usize,
-    len: usize,
-    key: Vec<u8>,
-    val: Vec<u8>,
+    buf: Vec<u8>,
+    offset: usize,
+    key_offset: usize,
+    value_offset: usize,
+    key_len: usize,
+    value_len: usize,
 }
 
 impl EventIterator {
     pub fn new(buf: Vec<u8>) -> EventIterator {
-        let len = buf.len();
         EventIterator {
-            buf: Cursor::new(buf),
-            index: 0,
-            len,
-            key: vec![],
-            val: vec![],
+            buf,
+            offset: 0,
+            key_offset: 0,
+            key_len: 0,
+            value_offset: 0,
+            value_len: 0,
         }
+    }
+
+    fn get_size(&mut self) -> u32 {
+        let result = byteorder::LE::read_u32(&self.buf[self.offset..]);
+        self.offset += 4;
+        result
     }
 }
 
 impl Iterator for EventIterator {
     fn next(&mut self) -> Result<()> {
         if self.valid() {
-            let len = self.buf.get_u32_le() as usize;
-            self.index += 4;
-            self.key.resize(len, 0);
-            self.buf.read_exact(self.key.as_mut_slice())?;
-            self.index += len;
+            self.key_len = self.get_size() as usize;
+            self.key_offset = self.offset;
+            self.offset += self.key_len;
 
-            let len = self.buf.get_u32_le() as usize;
-            self.index += 4;
-            self.val.resize(len, 0);
-            self.buf.read_exact(self.val.as_mut_slice())?;
-            self.index += len;
+            self.value_len = self.get_size() as usize;
+            self.value_offset = self.offset;
+            self.offset += self.value_len;
         }
         Ok(())
     }
 
     fn valid(&self) -> bool {
-        self.index < self.len
+        self.offset < self.buf.len()
     }
 
     fn key(&self) -> &[u8] {
-        &self.key
+        &self.buf[self.key_offset..self.key_offset + self.key_len]
     }
 
     fn value(&self) -> &[u8] {
-        &self.val
+        &self.buf[self.value_offset..self.value_offset + self.value_len]
     }
 }
 

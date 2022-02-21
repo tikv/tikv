@@ -15,9 +15,9 @@ use kvproto::import_sstpb::*;
 use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    name_to_cf, CfName, EncryptionKeyManager, FileEncryptionInfo, Iterator, KvEngine, SSTMetaInfo,
-    SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    name_to_cf, CfName, EncryptionKeyManager, FileEncryptionInfo, Iterator, KvEngine, Mutable,
+    SSTMetaInfo, SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
+    WriteBatch, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use kvproto::kvrpcpb::ApiVersion;
@@ -333,6 +333,7 @@ impl SSTImporter {
         let mut largest_key = None;
 
         let start = Instant::now();
+        let mut wb = engine.write_batch();
         loop {
             if !event_iter.valid() {
                 break;
@@ -382,9 +383,9 @@ impl SSTImporter {
             }
             let value = Cow::Borrowed(event_iter.value());
             // TODO handle delete cf
-            engine.put_cf(cf, &key, &value)?;
+            wb.put_cf(cf, &key, &value)?;
         }
-        engine.flush_cf(cf, true)?;
+        wb.write()?;
         let label = if perform_rewrite { "rewrite" } else { "normal" };
         info!("apply file finished {}", name);
         IMPORTER_APPLY_DURATION
