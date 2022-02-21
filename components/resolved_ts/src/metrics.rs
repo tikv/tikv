@@ -74,7 +74,7 @@ lazy_static! {
         "tikv_resolved_ts_check_leader_duration_seconds",
         "Bucketed histogram of resolved-ts check leader duration",
         &["type"],
-        exponential_buckets(0.005, 2.0, 20).unwrap(),
+        exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
 }
