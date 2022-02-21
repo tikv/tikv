@@ -1015,6 +1015,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
     ) {
+        let addr = ctx.peer();
         let ts = request.get_ts();
         let leaders = request.take_regions().into();
         let (cb, resp) = paired_future_callback();
@@ -1028,8 +1029,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             sink.success(resp).await?;
             ServerResult::Ok(())
         }
+<<<<<<< HEAD
         .map_err(|e| {
             warn!("cdc call CheckLeader failed"; "err" => ?e);
+=======
+        .map_err(move |e| {
+            // CheckLeader only needs quorum responses, remote may drops
+            // requests early.
+            info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
         })
         .map(|_| ());
 

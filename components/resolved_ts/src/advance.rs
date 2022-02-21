@@ -1,6 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::sync::{Arc, Mutex};
+=======
+use std::ffi::CString;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
 use std::time::Duration;
 
 use collections::HashMap;
@@ -18,11 +24,18 @@ use raftstore::store::msg::{Callback, SignificantMsg};
 use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
+use tikv_util::{error, info};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
+<<<<<<< HEAD
 use crate::errors::Result;
+=======
+use crate::errors::{Error, Result};
+use crate::metrics::*;
+use crate::util;
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
 
 pub struct AdvanceTsWorker<T, E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -295,6 +308,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
             async move {
+<<<<<<< HEAD
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
                     let store = box_try!(pd_client.get_store_async(store_id).await);
                     let cb = ChannelBuilder::new(env.clone());
@@ -311,6 +325,70 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 let res = box_try!(client.check_leader_async(&req)).await;
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
+=======
+                let client =
+                    get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
+                        .await;
+                let client = match client {
+                    Ok(client) => client,
+                    Err(err) => {
+                        error!("check leader failed";
+                                "error" => ?err,
+                                "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let mut req = CheckLeaderRequest::default();
+                req.set_regions(regions.into());
+                req.set_ts(min_ts.into_inner());
+                let start = Instant::now_coarse();
+                defer!({
+                    let elapsed = start.saturating_elapsed();
+                    slow_log!(
+                        elapsed,
+                        "check leader rpc costs too long, store_id: {}, to_store: {}",
+                        store_id,
+                        to_store
+                    );
+                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                        .with_label_values(&["rpc"])
+                        .observe(elapsed.as_secs_f64());
+                });
+                let rpc = match client.check_leader_async(&req) {
+                    Ok(rpc) => rpc,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+                let res_timout = tokio::time::timeout(timeout, rpc).await;
+                let res = match res_timout {
+                    Ok(res) => res,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let resp = match res {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                Result::Ok((to_store, resp))
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
             }
         });
         let resps = futures::future::join_all(stores).await;
@@ -344,4 +422,86 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             })
             .collect()
     }
+<<<<<<< HEAD
+=======
+    valid_regions.into_iter().collect()
+}
+
+fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
+    let mut voters = 0;
+    let mut incoming_voters = 0;
+    let mut demoting_voters = 0;
+
+    let mut resp_voters = 0;
+    let mut resp_incoming_voters = 0;
+    let mut resp_demoting_voters = 0;
+
+    peers.iter().for_each(|peer| {
+        let mut in_resp = false;
+        for store_id in stores {
+            if *store_id == peer.store_id {
+                in_resp = true;
+                break;
+            }
+        }
+        match peer.get_role() {
+            PeerRole::Voter => {
+                voters += 1;
+                if in_resp {
+                    resp_voters += 1;
+                }
+            }
+            PeerRole::IncomingVoter => {
+                incoming_voters += 1;
+                if in_resp {
+                    resp_incoming_voters += 1;
+                }
+            }
+            PeerRole::DemotingVoter => {
+                demoting_voters += 1;
+                if in_resp {
+                    resp_demoting_voters += 1;
+                }
+            }
+            PeerRole::Learner => (),
+        }
+    });
+
+    let has_incoming_majority =
+        (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
+    let has_demoting_majority =
+        (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
+
+    has_incoming_majority && has_demoting_majority
+}
+
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
+
+async fn get_tikv_client(
+    store_id: u64,
+    pd_client: Arc<dyn PdClient>,
+    security_mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+) -> Result<TikvClient> {
+    let mut clients = tikv_clients.lock().await;
+    let client = match clients.get(&store_id) {
+        Some(client) => client.clone(),
+        None => {
+            let start = Instant::now_coarse();
+            let store = box_try!(pd_client.get_store_async(store_id).await);
+            // hack: so it's different args, grpc will always create a new connection.
+            let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
+                CString::new("random id").unwrap(),
+                CONN_ID.fetch_add(1, Ordering::SeqCst),
+            );
+            let channel = security_mgr.connect(cb, &store.address);
+            let client = TikvClient::new(channel);
+            clients.insert(store_id, client.clone());
+            RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+            client
+        }
+    };
+    Ok(client)
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
 }
