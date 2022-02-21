@@ -277,7 +277,7 @@ pub async fn region_resolved_ts_store(
                         return Err(Error::Other(box_err!(err)));
                     }
                 };
-                Result::Ok((store_id, resp))
+                Result::Ok((to_store, resp))
             }
             .boxed()
         })
@@ -374,6 +374,7 @@ async fn get_tikv_client(
     let client = match clients.get(&store_id) {
         Some(client) => client.clone(),
         None => {
+            let start = Instant::now_coarse();
             let store = box_try!(pd_client.get_store_async(store_id).await);
             // hack: so it's different args, grpc will always create a new connection.
             let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
@@ -383,6 +384,7 @@ async fn get_tikv_client(
             let channel = security_mgr.connect(cb, &store.address);
             let client = TikvClient::new(channel);
             clients.insert(store_id, client.clone());
+            RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
             client
         }
     };
