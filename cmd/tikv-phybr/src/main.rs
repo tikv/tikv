@@ -1,24 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ::phybr::phybr::RegionMeta;
+use ::phybr::phybr::{RegionMeta, RegionRecover};
 use ::phybr::phybr_grpc::PhybrClient;
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
-use engine_traits::Iterable;
-use engine_traits::Peekable;
-use engine_traits::RaftEngine;
-use engine_traits::RaftLogBatch;
-use engine_traits::{Engines, CF_RAFT};
+use engine_traits::{
+    Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngine, RaftLogBatch, WriteBatch,
+    WriteBatchExt, CF_DEFAULT, CF_RAFT,
+};
 use futures::executor::block_on;
-use futures::future::ready;
 use futures::sink::SinkExt;
 use futures::stream::{self, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Environment, Error as GrpcError, WriteFlags};
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState};
 use protobuf::Message;
 use raftstore::store::peer_storage::{init_apply_state, init_raft_state, last_index};
 use structopt::StructOpt;
@@ -73,7 +72,30 @@ fn init_engines(config: &TiKvConfig) -> Result<Engines<RocksEngine, RocksEngine>
     Ok(engines)
 }
 
-fn scan_regions(engines: &Engines<RocksEngine, RocksEngine>) -> Result<Vec<RegionMeta>, String> {
+#[derive(Debug)]
+struct RegionMetaDetail {
+    raft_state: RaftLocalState,
+    region_state: RegionLocalState,
+    apply_state: RaftApplyState,
+}
+
+impl RegionMetaDetail {
+    fn to_region_meta(&self) -> RegionMeta {
+        let mut region_meta = RegionMeta::default();
+        region_meta.region_id = self.region_state.get_region().id;
+        region_meta.applied_index = self.apply_state.applied_index;
+        region_meta.term = self.raft_state.get_hard_state().term;
+        region_meta.version = self.region_state.get_region().get_region_epoch().version;
+        region_meta.tombstone = self.region_state.state == PeerState::Tombstone;
+        region_meta.start_key = self.region_state.get_region().get_start_key().to_owned();
+        region_meta.end_key = self.region_state.get_region().get_end_key().to_owned();
+        region_meta
+    }
+}
+
+fn scan_regions(
+    engines: &Engines<RocksEngine, RocksEngine>,
+) -> Result<Vec<RegionMetaDetail>, String> {
     let mut region_metas = Vec::with_capacity(1024 * 1024);
     let mut raft_wb = engines.raft.log_batch(4 * 1024);
     engines.kv.scan_cf(
@@ -90,6 +112,11 @@ fn scan_regions(engines: &Engines<RocksEngine, RocksEngine>) -> Result<Vec<Regio
             let mut region_state = RegionLocalState::default();
             region_state.merge_from_bytes(value).unwrap();
 
+            if region_state.get_state() == PeerState::Tombstone {
+                // I think skip tombstone replicas is ok.
+                return Ok(true);
+            }
+
             let mut raft_state = init_raft_state(engines, region_state.get_region()).unwrap();
             if region_state.get_state() == PeerState::Applying {
                 if let Some(snapshot_raft_state) = engines
@@ -105,16 +132,11 @@ fn scan_regions(engines: &Engines<RocksEngine, RocksEngine>) -> Result<Vec<Regio
             }
 
             let apply_state = init_apply_state(engines, region_state.get_region()).unwrap();
-
-            let mut region_meta = RegionMeta::default();
-            region_meta.region_id = region_id;
-            region_meta.applied_index = apply_state.applied_index;
-            region_meta.term = raft_state.get_hard_state().term;
-            region_meta.version = region_state.get_region().get_region_epoch().version;
-            region_meta.tombstone = region_state.state == PeerState::Tombstone;
-            region_meta.start_key = region_state.get_region().get_start_key().to_owned();
-            region_meta.end_key = region_state.get_region().get_end_key().to_owned();
-            region_metas.push(region_meta);
+            region_metas.push(RegionMetaDetail {
+                raft_state,
+                region_state,
+                apply_state,
+            });
             Ok(true)
         },
     )?;
@@ -131,9 +153,18 @@ fn main() {
     config.storage.data_dir = opts.data_dir;
 
     let engines = init_engines(&config).unwrap();
+    let mut region_meta_details = scan_regions(&engines).unwrap();
+
+    let region_metas = region_meta_details
+        .iter()
+        .map(|x| x.to_region_meta())
+        .collect::<Vec<_>>();
+    println!("region metas to report:");
+    for meta in &region_metas {
+        println!("\t{:?}", meta)
+    }
     let mut region_metas = stream::iter(
-        scan_regions(&engines)
-            .unwrap()
+        region_metas
             .into_iter()
             .map(|x| Ok((x, WriteFlags::default()))),
     );
@@ -143,10 +174,10 @@ fn main() {
         .keepalive_timeout(Duration::from_secs(3))
         .connect(&opts.adviser);
     let client = PhybrClient::new(channel);
-    let (mut sink, receiver) = match client.recover_regions() {
+    let (mut sink, mut receiver) = match client.recover_regions() {
         Ok((x, y)) => (x, y),
         Err(e) => {
-            eprintln!("rpc fail: {}", e);
+            eprintln!("rpc send fail: {}", e);
             return;
         }
     };
@@ -155,8 +186,68 @@ fn main() {
     println!("send: {:?}", res);
     let res = block_on(sink.close());
     println!("send close: {:?}", res);
-    let res = block_on(receiver.for_each(|x| ready(println!("receive: {:?}", x))));
+
+    let mut commands = HashMap::<u64, RegionRecover>::default();
+    let res: Result<(), ()> = block_on(async {
+        while let Some(command) = receiver.next().await {
+            let command = command.map_err(|e| eprintln!("rpc recv fail: {}", e))?;
+            assert!(commands.insert(command.region_id, command).is_none());
+        }
+        // future::ok::<_, GrpcError>(());
+        Ok(())
+    });
     println!("recv res: {:?}", res);
+
+    let mut raft_wb = engines.raft.log_batch(4 * 1024);
+    let mut kv_wb = engines.kv.write_batch();
+    let mut force_leaders = Vec::new();
+    for md in &mut region_meta_details {
+        let rid = md.region_state.get_region().id;
+        let (mut raft_changed, mut region_changed) = (false, false);
+
+        let applied_index = md.apply_state.applied_index;
+        if md.raft_state.last_index != applied_index {
+            raft_wb.cut_logs(rid, applied_index, md.raft_state.last_index + 1);
+            md.raft_state.last_index = applied_index;
+            raft_changed = true;
+        }
+        if md.raft_state.get_hard_state().commit != applied_index {
+            md.raft_state.mut_hard_state().commit = applied_index;
+            raft_changed = true;
+        }
+
+        if let Some(command) = commands.get(&rid) {
+            if command.tombstone {
+                md.region_state.set_state(PeerState::Tombstone);
+                region_changed = true;
+                raft_changed = false;
+            } else {
+                if command.term != md.raft_state.get_hard_state().term {
+                    md.raft_state.mut_hard_state().term = command.term;
+                    raft_changed = true;
+                }
+                if !command.silence {
+                    force_leaders.push(rid);
+                }
+            }
+        }
+
+        if raft_changed {
+            let key = keys::raft_state_key(rid);
+            raft_wb
+                .put_msg_cf(CF_DEFAULT, &key, &md.raft_state)
+                .unwrap();
+        }
+        if region_changed {
+            let key = keys::region_state_key(rid);
+            kv_wb.put_msg_cf(CF_RAFT, &key, &md.region_state).unwrap();
+        }
+    }
+    kv_wb.write().unwrap();
+    engines.kv.sync_wal().unwrap();
+    engines.raft.consume(&mut raft_wb, true).unwrap();
+
+    // TODO: start the tikv node.
 }
 
 #[allow(dead_code)]
