@@ -15,38 +15,57 @@ use tikv_util::{box_try, debug, error, warn};
 use crate::store::{CasualMessage, CasualRouter};
 
 const MAX_GC_REGION_BATCH: usize = 512;
-const MAX_REGION_NORMAL_GC_LOG_NUBER: u64 = 10240;
+const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
+
+pub struct TaskGcItem {
+    region_id: u64,
+    start_idx: u64,
+    end_idx: u64,
+    flush: bool,
+    cb: Option<Box<dyn FnOnce() + Send>>,
+}
 
 pub enum Task {
-    Gc {
-        region_id: u64,
-        start_idx: u64,
-        end_idx: u64,
-    },
+    Gc(TaskGcItem),
     Purge,
 }
 
 impl Task {
     pub fn gc(region_id: u64, start: u64, end: u64) -> Self {
-        Task::Gc {
+        Task::Gc(TaskGcItem {
             region_id,
             start_idx: start,
             end_idx: end,
+            flush: false,
+            cb: None,
+        })
+    }
+
+    pub fn flush(mut self) -> Self {
+        if let Task::Gc(t) = &mut self {
+            t.flush = true;
         }
+        self
+    }
+
+    pub fn when_done(mut self, callback: impl FnOnce() + Send + 'static) -> Self {
+        if let Task::Gc(t) = &mut self {
+            t.cb = Some(Box::new(callback));
+        }
+        self
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Gc {
-                region_id,
-                start_idx,
-                end_idx,
-            } => write!(
+            Task::Gc(t) => write!(
                 f,
-                "GC Raft Logs [region: {}, from: {}, to: {}]",
-                region_id, start_idx, end_idx
+                "GC Raft Logs [region: {}, from: {}, to: {}, has_cb: {}]",
+                t.region_id,
+                t.start_idx,
+                t.end_idx,
+                t.cb.is_some()
             ),
             Task::Purge => write!(f, "Purge Expired Files",),
         }
@@ -84,6 +103,9 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
 
     /// Does the GC job and returns the count of logs collected.
     fn gc_raft_log(&mut self, regions: Vec<RaftLogGCTask>) -> Result<usize, Error> {
+        fail::fail_point!("worker_gc_raft_log", |s| {
+            Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
+        });
         let deleted = box_try!(self.engines.raft.batch_gc(regions));
         Ok(deleted)
     }
@@ -107,24 +129,31 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
         });
         let tasks = std::mem::take(&mut self.tasks);
         let mut groups = Vec::with_capacity(tasks.len());
+        let mut cbs = Vec::new();
         let mut need_purge = false;
         for t in tasks {
             match t {
-                Task::Gc {
-                    region_id,
-                    start_idx,
-                    end_idx,
-                } => {
-                    debug!("gc raft log"; "region_id" => region_id, "end_index" => end_idx);
-                    if start_idx != 0 && end_idx > start_idx + MAX_REGION_NORMAL_GC_LOG_NUBER {
-                        warn!("gc raft log with a large range"; "region_id" => region_id,
-                            "start_index" => start_idx,
-                            "end_index" => end_idx);
+                Task::Gc(t) => {
+                    debug!("gc raft log"; "region_id" => t.region_id, "start_index" => t.start_idx, "end_index" => t.end_idx);
+                    if let Some(cb) = t.cb {
+                        cbs.push(cb);
+                    }
+                    if t.start_idx == t.end_idx {
+                        // It's only for flush.
+                        continue;
+                    }
+                    if t.start_idx != 0 && t.end_idx > t.start_idx + MAX_REGION_NORMAL_GC_LOG_NUMBER
+                    {
+                        warn!(
+                            "gc raft log with a large range";
+                            "region_id" => t.region_id,
+                            "start_index" => t.start_idx,
+                            "end_index" => t.end_idx);
                     }
                     groups.push(RaftLogGCTask {
-                        raft_group_id: region_id,
-                        from: start_idx,
-                        to: end_idx,
+                        raft_group_id: t.region_id,
+                        from: t.start_idx,
+                        to: t.end_idx,
                     });
                 }
                 Task::Purge => {
@@ -141,6 +170,9 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
                 debug!("gc log entries";  "entry_count" => n);
                 self.report_collected(n);
             }
+        }
+        for cb in cbs {
+            cb()
         }
         if !need_purge {
             return;
@@ -168,8 +200,13 @@ where
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
+        let flush_now = match &task {
+            Task::Gc(t) => t.flush,
+            _ => false,
+        };
         self.tasks.push(task);
-        if self.tasks.len() > MAX_GC_REGION_BATCH {
+        // TODO: maybe they should also be batched even `flush_now` is true.
+        if flush_now || self.tasks.len() > MAX_GC_REGION_BATCH {
             self.flush();
         }
     }
