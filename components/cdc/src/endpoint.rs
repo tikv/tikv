@@ -67,6 +67,8 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 // 10 minutes, it's the default gc life time of TiDB
 // and is long enough for most transactions.
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
+// Suppress repeat resolved ts lag warnning.
+const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
     Downstream {
@@ -262,8 +264,8 @@ impl ResolvedRegionHeap {
         }))
     }
 
-    // Pops outlier regions and the minimum resolved ts among them.
-    fn pop_outliers(&mut self, count: usize) -> (TimeStamp, HashSet<u64>) {
+    // Pop slow regions and the minimum resolved ts among them.
+    fn pop(&mut self, count: usize) -> (TimeStamp, HashSet<u64>) {
         let mut min_resolved_ts = TimeStamp::max();
         let mut outliers = HashSet::with_capacity_and_hasher(count, Default::default());
         for _ in 0..count {
@@ -279,16 +281,25 @@ impl ResolvedRegionHeap {
         (min_resolved_ts, outliers)
     }
 
-    fn into_hash_set(self) -> (TimeStamp, HashSet<u64>) {
+    fn to_hash_set(&self) -> (TimeStamp, HashSet<u64>) {
         let mut min_resolved_ts = TimeStamp::max();
         let mut regions = HashSet::with_capacity_and_hasher(self.heap.len(), Default::default());
-        for resolved_region in self.heap {
+        for resolved_region in &self.heap {
             regions.insert(resolved_region.0.region_id);
             if min_resolved_ts > resolved_region.0.resolved_ts {
                 min_resolved_ts = resolved_region.0.resolved_ts;
             }
         }
         (min_resolved_ts, regions)
+    }
+
+    fn clear(&mut self) {
+        self.heap.clear();
+    }
+
+    fn reset_and_shrink_to(&mut self, min_capacity: usize) {
+        self.clear();
+        self.heap.shrink_to(min_capacity);
     }
 }
 
@@ -311,28 +322,31 @@ pub struct Endpoint<T, E> {
     concurrency_manager: ConcurrencyManager,
 
     config: CdcConfig,
+
+    // Incremental scan
     workers: Runtime,
     scan_concurrency_semaphore: Arc<Semaphore>,
-
     scan_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
-
-    min_resolved_ts: TimeStamp,
-    min_ts_region_id: u64,
-    old_value_cache: OldValueCache,
-
-    // stats
-    resolved_region_count: usize,
-    unresolved_region_count: usize,
-
     sink_memory_quota: MemoryQuota,
 
+    old_value_cache: OldValueCache,
+    resolved_region_heap: ResolvedRegionHeap,
+
+    // Check leader
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
+
+    // Metrics and logging.
+    min_resolved_ts: TimeStamp,
+    min_ts_region_id: u64,
+    resolved_region_count: usize,
+    unresolved_region_count: usize,
+    warn_resolved_ts_repeat_count: usize,
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
@@ -402,12 +416,17 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             concurrency_manager,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
+            resolved_region_heap: ResolvedRegionHeap {
+                heap: BinaryHeap::new(),
+            },
             old_value_cache,
             resolved_region_count: 0,
             unresolved_region_count: 0,
             sink_memory_quota,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
             region_read_progress,
+            // Log the first resolved ts warnning.
+            warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
         };
         ep.register_min_ts_event();
         ep
@@ -775,12 +794,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+        // Reset resolved_regions to empty.
+        let resolved_regions = &mut self.resolved_region_heap;
+        resolved_regions.clear();
+
         let total_region_count = regions.len();
-        // TODO: figure out how to avoid create binary heap and hashset
-        //       every time, saving some CPU.
-        let mut resolved_regions = ResolvedRegionHeap {
-            heap: BinaryHeap::with_capacity(regions.len()),
-        };
         self.min_resolved_ts = TimeStamp::max();
         let mut advance_ok = 0;
         let mut advance_failed_none = 0;
@@ -816,14 +834,18 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             .physical()
             .saturating_sub(self.min_resolved_ts.physical());
         if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-            warn!("cdc resolved ts lag too large";
-                "min_resolved_ts" => self.min_resolved_ts,
-                "min_ts_region_id" => self.min_ts_region_id,
-                "min_ts" => min_ts,
-                "ok" => advance_ok,
-                "none" => advance_failed_none,
-                "stale" => advance_failed_stale,
-                "same" => advance_failed_same);
+            self.warn_resolved_ts_repeat_count += 1;
+            if self.warn_resolved_ts_repeat_count >= WARN_RESOLVED_TS_COUNT_THRESHOLD {
+                self.warn_resolved_ts_repeat_count = 0;
+                warn!("cdc resolved ts lag too large";
+                    "min_resolved_ts" => self.min_resolved_ts,
+                    "min_ts_region_id" => self.min_ts_region_id,
+                    "min_ts" => min_ts,
+                    "ok" => advance_ok,
+                    "none" => advance_failed_none,
+                    "stale" => advance_failed_stale,
+                    "same" => advance_failed_same);
+            }
         }
         self.resolved_region_count = resolved_regions.heap.len();
         self.unresolved_region_count = total_region_count - self.resolved_region_count;
@@ -833,14 +855,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         // and 2) resolved ts of normal regions does not fallback.
         //
         // Max number of outliers, in most cases, only a few regions are outliers.
+        // TODO: figure out how to avoid create hashset every time, saving some CPU.
         let max_outlier_count = 32;
-        let (outlier_min_resolved_ts, outlier_regions) =
-            resolved_regions.pop_outliers(max_outlier_count);
+        let (outlier_min_resolved_ts, outlier_regions) = resolved_regions.pop(max_outlier_count);
+        let (normal_min_resolved_ts, normal_regions) = resolved_regions.to_hash_set();
         self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
-        if !resolved_regions.heap.is_empty() {
-            let (min_resolved_ts, regions) = resolved_regions.into_hash_set();
-            self.broadcast_resolved_ts(min_resolved_ts, regions);
-        }
+        self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1017,7 +1037,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             }
             let lag_millis = min_ts_pd.physical().saturating_sub(min_ts.physical());
             if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-                warn!("cdc min_ts lag too large";
+                // TODO: Suppress repeat logs by using WARN_RESOLVED_TS_COUNT_THRESHOLD.
+                info!("cdc min_ts lag too large";
                     "min_ts" => min_ts, "min_ts_pd" => min_ts_pd,
                     "min_ts_min_lock" => min_ts_min_lock);
             }
@@ -1575,6 +1596,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
+        // Reclaim resolved_region_heap memory.
+        self.resolved_region_heap
+            .reset_and_shrink_to(self.capture_regions.len());
+
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["unresolved"])
@@ -2856,25 +2881,25 @@ mod tests {
         heap.push(6, 6.into());
         heap.push(3, 3.into());
 
-        let (ts, regions) = heap.pop_outliers(0);
+        let (ts, regions) = heap.pop(0);
         assert_eq!(ts, TimeStamp::max());
         assert!(regions.is_empty());
 
-        let (ts, regions) = heap.pop_outliers(2);
+        let (ts, regions) = heap.pop(2);
         assert_eq!(ts, 3.into());
         assert_eq!(regions.len(), 2);
         assert!(regions.contains(&3));
         assert!(regions.contains(&4));
 
         // Pop outliers more then it has.
-        let (ts, regions) = heap.pop_outliers(3);
+        let (ts, regions) = heap.pop(3);
         assert_eq!(ts, 5.into());
         assert_eq!(regions.len(), 2);
         assert!(regions.contains(&5));
         assert!(regions.contains(&6));
 
         // Empty regions
-        let (ts, regions) = heap.into_hash_set();
+        let (ts, regions) = heap.to_hash_set();
         assert_eq!(ts, TimeStamp::max());
         assert!(regions.is_empty());
 
@@ -2886,16 +2911,24 @@ mod tests {
         heap1.push(6, 6.into());
         heap1.push(3, 3.into());
 
-        let (ts, regions) = heap1.pop_outliers(1);
+        let (ts, regions) = heap1.pop(1);
         assert_eq!(ts, 3.into());
         assert_eq!(regions.len(), 1);
         assert!(regions.contains(&3));
 
-        let (ts, regions) = heap1.into_hash_set();
+        let (ts, regions) = heap1.to_hash_set();
         assert_eq!(ts, 4.into());
         assert_eq!(regions.len(), 3);
         assert!(regions.contains(&4));
         assert!(regions.contains(&5));
         assert!(regions.contains(&6));
+
+        heap1.reset_and_shrink_to(3);
+        assert_eq!(3, heap1.heap.capacity());
+        assert!(heap1.heap.is_empty());
+
+        heap1.push(1, 1.into());
+        heap1.clear();
+        assert!(heap1.heap.is_empty());
     }
 }
