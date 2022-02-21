@@ -70,4 +70,17 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_resolved_ts_check_leader_duration_seconds",
+        "Bucketed histogram of resolved-ts check leader duration",
+        &["type"],
+        exponential_buckets(0.005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_resolved_ts_tikv_client_init_duration_seconds",
+        "Bucketed histogram of resolved-ts tikv client initializing duration",
+        exponential_buckets(0.005, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
