@@ -1,6 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::sync::{Arc, Mutex};
+=======
+use std::ffi::CString;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
 use std::time::Duration;
 
 use collections::HashMap;
@@ -18,12 +24,19 @@ use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
+use tikv_util::{error, info};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
+<<<<<<< HEAD
 use crate::errors::Result;
 use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
+=======
+use crate::errors::{Error, Result};
+use crate::metrics::*;
+use crate::util;
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -199,6 +212,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
+<<<<<<< HEAD
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
                     let store = box_try!(pd_client.get_store_async(store_id).await);
                     let cb = ChannelBuilder::new(env.clone());
@@ -221,6 +235,70 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
                 );
                 let resp = box_try!(res);
                 Result::Ok((store_id, resp))
+=======
+                let client =
+                    get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
+                        .await;
+                let client = match client {
+                    Ok(client) => client,
+                    Err(err) => {
+                        error!("check leader failed";
+                                "error" => ?err,
+                                "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let mut req = CheckLeaderRequest::default();
+                req.set_regions(regions.into());
+                req.set_ts(min_ts.into_inner());
+                let start = Instant::now_coarse();
+                defer!({
+                    let elapsed = start.saturating_elapsed();
+                    slow_log!(
+                        elapsed,
+                        "check leader rpc costs too long, store_id: {}, to_store: {}",
+                        store_id,
+                        to_store
+                    );
+                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                        .with_label_values(&["rpc"])
+                        .observe(elapsed.as_secs_f64());
+                });
+                let rpc = match client.check_leader_async(&req) {
+                    Ok(rpc) => rpc,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+                let res_timout = tokio::time::timeout(timeout, rpc).await;
+                let res = match res_timout {
+                    Ok(res) => res,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let resp = match res {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                Result::Ok((to_store, resp))
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
             }
         });
         let resps = futures::future::join_all(stores).await;
@@ -309,10 +387,38 @@ fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
     has_incoming_majority && has_demoting_majority
 }
 
+<<<<<<< HEAD
 fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
     for peer in peer_list {
         if peer.id == peer_id {
             return Some(peer.store_id);
+=======
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
+
+async fn get_tikv_client(
+    store_id: u64,
+    pd_client: Arc<dyn PdClient>,
+    security_mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+) -> Result<TikvClient> {
+    let mut clients = tikv_clients.lock().await;
+    let client = match clients.get(&store_id) {
+        Some(client) => client.clone(),
+        None => {
+            let start = Instant::now_coarse();
+            let store = box_try!(pd_client.get_store_async(store_id).await);
+            // hack: so it's different args, grpc will always create a new connection.
+            let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
+                CString::new("random id").unwrap(),
+                CONN_ID.fetch_add(1, Ordering::SeqCst),
+            );
+            let channel = security_mgr.connect(cb, &store.address);
+            let client = TikvClient::new(channel);
+            clients.insert(store_id, client.clone());
+            RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+            client
+>>>>>>> ff58728e0... cdc: separate resolved region outliers (#11991)
         }
     }
     None
