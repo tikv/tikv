@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ffi::CString;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -18,15 +20,17 @@ use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
+use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
+use tikv_util::{error, info};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::Mutex;
 use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
-use crate::errors::Result;
-use crate::metrics::{CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM, CHECK_LEADER_REQ_SIZE_HISTOGRAM};
+use crate::errors::{Error, Result};
+use crate::metrics::*;
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -203,7 +207,7 @@ pub async fn region_resolved_ts_store(
     let store_count = store_map.len();
     let mut stores: Vec<_> = store_map
         .into_iter()
-        .map(|(store_id, regions)| {
+        .map(|(to_store, regions)| {
             let tikv_clients = tikv_clients.clone();
             let env = env.clone();
             let pd_client = pd_client.clone();
@@ -212,25 +216,65 @@ pub async fn region_resolved_ts_store(
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
             async move {
-                let client = box_try!(
-                    get_tikv_client(store_id, pd_client, security_mgr, env, tikv_clients.clone())
-                        .await
-                );
+                let client =
+                    get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
+                        .await;
+                let client = match client {
+                    Ok(client) => client,
+                    Err(err) => {
+                        error!("check leader failed";
+                                "error" => ?err,
+                                "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
-                let res = box_try!(
-                    tokio::time::timeout(
-                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
-                        box_try!(client.check_leader_async(&req))
-                    )
-                    .await
-                );
+                let start = Instant::now_coarse();
+                defer!({
+                    let elapsed = start.saturating_elapsed();
+                    slow_log!(
+                        elapsed,
+                        "check leader rpc costs too long, store_id: {}, to_store: {}",
+                        store_id,
+                        to_store
+                    );
+                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                        .with_label_values(&["rpc"])
+                        .observe(elapsed.as_secs_f64());
+                });
+                let rpc = match client.check_leader_async(&req) {
+                    Ok(rpc) => rpc,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
+                let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+                let res_timout = tokio::time::timeout(timeout, rpc).await;
+                let res = match res_timout {
+                    Ok(res) => res,
+                    Err(err) => {
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
+                    }
+                };
                 let resp = match res {
                     Ok(resp) => resp,
                     Err(err) => {
-                        tikv_clients.lock().await.remove(&store_id);
-                        return Err(box_err!(err));
+                        error!("check leader failed";
+                            "error" => ?err,
+                            "store_id" => store_id, "to_store" => to_store);
+                        tikv_clients.lock().await.remove(&to_store);
+                        return Err(Error::Other(box_err!(err)));
                     }
                 };
                 Result::Ok((store_id, resp))
@@ -317,6 +361,8 @@ fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
     None
 }
 
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
+
 async fn get_tikv_client(
     store_id: u64,
     pd_client: Arc<dyn PdClient>,
@@ -329,7 +375,11 @@ async fn get_tikv_client(
         Some(client) => client.clone(),
         None => {
             let store = box_try!(pd_client.get_store_async(store_id).await);
-            let cb = ChannelBuilder::new(env.clone());
+            // hack: so it's different args, grpc will always create a new connection.
+            let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
+                CString::new("random id").unwrap(),
+                CONN_ID.fetch_add(1, Ordering::SeqCst),
+            );
             let channel = security_mgr.connect(cb, &store.address);
             let client = TikvClient::new(channel);
             clients.insert(store_id, client.clone());
