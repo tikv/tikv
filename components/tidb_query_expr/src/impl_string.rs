@@ -524,11 +524,11 @@ pub fn insert_utf8(
     if ulen > slen - upos + 1 || len < 0 {
         ulen = slen - upos + 1;
     }
-    let mut ret = String::with_capacity(newstr.chars().count() + slen);
-    ret.push_str(&s[0..upos - 1]);
-    ret.push_str(newstr);
-    ret.push_str(&s[upos + ulen - 1..]);
-    Ok(writer.write_ref(Some(ret.as_bytes())))
+    let mut pw = writer.begin();
+    pw.partial_write(&s[0..upos - 1].as_bytes());
+    pw.partial_write(newstr.as_bytes());
+    pw.partial_write(&s[upos + ulen - 1..].as_bytes());
+    Ok(pw.finish())
 }
 
 #[rpn_fn(writer)]
