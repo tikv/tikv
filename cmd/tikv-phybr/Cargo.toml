@@ -19,6 +19,7 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raftstore = { path = "../../components/raftstore", default-features = false }
 tikv = { path = "../../" }
 tikv_util = { path = "../../components/tikv_util", default-features = false }
+server = { path = "../../components/server", default-features = false }
 structopt = "0.3"
 toml = "0.5"
 

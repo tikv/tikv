@@ -87,6 +87,7 @@ use tikv::{
         txn::flow_controller::FlowController, Engine,
     },
 };
+use tikv_util::config::ReadableDuration;
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
@@ -145,6 +146,57 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_storage_stats_task(engines);
             tikv.run_server(server_config);
             tikv.run_status_server();
+
+            signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+            tikv.stop();
+        }};
+    }
+
+    if !config.raft_engine.enable {
+        run_impl!(RocksEngine)
+    } else {
+        run_impl!(RaftLogEngine)
+    }
+}
+
+pub fn run_phybr(mut config: TiKvConfig) {
+    // For phybr, no raft peers can start a new election.
+    let bt = config.raft_store.raft_base_tick_interval.0;
+    let et = 24 * 60 * 60;
+    config.raft_store.raft_election_timeout_ticks = et;
+    config.raft_store.peer_stale_state_check_interval = ReadableDuration(bt * 4 * et as _);
+    config.raft_store.abnormal_leader_missing_duration = ReadableDuration(bt * 4 * et as _);
+    config.raft_store.max_leader_missing_duration = ReadableDuration(bt * 4 * et as _);
+
+    initial_logger(&config);
+
+    // Print version information.
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    tikv::log_tikv_info(build_timestamp);
+
+    // Print resource quota.
+    SysQuota::log_quota();
+    CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
+
+    // Do some prepare works before start.
+    pre_start();
+
+    let _m = Monitor::default();
+
+    macro_rules! run_impl {
+        ($ER: ty) => {{
+            let mut tikv = TiKVServer::<$ER>::init(config);
+
+            tikv.check_conflict_addr();
+            tikv.init_fs();
+            tikv.init_yatp();
+            tikv.init_encryption();
+            let listener = tikv.init_flow_receiver();
+            let (engines, _) = tikv.init_raw_engines(listener);
+            tikv.init_engines(engines.clone());
+            let server_config = tikv.init_servers();
+            tikv.register_services();
+            tikv.run_server(server_config);
 
             signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
             tikv.stop();
@@ -1265,17 +1317,14 @@ impl TiKVServer<RocksEngine> {
             .unwrap();
 
         // Create raft engine.
-        let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
+        let raft_db_path = self.config.infer_raft_db_path(None).unwrap();
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
-        let raft_engine = engine_rocks::raw_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+        let raft_engine =
+            engine_rocks::raw_util::new_engine_opt(&raft_db_path, raft_db_opts, raft_db_cf_opts)
+                .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
@@ -1287,13 +1336,10 @@ impl TiKVServer<RocksEngine> {
             Some(&self.region_info_accessor),
             self.config.storage.api_version(),
         );
-        let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
-            db_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let kv_db_path = self.config.infer_kv_engine_path(None).unwrap();
+        let kv_engine =
+            engine_rocks::raw_util::new_engine_opt(&kv_db_path, kv_db_opts, kv_cfs_opts)
+                .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));

@@ -2,50 +2,54 @@
 
 global:
   user: "qupeng"
-  deploy_dir: /home/qupeng/clusters/four-tikv/deploy
-  data_dir: /home/qupeng/clusters/four-tikv/data
+  deploy_dir: /home/qupeng/clusters/phybr/deploy
+  data_dir: /home/qupeng/clusters/phybr/data
 
 monitored:
 
 grafana_servers:
-  - host: 192.168.101.2
+  - host: 127.0.0.1
+    port: 23000
 
 monitoring_servers:
-  - host: 192.168.101.2
+  - host: 127.0.0.1
+    port: 29090
 
 ##########################################
 
 pd_servers:
-  - host: 192.168.101.2
+  - host: 127.0.0.1
+    client_port: 22379
+    peer_port: 22380
 
 tikv_servers:
-  - host: 192.168.101.2
-    port: 20160
-    status_port: 20180
+  - host: 127.0.0.1
+    port: 40160
+    status_port: 40180
     config:
       server.labels: { host: "host1" }
     resource_control:
       memory_limit: 8G
       cpu_quota: 300%
-  - host: 192.168.101.2
-    port: 20260
-    status_port: 20280
+  - host: 127.0.0.1
+    port: 40260
+    status_port: 40280
     config:
       server.labels: { host: "host2" }
     resource_control:
       memory_limit: 8G
       cpu_quota: 300%
-  - host: 192.168.101.2
-    port: 20360
-    status_port: 20380
+  - host: 127.0.0.1
+    port: 40360
+    status_port: 40380
     config:
       server.labels: { host: "host3" }
     resource_control:
       memory_limit: 8G
       cpu_quota: 300%
-  - host: 192.168.101.2
-    port: 20460
-    status_port: 20480
+  - host: 127.0.0.1
+    port: 40460
+    status_port: 40480
     config:
       server.labels: { host: "host4" }
     resource_control:
@@ -53,7 +57,9 @@ tikv_servers:
       cpu_quota: 300%
 
 tidb_servers:
-  - host: 192.168.101.2
+  - host: 127.0.0.1
+    port: 24000
+    status_port: 50080
 
 cdc_servers:
 
@@ -66,3 +72,5 @@ server_configs:
       run-auto-analyze: false
   tikv:
     raft-engine.enable: false
+    coprocessor.region-max-size: 16MB
+    coprocessor.region-split-size: 12MB

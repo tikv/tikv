@@ -10,8 +10,8 @@ use encryption_export::data_key_manager_from_config;
 use engine_rocks::raw_util::new_engine_opt;
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngine, RaftLogBatch, WriteBatch,
-    WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use futures::executor::block_on;
 use futures::sink::SinkExt;
@@ -23,12 +23,132 @@ use raftstore::store::peer_storage::{init_apply_state, init_raft_state, last_ind
 use structopt::StructOpt;
 use tikv::config::TiKvConfig;
 
+fn main() {
+    let opts = Opts::from_args();
+    let config: TiKvConfig = std::fs::read_to_string(&opts.config)
+        .map_err(|e| format!("read config file: {}", e))
+        .and_then(|s| toml::from_str(&s).map_err(|e| format!("parse config file: {}", e)))
+        .unwrap();
+
+    let engines = init_engines(&config).unwrap();
+    let mut region_meta_details = scan_regions(&engines).unwrap();
+
+    let region_metas = region_meta_details
+        .iter()
+        .map(|x| x.to_region_meta())
+        .collect::<Vec<_>>();
+    println!("region metas to report:");
+    for meta in &region_metas {
+        println!("\t{:?}", meta)
+    }
+    let mut region_metas = stream::iter(
+        region_metas
+            .into_iter()
+            .map(|x| Ok((x, WriteFlags::default()))),
+    );
+
+    let channel = ChannelBuilder::new(Arc::new(Environment::new(1)))
+        .keepalive_time(Duration::from_secs(10))
+        .keepalive_timeout(Duration::from_secs(3))
+        .connect(&opts.adviser);
+    let client = PhybrClient::new(channel);
+    let (mut sink, mut receiver) = match client.recover_regions() {
+        Ok((x, y)) => (x, y),
+        Err(e) => {
+            eprintln!("rpc send fail: {}", e);
+            return;
+        }
+    };
+
+    let res = block_on(sink.send_all(&mut region_metas));
+    println!("send: {:?}", res);
+    let res = block_on(sink.close());
+    println!("send close: {:?}", res);
+
+    let mut commands = HashMap::<u64, RegionRecover>::default();
+    let res: Result<(), ()> = block_on(async {
+        while let Some(command) = receiver.next().await {
+            let command = command.map_err(|e| eprintln!("rpc recv fail: {}", e))?;
+            assert!(commands.insert(command.region_id, command).is_none());
+        }
+        Ok(())
+    });
+    println!("recv res: {:?}", res);
+
+    let mut raft_wb = engines.raft.log_batch(4 * 1024);
+    let mut kv_wb = engines.kv.write_batch();
+    let mut force_leaders = Vec::new();
+    for md in &mut region_meta_details {
+        let rid = md.region_state.get_region().id;
+        let (mut raft_changed, mut region_changed) = (false, false);
+
+        let applied_index = md.apply_state.applied_index;
+        if md.raft_state.last_index != applied_index {
+            raft_wb.cut_logs(rid, applied_index + 1, md.raft_state.last_index + 1);
+            md.raft_state.last_index = applied_index;
+            raft_changed = true;
+        }
+        if md.raft_state.get_hard_state().commit != applied_index {
+            md.raft_state.mut_hard_state().commit = applied_index;
+            raft_changed = true;
+            if md.apply_state.commit_index != applied_index {
+                md.apply_state.commit_index = applied_index;
+                let trunc_state = md.apply_state.get_truncated_state();
+                md.apply_state.commit_term = if applied_index == trunc_state.index {
+                    trunc_state.term
+                } else {
+                    let e = engines.raft.get_entry(rid, applied_index).unwrap().unwrap();
+                    e.term
+                };
+                region_changed = true;
+            }
+        }
+
+        if let Some(command) = commands.get(&rid) {
+            if command.tombstone {
+                md.region_state.set_state(PeerState::Tombstone);
+                region_changed = true;
+                raft_changed = false;
+            } else {
+                if command.term != md.raft_state.get_hard_state().term {
+                    md.raft_state.mut_hard_state().term = command.term;
+                    raft_changed = true;
+                }
+                if !command.silence {
+                    force_leaders.push(rid);
+                }
+            }
+        }
+
+        if raft_changed {
+            let key = keys::raft_state_key(rid);
+            raft_wb
+                .put_msg_cf(CF_DEFAULT, &key, &md.raft_state)
+                .unwrap();
+        }
+        if region_changed {
+            let key = keys::region_state_key(rid);
+            kv_wb.put_msg_cf(CF_RAFT, &key, &md.region_state).unwrap();
+        }
+    }
+    kv_wb.write().unwrap();
+    engines.kv.sync_wal().unwrap();
+    engines.raft.consume(&mut raft_wb, true).unwrap();
+
+    // Start tikv nodes.
+    drop(engines);
+    drop(kv_wb);
+    drop(raft_wb);
+    std::thread::sleep(Duration::from_secs(3));
+    println!("starting tikv node...");
+    server::server::run_phybr(config);
+}
+
 #[derive(StructOpt)]
 #[structopt()]
 struct Opts {
     adviser: String,
     config: String,
-    data_dir: String,
 }
 
 fn init_engines(config: &TiKvConfig) -> Result<Engines<RocksEngine, RocksEngine>, String> {
@@ -142,112 +262,6 @@ fn scan_regions(
     )?;
     engines.raft.consume(&mut raft_wb, true)?;
     Ok(region_metas)
-}
-
-fn main() {
-    let opts = Opts::from_args();
-    let mut config: TiKvConfig = std::fs::read_to_string(&opts.config)
-        .map_err(|e| format!("read config file: {}", e))
-        .and_then(|s| toml::from_str(&s).map_err(|e| format!("parse config file: {}", e)))
-        .unwrap();
-    config.storage.data_dir = opts.data_dir;
-
-    let engines = init_engines(&config).unwrap();
-    let mut region_meta_details = scan_regions(&engines).unwrap();
-
-    let region_metas = region_meta_details
-        .iter()
-        .map(|x| x.to_region_meta())
-        .collect::<Vec<_>>();
-    println!("region metas to report:");
-    for meta in &region_metas {
-        println!("\t{:?}", meta)
-    }
-    let mut region_metas = stream::iter(
-        region_metas
-            .into_iter()
-            .map(|x| Ok((x, WriteFlags::default()))),
-    );
-
-    let channel = ChannelBuilder::new(Arc::new(Environment::new(1)))
-        .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3))
-        .connect(&opts.adviser);
-    let client = PhybrClient::new(channel);
-    let (mut sink, mut receiver) = match client.recover_regions() {
-        Ok((x, y)) => (x, y),
-        Err(e) => {
-            eprintln!("rpc send fail: {}", e);
-            return;
-        }
-    };
-
-    let res = block_on(sink.send_all(&mut region_metas));
-    println!("send: {:?}", res);
-    let res = block_on(sink.close());
-    println!("send close: {:?}", res);
-
-    let mut commands = HashMap::<u64, RegionRecover>::default();
-    let res: Result<(), ()> = block_on(async {
-        while let Some(command) = receiver.next().await {
-            let command = command.map_err(|e| eprintln!("rpc recv fail: {}", e))?;
-            assert!(commands.insert(command.region_id, command).is_none());
-        }
-        // future::ok::<_, GrpcError>(());
-        Ok(())
-    });
-    println!("recv res: {:?}", res);
-
-    let mut raft_wb = engines.raft.log_batch(4 * 1024);
-    let mut kv_wb = engines.kv.write_batch();
-    let mut force_leaders = Vec::new();
-    for md in &mut region_meta_details {
-        let rid = md.region_state.get_region().id;
-        let (mut raft_changed, mut region_changed) = (false, false);
-
-        let applied_index = md.apply_state.applied_index;
-        if md.raft_state.last_index != applied_index {
-            raft_wb.cut_logs(rid, applied_index, md.raft_state.last_index + 1);
-            md.raft_state.last_index = applied_index;
-            raft_changed = true;
-        }
-        if md.raft_state.get_hard_state().commit != applied_index {
-            md.raft_state.mut_hard_state().commit = applied_index;
-            raft_changed = true;
-        }
-
-        if let Some(command) = commands.get(&rid) {
-            if command.tombstone {
-                md.region_state.set_state(PeerState::Tombstone);
-                region_changed = true;
-                raft_changed = false;
-            } else {
-                if command.term != md.raft_state.get_hard_state().term {
-                    md.raft_state.mut_hard_state().term = command.term;
-                    raft_changed = true;
-                }
-                if !command.silence {
-                    force_leaders.push(rid);
-                }
-            }
-        }
-
-        if raft_changed {
-            let key = keys::raft_state_key(rid);
-            raft_wb
-                .put_msg_cf(CF_DEFAULT, &key, &md.raft_state)
-                .unwrap();
-        }
-        if region_changed {
-            let key = keys::region_state_key(rid);
-            kv_wb.put_msg_cf(CF_RAFT, &key, &md.region_state).unwrap();
-        }
-    }
-    kv_wb.write().unwrap();
-    engines.kv.sync_wal().unwrap();
-    engines.raft.consume(&mut raft_wb, true).unwrap();
-
-    // TODO: start the tikv node.
 }
 
 #[allow(dead_code)]
