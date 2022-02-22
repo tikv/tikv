@@ -151,9 +151,8 @@ impl RaftWorker {
             Err(RecvTimeoutError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
             Err(RecvTimeoutError::Timeout) => {}
         }
-        let now = Instant::now();
-        if (now - self.last_tick).as_millis() as u64 > self.tick_millis {
-            self.last_tick = now;
+        if self.last_tick.elapsed().as_millis() as u64 > self.tick_millis {
+            self.last_tick = Instant::now();
             let peers = self.router.peers.clone();
             for x in peers.iter() {
                 let region_id = *x.key();
