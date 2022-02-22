@@ -225,6 +225,7 @@ consistency-check-method = "raw"
 perf-level = 5
 enable-region-bucket = false
 region-bucket-size = "1MB"
+region-size-threshold-for-approximate = "3MB"
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"

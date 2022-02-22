@@ -202,7 +202,7 @@ where
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
         if host.policy() == CheckPolicy::Approximate && host.enable_region_bucket() {
-            let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
+            let mut bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
                 Ok(keys) => keys
                     .into_iter()
                     .map(|k| keys::origin_key(&k).to_vec())
@@ -221,12 +221,16 @@ where
                 bucket_keys
             );
             if !bucket_keys.is_empty() {
+                bucket_keys.insert(0, region.get_start_key().to_vec());
+                bucket_keys.push(region.get_end_key().to_vec());
                 let mut region_buckets = Buckets::default();
                 region_buckets.set_keys(bucket_keys.into());
                 let _ = self.router.send(
                     region.get_id(),
-                    CasualMessage::RefreshRegionBuckets { region_epoch: region.get_region_epoch().clone(), 
-                                                          region_buckets: region_buckets },
+                    CasualMessage::RefreshRegionBuckets {
+                        region_epoch: region.get_region_epoch().clone(),
+                        region_buckets,
+                    },
                 );
             }
         }
@@ -297,6 +301,7 @@ where
     ) -> Result<Vec<Vec<u8>>> {
         let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         let mut region_buckets = Buckets::default();
+        region_buckets.keys.push(region.get_start_key().to_vec());
         MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
             LARGE_CFS,
@@ -322,6 +327,7 @@ where
                     }
                 }
             }
+            region_buckets.keys.push(region.get_end_key().to_vec());
 
             // if we scan the whole range, we can update approximate size and keys with accurate value.
             info!(
@@ -344,8 +350,10 @@ where
             if host.enable_region_bucket() {
                 let _ = self.router.send(
                     region.get_id(),
-                    CasualMessage::RefreshRegionBuckets { region_epoch: region.get_region_epoch().clone(),
-                                                          region_buckets: region_buckets },
+                    CasualMessage::RefreshRegionBuckets {
+                        region_epoch: region.get_region_epoch().clone(),
+                        region_buckets,
+                    },
                 );
             }
         })?;

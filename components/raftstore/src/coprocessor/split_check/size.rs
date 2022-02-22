@@ -498,10 +498,13 @@ pub mod tests {
             )) = rx.try_recv()
             {
                 let keys = region_buckets.get_keys();
-                for i in 0..keys.len() - 1 {
+                for i in 1..keys.len() - 2 {
                     let start: i32 = std::str::from_utf8(&keys[i]).unwrap().parse().unwrap();
                     let end: i32 = std::str::from_utf8(&keys[i + 1]).unwrap().parse().unwrap();
                     assert!(end - start >= 150 && end - start < 450);
+                    if i == 1 {
+                       assert!(start >= 150 && start < 450);
+                    } 
                 }
 
                 break;
