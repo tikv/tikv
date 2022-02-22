@@ -90,7 +90,7 @@ impl ReqBatcher {
             let tracers = std::mem::take(&mut self.get_tracers);
 
             let span = Span::enter_with_parents(
-                "RawGetCommand",
+                "BatchGetCommand",
                 tracers.iter().map(|tracer| &tracer.root_span),
             );
             let _g = span.set_local_parent();
