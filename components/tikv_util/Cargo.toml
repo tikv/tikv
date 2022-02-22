@@ -31,6 +31,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
+num-traits = "0.2"
 openssl = "0.10"
 prometheus = { version = "0.13", features = ["nightly"] }
 rand = "0.8"
@@ -58,7 +59,7 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 page_size = "0.4"
-procfs = { version = "0.9", default-features = false }
+procfs = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 gag = "1.0"

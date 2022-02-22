@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, ApiVersion, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
+    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
     PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
@@ -17,6 +17,7 @@ use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::*;
 use tikv::storage::lock_manager::DummyLockManager;
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
 use tikv::storage::{
@@ -64,6 +65,7 @@ fn test_scheduler_leader_change_twice() {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 ctx0,
             ),
             Box::new(move |res: storage::Result<_>| {
@@ -81,6 +83,9 @@ fn test_scheduler_leader_change_twice() {
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
         Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
             box KvErrorInner::Request(ref e),
+        ))))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         ))))))
         | Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))))) => {
             assert!(e.has_stale_command(), "{:?}", e);
@@ -288,6 +293,7 @@ fn test_pipelined_pessimistic_lock() {
                 TimeStamp::default(),
                 None,
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             ),
             expect_ok_callback(tx.clone(), 0),
@@ -428,6 +434,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -462,6 +469,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                     TimeStamp::default(),
                     Some(vec![b"k2".to_vec()]),
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
@@ -524,7 +532,6 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
-    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     // Acquire the pessimistic lock if needed
@@ -573,6 +580,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     secondaries,
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -595,6 +603,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
                     0.into(),
                     secondaries,
                     false,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -618,10 +627,9 @@ fn test_async_apply_prewrite_impl<E: Engine>(
 
         // The memory lock is not released so reading will encounter the lock.
         thread::sleep(Duration::from_millis(300));
-        let err =
-            block_on(storage.get(ctx.clone(), raw_key.clone(), min_commit_ts.next())).unwrap_err();
+        let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), min_commit_ts.next()))
+            .unwrap_err();
         expect_locked(err, key, start_ts);
-
         // Commit command will be blocked.
         let (tx, rx) = channel();
         storage
@@ -644,7 +652,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         fail::remove(on_handle_apply);
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, raw_key, min_commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), min_commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -670,7 +678,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
             .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 
-        let got_value = block_on(storage.get(ctx, raw_key, commit_ts.next()))
+        let got_value = block_on(storage.get(ctx, Key::from_raw(key), commit_ts.next()))
             .unwrap()
             .0;
         assert_eq!(got_value.unwrap().as_slice(), value);
@@ -827,6 +835,7 @@ fn test_async_apply_prewrite_fallback() {
                 0.into(),
                 Some(vec![]),
                 false,
+                AssertionLevel::Off,
                 ctx.clone(),
             ),
             Box::new(move |r| tx.send(r).unwrap()),
@@ -866,7 +875,6 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
 ) {
     let on_handle_apply = "on_handle_apply";
 
-    let raw_key = key.to_vec();
     let start_ts = TimeStamp::from(start_ts);
 
     if is_pessimistic {
@@ -913,6 +921,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     0.into(),
                     None,
                     true,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -932,6 +941,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
                     0.into(),
                     None,
                     true,
+                    AssertionLevel::Off,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -944,13 +954,13 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
     assert!(res.one_pc_commit_ts > start_ts);
     let commit_ts = res.one_pc_commit_ts;
 
-    let err = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next())).unwrap_err();
+    let err = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next())).unwrap_err();
     expect_locked(err, key, start_ts);
 
     fail::remove(on_handle_apply);
     // The key may need some time to be applied.
     for retry in 0.. {
-        let res = block_on(storage.get(ctx.clone(), raw_key.clone(), commit_ts.next()));
+        let res = block_on(storage.get(ctx.clone(), Key::from_raw(key), commit_ts.next()));
         match res {
             Ok(v) => {
                 assert_eq!(v.0.unwrap().as_slice(), value);
@@ -1161,7 +1171,9 @@ fn test_before_propose_deadline() {
         .unwrap();
     assert!(matches!(
         rx.recv().unwrap(),
-        Err(StorageError(box StorageErrorInner::DeadlineExceeded))
+        Err(StorageError(box StorageErrorInner::Kv(KvError(
+            box KvErrorInner::Request(_),
+        ))))
     ));
 }
 
@@ -1202,6 +1214,7 @@ fn test_resolve_lock_deadline() {
         20.into(),
         None,
         false,
+        AssertionLevel::Off,
         ctx.clone(),
     );
     let (tx, rx) = channel();

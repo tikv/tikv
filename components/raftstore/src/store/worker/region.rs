@@ -443,7 +443,7 @@ where
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
+    fn cleanup_range(&self, ranges: &[Range<'_>]) -> Result<()> {
         self.engine
             .delete_all_in_range(DeleteStrategy::DeleteFiles, ranges)
             .unwrap_or_else(|e| {
@@ -544,7 +544,7 @@ where
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
         }
-        let ranges: Vec<Range> = cleanup_ranges
+        let ranges: Vec<Range<'_>> = cleanup_ranges
             .iter()
             .map(|(region_id, start, end)| {
                 info!("delete data in range because of stale"; "region_id" => region_id,
@@ -581,7 +581,7 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
@@ -805,8 +805,7 @@ mod tests {
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
         let timeout2 = 12;
-        let overlap_ranges =
-            pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+        let overlap_ranges = pending_delete_ranges.drain_overlap_ranges(b"g", b"q");
         assert_eq!(
             overlap_ranges,
             [
@@ -969,7 +968,7 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("snap-manager");
-        let mut worker = bg_worker.lazy_build("snapshot-worker");
+        let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(

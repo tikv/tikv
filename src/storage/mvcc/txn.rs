@@ -10,7 +10,7 @@ use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
@@ -279,7 +279,7 @@ pub(crate) mod tests {
         kv::{Engine, TestEngineBuilder},
         TxnStatus,
     };
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
@@ -715,7 +715,7 @@ pub(crate) mod tests {
         for_update_ts: Option<TimeStamp>,
         txn_size: u64,
         skip_constraint_check: bool,
-    ) -> TransactionProperties {
+    ) -> TransactionProperties<'_> {
         let kind = if let Some(ts) = for_update_ts {
             TransactionKind::Pessimistic(ts)
         } else {
@@ -732,6 +732,7 @@ pub(crate) mod tests {
             min_commit_ts: TimeStamp::default(),
             need_old_value: false,
             is_retry_request: false,
+            assertion_level: AssertionLevel::Off,
         }
     }
 
@@ -1027,6 +1028,8 @@ pub(crate) mod tests {
                     TimeStamp::zero(),
                     TimeStamp::zero(),
                     false,
+                    kvproto::kvrpcpb::Assertion::None,
+                    kvproto::kvrpcpb::AssertionLevel::Off,
                 );
             } else {
                 expected_lock_info.set_lock_type(Op::PessimisticLock);

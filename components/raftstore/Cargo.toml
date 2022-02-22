@@ -19,6 +19,7 @@ test-engines-panic = [
 
 cloud-aws = [ "sst_importer/cloud-aws" ]
 cloud-gcp = [ "sst_importer/cloud-gcp" ]
+cloud-azure = [ "sst_importer/cloud-azure" ]
 
 [dependencies]
 batch-system = { path = "../batch-system", default-features = false }
@@ -53,8 +54,8 @@ pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
-raft-proto = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft-proto = { version = "0.7.0", default-features = false }
 rand = "0.8.3"
 resource_metering = { path = "../resource_metering" }
 serde = "1.0"

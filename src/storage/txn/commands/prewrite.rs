@@ -25,7 +25,7 @@ use crate::storage::{
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
 use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::ExtraOp;
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp};
 use std::mem;
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
@@ -63,6 +63,10 @@ command! {
             /// When the transaction involves only one region, it's possible to commit the
             /// transaction directly with 1PC protocol.
             try_one_pc: bool,
+            /// Controls how strict the assertions should be.
+            /// Assertions is a mechanism to check the constraint on the previous version of data
+            /// that must be satisfied as long as data is consistent.
+            assertion_level: AssertionLevel,
         }
 }
 
@@ -84,6 +88,7 @@ impl Prewrite {
             TimeStamp::default(),
             None,
             false,
+            AssertionLevel::Off,
             Context::default(),
         )
     }
@@ -106,6 +111,7 @@ impl Prewrite {
             max_commit_ts,
             None,
             true,
+            AssertionLevel::Off,
             Context::default(),
         )
     }
@@ -128,6 +134,7 @@ impl Prewrite {
             TimeStamp::default(),
             None,
             false,
+            AssertionLevel::Off,
             Context::default(),
         )
     }
@@ -149,6 +156,7 @@ impl Prewrite {
             TimeStamp::default(),
             None,
             false,
+            AssertionLevel::Off,
             ctx,
         )
     }
@@ -168,6 +176,8 @@ impl Prewrite {
 
             primary: self.primary,
             secondary_keys: self.secondary_keys,
+
+            assertion_level: self.assertion_level,
 
             ctx: self.ctx,
             old_values: OldValues::default(),
@@ -236,6 +246,10 @@ command! {
             /// When the transaction involves only one region, it's possible to commit the
             /// transaction directly with 1PC protocol.
             try_one_pc: bool,
+            /// Controls how strict the assertions should be.
+            /// Assertions is a mechanism to check the constraint on the previous version of data
+            /// that must be satisfied as long as data is consistent.
+            assertion_level: AssertionLevel,
         }
 }
 
@@ -258,6 +272,7 @@ impl PrewritePessimistic {
             TimeStamp::default(),
             None,
             false,
+            AssertionLevel::Off,
             Context::default(),
         )
     }
@@ -281,6 +296,7 @@ impl PrewritePessimistic {
             max_commit_ts,
             None,
             true,
+            AssertionLevel::Off,
             Context::default(),
         )
     }
@@ -300,6 +316,8 @@ impl PrewritePessimistic {
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
             max_commit_ts: self.max_commit_ts,
+
+            assertion_level: self.assertion_level,
 
             ctx: self.ctx,
             old_values: OldValues::default(),
@@ -352,6 +370,7 @@ struct Prewriter<K: PrewriteKind> {
     secondary_keys: Option<Vec<Vec<u8>>>,
     old_values: OldValues,
     try_one_pc: bool,
+    assertion_level: AssertionLevel,
 
     ctx: Context,
 }
@@ -369,8 +388,8 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
-            SnapshotReader::new(self.start_ts, snapshot, !self.ctx.get_not_fill_cache()),
-            &mut context.statistics,
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
         );
         // Set extra op here for getting the write record when check write conflict in prewrite.
 
@@ -429,6 +448,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             min_commit_ts: self.min_commit_ts,
             need_old_value: extra_op == ExtraOp::ReadOldValue,
             is_retry_request: self.ctx.is_retry_request,
+            assertion_level: self.assertion_level,
         };
 
         let async_commit_pk = self
@@ -1194,6 +1214,7 @@ mod tests {
             TimeStamp::default(),
             Some(vec![]),
             false,
+            AssertionLevel::Off,
             Context::default(),
         );
 
@@ -1226,6 +1247,7 @@ mod tests {
                 40.into(),
                 Some(vec![k2.to_vec()]),
                 false,
+                AssertionLevel::Off,
                 Context::default(),
             );
 
@@ -1260,6 +1282,7 @@ mod tests {
             TimeStamp::default(),
             Some(vec![]),
             false,
+            AssertionLevel::Off,
             Context::default(),
         );
 
@@ -1293,6 +1316,7 @@ mod tests {
             40.into(),
             Some(vec![k2.to_vec()]),
             false,
+            AssertionLevel::Off,
             Context::default(),
         );
 
@@ -1493,6 +1517,7 @@ mod tests {
                     TimeStamp::default(),
                     secondary_keys,
                     case.one_pc,
+                    AssertionLevel::Off,
                     Context::default(),
                 )
             } else {
@@ -1507,6 +1532,7 @@ mod tests {
                     TimeStamp::default(),
                     secondary_keys,
                     case.one_pc,
+                    AssertionLevel::Off,
                     Context::default(),
                 )
             };
@@ -1619,6 +1645,7 @@ mod tests {
             TimeStamp::default(),
             Some(vec![]),
             false,
+            AssertionLevel::Off,
             Context::default(),
         );
         let context = WriteContext {
@@ -1720,6 +1747,7 @@ mod tests {
             TimeStamp::default(),
             Some(vec![]),
             false,
+            AssertionLevel::Off,
             Context::default(),
         );
         let context = WriteContext {
@@ -1849,6 +1877,7 @@ mod tests {
                     0.into(),
                     secondary_keys,
                     false,
+                    AssertionLevel::Off,
                     ctx,
                 );
                 prewrite_command(&engine, cm.clone(), &mut statistics, cmd)
@@ -1949,6 +1978,7 @@ mod tests {
             10.into(),
             Some(vec![]),
             false,
+            AssertionLevel::Off,
             Context::default(),
         );
         let context = WriteContext {

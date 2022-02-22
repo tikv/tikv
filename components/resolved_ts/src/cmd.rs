@@ -33,6 +33,7 @@ pub enum ChangeRow {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ChangeLog {
     Error(errorpb::Error),
     Rows { index: u64, rows: Vec<ChangeRow> },
@@ -71,7 +72,7 @@ impl ChangeLog {
     fn encode_rows(changes: HashMap<Key, RowChange>, is_one_pc: bool) -> Vec<ChangeRow> {
         changes
             .into_iter()
-            .map(|(key, row)| match (row.write, row.lock, row.default) {
+            .filter_map(|(key, row)| match (row.write, row.lock, row.default) {
                 (Some(KeyOp::Put(mut commit_ts, write)), _, default) => {
                     decode_write(key.as_encoded(), &write, true).map(|write| {
                         let Write {
@@ -125,7 +126,6 @@ impl ChangeLog {
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
-            .flatten()
             .collect()
     }
 }
@@ -281,6 +281,7 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 #[cfg(test)]
 mod tests {
     use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb::AssertionLevel;
     use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
@@ -397,6 +398,7 @@ mod tests {
                 min_commit_ts: 10.into(),
                 need_old_value: false,
                 is_retry_request: false,
+                assertion_level: AssertionLevel::Off,
             },
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,

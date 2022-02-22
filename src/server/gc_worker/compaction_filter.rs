@@ -94,11 +94,25 @@ lazy_static! {
         &["tag"]
     ).unwrap();
 
+    /// Counter of mvcc deletions met in compaction filter.
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_MET: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_met",
+        "MVCC deletion from compaction filter met"
+    ).unwrap();
+
+    /// Counter of mvcc deletions handled in gc worker.
     pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_mvcc_deletion_handled",
         "MVCC deletion from compaction filter handled"
     )
     .unwrap();
+
+    /// Mvcc deletions sent to gc worker can have already been cleared, in which case resources are
+    /// wasted to seek them.
+    pub static ref GC_COMPACTION_FILTER_MVCC_DELETION_WASTED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_mvcc_deletion_wasted",
+        "MVCC deletion from compaction filter wasted"
+    ).unwrap();
 }
 
 pub trait CompactionFilterInitializer<EK>
@@ -224,13 +238,13 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "manual" => context.is_manual_compaction(),
         );
 
-        let filter = Box::new(WriteCompactionFilter::new(
+        let filter = WriteCompactionFilter::new(
             db,
             safe_point,
             context,
             gc_scheduler,
             (store_id, region_info_provider),
-        ));
+        );
         let name = CString::new("write_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
@@ -396,6 +410,7 @@ impl WriteCompactionFilter {
                     self.remove_older = true;
                     if self.is_bottommost_level {
                         self.mvcc_deletion_overlaps = Some(0);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_MET.inc();
                     }
                 }
             }
@@ -420,7 +435,7 @@ impl WriteCompactionFilter {
         Ok(decision)
     }
 
-    fn handle_filtered_write(&mut self, write: WriteRef) -> Result<(), String> {
+    fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
@@ -596,7 +611,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
+fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(

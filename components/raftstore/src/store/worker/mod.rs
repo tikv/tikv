@@ -8,6 +8,7 @@ mod consistency_check;
 mod metrics;
 mod pd;
 mod query_stats;
+mod raftlog_fetch;
 mod raftlog_gc;
 mod read;
 mod refresh_config;
@@ -25,6 +26,7 @@ pub use self::pd::{
     FlowStatistics, FlowStatsReporter, HeartbeatTask, Runner as PdRunner, Task as PdTask,
 };
 pub use self::query_stats::QueryStats;
+pub use self::raftlog_fetch::{Runner as RaftlogFetchRunner, Task as RaftlogFetchTask};
 pub use self::raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask};
 pub use self::read::{LocalReader, Progress as ReadProgress, ReadDelegate, ReadExecutor, TrackVer};
 pub use self::refresh_config::{

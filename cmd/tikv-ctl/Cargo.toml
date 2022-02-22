@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -15,7 +15,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = [
    "encryption_export/cloud-aws",
    "backup/cloud-aws",
@@ -23,6 +22,10 @@ cloud-aws = [
 cloud-gcp = [
   "encryption_export/cloud-gcp",
   "backup/cloud-gcp",
+]
+cloud-azure = [
+  "encryption_export/cloud-azure",
+  "backup/cloud-azure",
 ]
 cloud-storage-grpc = [ "backup/cloud-storage-grpc" ]
 cloud-storage-dylib = [ "backup/cloud-storage-dylib" ]
@@ -49,7 +52,6 @@ engine_rocks = { path = "../../components/engine_rocks", default-features = fals
 engine_traits = { path = "../../components/engine_traits", default-features = false }
 error_code = { path = "../../components/error_code", default-features = false }
 file_system = { path = "../../components/file_system", default-features = false }
-fs2 = "0.4"
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
@@ -65,7 +67,7 @@ pd_client = { path = "../../components/pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
 raftstore = { path = "../../components/raftstore", default-features = false }
 rand = "0.8"

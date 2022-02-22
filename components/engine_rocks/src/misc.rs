@@ -25,7 +25,7 @@ impl RocksEngine {
         &self,
         cf: &str,
         sst_path: String,
-        ranges: &[Range],
+        ranges: &[Range<'_>],
     ) -> Result<()> {
         let mut ranges = ranges.to_owned();
         ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
@@ -98,7 +98,7 @@ impl RocksEngine {
         Ok(())
     }
 
-    fn delete_all_in_range_cf_by_key(&self, cf: &str, range: &Range) -> Result<()> {
+    fn delete_all_in_range_cf_by_key(&self, cf: &str, range: &Range<'_>) -> Result<()> {
         let start = KeyBuilder::from_slice(range.start_key, 0, 0);
         let end = KeyBuilder::from_slice(range.end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
@@ -136,7 +136,12 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().flush_cf(handle, sync)?)
     }
 
-    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
+    fn delete_ranges_cf(
+        &self,
+        cf: &str,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<()> {
         if ranges.is_empty() {
             return Ok(());
         }
@@ -190,7 +195,7 @@ impl MiscExt for RocksEngine {
         Ok(())
     }
 
-    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)> {
         let range = util::range_to_rocks_range(range);
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(self
@@ -361,7 +366,7 @@ mod tests {
     fn test_delete_all_in_range(
         strategy: DeleteStrategy,
         origin_keys: &[Vec<u8>],
-        ranges: &[Range],
+        ranges: &[Range<'_>],
     ) {
         let path = Builder::new()
             .prefix("engine_delete_all_in_range")
@@ -567,7 +572,7 @@ mod tests {
         cf_opts
             .set_prefix_extractor(
                 "FixedSuffixSliceTransform",
-                Box::new(crate::util::FixedSuffixSliceTransform::new(8)),
+                crate::util::FixedSuffixSliceTransform::new(8),
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.

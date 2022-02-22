@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
-use std::{env, thread, u64};
+use std::{env, thread};
 
 use nix::sys::wait::{wait, WaitStatus};
 use nix::unistd::{fork, ForkResult};
@@ -290,7 +290,7 @@ impl<T: FnOnce()> Drop for DeferContext<T> {
 }
 
 /// Represents a value of one of two possible types (a more generic Result.)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Either<L, R> {
     Left(L),
     Right(R),
@@ -410,6 +410,7 @@ impl<T> MustConsumeVec<T> {
         }
     }
 
+    #[must_use]
     pub fn take(&mut self) -> Self {
         MustConsumeVec {
             tag: self.tag,
@@ -489,7 +490,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // When the old global async logger is replaced, the old async guard will be taken and dropped.
         // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
-            let drainer = logger::text_format(logger::term_writer());
+            let drainer = logger::text_format(logger::term_writer(), true);
             let _ = logger::init_log(
                 drainer,
                 logger::convert_log_level_to_slog_level(level),
@@ -610,7 +611,7 @@ mod tests {
         let mut stderr = BufferRedirect::stderr().unwrap();
         let status = run_and_wait_child_process(|| {
             set_panic_hook(false, "./");
-            let drainer = logger::text_format(logger::term_writer());
+            let drainer = logger::text_format(logger::term_writer(), true);
             crate::logger::init_log(
                 DelayDrain(drainer),
                 logger::get_level_by_string("debug").unwrap(),

@@ -5,17 +5,6 @@
 ##   Time(based on ms): ms, s, m, h
 ##    e.g.: 78_000 = "1.3m"
 
-## Log levels: trace, debug, info, warning, error, critical.
-## Note that `debug` and `trace` are only available in development builds.
-# log-level = "info"
-
-## File to store logs.
-## If it is not set, logs will be appended to stderr.
-# log-file = ""
-
-## Log format, one of json, text. Default to text.
-# log-format = "text"
-
 ## File to store slow logs.
 ## If "log-file" is set, but this is not set, the slow logs will be appeneded
 ## to "log-file". If both "log-file" and "slow-log-file" are not set, all logs
@@ -25,18 +14,8 @@
 ## The minimum operation cost to output relative logs.
 # slow-log-threshold = "1s"
 
-## Timespan between rotating the log files.
-## Once this timespan passes, log files will be rotated, i.e. existing log file will have a
-## timestamp appended to its name and a new file will be created.
-# log-rotation-timespan = "24h"
-
-## Size of log file that triggers the log rotation.
-## Once the size of log file exceeds the threshold value, the log file will be rotated
-## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
-# log-rotation-size = "300MB"
-
 ## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
-## It won't take effect when compiling without BCC_IOSNOOP=1. 
+## It won't take effect when compiling without BCC_IOSNOOP=1.
 # enable-io-snoop = true
 
 ## Use abort when TiKV panic. By default TiKV will use _exit() on panic, in that case
@@ -62,6 +41,25 @@
 ## this threshold, it can squeeze some internal components (e.g. evicting cached Raft entries)
 ## to release memory.
 # memory-usage-limit = "0B"
+
+[log]
+## Log levels: debug, info, warn, error, fatal.
+## Note that `debug` is only available in development builds.
+# level = "info"
+## log format, one of json, text. Default to text.
+# format = "text"
+## Enable automatic timestamps in log output, if not set, it will be defaulted to true.
+# enable-timestamp = true
+
+[log.file]
+## Usually it is set through command line.
+# filename = ""
+## max log file size in MB (upper limit to 4096MB)
+# max-size = 300
+## max log file keep days
+# max-days = 0
+## maximum number of old log files to retain
+# max-backups = 0
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -923,41 +921,56 @@
 # enable-compaction-guard = false
 
 [raft-engine]
-## When enabled, configurations of `raftdb` will be ignored.
-# enable = false
+## Determines whether to use Raft Engine to store raft logs. When it is
+## enabled, configurations of `raftdb` are ignored.
+# enable = true
 
-## Directory to store log files. Will be created on startup if not exists.
-## If not set, it will be `{data-dir}/raft-engine`.
-## If there are multiple disks on the machine, storing the data of Raft engine on a different disk
-## can improve TiKV performance.
+## The directory at which raft log files are stored. If the directory does not
+## exist, it will be created when TiKV is started.
+##
+## When this configuration is not set, `{data-dir}/raft-engine` is used.
+##
+## If there are multiple disks on your machine, it is recommended to store the
+## data of Raft Engine on a different disk to improve TiKV performance.
 # dir = ""
 
-## Compress a log batch if its size exceeds this value.
-## It set to zero, compression is disabled.
+## Specifies the threshold size of a log batch. A log batch larger than this
+## configuration is compressed.
+##
+## If you set this configuration item to `0`, compression is disabled.
 # batch-compression-threshold = "8KB"
 
-## Flush buffered writes to disk when their accumulative size exceed this threshold.
-## Setting it to zero disables incremental sync.
+## Specifies the maximum accumulative size of buffered writes. When this
+## configuration value is exceeded, buffered writes are flushed to the disk.
+##
+## If you set this configuration item to `0`, incremental sync is disabled.
 # bytes-per-sync = "4MB"
 
-## Target file size for rotating log files.
+## Specifies the maximum size of log files. When a log file is larger than this
+## value, it is rotated.
 # target-file-size = "128MB"
 
-## Purge main log queue if its file size exceeds this value.
+## Specifies the threshold size of the main log queue. When this configuration
+## value is exceeded, the main log queue is purged.
+##
+## This configuration can be used to adjust the disk space usage of Raft
+## Engine.
 # purge-threshold = "10GB"
 
-## How to deal with file corruption during recovery. Candidates:
+## Determines how to deal with file corruption during recovery.
+##
+## Candidates:
 ##   absolute-consistency
 ##   tolerate-tail-corruption
 ##   tolerate-any-corruption
 # recovery-mode = "tolerate-tail-corruption"
 
-## Minimum I/O size for reading log files during recovery.
+## The minimum I/O size for reading log files during recovery.
 ##
 ## Default: "16KB". Minimum: "512B".
 # recovery-read-block-size = "16KB"
 
-## The number of threads used to scan and recovery log files.
+## The number of threads used to scan and recover log files.
 ##
 ## Default: 4. Minimum: 1.
 # recovery-threads = 4
@@ -1047,8 +1060,8 @@
 
 [backup]
 ## Number of threads to perform backup tasks.
-## The default value is set to min(CPU_NUM * 0.75, 32).
-# num-threads = 24
+## The default value is set to min(CPU_NUM * 0.5, 8).
+# num-threads = 8
 
 ## Number of ranges to backup in one batch.
 # batch-size = 8
@@ -1060,7 +1073,7 @@
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
-# enable-auto-tune = false 
+# enable-auto-tune = true 
 
 [backup-stream] 
 ## Number of threads to perform backup stream tasks.

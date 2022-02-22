@@ -197,7 +197,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -273,7 +273,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -408,7 +408,7 @@ mod tests {
         let exp_result = exp_result.vector_value().unwrap();
         let vec = exp_result.as_ref().to_real_vec();
         let chunked_vec: ChunkedVecSized<Real> = vec.into();
-        update_vector!(state, &mut ctx, &chunked_vec, exp_result.logical_rows()).unwrap();
+        update_vector!(state, &mut ctx, chunked_vec, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [VectorValue::with_capacity(0, EvalType::Real)];
         state.push_result(&mut ctx, &mut aggr_result).unwrap();

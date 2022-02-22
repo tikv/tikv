@@ -45,10 +45,11 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = [ "external_storage_export/cloud-aws" ]
 cloud-gcp = [ "external_storage_export/cloud-gcp" ]
+cloud-azure = [ "external_storage_export/cloud-azure" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 test-engines-rocksdb = [
@@ -65,6 +66,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
+api_version = { path = "../components/api_version", default-features = false }
 fail = "0.5"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
@@ -81,7 +83,7 @@ paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
 protobuf = { version = "2.8", features = ["bytes"] }
 more-asserts = "0.2"
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.8.3"

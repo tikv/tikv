@@ -5,9 +5,10 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["cloud-aws", "cloud-gcp"]
+default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = ["aws"]
 cloud-gcp = []
+cloud-azure = []
 
 [dependencies]
 async-trait = "0.1"

@@ -15,9 +15,9 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
@@ -56,7 +56,7 @@ nix = "0.11"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 rand = "0.8"

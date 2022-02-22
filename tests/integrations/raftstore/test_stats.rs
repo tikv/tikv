@@ -158,7 +158,7 @@ type Query = dyn Fn(Context, &Cluster<ServerCluster>, TikvClient, u64, u64, Vec<
 fn test_query_stats() {
     let raw_get: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = RawGetRequest::default();
-        req.set_context(ctx.clone());
+        req.set_context(ctx);
         req.key = start_key.clone();
         client.raw_get(&req).unwrap();
         assert!(check_query_num_read(
@@ -173,7 +173,7 @@ fn test_query_stats() {
     let raw_batch_get: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
             let mut req = RawBatchGetRequest::default();
-            req.set_context(ctx.clone());
+            req.set_context(ctx);
             req.set_keys(protobuf::RepeatedField::from(vec![start_key.clone()]));
             client.raw_batch_get(&req).unwrap();
             assert!(check_query_num_read(
@@ -187,7 +187,7 @@ fn test_query_stats() {
         });
     let raw_scan: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = RawScanRequest::default();
-        req.set_context(ctx.clone());
+        req.set_context(ctx);
         req.start_key = start_key.clone();
         req.end_key = vec![];
         client.raw_scan(&req).unwrap();
@@ -206,7 +206,7 @@ fn test_query_stats() {
             let mut key_range = KeyRange::default();
             key_range.set_start_key(start_key.clone());
             key_range.set_end_key(vec![]);
-            req.set_context(ctx.clone());
+            req.set_context(ctx);
             req.set_ranges(protobuf::RepeatedField::from(vec![key_range]));
             client.raw_batch_scan(&req).unwrap();
             assert!(check_query_num_read(
@@ -220,7 +220,7 @@ fn test_query_stats() {
         });
     let get: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = GetRequest::default();
-        req.set_context(ctx.clone());
+        req.set_context(ctx);
         req.key = start_key.clone();
         client.kv_get(&req).unwrap();
         assert!(check_query_num_read(
@@ -237,7 +237,7 @@ fn test_query_stats() {
     });
     let batch_get: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = BatchGetRequest::default();
-        req.set_context(ctx.clone());
+        req.set_context(ctx);
         req.set_keys(protobuf::RepeatedField::from(vec![start_key.clone()]));
         client.kv_batch_get(&req).unwrap();
         assert!(check_query_num_read(
@@ -254,7 +254,7 @@ fn test_query_stats() {
     });
     let scan: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = ScanRequest::default();
-        req.set_context(ctx.clone());
+        req.set_context(ctx);
         req.start_key = start_key.clone();
         req.end_key = vec![];
         client.kv_scan(&req).unwrap();
@@ -272,7 +272,7 @@ fn test_query_stats() {
     });
     let scan_lock: Box<Query> = Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
         let mut req = ScanLockRequest::default();
-        req.set_context(ctx.clone());
+        req.set_context(ctx);
         req.start_key = start_key.clone();
         req.end_key = vec![];
         client.kv_scan_lock(&req).unwrap();
@@ -291,7 +291,7 @@ fn test_query_stats() {
     let get_key_ttl: Box<Query> =
         Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
             let mut req = RawGetKeyTtlRequest::default();
-            req.set_context(ctx.clone());
+            req.set_context(ctx);
             req.key = start_key.clone();
             client.raw_get_key_ttl(&req).unwrap();
             assert!(check_query_num_read(
@@ -310,10 +310,10 @@ fn test_query_stats() {
                 let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
                     let mut get_req = RawGetRequest::default();
                     get_req.set_context(ctx.clone());
-                    get_req.key = start_key.clone();
+                    get_req.key = start_key;
                     let mut req = BatchCommandsRequestRequest::new();
                     req.set_raw_get(get_req);
-                    return req;
+                    req
                 });
                 batch_commands(&ctx, &client, get_command, &start_key);
                 assert!(check_split_key(cluster, start_key.clone()));
@@ -340,7 +340,7 @@ fn test_query_stats() {
                     get_req.key = start_key;
                     let mut req = BatchCommandsRequestRequest::new();
                     req.set_get(get_req);
-                    return req;
+                    req
                 });
                 batch_commands(&ctx, &client, get_command, &start_key);
                 assert!(check_split_key(
@@ -362,7 +362,7 @@ fn test_query_stats() {
         });
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
-    fail::cfg("mock_collect_interval", "return(0)").unwrap();
+    fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
     test_query_num(raw_get, true);
     test_query_num(raw_batch_get, true);
     test_query_num(raw_scan, true);
@@ -379,7 +379,7 @@ fn test_query_stats() {
     test_rollback();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
-    fail::remove("mock_collect_interval");
+    fail::remove("mock_collect_tick_interval");
 }
 
 fn raw_put(
@@ -433,7 +433,7 @@ fn put(
         );
     }
     assert!(check_query_num_write(
-        &cluster,
+        cluster,
         store_id,
         QueryKind::Prewrite,
         1
@@ -444,7 +444,7 @@ fn put(
         let mut commit_req = CommitRequest::default();
         commit_req.set_context(ctx.clone());
         commit_req.start_version = start_ts.into_inner();
-        commit_req.set_keys(vec![key.clone()].into_iter().collect());
+        commit_req.set_keys(vec![key].into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
         let commit_resp = client.kv_commit(&commit_req).unwrap();
         assert!(
@@ -455,7 +455,7 @@ fn put(
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     }
     assert!(check_query_num_write(
-        &cluster,
+        cluster,
         store_id,
         QueryKind::Commit,
         1
@@ -478,11 +478,11 @@ fn test_pessimistic_lock() {
     mutation.value = b"v2".to_vec();
 
     let mut lock_req = PessimisticLockRequest::default();
-    lock_req.set_context(ctx.clone());
+    lock_req.set_context(ctx);
     lock_req.set_mutations(vec![mutation].into_iter().collect());
     lock_req.start_version = start_ts.into_inner();
     lock_req.for_update_ts = start_ts.into_inner();
-    lock_req.primary_lock = key.clone();
+    lock_req.primary_lock = key;
     let lock_resp = client.kv_pessimistic_lock(&lock_req).unwrap();
     assert!(
         !lock_resp.has_region_error(),
@@ -512,7 +512,7 @@ pub fn test_rollback() {
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
 
     let mut rollback_req = BatchRollbackRequest::default();
-    rollback_req.set_context(ctx.clone());
+    rollback_req.set_context(ctx);
     rollback_req.start_version = start_ts.into_inner();
     rollback_req.set_keys(vec![key].into_iter().collect());
     let rollback_resp = client.kv_batch_rollback(&rollback_req).unwrap();
@@ -556,14 +556,7 @@ fn test_query_num(query: Box<Query>, enable_ttl: bool) {
         put(&cluster, &client, &ctx, store_id, k.clone());
     }
     let region_id = cluster.get_region_id(&k);
-    query(
-        ctx.clone(),
-        &cluster,
-        client.clone(),
-        store_id,
-        region_id,
-        k.clone(),
-    );
+    query(ctx, &cluster, client, store_id, region_id, k.clone());
 }
 
 fn test_delete_query() {
@@ -587,7 +580,7 @@ fn test_delete_query() {
         raw_put(&cluster, &client, &ctx, store_id, k.clone());
         // Raw DeleteRange
         let mut delete_req = RawDeleteRangeRequest::default();
-        delete_req.set_context(ctx.clone());
+        delete_req.set_context(ctx);
         delete_req.set_start_key(k.clone());
         delete_req.set_end_key(vec![]);
         client.raw_delete_range(&delete_req).unwrap();
@@ -678,13 +671,13 @@ fn batch_commands(
     ctx: &Context,
     client: &TikvClient,
     gen_request: Box<GenRequest>,
-    start_key: &Vec<u8>,
+    start_key: &[u8],
 ) {
     let (mut sender, receiver) = client.batch_commands().unwrap();
     for _ in 0..100 {
         let mut batch_req = BatchCommandsRequest::default();
         for i in 0..10 {
-            let req = gen_request(ctx, start_key.clone());
+            let req = gen_request(ctx, start_key.to_owned());
             batch_req.mut_requests().push(req);
             batch_req.mut_request_ids().push(i);
         }

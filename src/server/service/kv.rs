@@ -7,7 +7,7 @@ use tikv_util::time::{duration_to_ms, duration_to_sec, Instant};
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::coprocessor::Endpoint;
 use crate::server::gc_worker::GcWorker;
-use crate::server::load_statistics::ThreadLoad;
+use crate::server::load_statistics::ThreadLoadPool;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
@@ -76,7 +76,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
 
     enable_req_batch: bool,
 
-    grpc_thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoadPool>,
 
     proxy: Proxy,
 
@@ -116,7 +116,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
-        grpc_thread_load: Arc<ThreadLoad>,
+        grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
@@ -989,7 +989,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         });
         ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
 
-        let thread_load = Arc::clone(&self.grpc_thread_load);
+        let grpc_thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
@@ -1007,7 +1007,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
 
             let mut r = item.batch_resp;
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
-            r.set_transport_layer_load(thread_load.load() as u64);
+            // TODO: per thread load is more reasonable for batching.
+            r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                 r,
                 WriteFlags::default().buffer_hint(false),
@@ -1072,6 +1073,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
     ) {
+        let addr = ctx.peer();
         let ts = request.get_ts();
         let leaders = request.take_regions().into();
         let (cb, resp) = paired_future_callback();
@@ -1087,8 +1089,10 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             sink.success(resp).await?;
             ServerResult::Ok(())
         }
-        .map_err(|e| {
-            warn!("call CheckLeader failed"; "err" => ?e);
+        .map_err(move |e| {
+            // CheckLeader only needs quorum responses, remote may drops
+            // requests early.
+            info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
         })
         .map(|_| ());
 
@@ -1297,7 +1301,7 @@ fn future_get<E: Engine, L: LockManager>(
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
-        req.get_key().into(),
+        Key::from_raw(req.get_key()),
         req.get_version().into(),
     );
 
@@ -1335,11 +1339,12 @@ fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let raw_end_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_end_key());
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
+
     let v = storage.scan(
         req.take_context(),
-        req.take_start_key(),
-        raw_end_key,
+        Key::from_raw(req.get_start_key()),
+        end_key,
         req.get_limit() as usize,
         req.get_sample_step() as usize,
         req.get_version().into(),
@@ -1376,11 +1381,8 @@ fn future_batch_get<E: Engine, L: LockManager>(
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let start = Instant::now();
-    let v = storage.batch_get(
-        req.take_context(),
-        req.get_keys().to_vec(),
-        req.get_version().into(),
-    );
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
 
     async move {
         let v = v.await;
@@ -1421,14 +1423,14 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
-    let raw_start_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_start_key());
-    let raw_end_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_end_key());
+    let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan_lock(
         req.take_context(),
         req.get_max_version().into(),
-        raw_start_key,
-        raw_end_key,
+        start_key,
+        end_key,
         req.get_limit() as usize,
     );
 
@@ -1460,8 +1462,8 @@ fn future_delete_range<E: Engine, L: LockManager>(
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
         req.take_context(),
-        req.take_start_key(),
-        req.take_end_key(),
+        Key::from_raw(req.get_start_key()),
+        Key::from_raw(req.get_end_key()),
         req.get_notify_only(),
         cb,
     );
@@ -1669,7 +1671,11 @@ fn future_raw_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawScanRequest,
 ) -> impl Future<Output = ServerResult<RawScanResponse>> {
-    let end_key = txn_types::raw_key_maybe_unbounded_into_option(req.take_end_key());
+    let end_key = if req.get_end_key().is_empty() {
+        None
+    } else {
+        Some(req.take_end_key())
+    };
     let v = storage.raw_scan(
         req.take_context(),
         req.take_cf(),
@@ -2093,7 +2099,7 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
 
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     fail_point!("needs_reject_raft_append", |_| true);
-    if reject_messages_on_memory_ratio - 0.0 < std::f64::EPSILON {
+    if reject_messages_on_memory_ratio < f64::EPSILON {
         return false;
     }
 

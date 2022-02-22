@@ -70,9 +70,7 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 Err(
-                    e
-                    @
-                    Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
                         ..
                     }))),
                 ) => {
@@ -175,7 +173,7 @@ impl TxnEntry {
                     let v = WriteRef::parse(&write.1)
                         .map_err(MvccError::from)?
                         .to_owned();
-                    let v = v.short_value.unwrap_or_else(Vec::default);
+                    let v = v.short_value.unwrap_or_default();
                     Ok((k, v))
                 }
             }
@@ -642,7 +640,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{AssertionLevel, Context};
     use std::sync::Arc;
     use tikv_kv::DummySnapshotExt;
 
@@ -701,6 +699,7 @@ mod tests {
                             min_commit_ts: TimeStamp::default(),
                             need_old_value: false,
                             is_retry_request: false,
+                            assertion_level: AssertionLevel::Off,
                         },
                         Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,

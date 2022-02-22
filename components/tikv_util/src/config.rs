@@ -1210,7 +1210,7 @@ impl TomlLine {
     fn parse(s: &str) -> TomlLine {
         let s = s.trim();
         // try to parse table from format of "[`Keys`]"
-        if let Some(k) = s.strip_prefix('[').map(|s| s.strip_suffix(']')).flatten() {
+        if let Some(k) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             return match TomlLine::parse_key(k) {
                 Some(k) => TomlLine::Table(k),
                 None => TomlLine::Unknown,
@@ -1671,7 +1671,6 @@ mod tests {
     #[test]
     fn test_check_kernel() {
         use super::check_kernel::{check_kernel_params, Checker};
-        use std::i64;
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![

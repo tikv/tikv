@@ -16,6 +16,8 @@ rusoto_core = "0.46.0"
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
 url = "2.0"
+lazy_static = "1.3"
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 
 [dev-dependencies]
 fail = "0.5"

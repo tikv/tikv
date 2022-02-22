@@ -111,8 +111,17 @@ impl SSTImporter {
         self.dir.validate(meta, self.key_manager.clone())
     }
 
+    /// check if api version of sst files are compatible
+    pub fn check_api_version(&self, metas: &[SstMeta]) -> Result<bool> {
+        self.dir
+            .check_api_version(metas, self.key_manager.clone(), self.api_version)
+    }
+
     pub fn ingest<E: KvEngine>(&self, metas: &[SSTMetaInfo], engine: &E) -> Result<()> {
-        match self.dir.ingest(metas, engine, self.key_manager.clone()) {
+        match self
+            .dir
+            .ingest(metas, engine, self.key_manager.clone(), self.api_version)
+        {
             Ok(..) => {
                 info!("ingest"; "metas" => ?metas);
                 Ok(())
@@ -712,7 +721,6 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::INFINITY;
     use std::io;
 
     use engine_traits::{
@@ -791,7 +799,9 @@ mod tests {
                 total_kvs: 0,
                 meta: meta.to_owned(),
             };
-            dir.ingest(&[info], &db, key_manager.clone()).unwrap();
+            let api_version = info.meta.api_version;
+            dir.ingest(&[info], &db, key_manager.clone(), api_version)
+                .unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1074,7 +1084,7 @@ mod tests {
         block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
-            &Limiter::new(INFINITY),
+            &Limiter::new(f64::INFINITY),
             input_len,
             8192,
         ))
@@ -1091,7 +1101,7 @@ mod tests {
         let err = block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
-            &Limiter::new(INFINITY),
+            &Limiter::new(f64::INFINITY),
             0,
             usize::MAX,
         ))
@@ -1117,7 +1127,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1176,7 +1186,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1225,7 +1235,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1273,7 +1283,7 @@ mod tests {
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1317,7 +1327,7 @@ mod tests {
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1380,7 +1390,7 @@ mod tests {
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
                     None,
-                    Limiter::new(INFINITY),
+                    Limiter::new(f64::INFINITY),
                     db,
                 )
                 .unwrap()
@@ -1455,7 +1465,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1500,7 +1510,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1545,7 +1555,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             None,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             db,
         );
         match &result {
@@ -1571,7 +1581,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             None,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             db,
         );
 
@@ -1595,7 +1605,7 @@ mod tests {
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
             None,
-            Limiter::new(INFINITY),
+            Limiter::new(f64::INFINITY),
             db,
         );
 
@@ -1633,7 +1643,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1692,7 +1702,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1747,7 +1757,7 @@ mod tests {
                 "sample.sst",
                 &RewriteRule::default(),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()
@@ -1795,7 +1805,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t789", 0),
                 None,
-                Limiter::new(INFINITY),
+                Limiter::new(f64::INFINITY),
                 db,
             )
             .unwrap()

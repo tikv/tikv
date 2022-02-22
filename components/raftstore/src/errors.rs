@@ -125,6 +125,9 @@ pub enum Error {
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
+
+    #[error("Prepare merge is pending due to unapplied proposals")]
+    PendingPrepareMerge,
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -285,6 +288,7 @@ impl ErrorCodeExt for Error {
             Error::Encryption(e) => e.error_code(),
             Error::DataIsNotReady { .. } => error_code::raftstore::DATA_IS_NOT_READY,
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
+            Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
         }

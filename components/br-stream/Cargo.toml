@@ -45,7 +45,7 @@ file_system = { path = "../file_system" }
 tidb_query_datatype = {path = "../tidb_query_datatype", default-features = false}
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
 online_config = { path = "../online_config" }

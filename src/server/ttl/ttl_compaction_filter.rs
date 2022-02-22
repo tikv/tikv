@@ -1,22 +1,23 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ffi::CString;
+use std::marker::PhantomData;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
+use api_version::{APIVersion, KeyMode, RawValue};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
 use engine_rocks::RocksTtlProperties;
-use engine_traits::key_prefix::{self};
-use engine_traits::raw_value::{ttl_current_ts, RawValue};
-use kvproto::kvrpcpb::ApiVersion;
+use engine_traits::raw_ttl::ttl_current_ts;
 
-pub struct TTLCompactionFilterFactory {
-    pub api_version: ApiVersion,
+#[derive(Default)]
+pub struct TTLCompactionFilterFactory<API: APIVersion> {
+    _phantom: PhantomData<API>,
 }
 
-impl CompactionFilterFactory for TTLCompactionFilterFactory {
+impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API> {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
@@ -38,20 +39,20 @@ impl CompactionFilterFactory for TTLCompactionFilterFactory {
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = Box::new(TTLCompactionFilter {
+        let filter = TTLCompactionFilter::<API> {
             ts: current,
-            api_version: self.api_version,
-        });
+            _phantom: PhantomData,
+        };
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
-struct TTLCompactionFilter {
+struct TTLCompactionFilter<API: APIVersion> {
     ts: u64,
-    api_version: ApiVersion,
+    _phantom: PhantomData<API>,
 }
 
-impl CompactionFilter for TTLCompactionFilter {
+impl<API: APIVersion> CompactionFilter for TTLCompactionFilter<API> {
     fn featured_filter(
         &mut self,
         _level: usize,
@@ -68,20 +69,11 @@ impl CompactionFilter for TTLCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
         // Only consider raw keys.
-        match self.api_version {
-            // TTL is not enabled in V1.
-            ApiVersion::V1 => unreachable!(),
-            // In V1TTL, txnkv is disabled, so all data keys are raw keys.
-            ApiVersion::V1ttl => (),
-            ApiVersion::V2 => {
-                let origin_key = &key[keys::DATA_PREFIX_KEY.len()..];
-                if !key_prefix::is_raw_key(origin_key) {
-                    return CompactionFilterDecision::Keep;
-                }
-            }
+        if API::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
+            return CompactionFilterDecision::Keep;
         }
 
-        match RawValue::from_bytes(value, self.api_version) {
+        match API::decode_raw_value(value) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..

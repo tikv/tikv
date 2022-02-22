@@ -22,7 +22,7 @@ pub struct ChunkedVecBytes {
 /// position of each element.
 impl ChunkedVecBytes {
     #[inline]
-    pub fn push_data_ref(&mut self, value: BytesRef) {
+    pub fn push_data_ref(&mut self, value: BytesRef<'_>) {
         self.bitmap.push(true);
         self.data.extend_from_slice(value);
         self.finish_append();
@@ -35,7 +35,7 @@ impl ChunkedVecBytes {
     }
 
     #[inline]
-    pub fn push_ref(&mut self, value: Option<BytesRef>) {
+    pub fn push_ref(&mut self, value: Option<BytesRef<'_>>) {
         if let Some(x) = value {
             self.push_data_ref(x);
         } else {
@@ -43,7 +43,7 @@ impl ChunkedVecBytes {
         }
     }
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<BytesRef> {
+    pub fn get(&self, idx: usize) -> Option<BytesRef<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
             Some(&self.data[self.var_offset[idx]..self.var_offset[idx + 1]])
@@ -152,7 +152,7 @@ impl BytesWriter {
         }
     }
 
-    pub fn write_ref(mut self, data: Option<BytesRef>) -> BytesGuard {
+    pub fn write_ref(mut self, data: Option<BytesRef<'_>>) -> BytesGuard {
         self.chunked_vec.push_ref(data);
         BytesGuard {
             chunked_vec: self.chunked_vec,
@@ -180,7 +180,7 @@ impl BytesWriter {
 }
 
 impl<'a> PartialBytesWriter {
-    pub fn partial_write(&mut self, data: BytesRef) {
+    pub fn partial_write(&mut self, data: BytesRef<'_>) {
         self.chunked_vec.data.extend_from_slice(data);
     }
 
@@ -238,10 +238,7 @@ mod tests {
             None,
         ];
         assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
-        assert_eq!(
-            ChunkedVecBytes::from_slice(&test_bytes.to_vec()).to_vec(),
-            test_bytes
-        );
+        assert_eq!(ChunkedVecBytes::from_slice(test_bytes).to_vec(), test_bytes);
     }
 
     #[test]

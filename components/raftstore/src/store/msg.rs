@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
@@ -14,14 +13,14 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
-use raft::SnapshotStatus;
+use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
-use crate::store::SnapKey;
+use crate::store::{RaftlogFetchResult, SnapKey};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -179,41 +178,46 @@ where
     }
 }
 
-bitflags! {
-    pub struct PeerTicks: u8 {
-        const RAFT                   = 0b00000001;
-        const RAFT_LOG_GC            = 0b00000010;
-        const SPLIT_REGION_CHECK     = 0b00000100;
-        const PD_HEARTBEAT           = 0b00001000;
-        const CHECK_MERGE            = 0b00010000;
-        const CHECK_PEER_STALE_STATE = 0b00100000;
-        const ENTRY_CACHE_EVICT      = 0b01000000;
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum PeerTick {
+    Raft = 0,
+    RaftLogGc = 1,
+    SplitRegionCheck = 2,
+    PdHeartbeat = 3,
+    CheckMerge = 4,
+    CheckPeerStaleState = 5,
+    EntryCacheEvict = 6,
+    CheckLeaderLease = 7,
 }
 
-impl PeerTicks {
+impl PeerTick {
+    pub const VARIANT_COUNT: usize = Self::get_all_ticks().len();
+
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
-            PeerTicks::RAFT => "raft",
-            PeerTicks::RAFT_LOG_GC => "raft_log_gc",
-            PeerTicks::SPLIT_REGION_CHECK => "split_region_check",
-            PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
-            PeerTicks::CHECK_MERGE => "check_merge",
-            PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
-            PeerTicks::ENTRY_CACHE_EVICT => "entry_cache_evict",
-            _ => unreachable!(),
+            PeerTick::Raft => "raft",
+            PeerTick::RaftLogGc => "raft_log_gc",
+            PeerTick::SplitRegionCheck => "split_region_check",
+            PeerTick::PdHeartbeat => "pd_heartbeat",
+            PeerTick::CheckMerge => "check_merge",
+            PeerTick::CheckPeerStaleState => "check_peer_stale_state",
+            PeerTick::EntryCacheEvict => "entry_cache_evict",
+            PeerTick::CheckLeaderLease => "check_leader_lease",
         }
     }
-    pub fn get_all_ticks() -> &'static [PeerTicks] {
-        const TICKS: &[PeerTicks] = &[
-            PeerTicks::RAFT,
-            PeerTicks::RAFT_LOG_GC,
-            PeerTicks::SPLIT_REGION_CHECK,
-            PeerTicks::PD_HEARTBEAT,
-            PeerTicks::CHECK_MERGE,
-            PeerTicks::CHECK_PEER_STALE_STATE,
-            PeerTicks::ENTRY_CACHE_EVICT,
+
+    pub const fn get_all_ticks() -> &'static [PeerTick] {
+        const TICKS: &[PeerTick] = &[
+            PeerTick::Raft,
+            PeerTick::RaftLogGc,
+            PeerTick::SplitRegionCheck,
+            PeerTick::PdHeartbeat,
+            PeerTick::CheckMerge,
+            PeerTick::CheckPeerStaleState,
+            PeerTick::EntryCacheEvict,
+            PeerTick::CheckLeaderLease,
         ];
         TICKS
     }
@@ -298,6 +302,12 @@ where
         callback: Callback<SK>,
     },
     LeaderCallback(Callback<SK>),
+    RaftLogGcFlushed,
+    // Reports the result of asynchronous Raft logs fetching.
+    RaftlogFetched {
+        context: GetEntriesContext,
+        res: Box<RaftlogFetchResult>,
+    },
 }
 
 /// Message that will be sent to a peer.
@@ -367,6 +377,9 @@ pub enum CasualMessage<EK: KvEngine> {
     RejectRaftAppend {
         peer_id: u64,
     },
+
+    // Try renew leader lease
+    RenewLease,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -422,6 +435,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
             }
+            CasualMessage::RenewLease => write!(fmt, "RenewLease"),
         }
     }
 }
@@ -488,7 +502,7 @@ pub enum PeerMsg<EK: KvEngine> {
     RaftCommand(RaftCommand<EK::Snapshot>),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
-    Tick(PeerTicks),
+    Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {
         res: ApplyTaskRes<EK::Snapshot>,

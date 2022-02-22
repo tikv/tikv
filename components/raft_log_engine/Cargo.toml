@@ -18,6 +18,6 @@ online_config = { path = "../online_config" }
 serde = "1.0"
 serde_derive = "1.0"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-engine = { git = "https://github.com/tikv/raft-engine", branch = "master" }
 protobuf = "2"

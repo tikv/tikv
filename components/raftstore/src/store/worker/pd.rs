@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
@@ -44,7 +44,7 @@ use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
-use resource_metering::{Collector, CollectorHandle, CollectorRegHandle, RawRecords};
+use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -342,13 +342,15 @@ where
     }
 }
 
-const DEFAULT_QPS_INFO_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_COLLECT_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-fn default_collect_interval() -> Duration {
+fn default_collect_tick_interval() -> Duration {
     #[cfg(feature = "failpoints")]
-    fail_point!("mock_collect_interval", |_| { Duration::from_millis(1) });
-    DEFAULT_COLLECT_INTERVAL
+    fail_point!("mock_collect_tick_interval", |_| {
+        Duration::from_millis(1)
+    });
+    DEFAULT_COLLECT_TICK_INTERVAL
 }
 
 #[inline]
@@ -371,10 +373,10 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
-    sender: Option<Sender<ReadStats>>,
-    thread_info_interval: Duration,
-    qps_info_interval: Duration,
-    collect_interval: Duration,
+    read_stats_sender: Option<Sender<ReadStats>>,
+    collect_store_infos_interval: Duration,
+    load_base_split_check_interval: Duration,
+    collect_tick_interval: Duration,
 }
 
 impl<EK, ER> StatsMonitor<EK, ER>
@@ -387,10 +389,13 @@ where
             scheduler,
             handle: None,
             timer: None,
-            sender: None,
-            thread_info_interval: interval,
-            qps_info_interval: cmp::min(DEFAULT_QPS_INFO_INTERVAL, interval),
-            collect_interval: cmp::min(DEFAULT_COLLECT_INTERVAL, interval),
+            read_stats_sender: None,
+            collect_store_infos_interval: interval,
+            load_base_split_check_interval: cmp::min(
+                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
+                interval,
+            ),
+            collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
         }
     }
 
@@ -400,27 +405,28 @@ where
         &mut self,
         mut auto_split_controller: AutoSplitController,
     ) -> Result<(), io::Error> {
-        if self.collect_interval < default_collect_interval() {
-            info!("it seems we are running tests, skip stats monitoring.");
+        if self.collect_tick_interval < default_collect_tick_interval()
+            || self.collect_store_infos_interval < self.collect_tick_interval
+        {
+            info!(
+                "interval is too small, skip stats monitoring. If we are running tests, it is normal, otherwise a check is needed."
+            );
             return Ok(());
         }
         let mut timer_cnt = 0; // to run functions with different intervals in a loop
-        let collect_interval = self.collect_interval;
-        if self.thread_info_interval < self.collect_interval {
-            info!("running in test mode, skip starting monitor.");
-            return Ok(());
-        }
-        let thread_info_interval = self
-            .thread_info_interval
-            .div_duration_f64(self.collect_interval) as i32;
-        let qps_info_interval = self
-            .qps_info_interval
-            .div_duration_f64(self.collect_interval) as i32;
+        let tick_interval = self.collect_tick_interval;
+        let collect_store_infos_interval = self
+            .collect_store_infos_interval
+            .div_duration_f64(tick_interval) as i32;
+        let load_base_split_check_interval = self
+            .load_base_split_check_interval
+            .div_duration_f64(tick_interval) as i32;
+
         let (tx, rx) = mpsc::channel();
         self.timer = Some(tx);
 
         let (sender, receiver) = mpsc::channel();
-        self.sender = Some(sender);
+        self.read_stats_sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
@@ -431,54 +437,20 @@ where
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(collect_interval) {
-                    if timer_cnt % thread_info_interval == 0 {
-                        thread_stats.record();
-                        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
-                        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
-                        let write_io_rates =
-                            convert_record_pairs(thread_stats.get_write_io_rates());
-
-                        let task = Task::StoreInfos {
-                            cpu_usages,
-                            read_io_rates,
-                            write_io_rates,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send store infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(tick_interval) {
+                    if timer_cnt % collect_store_infos_interval == 0 {
+                        StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
-                    if timer_cnt % qps_info_interval == 0 {
-                        let mut others = vec![];
-                        while let Ok(other) = receiver.try_recv() {
-                            others.push(other);
-                        }
-                        let (top, split_infos) = auto_split_controller.flush(others);
-                        auto_split_controller.clear();
-                        let task = Task::AutoSplit { split_infos };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!(
-                                "failed to send split infos to pd worker";
-                                "err" => ?e,
-                            );
-                        }
-
-                        for i in 0..TOP_N {
-                            if i < top.len() {
-                                READ_QPS_TOPN
-                                    .with_label_values(&[&i.to_string()])
-                                    .set(top[i] as f64);
-                            } else {
-                                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
-                            }
-                        }
+                    if timer_cnt % load_base_split_check_interval == 0 {
+                        StatsMonitor::load_base_split(
+                            &mut auto_split_controller,
+                            &receiver,
+                            &scheduler,
+                        );
                     }
                     // modules timer_cnt with the least common multiple of intervals to avoid overflow
-                    timer_cnt = (timer_cnt + 1) % (qps_info_interval * thread_info_interval);
-                    auto_split_controller.refresh_cfg();
+                    timer_cnt = (timer_cnt + 1)
+                        % (load_base_split_check_interval * collect_store_infos_interval);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
@@ -487,10 +459,62 @@ where
         Ok(())
     }
 
+    pub fn collect_store_infos(
+        thread_stats: &mut ThreadInfoStatistics,
+        scheduler: &Scheduler<Task<EK, ER>>,
+    ) {
+        thread_stats.record();
+        let cpu_usages = convert_record_pairs(thread_stats.get_cpu_usages());
+        let read_io_rates = convert_record_pairs(thread_stats.get_read_io_rates());
+        let write_io_rates = convert_record_pairs(thread_stats.get_write_io_rates());
+
+        let task = Task::StoreInfos {
+            cpu_usages,
+            read_io_rates,
+            write_io_rates,
+        };
+        if let Err(e) = scheduler.schedule(task) {
+            error!(
+                "failed to send store infos to pd worker";
+                "err" => ?e,
+            );
+        }
+    }
+
+    pub fn load_base_split(
+        auto_split_controller: &mut AutoSplitController,
+        receiver: &Receiver<ReadStats>,
+        scheduler: &Scheduler<Task<EK, ER>>,
+    ) {
+        auto_split_controller.refresh_cfg();
+        let mut others = vec![];
+        while let Ok(other) = receiver.try_recv() {
+            others.push(other);
+        }
+        let (top, split_infos) = auto_split_controller.flush(others);
+        auto_split_controller.clear();
+        let task = Task::AutoSplit { split_infos };
+        if let Err(e) = scheduler.schedule(task) {
+            error!(
+                "failed to send split infos to pd worker";
+                "err" => ?e,
+            );
+        }
+        for i in 0..TOP_N {
+            if i < top.len() {
+                READ_QPS_TOPN
+                    .with_label_values(&[&i.to_string()])
+                    .set(top[i] as f64);
+            } else {
+                READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
+            }
+        }
+    }
+
     pub fn stop(&mut self) {
         if let Some(h) = self.handle.take() {
             drop(self.timer.take());
-            drop(self.sender.take());
+            drop(self.read_stats_sender.take());
             if let Err(e) = h.join() {
                 error!("join stats collector failed"; "err" => ?e);
             }
@@ -498,7 +522,7 @@ where
     }
 
     pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
-        &self.sender
+        &self.read_stats_sender
     }
 }
 
@@ -675,7 +699,7 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
 
-    _region_cpu_records_collector: CollectorHandle,
+    _region_cpu_records_collector: CollectorGuard,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -712,8 +736,10 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let _region_cpu_records_collector = collector_reg_handle
-            .register(Box::new(RegionCPUMeteringCollector::new(scheduler.clone())));
+        let _region_cpu_records_collector = collector_reg_handle.register(
+            Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
+            true,
+        );
 
         Runner {
             store_id,
@@ -973,7 +999,14 @@ where
         stats.set_capacity(capacity);
 
         let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info.kv_engine.get_engine_used_size().expect("cf");
+            + store_info
+                .kv_engine
+                .get_engine_used_size()
+                .expect("kv engine used size")
+            + store_info
+                .raft_engine
+                .get_engine_size()
+                .expect("raft engine used size");
         stats.set_used_size(used_size);
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
@@ -1025,6 +1058,9 @@ where
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["available"])
             .set(available as i64);
+        STORE_SIZE_GAUGE_VEC
+            .with_label_values(&["used"])
+            .set(used_size as i64);
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
@@ -1262,9 +1298,10 @@ where
                         "try to transfer leader";
                         "region_id" => region_id,
                         "from_peer" => ?peer,
-                        "to_peer" => ?transfer_leader.get_peer()
+                        "to_peer" => ?transfer_leader.get_peer(),
+                        "to_peers" => ?transfer_leader.get_peers(),
                     );
-                    let req = new_transfer_leader_request(transfer_leader.take_peer());
+                    let req = new_transfer_leader_request(transfer_leader.take_peer(), transfer_leader.take_peers().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
                 } else if resp.has_split_region() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -1809,10 +1846,11 @@ fn new_batch_split_region_request(
     req
 }
 
-fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
+fn new_transfer_leader_request(peer: metapb::Peer, peers: Vec<metapb::Peer>) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::TransferLeader);
     req.mut_transfer_leader().set_peer(peer);
+    req.mut_transfer_leader().set_peers(peers.into());
     req
 }
 
@@ -2125,7 +2163,14 @@ mod tests {
                     let resource_tag = Arc::new(TagInfos::from_rpc_context(&context));
 
                     let mut records = HashMap::default();
-                    records.insert(resource_tag, RawRecord { cpu_time: 10 });
+                    records.insert(
+                        resource_tag,
+                        RawRecord {
+                            cpu_time: 10,
+                            read_keys: 0,
+                            write_keys: 0,
+                        },
+                    );
                     records
                 },
             });

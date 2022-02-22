@@ -105,6 +105,7 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
+    #[must_use]
     pub fn append_ts(mut self, ts: TimeStamp) -> Key {
         self.0.encode_u64_desc(ts.into_inner()).unwrap();
         self
@@ -224,7 +225,7 @@ impl Key {
 
 impl Clone for Key {
     fn clone(&self) -> Self {
-        // default clone implemention use self.len() to reserve capacity
+        // default clone implementation use self.len() to reserve capacity
         // for the sake of appending ts, we need to reserve more
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);
@@ -241,25 +242,6 @@ impl Debug for Key {
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", &log_wrappers::Value::key(&self.0))
-    }
-}
-
-/// Convert a maybe unbounded raw key into `Option`, for a explicit meaning of "Unbounded".
-///
-/// # Example
-///
-/// ```
-/// use txn_types::raw_key_maybe_unbounded_into_option;
-///
-/// assert_eq!(raw_key_maybe_unbounded_into_option(b"".to_vec()), None);
-/// assert_eq!(raw_key_maybe_unbounded_into_option(b"abc".to_vec()), Some(b"abc".to_vec()));
-/// ```
-#[inline]
-pub fn raw_key_maybe_unbounded_into_option(raw_key: Vec<u8>) -> Option<Vec<u8>> {
-    if raw_key.is_empty() {
-        None
-    } else {
-        Some(raw_key)
     }
 }
 
@@ -527,6 +509,9 @@ bitflags! {
         const ONE_PC = 0b00000001;
         /// Indicates this request is from a stale read-only transaction.
         const STALE_READ = 0b00000010;
+        /// Indicates this request is a transfer leader command that needs to be proposed
+        /// like a normal command.
+        const TRANSFER_LEADER_PROPOSAL = 0b00000100;
     }
 }
 

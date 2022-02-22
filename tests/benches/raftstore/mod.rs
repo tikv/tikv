@@ -35,7 +35,7 @@ struct SetConfig<F> {
     value_size: usize,
 }
 
-fn bench_set<T, F>(b: &mut Bencher, input: &SetConfig<F>)
+fn bench_set<T, F>(b: &mut Bencher<'_>, input: &SetConfig<F>)
 where
     T: Simulator,
     F: ClusterFactory<T>,
@@ -57,7 +57,7 @@ struct GetConfig<F> {
     nodes: usize,
 }
 
-fn bench_get<T, F>(b: &mut Bencher, input: &GetConfig<F>)
+fn bench_get<T, F>(b: &mut Bencher<'_>, input: &GetConfig<F>)
 where
     T: Simulator,
     F: ClusterFactory<T>,
@@ -84,7 +84,7 @@ struct DeleteConfig<F> {
     nodes: usize,
 }
 
-fn bench_delete<T, F>(b: &mut Bencher, input: &DeleteConfig<F>)
+fn bench_delete<T, F>(b: &mut Bencher<'_>, input: &DeleteConfig<F>)
 where
     T: Simulator,
     F: ClusterFactory<T>,

@@ -4,6 +4,7 @@ use crate::engine::PanicEngine;
 use crate::write_batch::PanicWriteBatch;
 use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
+
 use raft::eraftpb::Entry;
 
 impl RaftEngineReadOnly for PanicEngine {
@@ -23,6 +24,10 @@ impl RaftEngineReadOnly for PanicEngine {
         max_size: Option<usize>,
         buf: &mut Vec<Entry>,
     ) -> Result<usize> {
+        panic!()
+    }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
         panic!()
     }
 }
@@ -55,6 +60,7 @@ impl RaftEngine for PanicEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {

@@ -11,6 +11,7 @@ use super::plugin_registry::PluginRegistry;
 use super::raw_storage_impl::RawStorageImpl;
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 
+#[allow(clippy::large_enum_variant)]
 enum CoprocessorError {
     RegionError(kvproto::errorpb::Error),
     Other(String),
