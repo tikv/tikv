@@ -300,7 +300,7 @@ impl TagInfos {
         }
     }
 
-    // create a TagInfos with start and end keys for an non-raw read request.
+    // create a TagInfos with start and end keys for a read request.
     pub fn from_rpc_context_with_key_ranges(
         context: &kvproto::kvrpcpb::Context,
         key_ranges: Vec<(Vec<u8>, Vec<u8>)>,
