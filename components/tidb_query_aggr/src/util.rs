@@ -39,10 +39,23 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             // No need to cast. Return directly without changing anything.
             return Ok(());
         }
-        EvalType::Int => FieldTypeBuilder::new()
-            .tp(FieldTypeTp::NewDecimal)
-            .flen(tidb_query_datatype::MAX_DECIMAL_WIDTH)
-            .build(),
+        EvalType::Int => {
+            //Codes tidb/expression/aggregation/base_func.go defined
+            //typeInfer4Sum()、typeInfer4Avg(), For Bit's sum(), avg() expression RetType is
+            //Double.
+            if ret_field_type.tp() == FieldTypeTp::Bit {
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::Double)
+                    .flen(tidb_query_datatype::MAX_REAL_WIDTH)
+                    .decimal(tidb_query_datatype::UNSPECIFIED_LENGTH)
+                    .build()
+            } else {
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::NewDecimal)
+                    .flen(tidb_query_datatype::MAX_DECIMAL_WIDTH)
+                    .build()
+            }
+        }
         _ => FieldTypeBuilder::new()
             .tp(FieldTypeTp::Double)
             .flen(tidb_query_datatype::MAX_REAL_WIDTH)

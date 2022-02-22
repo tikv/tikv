@@ -504,7 +504,7 @@ impl Duration {
         }
 
         write!(
-            &mut string,
+            string,
             "{:02}{}{:02}{}{:02}",
             self.hours(),
             sep,
@@ -516,7 +516,7 @@ impl Duration {
 
         if self.fsp > 0 {
             let frac = self.subsec_nanos() / TEN_POW[NANO_WIDTH - self.fsp as usize];
-            write!(&mut string, ".{:0width$}", frac, width = self.fsp as usize).unwrap();
+            write!(string, ".{:0width$}", frac, width = self.fsp as usize).unwrap();
         }
 
         string
