@@ -142,12 +142,7 @@ impl Samples {
     }
 
     // split the keys with the given split config and sampled data.
-    fn split_key(
-        &self,
-        split_balance_score: f64,
-        split_contained_score: f64,
-        sample_threshold: u64,
-    ) -> Vec<u8> {
+    fn split_key(&self, split_balance_score: f64, split_contained_score: f64) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in self.0.iter().enumerate() {
@@ -155,13 +150,13 @@ impl Samples {
                 continue;
             }
             let evaluated_key_num_lr = sample.left + sample.right;
-            let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as u64;
-            if evaluated_key_num_lr == 0 || evaluated_key_num < sample_threshold {
+            if evaluated_key_num_lr == 0 {
                 LOAD_BASE_SPLIT_EVENT
                     .with_label_values(&["no_enough_key"])
                     .inc();
                 continue;
             }
+            let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as f64;
 
             // The balance score is the difference in the number of requested keys between the left and right of a sample key.
             // The smaller the balance score, the more balanced the load will be after this splitting.
@@ -179,7 +174,7 @@ impl Samples {
 
             // The contained score is the ratio of a sample key that are contained in the requested key.
             // The larger the contained score, the more RPCs the cluster will receive after this splitting.
-            let contained_score = sample.contained as f64 / evaluated_key_num as f64;
+            let contained_score = sample.contained as f64 / evaluated_key_num;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
@@ -252,14 +247,18 @@ impl Recorder {
             |x| x,
         );
         let mut samples = Samples::from(sampled_key_ranges);
+        // Because we need to observe the number of `no_enough_key` of all the actual keys,
+        // so we do this check after the samples are calculated.
+        if (self.key_ranges.len() as u64) < config.sample_threshold {
+            LOAD_BASE_SPLIT_EVENT
+                .with_label_values(&["no_enough_key"])
+                .inc_by(samples.0.len() as u64);
+            return vec![];
+        }
         self.key_ranges.iter().flatten().for_each(|key_range| {
             samples.evaluate(key_range);
         });
-        samples.split_key(
-            config.split_balance_score,
-            config.split_contained_score,
-            config.sample_threshold,
-        )
+        samples.split_key(config.split_balance_score, config.split_contained_score)
     }
 }
 

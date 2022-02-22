@@ -1692,14 +1692,14 @@ impl Time {
     #[inline]
     pub fn to_numeric_string(self) -> String {
         let mut buffer = String::with_capacity(15);
-        write!(&mut buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
+        write!(buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
         if self.get_time_type() != TimeType::Date {
-            write!(&mut buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
+            write!(buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
         }
         let fsp = usize::from(self.fsp());
         if fsp > 0 {
             write!(
-                &mut buffer,
+                buffer,
                 ".{:0width$}",
                 self.micro() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
