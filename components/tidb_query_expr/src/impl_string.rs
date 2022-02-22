@@ -525,9 +525,9 @@ pub fn insert_utf8(
         ulen = slen - upos + 1;
     }
     let mut pw = writer.begin();
-    pw.partial_write(&s[0..upos - 1].as_bytes());
+    pw.partial_write(s[0..upos - 1].as_bytes());
     pw.partial_write(newstr.as_bytes());
-    pw.partial_write(&s[upos + ulen - 1..].as_bytes());
+    pw.partial_write(s[upos + ulen - 1..].as_bytes());
     Ok(pw.finish())
 }
 
