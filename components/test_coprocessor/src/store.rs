@@ -32,6 +32,7 @@ impl<'a, E: Engine> Insert<'a, E> {
         }
     }
 
+    #[must_use]
     pub fn set(mut self, col: &Column, value: Datum) -> Self {
         assert!(self.table.column_by_id(col.id).is_some());
         self.values.insert(col.id, value);

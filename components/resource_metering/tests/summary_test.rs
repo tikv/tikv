@@ -69,7 +69,7 @@ fn test_summary() {
                 resource_metering::record_write_keys(456);
             }
             thread::sleep(Duration::from_millis(REPORT_INTERVAL_MS + 500)); // wait report
-            assert!(data_sink.get(&b"TAG-1".to_vec()).is_none());
+            assert!(data_sink.get(b"TAG-1").is_none());
             data_sink.clear();
         })
         .join()
@@ -95,7 +95,7 @@ fn test_summary() {
             }
             thread::sleep(Duration::from_millis(REPORT_INTERVAL_MS + 500)); // wait report
 
-            let r = data_sink.get(&b"TAG-1".to_vec()).unwrap();
+            let r = data_sink.get(b"TAG-1").unwrap();
             assert_eq!(
                 r.get_record()
                     .get_items()
@@ -133,7 +133,7 @@ fn test_summary() {
             resource_metering::record_write_keys(456);
         }
         thread::sleep(Duration::from_millis(REPORT_INTERVAL_MS + 500)); // wait report
-        assert!(data_sink.get(&b"TAG-1".to_vec()).is_none());
+        assert!(data_sink.get(b"TAG-1").is_none());
         data_sink.clear();
     })
     .join()

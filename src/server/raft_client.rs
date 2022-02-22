@@ -226,9 +226,10 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn wait_hint(&mut self) -> Option<Duration> {
-        if !self.cfg.heavy_load_wait_duration.0.is_zero() {
+        let wait_dur = self.cfg.heavy_load_wait_duration();
+        if !wait_dur.is_zero() {
             if self.loads.current_thread_in_heavy_load() {
-                Some(self.cfg.heavy_load_wait_duration.0)
+                Some(wait_dur)
             } else {
                 None
             }

@@ -107,7 +107,7 @@ fn test_serde_custom_tikv_config() {
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 25,
-        heavy_load_wait_duration: ReadableDuration::millis(2),
+        heavy_load_wait_duration: Some(ReadableDuration::millis(2)),
         enable_request_batch: false,
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
@@ -230,6 +230,7 @@ fn test_serde_custom_tikv_config() {
         inspect_interval: ReadableDuration::millis(444),
         raft_msg_flush_interval: ReadableDuration::micros(250),
         check_leader_lease_interval: ReadableDuration::millis(123),
+        renew_leader_lease_advance_duration: ReadableDuration::millis(456),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -614,7 +615,7 @@ fn test_serde_custom_tikv_config() {
         },
         titan: titan_db_config,
     };
-    value.raft_engine.enable = true;
+    value.raft_engine.enable = false;
     let raft_engine_config = value.raft_engine.mut_config();
     raft_engine_config.dir = "test-dir".to_owned();
     raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
@@ -719,7 +720,6 @@ fn test_serde_custom_tikv_config() {
         import_mode_timeout: ReadableDuration::secs(1453),
     };
     value.panic_when_unexpected_key_or_data = true;
-    value.enable_io_snoop = false;
     value.gc = GcConfig {
         ratio_threshold: 1.2,
         batch_keys: 256,

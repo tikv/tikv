@@ -39,10 +39,10 @@ impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = Box::new(TTLCompactionFilter::<API> {
+        let filter = TTLCompactionFilter::<API> {
             ts: current,
             _phantom: PhantomData,
-        }) as Box<dyn CompactionFilter>;
+        };
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }

@@ -104,11 +104,13 @@ impl TestSuiteBuilder {
         }
     }
 
+    #[must_use]
     pub fn cluster(mut self, cluster: Cluster<ServerCluster>) -> TestSuiteBuilder {
         self.cluster = Some(cluster);
         self
     }
 
+    #[must_use]
     pub fn memory_quota(mut self, memory_quota: usize) -> TestSuiteBuilder {
         self.memory_quota = Some(memory_quota);
         self

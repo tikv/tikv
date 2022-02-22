@@ -2,21 +2,29 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use engine_traits::CF_WRITE;
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::config::Config as RaftstoreConfig;
 use raftstore::store::util::is_vote_msg;
+use raftstore::store::Callback;
 use raftstore::Result;
 use tikv_util::HandyRwLock;
 
 use collections::HashMap;
 use test_raftstore::*;
+use tikv::storage::kv::SnapshotExt;
+use tikv::storage::Snapshot;
 use tikv_util::config::{ReadableDuration, ReadableSize};
+use txn_types::{Key, PessimisticLock};
 
 #[test]
 fn test_follower_slow_split() {
@@ -728,4 +736,151 @@ fn test_report_approximate_size_after_split_check() {
     let region_number = cluster.pd_client.get_regions_number();
     assert_eq!(region_number, 1);
     assert!(size > approximate_size);
+}
+
+#[test]
+fn test_split_with_concurrent_pessimistic_locking() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(cluster.get_ctx(b"key"));
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"key".to_vec());
+
+    // 1. Locking happens when split invalidates in-memory pessimistic locks.
+    // The pessimistic lock request has to fallback to propose locks. It should find
+    // that the epoch has changed.
+    fail::cfg("on_split_invalidate_locks", "pause").unwrap();
+    cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
+    thread::sleep(Duration::from_millis(300));
+
+    let client2 = client.clone();
+    let req2 = req.clone();
+    let res = thread::spawn(move || client2.kv_pessimistic_lock(&req2).unwrap());
+    thread::sleep(Duration::from_millis(200));
+    fail::remove("on_split_invalidate_locks");
+    let resp = res.join().unwrap();
+    assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+
+    // 2. Locking happens when split has finished
+    // It needs to be rejected due to incorrect epoch, otherwise the lock may be written to the wrong region.
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    req.set_context(cluster.get_ctx(b"key"));
+    let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(200));
+
+    cluster.split_region(&cluster.get_region(b"key"), b"b", Callback::None);
+    thread::sleep(Duration::from_millis(300));
+
+    fail::remove("txn_before_process_write");
+    let resp = res.join().unwrap();
+    assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+}
+
+#[test]
+fn test_split_pessimistic_locks_with_concurrent_prewrite() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"a".to_vec());
+    mutation.set_value(b"v".to_vec());
+    let mut req = PrewriteRequest::default();
+    req.set_context(cluster.get_ctx(b"a"));
+    req.set_mutations(vec![mutation].into());
+    req.set_try_one_pc(true);
+    req.set_start_version(20);
+    req.set_primary_lock(b"a".to_vec());
+    let resp = client.kv_prewrite(&req).unwrap();
+    let commit_ts = resp.one_pc_commit_ts;
+
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    let lock_a = PessimisticLock {
+        primary: b"a".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: (commit_ts + 10).into(),
+        min_commit_ts: (commit_ts + 10).into(),
+    };
+    let lock_c = PessimisticLock {
+        primary: b"c".to_vec().into_boxed_slice(),
+        start_ts: 15.into(),
+        ttl: 3000,
+        for_update_ts: (commit_ts + 10).into(),
+        min_commit_ts: (commit_ts + 10).into(),
+    };
+    {
+        let mut locks = txn_ext.pessimistic_locks.write();
+        assert!(
+            locks
+                .insert(vec![
+                    (Key::from_raw(b"a"), lock_a),
+                    (Key::from_raw(b"c"), lock_c)
+                ])
+                .is_ok()
+        );
+    }
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"a".to_vec());
+    mutation.set_value(b"v2".to_vec());
+    let mut req = PrewriteRequest::default();
+    req.set_context(cluster.get_ctx(b"a"));
+    req.set_mutations(vec![mutation].into());
+    req.set_is_pessimistic_lock(vec![true]);
+    req.set_start_version(10);
+    req.set_for_update_ts(commit_ts + 20);
+    req.set_primary_lock(b"a".to_vec());
+
+    // First let prewrite get snapshot
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    let resp = thread::spawn(move || client.kv_prewrite(&req).unwrap());
+    thread::sleep(Duration::from_millis(150));
+
+    // In the meantime, split region.
+    fail::cfg("on_split_invalidate_locks", "pause").unwrap();
+    cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
+    thread::sleep(Duration::from_millis(300));
+
+    // PrewriteResponse should contain an EpochNotMatch instead of PessimisticLockNotFound.
+    fail::remove("txn_before_process_write");
+    let resp = resp.join().unwrap();
+    assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
 }
