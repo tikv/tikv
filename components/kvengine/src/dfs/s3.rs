@@ -2,6 +2,7 @@
 
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
+use aws_sdk_s3::model::{Tag, Tagging};
 use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Bytes;
@@ -171,13 +172,16 @@ impl DFS for S3FS {
         if let Err(err) = std::fs::remove_file(&local_file_path) {
             error!("failed to remove local file {:?}", err);
         }
-        // TODO(x): use tag instead of delete directly.
         let key = self.file_key(file_id);
         let bucket = self.bucket.clone();
+        let tagging = Tagging::builder()
+            .set_tag_set(Some(vec![Tag::builder().key("deleted").build()]))
+            .build();
         self.s3c
-            .delete_object()
+            .put_object_tagging()
             .bucket(bucket)
             .key(key)
+            .set_tagging(Some(tagging))
             .send()
             .await?;
         Ok(())
