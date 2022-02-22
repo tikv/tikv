@@ -4241,6 +4241,7 @@ where
         let mut total_gc_logs = 0;
 
         let first_idx = self.fsm.peer.get_store().first_index();
+        let last_idx = self.fsm.peer.get_store().last_index();
 
         let mut compact_idx = if force_compact
             // Too many logs between applied index and first index.
@@ -4248,7 +4249,7 @@ where
             // Raft log size ecceeds the limit.
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            applied_idx
+            std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft logs.
             // There will be at least 3 entries left after one compaction:
