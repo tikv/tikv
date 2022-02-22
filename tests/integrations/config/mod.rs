@@ -678,7 +678,7 @@ fn test_serde_custom_tikv_config() {
         consistency_check_method: ConsistencyCheckMethod::Raw,
         perf_level: PerfLevel::EnableTime,
         enable_region_bucket: false,
-        region_bucket_size: ReadableSize::gb(1),
+        region_bucket_size: ReadableSize::mb(1),
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());

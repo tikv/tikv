@@ -164,7 +164,9 @@ where
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= host.cfg.region_max_size.0 {
+        if region_size >= host.cfg.region_max_size.0
+            || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
+        {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
@@ -172,7 +174,9 @@ where
                 "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit
+                || region_size >= host.cfg.region_size_threshold_for_approximate.0
+            {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
@@ -292,7 +296,14 @@ pub mod tests {
         exp_buckets_keys: Vec<Vec<u8>>,
     ) {
         loop {
-            if let Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) = rx.try_recv() {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    region_buckets,
+                },
+            )) = rx.try_recv()
+            {
                 let mut i = 0;
                 let keys = region_buckets.get_keys();
                 assert_eq!(keys.len(), exp_buckets_keys.len());
@@ -456,6 +467,7 @@ pub mod tests {
             batch_split_limit: 5,
             enable_region_bucket: true,
             region_bucket_size: ReadableSize(3000),
+            region_size_threshold_for_approximate: ReadableSize(50000),
             ..Default::default()
         };
 
@@ -477,7 +489,14 @@ pub mod tests {
         ));
 
         loop {
-            if let Ok((_, CasualMessage::RefreshRegionBuckets { region_buckets })) = rx.try_recv() {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    region_buckets,
+                },
+            )) = rx.try_recv()
+            {
                 let keys = region_buckets.get_keys();
                 for i in 0..keys.len() - 1 {
                     let start: i32 = std::str::from_utf8(&keys[i]).unwrap().parse().unwrap();

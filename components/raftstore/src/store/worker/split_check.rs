@@ -195,13 +195,13 @@ where
             "region_id" => region_id,
             "start_key" => log_wrappers::Value::key(&start_key),
             "end_key" => log_wrappers::Value::key(&end_key),
+            "policy" => ?policy,
         );
         CHECK_SPILT_COUNTER.all.inc();
-        let bucket_check_policy = policy;
         let mut host =
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
-        if bucket_check_policy == CheckPolicy::Approximate && host.enable_region_bucket() {
+        if host.policy() == CheckPolicy::Approximate && host.enable_region_bucket() {
             let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
                 Ok(keys) => keys
                     .into_iter()
@@ -215,13 +215,18 @@ where
                     vec![]
                 }
             };
-            info!("starting approximate_bucket_keys {}", bucket_keys.len());
+            info!(
+                "starting approximate_bucket_keys {}, bucket {:?}",
+                bucket_keys.len(),
+                bucket_keys
+            );
             if !bucket_keys.is_empty() {
                 let mut region_buckets = Buckets::default();
-                region_buckets.set_keys(::protobuf::RepeatedField::from_vec(bucket_keys));
+                region_buckets.set_keys(bucket_keys.into());
                 let _ = self.router.send(
                     region.get_id(),
-                    CasualMessage::RefreshRegionBuckets { region_buckets },
+                    CasualMessage::RefreshRegionBuckets { region_epoch: region.get_region_epoch().clone(), 
+                                                          region_buckets: region_buckets },
                 );
             }
         }
@@ -303,7 +308,6 @@ where
             let mut size = 0;
             let mut keys = 0;
             let mut bucket_size: u64 = 0;
-            region_buckets.keys = ::protobuf::RepeatedField::new();
             while let Some(e) = iter.next() {
                 if host.on_kv(region, &e) {
                     return;
@@ -327,6 +331,7 @@ where
                 "keys" => keys,
                 "bucket_count" => region_buckets.get_keys().len(),
                 "bucket_size" => bucket_size,
+                "bucket" => ?region_buckets,
             );
             let _ = self.router.send(
                 region.get_id(),
@@ -339,7 +344,8 @@ where
             if host.enable_region_bucket() {
                 let _ = self.router.send(
                     region.get_id(),
-                    CasualMessage::RefreshRegionBuckets { region_buckets },
+                    CasualMessage::RefreshRegionBuckets { region_epoch: region.get_region_epoch().clone(),
+                                                          region_buckets: region_buckets },
                 );
             }
         })?;

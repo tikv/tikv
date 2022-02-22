@@ -372,6 +372,7 @@ pub enum CasualMessage<EK: KvEngine> {
         peer_id: u64,
     },
     RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
         region_buckets: metapb::Buckets,
     },
 }

@@ -845,8 +845,11 @@ where
             CasualMessage::RegionApproximateKeys { keys } => {
                 self.on_approximate_region_keys(keys);
             }
-            CasualMessage::RefreshRegionBuckets { region_buckets } => {
-                self.on_refresh_region_buckets(region_buckets);
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch,
+                region_buckets,
+            } => {
+                self.on_refresh_region_buckets(region_epoch, region_buckets);
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
@@ -4380,7 +4383,20 @@ where
         self.register_pd_heartbeat_tick();
     }
 
-    fn on_refresh_region_buckets(&mut self, region_buckets: metapb::Buckets) {
+    fn on_refresh_region_buckets(
+        &mut self,
+        region_epoch: metapb::RegionEpoch,
+        region_buckets: metapb::Buckets,
+    ) {
+        let region = self.fsm.peer.region();
+        if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+            warn!(
+                "receive a stale refresh region bucket message";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
         self.fsm.peer.region_buckets = region_buckets;
     }
 

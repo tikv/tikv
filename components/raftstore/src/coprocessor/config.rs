@@ -47,6 +47,8 @@ pub struct Config {
     // enable subsplit ranges (aka bucket) within the region
     pub enable_region_bucket: bool,
     pub region_bucket_size: ReadableSize,
+    // region size threshold for using approximate size instead of scan
+    pub region_size_threshold_for_approximate: ReadableSize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -68,6 +70,7 @@ pub const SPLIT_KEYS: u64 = 960000;
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
 pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
+pub const DEFAULT_LARGE_REGION_SIZE_THRESHOLD: ReadableSize = ReadableSize::mb(500);
 
 impl Default for Config {
     fn default() -> Config {
@@ -83,6 +86,7 @@ impl Default for Config {
             perf_level: PerfLevel::EnableCount,
             enable_region_bucket: false,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
+            region_size_threshold_for_approximate: DEFAULT_LARGE_REGION_SIZE_THRESHOLD,
         }
     }
 }
@@ -101,6 +105,20 @@ impl Config {
                 "region max keys {} must >= split keys {}",
                 self.region_max_keys,
                 self.region_split_keys
+            ));
+        }
+        if self.region_split_size.0 < self.region_bucket_size.0 {
+            return Err(box_err!(
+                "region split size {} must >= region bucket size {}",
+                self.region_split_size.0,
+                self.region_bucket_size.0
+            ));
+        }
+        if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
+            return Err(box_err!(
+                "large region threshold size {} must >= region bucket size {}",
+                self.region_size_threshold_for_approximate.0,
+                self.region_bucket_size.0
             ));
         }
         Ok(())

@@ -90,19 +90,12 @@ impl<'a, E> Host<'a, E> {
         region: &Region,
         engine: &Kv,
     ) -> Result<Vec<Vec<u8>>> {
-        let region_size = if let Ok(size) = get_region_approximate_size(engine, region, 0) {
-            size
-        } else {
-            self.cfg.region_max_size.0
-        };
-
+        let region_size = get_region_approximate_size(engine, region, 0)?;
         const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
-        const SAMPLE_COUNT_PER_BUCKET: u64 = 10;
         if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
             let mut bucket_checker = size::Checker::new(
-                self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION
-                    / SAMPLE_COUNT_PER_BUCKET,
-                self.cfg.region_bucket_size.0 / SAMPLE_COUNT_PER_BUCKET,
+                self.cfg.region_bucket_size.0, /* not used */
+                self.cfg.region_bucket_size.0, /* not used */
                 region_size / self.cfg.region_bucket_size.0,
                 CheckPolicy::Approximate,
             );
