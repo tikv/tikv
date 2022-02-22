@@ -658,7 +658,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let rand_key = requests[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag_with_key_ranges(&rand_ctx, vec![(rand_key.clone(), rand_key)]);
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1450,7 +1450,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let rand_key = gets[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag_with_key_ranges(&rand_ctx, vec![(rand_key.clone(), rand_key)]);
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
