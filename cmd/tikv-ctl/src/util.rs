@@ -10,6 +10,7 @@ use tikv::config::TiKvConfig;
 
 const LOG_DIR: &str = "./ctl-engine-info-log";
 
+#[allow(clippy::field_reassign_with_default)]
 pub fn init_ctl_logger(level: &str) {
     let mut cfg = TiKvConfig::default();
     cfg.log_level = slog::Level::from_str(level).unwrap();
