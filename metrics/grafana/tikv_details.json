@@ -15041,7 +15041,7 @@
             "min": false,
             "rightSide": true,
             "show": true,
-            "sideWidth": 300,
+            "sideWidth": 400,
             "total": false,
             "values": true
           },
