@@ -247,15 +247,16 @@ impl Recorder {
             |x| x,
         );
         let mut samples = Samples::from(sampled_key_ranges);
+        let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
         // Because we need to observe the number of `no_enough_key` of all the actual keys,
         // so we do this check after the samples are calculated.
-        if (self.key_ranges.len() as u64) < config.sample_threshold {
+        if (recorded_key_ranges.len() as u64) < config.sample_threshold {
             LOAD_BASE_SPLIT_EVENT
                 .with_label_values(&["no_enough_key"])
                 .inc_by(samples.0.len() as u64);
             return vec![];
         }
-        self.key_ranges.iter().flatten().for_each(|key_range| {
+        recorded_key_ranges.into_iter().for_each(|key_range| {
             samples.evaluate(key_range);
         });
         samples.split_key(config.split_balance_score, config.split_contained_score)
