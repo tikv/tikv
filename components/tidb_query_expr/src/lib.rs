@@ -337,6 +337,22 @@ fn map_upper_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     })
 }
 
+fn map_lower_utf8_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    let ret_field_type = children[0].get_field_type();
+    Ok(match_template_charset! {
+     TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
+           Charset::TT => lower_utf8_fn_meta::<TT>(),
+        }
+    })
+}
+
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -693,10 +709,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::Insert => insert_fn_meta(),
+        ScalarFuncSig::InsertUtf8 => insert_utf8_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => map_upper_sig(value, children)?,
         ScalarFuncSig::Upper => upper_fn_meta(),
         ScalarFuncSig::Lower => map_lower_sig(value, children)?,
+        ScalarFuncSig::LowerUtf8 => map_lower_utf8_sig(value, children)?,
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
