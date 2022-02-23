@@ -22,6 +22,22 @@ use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
 
+// LOAD_BASE_SPLIT_EVENT metrics label definitions.
+// Workload fits the QPS threshold or byte threshold.
+const LOAD_FIT: &str = "load_fit";
+// Split info has been collected, ready to split.
+const READY_TO_SPLIT: &str = "ready_to_split";
+// Split info has not been collected yet, not ready to split.
+const NOT_READY_TO_SPLIT: &str = "not_ready_to_split";
+// The number of sampled keys does not meet the threshold.
+const NO_ENOUGH_SAMPLED_KEY: &str = "no_enough_sampled_key";
+// The number of sampled keys located on left and right does not meet the threshold.
+const NO_ENOUGH_LR_KEY: &str = "no_enough_lr_key";
+// The number of balanced keys does not meet the score.
+const NO_BALANCE_KEY: &str = "no_balance_key";
+// The number of contained keys does not meet the score.
+const NO_UNCROSS_KEY: &str = "no_uncross_key";
+
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
 #[inline(always)]
@@ -152,7 +168,7 @@ impl Samples {
             let evaluated_key_num_lr = sample.left + sample.right;
             if evaluated_key_num_lr == 0 {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_enough_key"])
+                    .with_label_values(&[NO_ENOUGH_LR_KEY])
                     .inc();
                 continue;
             }
@@ -167,7 +183,7 @@ impl Samples {
                 .observe(balance_score);
             if balance_score >= split_balance_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_balance_key"])
+                    .with_label_values(&[NO_BALANCE_KEY])
                     .inc();
                 continue;
             }
@@ -180,7 +196,7 @@ impl Samples {
                 .observe(contained_score);
             if contained_score >= split_contained_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_uncross_key"])
+                    .with_label_values(&[NO_UNCROSS_KEY])
                     .inc();
                 continue;
             }
@@ -252,7 +268,7 @@ impl Recorder {
         // so we do this check after the samples are calculated.
         if (recorded_key_ranges.len() as u64) < config.sample_threshold {
             LOAD_BASE_SPLIT_EVENT
-                .with_label_values(&["no_enough_key"])
+                .with_label_values(&[NO_ENOUGH_SAMPLED_KEY])
                 .inc_by(samples.0.len() as u64);
             return vec![];
         }
@@ -479,7 +495,7 @@ impl AutoSplitController {
                 continue;
             }
 
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&[LOAD_FIT]).inc();
 
             let detect_times = self.cfg.detect_times;
             let recorder = self
@@ -505,7 +521,7 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     });
                     LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&["prepare_to_split"])
+                        .with_label_values(&[READY_TO_SPLIT])
                         .inc();
                     info!("load base split region";
                         "region_id" => region_id,
@@ -515,7 +531,7 @@ impl AutoSplitController {
                 self.recorders.remove(&region_id);
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_fit_key"])
+                    .with_label_values(&[NOT_READY_TO_SPLIT])
                     .inc();
             }
 
