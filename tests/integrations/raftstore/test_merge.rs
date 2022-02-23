@@ -8,9 +8,7 @@ use std::time::*;
 use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-use raft::eraftpb;
 use raft::eraftpb::ConfChangeType;
 use raft::eraftpb::MessageType;
 
