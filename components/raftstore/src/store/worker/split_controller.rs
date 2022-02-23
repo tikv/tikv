@@ -632,6 +632,25 @@ mod tests {
     }
 
     #[test]
+    fn test_recorder() {
+        let mut config = SplitConfig::default();
+        config.detect_times = 10;
+        config.sample_threshold = 20;
+
+        let mut recorder = Recorder::new(config.detect_times);
+        for _ in 0..config.detect_times {
+            assert!(!recorder.is_ready());
+            recorder.record(vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ]);
+        }
+        assert!(recorder.is_ready());
+        let key = recorder.collect(&config);
+        assert_eq!(key, b"b");
+    }
+
+    #[test]
     fn test_hub() {
         // raw key mode
         let raw_key_ranges = vec![
