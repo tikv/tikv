@@ -4264,7 +4264,6 @@ where
         let mut total_gc_logs = 0;
 
         let first_idx = self.fsm.peer.get_store().first_index();
-        let last_idx = self.fsm.peer.get_store().last_index();
 
         let mut compact_idx = if force_compact
             // Too many logs between applied index and first index.
