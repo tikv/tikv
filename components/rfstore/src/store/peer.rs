@@ -669,6 +669,15 @@ impl Peer {
         self.raft_group.snap()
     }
 
+    pub fn ready_to_handle_pending_snapshot(&self) -> bool {
+        // If apply worker is still working, written apply state may be overwritten
+        // by apply worker. So we have to wait here.
+        // Please note that commit_index can't be used here. When applying a snapshot,
+        // a stale heartbeat can make the leader think follower has already applied
+        // the snapshot, and send remaining log entries, which may increase commit_index.
+        self.last_applying_idx == self.get_store().applied_index()
+    }
+
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
         metrics.message += ready.messages().len() as u64;
         metrics.commit += ready.committed_entries().len() as u64;
@@ -1182,6 +1191,11 @@ impl Peer {
         }
         if !self.raft_group.has_ready() {
             return;
+        }
+        if self.has_pending_snapshot() {
+            if !self.ready_to_handle_pending_snapshot() {
+                return;
+            }
         }
         let mut ready = self.raft_group.ready();
         self.on_role_changed(ctx, &ready);
