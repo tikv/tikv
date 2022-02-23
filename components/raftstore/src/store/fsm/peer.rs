@@ -883,6 +883,7 @@ where
             == 1
         {
             let stats = StoreStats::default();
+            stats.set_store_id(self.fsm.store.id);
             let store_info = StoreInfo {
                 kv_engine: self.ctx.engines.kv.clone(),
                 raft_engine: self.ctx.engines.raft.clone(),
@@ -908,8 +909,9 @@ where
         // If the applied index equals to the commit index, there is nothing to wait for, proceeds
         // to the next step immediately. If they are not equal, further checks will be performed in
         // on_apply_res().
-        if self.fsm.peer.raft_group.store().applied_index()
-            == self.fsm.peer.raft_group.store().commit_index()
+        if self.fsm.stopped
+            || self.fsm.peer.raft_group.store().applied_index()
+                == self.fsm.peer.raft_group.store().commit_index()
         {
             self.finish_unsafe_recovery_wait_apply();
         }
