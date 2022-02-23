@@ -26,7 +26,7 @@ use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::metrics;
-use crate::router::{ApplyEvent, Router, FLUSH_STORAGE_INTERVAL};
+use crate::router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 
@@ -188,7 +188,7 @@ where
             }
         };
 
-        let kvs = ApplyEvent::from_cmd_batch(batch, resolver.value_mut());
+        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut());
         drop(resolver);
 
         HANDLE_EVENT_DURATION_HISTOGRAM
@@ -199,24 +199,17 @@ where
             HANDLE_EVENT_DURATION_HISTOGRAM
                 .with_label_values(&["get_router_lock"])
                 .observe(sw.lap().as_secs_f64());
-            let mut kv_count = 0;
-            let total_size = kvs.as_slice().iter().fold(0usize, |init, kv| init + kv.size());
+            let kv_count = kvs.len();
+            let total_size = kvs.size();
             metrics::HEAP_MEMORY
                 .with_label_values(&["alloc"])
                 .inc_by(total_size as f64);
-            for kv in kvs {
-                let size = kv.size();
-                // TODO build a error handle mechanism #error 6
-                if kv.should_record() {
-                    if let Err(err) = router.on_event(kv).await {
-                        err.report("failed to send event.");
-                    }
-                    metrics::HEAP_MEMORY
-                        .with_label_values(&["free"])
-                        .inc_by(size as f64);
-                    kv_count += 1;
-                }
+            if let Err(err) = router.on_events(kvs).await {
+                err.report("failed to send event.");
             }
+            metrics::HEAP_MEMORY
+                .with_label_values(&["free"])
+                .inc_by(total_size as f64);
             HANDLE_KV_HISTOGRAM.observe(kv_count as _);
             let time_cost = sw.lap().as_secs_f64();
             if time_cost > SLOW_EVENT_THRESHOLD {
