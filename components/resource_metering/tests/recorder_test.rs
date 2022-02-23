@@ -1,15 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO(mornyx): Temporarily put all the code in linux module and need to be split later.
-#[cfg(target_os = "linux")]
-mod linux {
-    use collections::HashMap;
-    use resource_metering::{init_recorder, ResourceTagFactory};
-    use resource_metering::{Collector, RawRecord, RawRecords};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
+
+    use collections::HashMap;
+    use resource_metering::{init_recorder, ResourceTagFactory};
+    use resource_metering::{Collector, RawRecord, RawRecords};
     use tikv_util::sys::thread;
+
     use Operation::*;
 
     enum Operation {
@@ -148,7 +149,7 @@ mod linux {
 
     impl DummyCollector {
         fn check(&self, mut expected: HashMap<Vec<u8>, RawRecord>) {
-            const MAX_DRIFT: u32 = 50;
+            const MAX_DRIFT: u32 = 200;
 
             // Wait a collect interval to avoid losing records.
             std::thread::sleep(Duration::from_millis(1200));

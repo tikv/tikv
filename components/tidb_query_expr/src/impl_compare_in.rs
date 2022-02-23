@@ -230,7 +230,7 @@ pub fn compare_in_int_type_by_hash(
                 }
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
-            for (i, arg) in (&args[1..]).iter().enumerate() {
+            for (i, arg) in args[1..].iter().enumerate() {
                 let argi_unsigned = metadata.unsigned_flags[i + 1];
                 match arg {
                     None => {
