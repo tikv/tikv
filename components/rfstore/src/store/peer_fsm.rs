@@ -1108,6 +1108,18 @@ impl<'a> PeerMsgHandler<'a> {
         cb: Callback,
         source: &str,
     ) {
+        if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
+            info!(
+                "prepare split error";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "split_keys" => %util::KeysInfoFormatter(split_keys.iter()),
+                "source" => source,
+                "error" => ?e,
+            );
+            cb.invoke_with_response(new_error(e));
+            return;
+        }
         info!(
             "on split";
             "region_id" => self.fsm.region_id(),
@@ -1115,10 +1127,6 @@ impl<'a> PeerMsgHandler<'a> {
             "split_keys" => %util::KeysInfoFormatter(split_keys.iter()),
             "source" => source,
         );
-        if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
-            cb.invoke_with_response(new_error(e));
-            return;
-        }
         self.peer.split_callback = Some(cb);
         let region = self.fsm.peer.region();
         let peer = &self.fsm.peer.peer;

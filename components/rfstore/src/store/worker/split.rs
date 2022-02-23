@@ -134,7 +134,6 @@ impl SplitRunner {
 
     fn finish_split(&self, region: metapb::Region, peer: metapb::Peer, callback: Callback) {
         let id_ver = RegionIDVer::from_region(&region);
-        debug!("split worker finish split for {:?}", id_ver);
         let shard_res = self.kv.get_shard_with_ver(id_ver.id(), id_ver.ver());
         if let Err(err) = shard_res {
             error!("failed finish split for {}, err:{:?}", id_ver, err);
@@ -200,12 +199,24 @@ impl Runnable for SplitRunner {
                         Bytes::from(raw_key)
                     })
                     .collect();
+                info!(
+                    "split region by keys";
+                    "region" => tag,
+                );
                 self.pre_split(region, peer, keys);
             }
             SplitMethod::SplitFiles => {
+                info!(
+                    "split region files";
+                    "region" => tag,
+                );
                 self.split_files(region, peer);
             }
             SplitMethod::Finish(callback) => {
+                info!(
+                    "finish split region";
+                    "region" => tag,
+                );
                 self.finish_split(region, peer, callback);
             }
         };
