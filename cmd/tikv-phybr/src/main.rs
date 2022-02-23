@@ -83,8 +83,8 @@ fn main() {
     for md in &mut region_meta_details {
         let rid = md.region_state.get_region().id;
         let (mut raft_changed, mut region_changed, mut silence) = (false, false, false);
-
         let applied_index = md.apply_state.applied_index;
+
         if md.raft_state.last_index != applied_index {
             raft_wb.cut_logs(rid, applied_index + 1, md.raft_state.last_index + 1);
             md.raft_state.last_index = applied_index;
@@ -93,17 +93,18 @@ fn main() {
         if md.raft_state.get_hard_state().commit != applied_index {
             md.raft_state.mut_hard_state().commit = applied_index;
             raft_changed = true;
-            if md.apply_state.commit_index != applied_index {
-                md.apply_state.commit_index = applied_index;
-                let trunc_state = md.apply_state.get_truncated_state();
-                md.apply_state.commit_term = if applied_index == trunc_state.index {
-                    trunc_state.term
-                } else {
-                    let e = engines.raft.get_entry(rid, applied_index).unwrap().unwrap();
-                    e.term
-                };
-                region_changed = true;
-            }
+        }
+
+        if md.apply_state.commit_index != applied_index {
+            md.apply_state.commit_index = applied_index;
+            let trunc_state = md.apply_state.get_truncated_state();
+            md.apply_state.commit_term = if applied_index == trunc_state.index {
+                trunc_state.term
+            } else {
+                let e = engines.raft.get_entry(rid, applied_index).unwrap().unwrap();
+                e.term
+            };
+            region_changed = true;
         }
 
         if let Some(command) = commands.get(&rid) {
