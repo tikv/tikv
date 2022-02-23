@@ -159,7 +159,9 @@ impl raft::Storage for PeerStorage {
     fn snapshot(&self, request_index: u64) -> raft::Result<eraftpb::Snapshot> {
         if !self.initial_flushed || self.shard_meta.is_none() {
             info!("shard has not flushed for generating snapshot"; "region" => self.tag());
-            return Err(raft::Error::Store(StorageError::Unavailable));
+            return Err(raft::Error::Store(
+                StorageError::SnapshotTemporarilyUnavailable,
+            ));
         }
         let shard_meta = self.shard_meta.as_ref().unwrap();
         let snap_index = shard_meta.write_sequence;
