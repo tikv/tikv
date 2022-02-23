@@ -503,8 +503,8 @@ pub mod tests {
                     let end: i32 = std::str::from_utf8(&keys[i + 1]).unwrap().parse().unwrap();
                     assert!(end - start >= 150 && end - start < 450);
                     if i == 1 {
-                       assert!(start >= 150 && start < 450);
-                    } 
+                        assert!(start >= 150 && start < 450);
+                    }
                 }
 
                 break;
