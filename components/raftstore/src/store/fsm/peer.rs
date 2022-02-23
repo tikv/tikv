@@ -882,8 +882,8 @@ where
             .fetch_sub(1, Ordering::Relaxed)
             == 1
         {
-            let stats = StoreStats::default();
-            stats.set_store_id(self.fsm.store.id);
+            let mut stats = StoreStats::default();
+            stats.set_store_id(self.store_id());
             let store_info = StoreInfo {
                 kv_engine: self.ctx.engines.kv.clone(),
                 raft_engine: self.ctx.engines.raft.clone(),

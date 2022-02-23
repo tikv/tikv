@@ -68,7 +68,7 @@ fn test_unsafe_recover_send_report() {
 
     // No store report is sent, since there are peers have unapplied entries.
     for _ in 0..20 {
-        assert_eq!(pd_client.must_get_store_reported(), 0);
+        assert_eq!(pd_client.must_get_store_reported(&nodes[0]), 0);
         sleep_ms(100);
     }
 
@@ -83,7 +83,7 @@ fn test_unsafe_recover_send_report() {
     // Store reports are sent once the entries are applied.
     let mut reported = false;
     for _ in 0..20 {
-        if pd_client.must_get_store_reported() > 0 {
+        if pd_client.must_get_store_reported(&nodes[0]) > 0 {
             reported = true;
             break;
         }

@@ -323,7 +323,7 @@ struct PdCluster {
     pub check_merge_target_integrity: bool,
 
     unsafe_recovery_require_report: bool,
-    unsafe_recovery_store_reported: i32,
+    unsafe_recovery_store_reported: HashMap<u64, i32>,
 }
 
 impl PdCluster {
@@ -357,7 +357,7 @@ impl PdCluster {
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
-            unsafe_recovery_store_reported: 0,
+            unsafe_recovery_store_reported: HashMap::default(),
         }
     }
 
@@ -728,12 +728,19 @@ impl PdCluster {
         self.unsafe_recovery_require_report = require_report;
     }
 
-    fn get_store_reported(&self) -> i32 {
-        self.unsafe_recovery_store_reported
+    fn get_store_reported(&self, store_id: &u64) -> i32 {
+        *self
+            .unsafe_recovery_store_reported
+            .get(store_id)
+            .unwrap_or(&0)
     }
 
-    fn store_reported_inc(&mut self) {
-        self.unsafe_recovery_store_reported += 1;
+    fn store_reported_inc(&mut self, store_id: u64) {
+        let reported = self
+            .unsafe_recovery_store_reported
+            .entry(store_id)
+            .or_insert(0);
+        *reported += 1;
     }
 }
 
@@ -1285,8 +1292,8 @@ impl TestPdClient {
         self.cluster.wl().set_require_report(require_report);
     }
 
-    pub fn must_get_store_reported(&self) -> i32 {
-        self.cluster.rl().get_store_reported()
+    pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
+        self.cluster.rl().get_store_reported(store_id)
     }
 }
 
@@ -1574,7 +1581,7 @@ impl PdClient for TestPdClient {
         cluster.store_stats.insert(store_id, stats);
 
         if report.is_some() {
-            cluster.store_reported_inc();
+            cluster.store_reported_inc(store_id);
         }
 
         let mut resp = cluster.handle_store_heartbeat().unwrap();
