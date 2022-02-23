@@ -89,7 +89,7 @@ use tikv::{
         txn::flow_controller::FlowController, Engine,
     },
 };
-use tikv_util::config::ReadableDuration;
+use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
@@ -172,6 +172,13 @@ pub fn run_phybr(
     config.raft_store.peer_stale_state_check_interval = ReadableDuration(bt * 4 * et as _);
     config.raft_store.abnormal_leader_missing_duration = ReadableDuration(bt * 4 * et as _);
     config.raft_store.max_leader_missing_duration = ReadableDuration(bt * 4 * et as _);
+
+    // Disable region split during recovering.
+    config.coprocessor.region_max_size = ReadableSize::gb(2048);
+    config.coprocessor.region_split_size = ReadableSize::gb(1024);
+    config.coprocessor.region_max_keys = 1 << 31;
+    config.coprocessor.region_split_keys = 1 << 30;
+    config.raft_store.region_split_size;
 
     initial_logger(&config);
 

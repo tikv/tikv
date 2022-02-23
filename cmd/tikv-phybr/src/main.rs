@@ -177,7 +177,6 @@ fn main() {
         }
 
         println!("all region state adjustments are done");
-        server::signal_handler::kill_self();
     });
 
     server::server::run_phybr(config, tx);
