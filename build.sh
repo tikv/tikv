@@ -34,3 +34,8 @@ echo "forcibly remove ${target_path}"
 rm -rf "${target_path}"
 echo "copy ${ori_build_path} to ${target_path}"
 cp "${ori_build_path}" "${target_path}"
+
+if [[ $(uname -s) == "Darwin" ]]; then
+  target_install_name="@rpath/${target_name}"
+  install_name_tool -id "${target_install_name}" "${target_path}"
+fi
