@@ -16,6 +16,8 @@ use engine_traits::{Peekable, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
+use tikv::storage::kv::SnapshotExt;
+use tikv::storage::Snapshot;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
@@ -1596,4 +1598,69 @@ fn test_retry_pending_prepare_merge_fail() {
     let rx = cluster.async_put(b"k1", b"v12").unwrap();
     let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(!res.get_header().has_error(), "{:?}", res);
+}
+
+#[test]
+fn test_merge_pessimistic_locks_propose_fail() {
+    let mut cluster = new_server_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    // Sending a TransferLeaeder message to make left region fail to propose.
+
+    let snapshot = cluster.must_get_snapshot_of_region(left.id);
+    let txn_ext = snapshot.ext().get_txn_ext().unwrap().clone();
+    let lock = PessimisticLock {
+        primary: b"k1".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"k1"), lock)])
+            .is_ok()
+    );
+
+    fail::cfg("raft_propose", "pause").unwrap();
+
+    cluster.merge_region(left.id, right.id, Callback::None);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        txn_ext.pessimistic_locks.read().status,
+        LocksStatus::MergingRegion
+    );
+
+    // With the fail point set, we will fail to propose the locks or the PrepareMerge request.
+    fail::cfg("raft_propose", "return()").unwrap();
+
+    // But after that, the pessimistic locks status should remain unchanged.
+    for _ in 0..5 {
+        thread::sleep(Duration::from_millis(200));
+        if txn_ext.pessimistic_locks.read().status == LocksStatus::Normal {
+            return;
+        }
+    }
+    panic!(
+        "pessimistic locks status should return to Normal, but got {:?}",
+        txn_ext.pessimistic_locks.read().status
+    );
 }

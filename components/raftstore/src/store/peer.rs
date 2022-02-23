@@ -3820,6 +3820,7 @@ where
             });
         }
 
+        self.maybe_inject_propose_error(&req)?;
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
@@ -4690,6 +4691,37 @@ where
                 .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
+    }
+
+    fn maybe_inject_propose_error(&self, req: &RaftCmdRequest) -> Result<()> {
+        // The return value format is {req_type}:{store_id}
+        // Request matching the format will fail to be proposed.
+        // Empty `req_type` means matching all kinds of requests.
+        // ":{store_id}" can be omitted, meaning matching all stores.
+        fail_point!("raft_propose", |r| {
+            r.map_or(Ok(()), |s| {
+                let mut parts = s.splitn(2, ':');
+                let cmd_type = parts.next().unwrap();
+                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
+                if let Some(store_id) = store_id {
+                    if store_id != self.peer.get_store_id() {
+                        return Ok(());
+                    }
+                }
+                let admin_type = req.get_admin_request().get_cmd_type();
+                let match_type = cmd_type.is_empty()
+                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
+                    || (cmd_type == "transfer_leader"
+                        && admin_type == AdminCmdType::TransferLeader);
+                // More matching rules can be added here.
+                if match_type {
+                    Err(box_err!("injected error"))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        Ok(())
     }
 }
 
