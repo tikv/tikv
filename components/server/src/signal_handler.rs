@@ -6,7 +6,8 @@ pub use self::imp::wait_for_signal;
 mod imp {
     use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine};
     use libc::c_int;
-    use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
+    use nix::sys::signal::{kill, SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
+    use nix::unistd::Pid;
     use signal::trap::Trap;
     use tikv_util::metrics;
 

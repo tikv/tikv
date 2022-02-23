@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashMap;
+use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +21,7 @@ use grpcio::{ChannelBuilder, Environment, Error as GrpcError, WriteFlags};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState};
 use protobuf::Message;
 use raftstore::store::peer_storage::{init_apply_state, init_raft_state, last_index};
+use raftstore::store::{Callback, SignificantMsg, SignificantRouter};
 use structopt::StructOpt;
 use tikv::config::TiKvConfig;
 
@@ -80,7 +82,7 @@ fn main() {
     let mut force_leaders = Vec::new();
     for md in &mut region_meta_details {
         let rid = md.region_state.get_region().id;
-        let (mut raft_changed, mut region_changed) = (false, false);
+        let (mut raft_changed, mut region_changed, mut silence) = (false, false, false);
 
         let applied_index = md.apply_state.applied_index;
         if md.raft_state.last_index != applied_index {
@@ -114,9 +116,7 @@ fn main() {
                     md.raft_state.mut_hard_state().term = command.term;
                     raft_changed = true;
                 }
-                if !command.silence {
-                    force_leaders.push(rid);
-                }
+                silence = command.silence;
             }
         }
 
@@ -130,6 +130,10 @@ fn main() {
             let key = keys::region_state_key(rid);
             kv_wb.put_msg_cf(CF_RAFT, &key, &md.region_state).unwrap();
         }
+
+        if !silence {
+            force_leaders.push(rid);
+        }
     }
     kv_wb.write().unwrap();
     engines.kv.sync_wal().unwrap();
@@ -139,9 +143,45 @@ fn main() {
     drop(engines);
     drop(kv_wb);
     drop(raft_wb);
+
     std::thread::sleep(Duration::from_secs(3));
     println!("starting tikv node...");
-    server::server::run_phybr(config);
+    let (tx, rx) = sync_channel::<Box<dyn SignificantRouter<RocksEngine>>>(1);
+    let th = std::thread::spawn(move || {
+        let router = match rx.recv() {
+            Ok(x) => x,
+            Err(_) => {
+                println!("starting tikv fail");
+                return;
+            }
+        };
+        println!("starting tikv success");
+
+        let mut rxs = Vec::with_capacity(force_leaders.len());
+        for &rid in &force_leaders {
+            router
+                .significant_send(rid, SignificantMsg::Campaign)
+                .unwrap();
+            println!("region {} starts to campaign", rid);
+
+            let (tx, rx) = sync_channel(1);
+            let cb = Callback::Read(Box::new(move |_| tx.send(1).unwrap()));
+            router
+                .significant_send(rid, SignificantMsg::LeaderCallback(cb))
+                .unwrap();
+            rxs.push(rx);
+        }
+        for (&rid, rx) in force_leaders.iter().zip(rxs) {
+            let _ = rx.recv().unwrap();
+            println!("region {} has applied to its current term", rid);
+        }
+
+        println!("all region state adjustments are done");
+        server::signal_handler::kill_self();
+    });
+
+    server::server::run_phybr(config, tx);
+    th.join().unwrap();
 }
 
 #[derive(StructOpt)]

@@ -10,6 +10,7 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKVServer` struct.
 
+use std::sync::mpsc::SyncSender;
 use std::{
     cmp,
     convert::TryFrom,
@@ -58,8 +59,9 @@ use raftstore::{
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
+        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader,
+        SignificantRouter, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMsg,
     },
 };
 use security::SecurityManager;
@@ -159,7 +161,10 @@ pub fn run_tikv(config: TiKvConfig) {
     }
 }
 
-pub fn run_phybr(mut config: TiKvConfig) {
+pub fn run_phybr(
+    mut config: TiKvConfig,
+    router: SyncSender<Box<dyn SignificantRouter<RocksEngine>>>,
+) {
     // For phybr, no raft peers can start a new election.
     let bt = config.raft_store.raft_base_tick_interval.0;
     let et = 24 * 60 * 60;
@@ -198,6 +203,7 @@ pub fn run_phybr(mut config: TiKvConfig) {
             tikv.register_services();
             tikv.run_server(server_config);
 
+            router.send(Box::new(tikv.router.clone()) as _).unwrap();
             signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
             tikv.stop();
         }};

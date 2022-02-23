@@ -1200,6 +1200,16 @@ where
                 self.fsm.peer.mut_store().update_async_fetch_res(low, None);
                 self.fsm.has_ready = true;
             }
+            SignificantMsg::Campaign => {
+                self.fsm.peer.raft_group.raft.become_candidate();
+                if let Err(e) = self.fsm.peer.raft_group.campaign() {
+                    error!("campaign manually fail";
+                        "region_id" => self.fsm.peer_id(),
+                        "err" => ?e);
+                } else {
+                    self.fsm.has_ready = true;
+                }
+            }
         }
     }
 

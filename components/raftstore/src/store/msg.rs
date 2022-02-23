@@ -308,6 +308,8 @@ where
         context: GetEntriesContext,
         res: Box<RaftlogFetchResult>,
     },
+    // Currently used in recovering from physical backup.
+    Campaign,
 }
 
 /// Message that will be sent to a peer.
