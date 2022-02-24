@@ -8,7 +8,7 @@ use test_raftstore::sleep_ms;
 use test_raftstore::TestPdClient;
 
 #[test]
-fn test_hlc_tso_provider() {
+fn test_hlc_provider() {
     let pd_cli = Arc::new(TestPdClient::new(1, false));
 
     pd_cli.set_tso(100.into());
@@ -25,7 +25,7 @@ fn test_hlc_tso_provider() {
 }
 
 #[test]
-fn test_hlc_tso_provider_on_failure() {
+fn test_hlc_provider_on_failure() {
     let pd_cli = Arc::new(TestPdClient::new(1, false));
 
     let tso_refresh_interval = 200;
@@ -53,14 +53,11 @@ fn test_hlc_tso_provider_on_failure() {
     sleep_ms(tso_refresh_interval);
     let ts = provider.get_ts().unwrap();
     assert_eq!(ts, 252.into(), "ts: {:?}", ts);
+    pd_cli.trigger_tso_failure();
 
     sleep_ms(tso_refresh_interval);
     let ts = provider.get_ts().unwrap();
     assert_eq!(ts, 253.into(), "ts: {:?}", ts);
-
-    sleep_ms(tso_refresh_interval);
-    let res = provider.get_ts();
-    assert!(res.is_err(), "res: {:?}", res);
 
     sleep_ms(tso_refresh_interval);
     let ts = provider.get_ts().unwrap();
