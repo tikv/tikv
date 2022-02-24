@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
+use tikv_util::time::InstantExt;
 use tikv_util::worker::Scheduler;
 use tikv_util::{debug, error, info};
 
@@ -151,7 +152,7 @@ impl RaftWorker {
             Err(RecvTimeoutError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
             Err(RecvTimeoutError::Timeout) => {}
         }
-        if self.last_tick.elapsed().as_millis() as u64 > self.tick_millis {
+        if self.last_tick.saturating_elapsed().as_millis() as u64 > self.tick_millis {
             self.last_tick = Instant::now();
             let peers = self.router.peers.clone();
             for x in peers.iter() {
@@ -272,10 +273,9 @@ impl StoreWorker {
                 Err(RecvTimeoutError::Disconnected) => return,
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            let now = Instant::now();
-            if (now - self.last_tick).as_millis() as u64 > self.tick_millis {
+            if self.last_tick.saturating_elapsed().as_millis() as u64 > self.tick_millis {
                 self.handler.handle_msg(StoreMsg::Tick);
-                self.last_tick = now;
+                self.last_tick = Instant::now();
             }
         }
     }

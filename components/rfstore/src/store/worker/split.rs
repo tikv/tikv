@@ -8,9 +8,9 @@ use std::fmt::{self, Display, Formatter};
 use std::thread::sleep;
 use yatp::Remote;
 
-use crate::store::cmd_resp::new_error;
+use crate::store::cmd_resp::{err_resp, new_error};
 use crate::store::{Callback, CustomBuilder, PdTask, PeerMsg, RegionIDVer};
-use crate::{RaftRouter, RaftStoreRouter};
+use crate::{Error, RaftRouter, RaftStoreRouter};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, Scheduler};
 use tikv_util::{box_err, debug, error, info, warn};
@@ -27,7 +27,7 @@ pub struct SplitTask {
 pub enum SplitMethod {
     MaxSize(u64),
     Keys(Vec<Vec<u8>>),
-    SplitFiles,
+    SplitFiles(Callback),
     Finish(Callback),
 }
 
@@ -116,12 +116,14 @@ impl SplitRunner {
         self.router.send_command(request, Callback::None).unwrap()
     }
 
-    fn split_files(&self, region: metapb::Region, peer: metapb::Peer) {
+    fn split_files(&self, region: metapb::Region, peer: metapb::Peer, callback: Callback) {
         let res = self
             .kv
             .split_shard_files(region.get_id(), region.get_region_epoch().get_version());
         if let Err(err) = res {
             error!("failed to split files {:?}", &err);
+            let resp = err_resp(Error::KVEngineError(err), 0);
+            callback.invoke_with_response(resp);
             return;
         }
         let cs = res.unwrap();
@@ -129,7 +131,7 @@ impl SplitRunner {
         let mut builder = CustomBuilder::new();
         builder.set_change_set(cs);
         request.set_custom_request(builder.build());
-        self.router.send_command(request, Callback::None).unwrap();
+        self.router.send_command(request, callback).unwrap();
     }
 
     fn finish_split(&self, region: metapb::Region, peer: metapb::Peer, callback: Callback) {
@@ -137,6 +139,8 @@ impl SplitRunner {
         let shard_res = self.kv.get_shard_with_ver(id_ver.id(), id_ver.ver());
         if let Err(err) = shard_res {
             error!("failed finish split for {}, err:{:?}", id_ver, err);
+            let resp = err_resp(Error::KVEngineError(err), 0);
+            callback.invoke_with_response(resp);
             return;
         }
         let shard = shard_res.unwrap();
@@ -205,12 +209,12 @@ impl Runnable for SplitRunner {
                 );
                 self.pre_split(region, peer, keys);
             }
-            SplitMethod::SplitFiles => {
+            SplitMethod::SplitFiles(callback) => {
                 info!(
                     "split region files";
                     "region" => tag,
                 );
-                self.split_files(region, peer);
+                self.split_files(region, peer, callback);
             }
             SplitMethod::Finish(callback) => {
                 info!(

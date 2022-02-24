@@ -35,11 +35,12 @@ use raftstore::store::{local_metrics::*, metrics::*, QueryStats, TxnExt};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::VecDeque;
-use std::ops::{Add, Sub};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ops::{Add, Mul, Sub};
+use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, InstantExt};
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use time::Timespec;
@@ -582,7 +583,7 @@ impl Peer {
             "peer destroy itself";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "takes" => ?t.elapsed(),
+            "takes" => ?t.saturating_elapsed(),
         );
 
         Ok(())
@@ -880,10 +881,10 @@ impl Peer {
                 continue;
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                if instant.elapsed() >= max_duration {
+                if instant.saturating_elapsed() >= max_duration {
                     let mut stats = PeerStats::new();
                     stats.set_peer(p.clone());
-                    stats.set_down_seconds(instant.elapsed().as_secs());
+                    stats.set_down_seconds(instant.saturating_elapsed().as_secs());
                     down_peers.push(stats);
                 }
             }
@@ -968,14 +969,15 @@ impl Peer {
                 self.leader_missing_time = Instant::now().into();
                 StaleState::Valid
             }
-            Some(instant) if instant.elapsed() >= cfg.max_leader_missing_duration.0 => {
+            Some(instant) if instant.saturating_elapsed() >= cfg.max_leader_missing_duration.0 => {
                 // Resets the `leader_missing_time` to avoid sending the same tasks to
                 // PD worker continuously during the leader missing timeout.
                 self.leader_missing_time = Instant::now().into();
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.elapsed() >= cfg.abnormal_leader_missing_duration.0 && !naive_peer =>
+                if instant.saturating_elapsed() >= cfg.abnormal_leader_missing_duration.0
+                    && !naive_peer =>
             {
                 // A peer is considered as in the leader missing state
                 // if it's initialized but is isolated from its leader or
@@ -1415,7 +1417,11 @@ impl Peer {
             self.mut_store().initial_flushed = true;
         }
         if cs.has_split_files() {
-            self.mut_store().split_file_done_time = Some(Instant::now());
+            let split_job_states = &mut self.mut_store().split_job_states;
+            if let Some(scheduled_split_file_time) = split_job_states.scheduled_split_file_time {
+                split_job_states.split_file_duration =
+                    Some(scheduled_split_file_time.saturating_elapsed());
+            }
         }
     }
 
@@ -1438,9 +1444,7 @@ impl Peer {
                 store.shard_meta = Some(new_meta);
                 store.split_stage = kvenginepb::SplitStage::Initial;
                 store.initial_flushed = false;
-                store.scheduled_split_file_time = None;
-                store.split_file_done_time = None;
-                store.scheduled_finish_split = false;
+                store.split_job_states.reset();
                 // The raft state key changed when region version change, we need to set it here.
                 store.write_raft_state(ctx);
             } else {
@@ -2656,44 +2660,90 @@ impl Peer {
     }
 
     pub(crate) fn maybe_schedule_split_file(&mut self, ctx: &mut RaftContext) {
-        if self.get_store().scheduled_split_file_time.is_none() {
-            info!("leader schedule split files";
-                "region" => self.tag());
-            let split_task = SplitTask::new(
-                self.region().clone(),
-                self.peer.clone(),
-                SplitMethod::SplitFiles,
-            );
-            ctx.global.split_scheduler.schedule(split_task).unwrap();
-            self.mut_store().scheduled_split_file_time = Some(Instant::now());
+        let tag = self.tag();
+        let split_job_states = &mut self.mut_store().split_job_states;
+        if split_job_states.split_file_job_status.is_some() {
+            let split_file_status = split_job_states
+                .split_file_job_status
+                .as_ref()
+                .unwrap()
+                .load(SeqCst);
+            if split_file_status == JOB_STATUS_RUNNING || split_file_status == JOB_STATUS_FINISHED {
+                return;
+            }
         }
+        info!("leader schedule split files";
+            "region" => tag);
+        let status = Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING));
+        split_job_states.split_file_job_status = Some(status.clone());
+        split_job_states.scheduled_split_file_time = Some(Instant::now());
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                let err_msg = resp.response.get_header().get_error().get_message();
+                error!("failed to propose split files {:?} for {:?}", err_msg, tag);
+                status.store(JOB_STATUS_FAILED, SeqCst);
+            } else {
+                info!("proposed split files for {:?}", tag);
+                status.store(JOB_STATUS_FINISHED, SeqCst);
+            }
+        }));
+        let split_task = SplitTask::new(
+            self.region().clone(),
+            self.peer.clone(),
+            SplitMethod::SplitFiles(cb),
+        );
+        ctx.global.split_scheduler.schedule(split_task).unwrap();
     }
 
     pub(crate) fn maybe_schedule_finish_split(&mut self, ctx: &mut RaftContext) {
-        if !self.get_store().scheduled_finish_split {
-            let mut wait_enough_time = true;
-            if let Some(schedule_split_file_time) =
-                self.get_store().scheduled_split_file_time.as_ref()
+        let tag = self.tag();
+        let split_job_states = &mut self.mut_store().split_job_states;
+        if split_job_states.finish_split_job_state.is_some() {
+            let finish_split_status = split_job_states
+                .finish_split_job_state
+                .as_ref()
+                .unwrap()
+                .load(SeqCst);
+            if finish_split_status == JOB_STATUS_RUNNING
+                || finish_split_status == JOB_STATUS_FINISHED
             {
-                if let Some(split_file_done_time) = self.get_store().split_file_done_time.as_ref() {
-                    let split_file_duration = split_file_done_time.sub(*schedule_split_file_time);
-                    if Instant::now() < split_file_done_time.add(split_file_duration) {
-                        wait_enough_time = false;
-                    }
-                }
-            }
-            if wait_enough_time {
-                info!("leader schedule finish split"; "region" => self.tag());
-                let callback = self.split_callback.take();
-                let split_task = SplitTask::new(
-                    self.region().clone(),
-                    self.peer.clone(),
-                    SplitMethod::Finish(callback.unwrap_or(Callback::None)),
-                );
-                ctx.global.split_scheduler.schedule(split_task).unwrap();
-                self.mut_store().scheduled_finish_split = true;
+                return;
             }
         }
+        if let Some(schedule_split_file_time) = split_job_states.scheduled_split_file_time {
+            if let Some(split_file_duration) = split_job_states.split_file_duration {
+                if Instant::now() < schedule_split_file_time.add(split_file_duration.mul(2)) {
+                    // Wait for another split file duration until we issue the finish split command.
+                    // So the followers should probably already in split file done state, don't need
+                    // to pause apply.
+                    return;
+                }
+            }
+        }
+        info!("leader schedule finish split"; "region" => tag);
+        let status = Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING));
+        split_job_states.finish_split_job_state = Some(status.clone());
+        let callback = self.split_callback.take();
+        let outer_callback = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                let err_msg = resp.response.get_header().get_error().get_message();
+                error!("failed to propose finish split {} for {:?}", err_msg, tag);
+                status.store(JOB_STATUS_FAILED, SeqCst);
+            } else {
+                info!("proposed finish split for {:?}", tag);
+                status.store(JOB_STATUS_FINISHED, SeqCst);
+            }
+            if let Some(cb) = callback {
+                cb.invoke_with_response(resp.response);
+            }
+        }));
+
+        let split_task = SplitTask::new(
+            self.region().clone(),
+            self.peer.clone(),
+            SplitMethod::Finish(outer_callback),
+        );
+        ctx.global.split_scheduler.schedule(split_task).unwrap();
     }
 }
 

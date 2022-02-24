@@ -3,7 +3,9 @@
 use crate::errors::*;
 use byteorder::{ByteOrder, LittleEndian};
 use kvproto::*;
-use std::time::Instant;
+use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use super::keys::raft_state_key;
 use crate::store::{
@@ -65,6 +67,23 @@ pub struct ApplySnapResult {
     pub destroyed_regions: Vec<metapb::Region>,
 }
 
+#[derive(Default)]
+pub(crate) struct SplitJobStates {
+    pub(crate) split_file_job_status: Option<Arc<AtomicUsize>>,
+    pub(crate) scheduled_split_file_time: Option<Instant>,
+    pub(crate) split_file_duration: Option<Duration>,
+    pub(crate) finish_split_job_state: Option<Arc<AtomicUsize>>,
+}
+
+impl SplitJobStates {
+    pub(crate) fn reset(&mut self) {
+        self.split_file_job_status = None;
+        self.scheduled_split_file_time = None;
+        self.split_file_duration = None;
+        self.finish_split_job_state = None;
+    }
+}
+
 pub(crate) struct PeerStorage {
     pub(crate) engines: Engines,
 
@@ -80,9 +99,7 @@ pub(crate) struct PeerStorage {
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
     pub(crate) split_stage: kvenginepb::SplitStage,
     pub(crate) pending_flush: Option<kvenginepb::ChangeSet>,
-    pub(crate) scheduled_split_file_time: Option<Instant>,
-    pub(crate) split_file_done_time: Option<Instant>,
-    pub(crate) scheduled_finish_split: bool,
+    pub(crate) split_job_states: SplitJobStates,
 }
 
 impl raft::Storage for PeerStorage {
@@ -221,9 +238,7 @@ impl PeerStorage {
             shard_meta,
             split_stage: kvenginepb::SplitStage::Initial,
             pending_flush: None,
-            scheduled_split_file_time: None,
-            split_file_done_time: None,
-            scheduled_finish_split: false,
+            split_job_states: Default::default(),
         })
     }
 

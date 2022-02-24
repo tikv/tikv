@@ -27,6 +27,7 @@ use crate::{
 };
 use kvenginepb as pb;
 use slog_global::*;
+use tikv_util::time::InstantExt;
 
 #[derive(Clone)]
 pub(crate) struct MemTables {
@@ -406,7 +407,7 @@ impl Shard {
     }
 
     pub(crate) fn next_mem_table_size(&self, current_size: u64, last_switch_time: Instant) -> u64 {
-        let dur = last_switch_time.elapsed();
+        let dur = last_switch_time.saturating_elapsed();
         let time_in_ms = dur.as_millis() as u64 + 1;
         let bytes_per_sec = current_size * 1000 / time_in_ms;
         let next_mem_size = bytes_per_sec * self.opt.max_mem_table_size_factor as u64;

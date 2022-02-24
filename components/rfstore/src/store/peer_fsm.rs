@@ -205,8 +205,6 @@ impl<'a> PeerMsgHandler<'a> {
                 callback,
                 source,
             } => {
-                // TODO(x)
-                // callback.invoke_with_response(new_error(box_err!("not supported")))
                 self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
             }
             CasualMessage::HalfSplitRegion {
@@ -1260,6 +1258,10 @@ impl<'a> PeerMsgHandler<'a> {
                     "failed to propose engine change set {:?} for {:?}",
                     err_msg, tag
                 );
+                // TODO(x): handle the error.
+                // We need to detect if this error can be retried and retry it.
+                // Or we may lose data if it is a flush.
+                // And we need to stop propose change set if previous change set propose failed.
             } else {
                 info!("proposed meta change event for {:?}", tag);
             }
