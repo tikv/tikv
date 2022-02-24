@@ -159,6 +159,7 @@ walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
 seahash = "4.1.0"
+causal_ts = { path = "components/causal_ts" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf"] }
@@ -262,6 +263,7 @@ members = [
   "components/test_coprocessor_plugin/example_plugin",
   "components/resource_metering",
   "components/api_version",
+  "components/causal_ts",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
