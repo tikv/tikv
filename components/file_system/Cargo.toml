@@ -36,3 +36,4 @@ maligned = "0.2.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 bcc = { version = "0.0.30", optional = true }
 thread_local = "1.1.3"
+more-asserts = "0.2"

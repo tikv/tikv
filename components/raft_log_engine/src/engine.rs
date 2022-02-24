@@ -10,7 +10,7 @@ use engine_traits::{
     CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask,
     Result,
 };
-use file_system::{IOOp, IORateLimiter, IOType};
+use file_system::{IOOp, IORateLimiter, IOType, WithIOType};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 use raft_engine::{
@@ -49,7 +49,7 @@ impl<R: Seek + Read> Read for ManagedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundRead, IOOp::Read, size);
+            size = limiter.request(IOOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -74,9 +74,12 @@ impl<W: Seek + Write> Seek for ManagedWriter<W> {
 
 impl<W: Seek + Write> Write for ManagedWriter<W> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        // Indiscriminately increase the priority because Raft Engine merges
+        // write batches with different IO types.
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundWrite, IOOp::Write, size);
+            size = limiter.request(IOOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),

@@ -277,7 +277,6 @@ fn test_serde_custom_tikv_config() {
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_refill_period: ReadableDuration::millis(10),
         rate_limiter_mode: DBRateLimiterMode::AllIo,
-        auto_tuned: None,
         rate_limiter_auto_tuned: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
@@ -654,6 +653,7 @@ fn test_serde_custom_tikv_config() {
         },
         io_rate_limit: IORateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(1000),
+            max_buffered_read_bytes: ReadableSize::mb(5),
             mode: IORateLimitMode::AllIo,
             strict: true,
             foreground_read_priority: IOPriority::Low,

@@ -11,6 +11,9 @@ extern crate test;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[allow(unused_imports)]
+#[macro_use]
+extern crate more_asserts;
 
 mod file;
 mod io_stats;
@@ -19,10 +22,10 @@ mod metrics_manager;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
+pub use io_stats::init as init_io_stats_collector;
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
+    get_io_rate_limiter, set_io_rate_limiter, IORateLimitMode, IORateLimiter,
     IORateLimiterStatistics,
 };
 
@@ -87,6 +90,39 @@ impl IOType {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct IOContext {
+    pub(crate) io_type: IOType,
+    /// Total I/O bytes used by current thread.
+    pub(crate) total_read_bytes: usize,
+    /// Buffered I/O bytes used after `total_read_bytes` is refreshed, by
+    /// current thread.
+    pub(crate) outstanding_read_bytes: usize,
+    /// Unprocessed physical I/O bytes used by current thread.
+    pub(crate) unprocessed_read_bytes: Option<(IOType, usize)>,
+}
+
+impl IOContext {
+    pub fn new(io_type: IOType) -> Self {
+        Self {
+            io_type,
+            total_read_bytes: 0,
+            outstanding_read_bytes: 0,
+            unprocessed_read_bytes: None,
+        }
+    }
+}
+
+pub fn set_io_type(io_type: IOType) {
+    let mut ctx = io_stats::get_io_context();
+    ctx.io_type = io_type;
+    io_stats::set_io_context(ctx);
+}
+
+pub fn get_io_type() -> IOType {
+    io_stats::get_io_context().io_type
+}
+
 pub struct WithIOType {
     previous_io_type: IOType,
 }
@@ -108,8 +144,8 @@ impl Drop for WithIOType {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IOBytes {
-    read: u64,
-    write: u64,
+    read: usize,
+    write: usize,
 }
 
 impl std::ops::Sub for IOBytes {
@@ -119,6 +155,17 @@ impl std::ops::Sub for IOBytes {
         Self {
             read: self.read.saturating_sub(other.read),
             write: self.write.saturating_sub(other.write),
+        }
+    }
+}
+
+impl std::ops::Add for IOBytes {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self::Output {
+        Self {
+            read: self.read.saturating_add(other.read),
+            write: self.write.saturating_add(other.write),
         }
     }
 }

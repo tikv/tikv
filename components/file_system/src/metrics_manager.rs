@@ -24,8 +24,8 @@ impl BytesFetcher {
             BytesFetcher::FromRateLimiter(ref stats) => {
                 let mut bytes: [IOBytes; IOType::COUNT] = Default::default();
                 for t in IOType::iter() {
-                    bytes[t as usize].read = stats.fetch(t, IOOp::Read) as u64;
-                    bytes[t as usize].write = stats.fetch(t, IOOp::Write) as u64;
+                    bytes[t as usize].read = stats.fetch(t, IOOp::Read);
+                    bytes[t as usize].write = stats.fetch(t, IOOp::Write);
                 }
                 bytes
             }
@@ -54,10 +54,10 @@ impl MetricsManager {
             let delta_bytes = latest[t as usize] - self.last_fetch[t as usize];
             IO_BYTES_VEC
                 .with_label_values(&[t.as_str(), "read"])
-                .inc_by(delta_bytes.read);
+                .inc_by(delta_bytes.read as u64);
             IO_BYTES_VEC
                 .with_label_values(&[t.as_str(), "write"])
-                .inc_by(delta_bytes.write);
+                .inc_by(delta_bytes.write as u64);
             self.last_fetch[t as usize] = latest[t as usize];
         }
     }

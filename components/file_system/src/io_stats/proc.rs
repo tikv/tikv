@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{IOBytes, IOType};
+use crate::{IOBytes, IOContext, IOType};
 
 use std::{
     cell::Cell,
@@ -8,7 +8,7 @@ use std::{
     io::{BufRead, BufReader, Seek},
     path::PathBuf,
     str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crossbeam_utils::CachePadded;
@@ -27,7 +27,7 @@ lazy_static! {
 
 thread_local! {
     /// A private copy of I/O type. Optimized for local access.
-    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other);
+    static IO_CTX: Cell<IOContext> = Cell::new(IOContext::new(IOType::Other));
 }
 
 #[derive(Debug)]
@@ -85,9 +85,9 @@ impl ThreadID {
                     let mut s = line.split_whitespace();
                     if let (Some(field), Some(value)) = (s.next(), s.next()) {
                         if field.starts_with("read_bytes") {
-                            io_bytes.read = u64::from_str(value).ok()?;
+                            io_bytes.read = usize::from_str(value).ok()?;
                         } else if field.starts_with("write_bytes") {
-                            io_bytes.write = u64::from_str(value).ok()?;
+                            io_bytes.write = usize::from_str(value).ok()?;
                         }
                     }
                 }
@@ -117,8 +117,8 @@ impl LocalIOStats {
 
 #[derive(Default)]
 struct AtomicIOBytes {
-    read: AtomicU64,
-    write: AtomicU64,
+    read: AtomicUsize,
+    write: AtomicUsize,
 }
 
 impl AtomicIOBytes {
@@ -135,13 +135,17 @@ impl AtomicIOBytes {
     }
 }
 
-/// Flushes the local I/O stats to global I/O stats.
+/// Flushes the local I/O stats to global I/O stats. Returns the renewed total
+/// I/O bytes of current thread.
 #[inline]
-fn flush_thread_io(sentinel: &mut LocalIOStats) {
+fn flush_thread_io(sentinel: &mut LocalIOStats) -> IOBytes {
     if let Some(io_bytes) = sentinel.id.fetch_io_bytes() {
-        GLOBAL_IO_STATS[sentinel.io_type as usize]
-            .fetch_add(io_bytes - sentinel.last_flushed, Ordering::Relaxed);
+        let delta = io_bytes - sentinel.last_flushed;
+        GLOBAL_IO_STATS[sentinel.io_type as usize].fetch_add(delta, Ordering::Relaxed);
         sentinel.last_flushed = io_bytes;
+        io_bytes
+    } else {
+        IOBytes::default()
     }
 }
 
@@ -149,21 +153,26 @@ pub fn init() -> Result<(), String> {
     Ok(())
 }
 
-pub fn set_io_type(new_io_type: IOType) {
-    IO_TYPE.with(|io_type| {
-        if io_type.get() != new_io_type {
+pub(crate) fn get_io_context() -> IOContext {
+    IO_CTX.with(|ctx| ctx.get())
+}
+
+pub(crate) fn set_io_context(mut new_ctx: IOContext) {
+    IO_CTX.with(|ctx| {
+        let old_ctx = ctx.get();
+        if new_ctx.io_type != old_ctx.io_type {
             let mut sentinel = LOCAL_IO_STATS
                 .get_or(|| CachePadded::new(Mutex::new(LocalIOStats::current())))
                 .lock();
-            flush_thread_io(&mut sentinel);
-            sentinel.io_type = new_io_type;
-            io_type.set(new_io_type);
+            let thread_bytes = flush_thread_io(&mut sentinel);
+            let outstanding = thread_bytes.read - old_ctx.total_read_bytes;
+            if outstanding > 0 {
+                new_ctx.unprocessed_read_bytes = Some((old_ctx.io_type, outstanding));
+            }
+            sentinel.io_type = new_ctx.io_type;
         }
+        ctx.set(new_ctx);
     });
-}
-
-pub fn get_io_type() -> IOType {
-    IO_TYPE.with(|io_type| io_type.get())
 }
 
 pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
@@ -175,6 +184,13 @@ pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
         bytes[i] = GLOBAL_IO_STATS[i].load(Ordering::Relaxed);
     }
     bytes
+}
+
+pub fn fetch_thread_io_bytes() -> IOBytes {
+    let mut sentinel = LOCAL_IO_STATS
+        .get_or(|| CachePadded::new(Mutex::new(LocalIOStats::current())))
+        .lock();
+    flush_thread_io(&mut sentinel)
 }
 
 #[cfg(test)]

@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
+use file_system::{IOType, WithIOType};
+use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
+
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
 use crate::util::get_cf_handle;
-use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
-use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 const WRITE_BATCH_MAX_BATCH: usize = 16;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -76,6 +78,9 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        // Indiscriminately increase the priority because RocksDB merges write
+        // batches with different IO types.
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         let opt: RocksWriteOptions = opts.into();
         self.get_db()
             .write_opt(self.as_inner(), &opt.into_raw())
@@ -212,6 +217,9 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        // Indiscriminately increase the priority because RocksDB merges write
+        // batches with different IO types.
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         let opt: RocksWriteOptions = opts.into();
         if self.index > 0 {
             self.get_db()

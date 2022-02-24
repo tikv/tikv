@@ -35,7 +35,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IOBudgetAdjustor,
+    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File,
     MetricsManager as IOMetricsManager,
 };
 use futures::executor::block_on;
@@ -1074,7 +1074,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.config
                 .storage
                 .io_rate_limit
-                .build(!stats_collector_enabled /*enable_statistics*/),
+                .build(stats_collector_enabled),
         );
         let fetcher = if stats_collector_enabled {
             BytesFetcher::FromIOStatsCollector()
@@ -1096,17 +1096,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.engines.as_ref().unwrap().engines.clone(),
         );
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        let engines_info_clone = engines_info.clone();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-                engines_info_clone.update(now);
+                engines_info.update(now);
             });
-        if let Some(limiter) = get_io_rate_limiter() {
-            limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
-        }
 
         let mut mem_trace_metrics = MemoryTraceManager::default();
         mem_trace_metrics.register_provider(MEMTRACE_RAFTSTORE.clone());
@@ -1600,23 +1596,5 @@ impl EnginesResourceInfo {
             std::cmp::max(normalized_pending_bytes, avg),
             Ordering::Relaxed,
         );
-    }
-}
-
-impl IOBudgetAdjustor for EnginesResourceInfo {
-    fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
-            / Self::SCALE_FACTOR as f32;
-        // Two reasons for adding `sqrt` on top:
-        // 1) In theory the convergence point is independent of the value of pending
-        //    bytes (as long as backlog generating rate equals consuming rate, which is
-        //    determined by compaction budgets), a convex helps reach that point while
-        //    maintaining low level of pending bytes.
-        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
-        //    with decreasing derivative can help balance such trend.
-        let score = score.sqrt();
-        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
-        let score = 0.5 + score / 2.0;
-        (total_budgets as f32 * score) as usize
     }
 }

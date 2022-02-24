@@ -948,11 +948,7 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[online_config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
-    // deprecated. use rate_limiter_auto_tuned.
-    #[online_config(skip)]
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    pub auto_tuned: Option<bool>,
+    #[serde(alias = "auto-tuned")]
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
@@ -1008,7 +1004,6 @@ impl Default for DbConfig {
             rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
-            auto_tuned: None, // deprecated
             rate_limiter_auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
@@ -2961,13 +2956,6 @@ impl TiKvConfig {
                 "raft_store.clean_stale_peer_delay",
             );
         }
-        if self.rocksdb.auto_tuned.is_some() {
-            warn!(
-                "deprecated configuration, {} is no longer used and ignored, please use {}.",
-                "rocksdb.auto_tuned", "rocksdb.rate_limiter_auto_tuned",
-            );
-            self.rocksdb.auto_tuned = None;
-        }
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
@@ -4133,6 +4121,15 @@ mod tests {
         assert_eq!(
             db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
             false
+        );
+
+        // Use deprecated item.
+        cfg_controller
+            .update_config("rocksdb.auto_tuned", "true")
+            .unwrap();
+        assert_eq!(
+            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
+            true
         );
     }
 

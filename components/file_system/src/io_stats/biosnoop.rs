@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This crate is deprecated.
+
 use crate::metrics::*;
 use crate::IOBytes;
 use crate::IOType;

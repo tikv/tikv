@@ -350,6 +350,8 @@ impl BlockCacheConfig {
 pub struct IORateLimitConfig {
     pub max_bytes_per_sec: ReadableSize,
     #[online_config(skip)]
+    pub max_buffered_read_bytes: ReadableSize,
+    #[online_config(skip)]
     pub mode: IORateLimitMode,
     /// When this flag is off, high-priority IOs are counted but not limited. Default
     /// set to false because the optimal throughput target provided by user might not be
@@ -374,6 +376,7 @@ impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(0),
+            max_buffered_read_bytes: ReadableSize::mb(1),
             mode: IORateLimitMode::WriteOnly,
             strict: false,
             foreground_read_priority: IOPriority::High,
@@ -392,9 +395,17 @@ impl Default for IORateLimitConfig {
 }
 
 impl IORateLimitConfig {
-    pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let limiter = IORateLimiter::new(self.mode, self.strict, enable_statistics);
-        limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
+    pub fn build(&mut self, stats_collector_enabled: bool) -> IORateLimiter {
+        if !stats_collector_enabled && self.mode != IORateLimitMode::WriteOnly {
+            warn!("Falling back to write-only mode because io-stats-collector is missing.");
+            self.mode = IORateLimitMode::WriteOnly;
+        }
+        let limiter = IORateLimiter::new(
+            self.mode,
+            self.strict,
+            Some(self.max_buffered_read_bytes.0 as usize), /*batch_buffered_reads*/
+            !stats_collector_enabled,                      /*enable_statistics*/
+        );
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
         limiter.set_io_priority(IOType::Flush, self.flush_priority);
@@ -409,6 +420,7 @@ impl IORateLimitConfig {
         limiter.set_io_priority(IOType::Import, self.import_priority);
         limiter.set_io_priority(IOType::Export, self.export_priority);
         limiter.set_io_priority(IOType::Other, self.other_priority);
+        limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter
     }
 
@@ -431,11 +443,6 @@ impl IORateLimitConfig {
                 self.gc_priority, self.foreground_write_priority,
             );
             self.gc_priority = self.foreground_write_priority;
-        }
-        if self.mode != IORateLimitMode::WriteOnly {
-            return Err(
-                "storage.io-rate-limit.mode other than write-only is not supported.".into(),
-            );
         }
         Ok(())
     }

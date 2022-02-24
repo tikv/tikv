@@ -12,20 +12,22 @@ mod stub {
     }
 
     thread_local! {
-        static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other);
+        static IO_CTX: IOContext = IOContext::new(IOType::Other);
     }
 
-    pub fn set_io_type(new_io_type: IOType) {
-        IO_TYPE.with(|io_type| {
-            io_type.set(new_io_type);
-        });
+    pub(crate) fn get_io_context() -> IOContext {
+        IO_CTX.with(|ctx| ctx.get())
     }
 
-    pub fn get_io_type() -> IOType {
-        IO_TYPE.with(|io_type| io_type.get())
+    pub(crate) fn set_io_context(new_ctx: IOContext) {
+        IO_CTX.with(|ctx| ctx.set(new_ctx));
     }
 
     pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+        Default::default()
+    }
+
+    pub fn fetch_thread_io_bytes() -> IOBytes {
         Default::default()
     }
 }
@@ -45,7 +47,7 @@ pub use proc::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::IOType;
+    use crate::{IOContext, IOType};
 
     #[bench]
     fn bench_fetch_io_bytes(b: &mut test::Bencher) {
@@ -54,7 +56,7 @@ mod tests {
             .map(|_| {
                 let tx_clone = tx.clone();
                 std::thread::Builder::new().spawn(move || {
-                    set_io_type(IOType::ForegroundWrite);
+                    set_io_context(IOContext::new(IOType::ForegroundWrite));
                     tx_clone.send(()).unwrap();
                 })
             })
@@ -72,14 +74,17 @@ mod tests {
             .map(|_| {
                 let tx_clone = tx.clone();
                 std::thread::Builder::new().spawn(move || {
-                    set_io_type(IOType::ForegroundWrite);
+                    set_io_context(IOContext::new(IOType::ForegroundWrite));
                     tx_clone.send(()).unwrap();
                 })
             })
             .collect::<Vec<_>>();
-        b.iter(|| match get_io_type() {
-            IOType::ForegroundWrite => set_io_type(IOType::ForegroundRead),
-            _ => set_io_type(IOType::ForegroundWrite),
+        b.iter(|| {
+            if get_io_context().io_type == IOType::ForegroundRead {
+                set_io_context(IOContext::new(IOType::ForegroundWrite));
+            } else {
+                set_io_context(IOContext::new(IOType::ForegroundRead));
+            }
         });
         for _ in 0..8 {
             rx.recv().unwrap();
