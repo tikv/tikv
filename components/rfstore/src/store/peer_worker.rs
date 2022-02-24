@@ -74,6 +74,7 @@ pub(crate) struct RaftWorker {
     router: RaftRouter,
     apply_senders: Vec<Sender<ApplyBatch>>,
     io_sender: Sender<IOTask>,
+    sync_io_worker: Option<IOWorker>,
     last_tick: Instant,
     tick_millis: u64,
 }
@@ -84,6 +85,7 @@ impl RaftWorker {
         receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
         io_sender: Sender<IOTask>,
+        sync_io_worker: Option<IOWorker>,
     ) -> (Self, Vec<Receiver<ApplyBatch>>) {
         let apply_pool_size = ctx.cfg.value().apply_pool_size;
         let mut apply_senders = Vec::with_capacity(apply_pool_size);
@@ -102,6 +104,7 @@ impl RaftWorker {
                 router,
                 apply_senders,
                 io_sender,
+                sync_io_worker,
                 last_tick: Instant::now(),
                 tick_millis,
             },
@@ -201,7 +204,11 @@ impl RaftWorker {
         self.ctx.global.engines.raft.apply(&raft_wb);
         let readies = mem::take(&mut self.ctx.persist_readies);
         let io_task = IOTask { raft_wb, readies };
-        self.io_sender.send(io_task).unwrap();
+        if let Some(sync_io_worker) = self.sync_io_worker.as_mut() {
+            sync_io_worker.handle_task(io_task);
+        } else {
+            self.io_sender.send(io_task).unwrap();
+        }
     }
 }
 
@@ -310,14 +317,14 @@ impl IOWorker {
         loop {
             let res = self.receiver.recv_timeout(Duration::from_secs(1));
             match res {
-                Ok(msg) => self.handle_msg(msg),
+                Ok(msg) => self.handle_task(msg),
                 Err(RecvTimeoutError::Disconnected) => return,
                 Err(RecvTimeoutError::Timeout) => {}
             }
         }
     }
 
-    fn handle_msg(&mut self, task: IOTask) {
+    fn handle_task(&mut self, task: IOTask) {
         if !task.raft_wb.is_empty() {
             self.engine.persist(task.raft_wb).unwrap();
         }
