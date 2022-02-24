@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(transparent)]
 pub struct TimeStamp(u64);
 
 const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
@@ -144,12 +145,14 @@ impl TsSet {
 
     pub fn from_u64s(ts: Vec<u64>) -> Self {
         // This conversion is safe because TimeStamp is a transparent wrapper over u64.
+        #[allow(clippy::transmute_undefined_repr)]
         let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
         Self::new(ts)
     }
 
     pub fn vec_from_u64s(ts: Vec<u64>) -> Self {
         // This conversion is safe because TimeStamp is a transparent wrapper over u64.
+        #[allow(clippy::transmute_undefined_repr)]
         let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
         Self::vec(ts)
     }
