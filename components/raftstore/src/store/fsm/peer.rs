@@ -1227,6 +1227,11 @@ where
     }
 
     fn on_exit_force_leader(&mut self) {
+         info!(
+            "exit force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.peer.force_leader = false;
         self.fsm
             .peer
