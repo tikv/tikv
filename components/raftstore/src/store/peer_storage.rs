@@ -1926,7 +1926,7 @@ where
         })
         .map_err(into_other::<_, raft::Error>)?;
 
-    if state.get_state() != PeerState::Normal {
+    if state.get_state() == PeerState::Tombstone || state.get_state() == PeerState::Applying {
         return Err(storage_error(format!(
             "snap job for {} seems stale, skip.",
             region_id

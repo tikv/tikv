@@ -82,8 +82,11 @@ fn main() {
     let mut force_leaders = Vec::new();
     for md in &mut region_meta_details {
         let rid = md.region_state.get_region().id;
-        let (mut raft_changed, mut region_changed, mut silence) = (false, false, false);
         let applied_index = md.apply_state.applied_index;
+        let mut raft_changed = false;
+        let mut region_changed = false;
+        let mut apply_changed = false;
+        let mut silence = false;
 
         if md.raft_state.last_index != applied_index {
             raft_wb.cut_logs(rid, applied_index + 1, md.raft_state.last_index + 1);
@@ -104,14 +107,16 @@ fn main() {
                 let e = engines.raft.get_entry(rid, applied_index).unwrap().unwrap();
                 e.term
             };
-            region_changed = true;
+            apply_changed = true;
         }
 
         if let Some(command) = commands.get(&rid) {
             if command.tombstone {
                 md.region_state.set_state(PeerState::Tombstone);
                 region_changed = true;
+                silence = true;
                 raft_changed = false;
+                apply_changed = false;
             } else {
                 if command.term != md.raft_state.get_hard_state().term {
                     md.raft_state.mut_hard_state().term = command.term;
@@ -131,10 +136,19 @@ fn main() {
             let key = keys::region_state_key(rid);
             kv_wb.put_msg_cf(CF_RAFT, &key, &md.region_state).unwrap();
         }
+        if apply_changed {
+            let key = keys::apply_state_key(rid);
+            kv_wb.put_msg_cf(CF_RAFT, &key, &md.apply_state).unwrap();
+        }
 
         if !silence {
             force_leaders.push(rid);
         }
+
+        println!(
+            "region {} raft changed: {}, region changed: {}, apply changed: {}",
+            rid, raft_changed, region_changed, apply_changed
+        );
     }
     kv_wb.write().unwrap();
     engines.kv.sync_wal().unwrap();
@@ -160,21 +174,25 @@ fn main() {
 
         let mut rxs = Vec::with_capacity(force_leaders.len());
         for &rid in &force_leaders {
-            router
-                .significant_send(rid, SignificantMsg::Campaign)
-                .unwrap();
-            println!("region {} starts to campaign", rid);
+            if let Err(e) = router.significant_send(rid, SignificantMsg::Campaign) {
+                println!("region {} fails to campaign: {}", rid, e);
+                continue;
+            } else {
+                println!("region {} starts to campaign", rid);
+            }
 
             let (tx, rx) = sync_channel(1);
             let cb = Callback::Read(Box::new(move |_| tx.send(1).unwrap()));
             router
                 .significant_send(rid, SignificantMsg::LeaderCallback(cb))
                 .unwrap();
-            rxs.push(rx);
+            rxs.push(Some(rx));
         }
         for (&rid, rx) in force_leaders.iter().zip(rxs) {
-            let _ = rx.recv().unwrap();
-            println!("region {} has applied to its current term", rid);
+            if let Some(rx) = rx {
+                let _ = rx.recv().unwrap();
+                println!("region {} has applied to its current term", rid);
+            }
         }
 
         println!("all region state adjustments are done");
@@ -273,7 +291,7 @@ fn scan_regions(
             region_state.merge_from_bytes(value).unwrap();
 
             if region_state.get_state() == PeerState::Tombstone {
-                // I think skip tombstone replicas is ok.
+                // TODO: it's better to report tombstone regions to the adviser.
                 return Ok(true);
             }
 

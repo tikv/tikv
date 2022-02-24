@@ -178,7 +178,6 @@ pub fn run_phybr(
     config.coprocessor.region_split_size = ReadableSize::gb(1024);
     config.coprocessor.region_max_keys = 1 << 31;
     config.coprocessor.region_split_keys = 1 << 30;
-    config.raft_store.region_split_size;
 
     initial_logger(&config);
 

@@ -185,6 +185,7 @@ pub trait DebugExecutor {
                                 "role": format!("{:?}", p.get_role()),
                             })).collect::<Vec<_>>(),
                         }),
+                        "state": format!("{:?}", s.get_state()),
                     })
                 }),
                 "raft_local_state": r.raft_local_state.map(|s| {
