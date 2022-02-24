@@ -3,8 +3,6 @@
 #include "Common.h"
 
 namespace DB {
-struct RawCppString;
-using RawCppStringPtr = RawCppString *;
 enum class FileEncryptionRes : uint8_t {
   Disabled = 0,
   Ok,

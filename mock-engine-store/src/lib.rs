@@ -1,4 +1,4 @@
-use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::RocksEngine;
 use engine_store_ffi::interfaces::root::DB as ffi_interfaces;
 use engine_store_ffi::EngineStoreServerHelper;
 use engine_store_ffi::RaftStoreProxyFFIHelper;
@@ -7,14 +7,13 @@ use engine_traits::{Engines, SyncMutable};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use protobuf::Message;
 use raftstore::engine_store_ffi;
-use raftstore::engine_store_ffi::interfaces::root::DB::RawRustPtr;
 use raftstore::engine_store_ffi::RawCppPtr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
-use tikv_util::{debug, error, info, warn};
+use tikv_util::{debug, info, warn};
 // use kvproto::raft_serverpb::{
 //     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
 // };
@@ -148,12 +147,25 @@ impl EngineStoreServerWrap {
     }
 }
 
-extern "C" fn ffi_set_read_index_resp(
-    data: ffi_interfaces::RawVoidPtr,
-    view: ffi_interfaces::BaseBuffView,
+unsafe extern "C" fn ffi_set_pb_msg_by_bytes(
+    type_: ffi_interfaces::MsgPBType,
+    ptr: ffi_interfaces::RawVoidPtr,
+    buff: ffi_interfaces::BaseBuffView,
 ) {
-    let data = unsafe { &mut *(data as *mut kvproto::kvrpcpb::ReadIndexResponse) };
-    data.merge_from_bytes(view.to_slice()).unwrap();
+    match type_ {
+        ffi_interfaces::MsgPBType::ReadIndexResponse => {
+            let v = &mut *(ptr as *mut kvproto::kvrpcpb::ReadIndexResponse);
+            v.merge_from_bytes(buff.to_slice()).unwrap();
+        }
+        ffi_interfaces::MsgPBType::ServerInfoResponse => {
+            let v = &mut *(ptr as *mut kvproto::diagnosticspb::ServerInfoResponse);
+            v.merge_from_bytes(buff.to_slice()).unwrap();
+        }
+        ffi_interfaces::MsgPBType::RegionLocalState => {
+            let v = &mut *(ptr as *mut kvproto::raft_serverpb::RegionLocalState);
+            v.merge_from_bytes(buff.to_slice()).unwrap();
+        }
+    }
 }
 
 pub fn gen_engine_store_server_helper(
@@ -176,11 +188,9 @@ pub fn gen_engine_store_server_helper(
         fn_handle_http_request: None,
         fn_check_http_uri_available: None,
         fn_gc_raw_cpp_ptr: Some(ffi_gc_raw_cpp_ptr),
-        fn_insert_batch_read_index_resp: None,
-        fn_set_read_index_resp: Some(ffi_set_read_index_resp),
-        fn_set_server_info_resp: None,
         fn_get_config: None,
         fn_set_store: None,
+        fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
     }
 }
 
@@ -249,6 +259,41 @@ extern "C" fn ffi_gen_cpp_string(s: ffi_interfaces::BaseBuffView) -> ffi_interfa
     ffi_interfaces::RawCppPtr {
         ptr: ptr as *mut _,
         type_: RawCppPtrTypeImpl::String.into(),
+    }
+}
+
+pub struct RawCppStringPtrGuard(ffi_interfaces::RawCppStringPtr);
+
+impl Default for RawCppStringPtrGuard {
+    fn default() -> Self {
+        Self(std::ptr::null_mut())
+    }
+}
+
+impl std::convert::AsRef<ffi_interfaces::RawCppStringPtr> for RawCppStringPtrGuard {
+    fn as_ref(&self) -> &ffi_interfaces::RawCppStringPtr {
+        &self.0
+    }
+}
+impl std::convert::AsMut<ffi_interfaces::RawCppStringPtr> for RawCppStringPtrGuard {
+    fn as_mut(&mut self) -> &mut ffi_interfaces::RawCppStringPtr {
+        &mut self.0
+    }
+}
+
+impl Drop for RawCppStringPtrGuard {
+    fn drop(&mut self) {
+        ffi_interfaces::RawCppPtr {
+            ptr: self.0 as *mut _,
+            type_: RawCppPtrTypeImpl::String.into(),
+        };
+    }
+}
+
+impl RawCppStringPtrGuard {
+    pub fn as_str(&self) -> &[u8] {
+        let s = self.0 as *mut Vec<u8>;
+        unsafe { &*s }
     }
 }
 
