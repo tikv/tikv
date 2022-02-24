@@ -56,7 +56,6 @@ pub struct Config {
     pub raft_min_election_timeout_ticks: usize,
     #[online_config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
-    #[online_config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
@@ -430,6 +429,12 @@ impl Config {
             return Err(box_err!(
                 "raft max inflight msgs should be greater than 0 and less than or equal to 16384"
             ));
+        }
+
+        if self.raft_max_size_per_msg == 0 || self.raft_max_size_per_msg > ReadableSize::gb(32) {
+            return Err(box_err!(
+                "raft max size per message should be greater than 0 and less than or equal to 32GiB"
+            ))
         }
 
         if self.raft_log_gc_threshold < 1 {
