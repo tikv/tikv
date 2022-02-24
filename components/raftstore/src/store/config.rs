@@ -1010,5 +1010,13 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
+
+        cfg = Config::new();
+        cfg.raft_max_size_per_msg = 0;
+        assert!(cfg.validate().is_err());
+        cfg.raft_max_size_per_msg = ReadableSize::gb(64);
+        assert!(cfg.validate().is_err());
+        cfg.raft_max_size_per_msg = ReadableSize::gb(32);
+        assert!(cfg.validate().is_ok());
     }
 }
