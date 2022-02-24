@@ -521,7 +521,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(key.as_encoded().to_vec(), key.as_encoded().to_vec())],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -651,9 +654,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
+        let rand_ctx = requests[rand_index].get_context();
+        let rand_key = requests[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag(requests[rand_index].get_context());
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -806,7 +811,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = keys
+            .iter()
+            .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -953,7 +964,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(
+                start_key.as_encoded().to_vec(),
+                match &end_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+            )],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -1106,7 +1126,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(
+                match &start_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+                match &end_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+            )],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
@@ -1338,7 +1370,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1412,9 +1446,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
+        let rand_ctx = gets[rand_index].get_context();
+        let rand_key = gets[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag(gets[rand_index].get_context());
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1518,7 +1554,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1950,7 +1989,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = ranges
+            .iter()
+            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2073,7 +2118,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2248,7 +2295,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = ranges
+            .iter()
+            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
