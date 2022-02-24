@@ -17,6 +17,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Encoding;
 use tidb_query_datatype::codec::convert::*;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::datum_codec::DatumPayloadDecoder;
 use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use tidb_query_datatype::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
 use tidb_query_datatype::codec::mysql::{binary_literal, Time};
@@ -648,7 +649,7 @@ fn cast_year_as_string(
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_bit_as_string(
-    ctx: &mut EvalContext,
+    _ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&Int>,
 ) -> Result<Option<Bytes>> {
@@ -656,12 +657,13 @@ fn cast_bit_as_string(
         None => Ok(None),
         Some(val) => {
             let mut buf = [0; 8];
-            BigEndian::write_i64(&mut buf, *val);
+            BigEndian::write_u64(&mut buf, *val as u64);
             let flen = extra.ret_field_type.as_accessor().flen();
             if flen > 0 && flen <= 8 {
                 let start_idx: usize = (8 - flen) as usize;
                 let buf = &buf[start_idx..8];
-                cast_as_string_helper(ctx, extra, buf.to_vec())
+                // For MysqlBit, directly returning instead of cast string
+                Ok(Some(buf.to_vec()))
             } else {
                 //In cast bit(m) to var_string(n); n may be equal or less than 8, n = int(( m + 7 ) / 8);
                 Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))

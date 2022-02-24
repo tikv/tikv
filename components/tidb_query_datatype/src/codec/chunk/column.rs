@@ -81,9 +81,8 @@ impl Column {
                     if field_type.as_accessor().flen() > 64 {
                         unimplemented!()
                     }
-                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
                     for &row_index in logical_rows {
-                        col.append_bit_datum(&raw_datums[row_index], &start_idx)?;
+                        col.append_bit_datum(&raw_datums[row_index], field_type)?;
                     }
                 } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
@@ -554,7 +553,7 @@ impl Column {
     }
 
     /// Append bit datum to the column.
-    pub fn append_bit_datum(&mut self, src_datum: &[u8], start_idx: &usize) -> Result<()> {
+    pub fn append_bit_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
         if src_datum.is_empty() {
             return Err(Error::InvalidDataType(
                 "Failed to decode datum flag".to_owned(),
@@ -564,9 +563,11 @@ impl Column {
         let raw_datum = &src_datum[1..];
         match flag {
             datum::NIL_FLAG => self.append_null(),
-            datum::UINT_FLAG | datum::VAR_UINT_FLAG => {
-                self.append_bytes(&raw_datum[*start_idx..])?
+            datum::UINT_FLAG => {
+                let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
+                self.append_bytes(&raw_datum[start_idx..])?
             }
+            datum::VAR_UINT_FLAG => self.append_bytes(raw_datum)?,
             _ => {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Bit vector",
