@@ -537,6 +537,11 @@ impl Config {
         if self.apply_batch_system.max_batch_size == 0 {
             self.apply_batch_system.max_batch_size = 256;
         }
+        if self.apply_batch_system.max_batch_size > 10240 {
+            return Err(box_err!(
+                "apply-max-batch-size should be greater than 0 and less than or equal to 10240"
+            ));
+        }
 
         if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > limit {
             return Err(box_err!(
@@ -555,6 +560,12 @@ impl Config {
                 self.store_batch_system.max_batch_size = 1024;
             }
         }
+        if self.store_batch_system.max_batch_size > 10240 {
+            return Err(box_err!(
+                "store-max-batch-size should be greater than 0 and less than or equal to 10240"
+            ));
+        }
+
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"
@@ -959,6 +970,14 @@ mod tests {
 
         cfg = Config::new();
         cfg.store_batch_system.pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.apply_batch_system.max_batch_size = 10241;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.store_batch_system.max_batch_size = 10241;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
