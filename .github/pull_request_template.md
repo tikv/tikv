@@ -8,23 +8,31 @@ If you're unsure about anything, just ask; somebody should be along to answer wi
 PR Title Format:
 1. module [, module2, module3]: what's changed
 2. *: what's changed
-
-If you want to open the **Challenge Program** pull request, please use the following template:
-https://raw.githubusercontent.com/tikv/.github/master/.github/PULL_REQUEST_TEMPLATE/challenge-program.md
-You can use it with query parameters: https://github.com/tikv/tikv/compare/master...${you branch}?template=challenge-program.md
 -->
 
-### What problem does this PR solve?
-
-Issue Number: close #xxx <!-- REMOVE this line if no issue to close -->
-
-Problem Summary:
-
 ### What is changed and how it works?
+<!--
 
-Proposal: [xxx](url) <!-- REMOVE this line if not applicable -->
+Please create an issue first to describe the problem.
+
+There MUST be one line starting with "Issue Number:  " and 
+linking the relevant issues via the "close" or "ref".
+
+For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#linking-issues.
+
+-->
+Issue Number: Close #xxx
 
 What's Changed:
+
+<!--
+
+You could use "commit message" code block to add more description to the final commit message.
+For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#format-of-the-commit-message.
+
+-->
+```commit-message
+```
 
 ### Related changes
 
@@ -49,3 +57,9 @@ Side effects
 - Breaking backward compatibility
 
 ### Release note <!-- bugfixes or new feature need a release note -->
+
+```release-note
+Please add a release note.
+If you don't think this PR needs a release note then fill it with None.
+If this PR will be picked to release branch, then a release note is probably required.
+```

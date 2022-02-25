@@ -11,7 +11,6 @@ ${LOCAL_DIR}/lib/libgflags.a:
 	make && \
 	make install
 
-# TODO: use official archive once https://github.com/SimonKagstrom/kcov/pull/146 is resolved and published.
 ${LOCAL_DIR}/bin/kcov:
 	cd /tmp && \
 	curl -L https://github.com/SimonKagstrom/kcov/archive/v33.tar.gz -o kcov.tar.gz && \

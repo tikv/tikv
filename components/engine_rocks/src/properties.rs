@@ -1,21 +1,20 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{IndexHandle, MvccProperties, TableProperties, TablePropertiesCollection};
+use crate::decode_properties::{DecodeProperties, IndexHandle, IndexHandles};
+use engine_traits::{MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
+use tikv_util::info;
 use txn_types::{Key, Write, WriteType};
 
 use crate::mvcc_properties::*;
@@ -53,10 +52,10 @@ impl SizeProperties {
     }
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
-        let mut res = SizeProperties::default();
-        res.total_size = props.decode_u64(PROP_TOTAL_SIZE)?;
-        res.index_handles = props.decode_handles(PROP_SIZE_INDEX)?;
-        Ok(res)
+        Ok(SizeProperties {
+            total_size: props.decode_u64(PROP_TOTAL_SIZE)?,
+            index_handles: props.decode_handles(PROP_SIZE_INDEX)?,
+        })
     }
 }
 
@@ -95,6 +94,12 @@ impl UserProperties {
     }
 }
 
+impl Default for UserProperties {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DecodeProperties for UserProperties {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {
@@ -123,19 +128,10 @@ pub enum RangeOffsetKind {
     Keys,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct RangeOffsets {
     pub size: u64,
     pub keys: u64,
-}
-
-impl RangeOffsets {
-    fn get(&self, kind: RangeOffsetKind) -> u64 {
-        match kind {
-            RangeOffsetKind::Keys => self.keys,
-            RangeOffsetKind::Size => self.size,
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -168,7 +164,10 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
+            Err(e) => info!(
+                "decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?",
+                e
+            ),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
@@ -180,61 +179,41 @@ impl RangeProperties {
             let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let mut offsets = RangeOffsets::default();
-            offsets.size = number::decode_u64(&mut buf)?;
-            offsets.keys = number::decode_u64(&mut buf)?;
+            let offsets = RangeOffsets {
+                size: number::decode_u64(&mut buf)?,
+                keys: number::decode_u64(&mut buf)?,
+            };
             res.offsets.push((k, offsets));
         }
         Ok(res)
     }
 
     pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Size, start, end)
+        self.get_approximate_distance_in_range(start, end).0
     }
 
     pub fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Keys, start, end)
+        self.get_approximate_distance_in_range(start, end).1
     }
 
-    fn get_approximate_distance_in_range(
-        &self,
-        kind: RangeOffsetKind,
-        start: &[u8],
-        end: &[u8],
-    ) -> u64 {
+    /// Returns `size` and `keys`.
+    pub fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> (u64, u64) {
         assert!(start <= end);
         if start == end {
-            return 0;
+            return (0, 0);
         }
         let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
-            Ok(idx) => self.offsets[idx].1.get(kind),
-            Err(next_idx) => {
-                if next_idx == 0 {
-                    0
-                } else {
-                    self.offsets[next_idx - 1].1.get(kind)
-                }
-            }
+            Ok(idx) => Some(idx),
+            Err(next_idx) => next_idx.checked_sub(1),
         };
-
         let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
-            Ok(idx) => self.offsets[idx].1.get(kind),
-            Err(next_idx) => {
-                if next_idx == 0 {
-                    0
-                } else {
-                    self.offsets[next_idx - 1].1.get(kind)
-                }
-            }
+            Ok(idx) => Some(idx),
+            Err(next_idx) => next_idx.checked_sub(1),
         };
-
-        if end_offset < start_offset {
-            panic!(
-                "start {:?} end {:?} start_offset {} end_offset {}",
-                start, end, start_offset, end_offset
-            );
-        }
-        end_offset - start_offset
+        let start = start_offset.map_or_else(|| Default::default(), |x| self.offsets[x].1);
+        let end = end_offset.map_or_else(|| Default::default(), |x| self.offsets[x].1);
+        assert!(end.size >= start.size && end.keys >= start.keys);
+        (end.size - start.size, end.keys - start.keys)
     }
 
     // equivalent to range(Excluded(start_key), Excluded(end_key))
@@ -294,8 +273,10 @@ impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
         for (key, size_handle) in p.index_handles.into_map() {
-            let mut range = RangeOffsets::default();
-            range.size = size_handle.offset;
+            let range = RangeOffsets {
+                size: size_handle.offset,
+                ..Default::default()
+            };
             res.offsets.push((key, range));
         }
         res
@@ -342,8 +323,8 @@ impl RangePropertiesCollector {
     }
 
     fn insert_new_point(&mut self, key: Vec<u8>) {
-        self.last_offsets = self.cur_offsets.clone();
-        self.props.offsets.push((key, self.cur_offsets.clone()));
+        self.last_offsets = self.cur_offsets;
+        self.props.offsets.push((key, self.cur_offsets));
     }
 }
 
@@ -391,12 +372,9 @@ impl Default for RangePropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(RangePropertiesCollector::new(
-            self.prop_size_index_distance,
-            self.prop_keys_index_distance,
-        ))
+impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangePropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> RangePropertiesCollector {
+        RangePropertiesCollector::new(self.prop_size_index_distance, self.prop_keys_index_distance)
     }
 }
 
@@ -511,21 +489,18 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
-impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(MvccPropertiesCollector::new())
+impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
+        MvccPropertiesCollector::new()
     }
 }
 
-pub fn get_range_entries_and_versions<E>(
-    engine: &E,
+pub fn get_range_entries_and_versions(
+    engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)>
-where
-    E: KvEngine,
-{
+) -> Option<(u64, u64)> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -540,7 +515,7 @@ where
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
     for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -620,22 +595,22 @@ mod tests {
             props.get_approximate_size_in_range(b"", b"k"),
             DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
         );
-        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11 as u64);
+        assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11_u64);
 
         assert_eq!(props.offsets.len(), 7);
-        let a = props.get(b"a".as_ref());
+        let a = props.get(b"a");
         assert_eq!(a.size, 1);
-        let e = props.get(b"e".as_ref());
+        let e = props.get(b"e");
         assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
-        let i = props.get(b"i".as_ref());
+        let i = props.get(b"i");
         assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
-        let k = props.get(b"k".as_ref());
+        let k = props.get(b"k");
         assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
-        let m = props.get(b"m".as_ref());
+        let m = props.get(b"m");
         assert_eq!(m.keys, 11 + DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let n = props.get(b"n".as_ref());
+        let n = props.get(b"n");
         assert_eq!(n.keys, 11 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let o = props.get(b"o".as_ref());
+        let o = props.get(b"o");
         assert_eq!(o.keys, 12 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [
@@ -695,7 +670,7 @@ mod tests {
         let mut collector = RangePropertiesCollector::default();
         let mut extra_value_size: u64 = 0;
         for &(k, vlen) in &cases {
-            if handles.contains(&k) || rng.gen_range(0, 2) == 0 {
+            if handles.contains(&k) || rng.gen_range(0..2) == 0 {
                 let v = vec![0; vlen as usize - extra_value_size as usize];
                 extra_value_size = 0;
                 collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
@@ -735,8 +710,10 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))

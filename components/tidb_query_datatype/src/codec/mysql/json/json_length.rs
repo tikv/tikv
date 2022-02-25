@@ -5,23 +5,23 @@ use super::path_expr::PathExpression;
 use super::{JsonRef, JsonType};
 
 impl<'a> JsonRef<'a> {
-    fn len(&self) -> Option<i64> {
+    fn len(&self) -> i64 {
         match self.get_type() {
-            JsonType::Array | JsonType::Object => Some(self.get_elem_count() as i64),
-            _ => Some(1),
+            JsonType::Array | JsonType::Object => self.get_elem_count() as i64,
+            _ => 1,
         }
     }
 
     /// `json_length` is the implementation for JSON_LENGTH in mysql
-    /// https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
+    /// <https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length>
     pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Result<Option<i64>> {
         if path_expr_list.is_empty() {
-            return Ok(self.len());
+            return Ok(Some(self.len()));
         }
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return Ok(None);
         }
-        Ok(self.extract(path_expr_list)?.and_then(|j| j.as_ref().len()))
+        Ok(self.extract(path_expr_list)?.map(|j| j.as_ref().len()))
     }
 }
 

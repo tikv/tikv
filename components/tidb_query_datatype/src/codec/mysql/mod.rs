@@ -16,7 +16,7 @@ fn check_fsp(fsp: i8) -> Result<u8> {
     if fsp == UNSPECIFIED_FSP {
         return Ok(DEFAULT_FSP as u8);
     }
-    if fsp > MAX_FSP || fsp < MIN_FSP {
+    if !(MIN_FSP..=MAX_FSP).contains(&fsp) {
         return Err(invalid_type!("Invalid fsp {}", fsp));
     }
     Ok(fsp as u8)
@@ -33,7 +33,7 @@ pub mod time;
 
 pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode};
 pub use self::duration::{Duration, DurationDecoder, DurationEncoder};
-pub use self::enums::{Enum, EnumRef};
+pub use self::enums::{Enum, EnumDecoder, EnumEncoder, EnumRef};
 pub use self::json::{
     parse_json_path_expr, Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonType,
     ModifyType, PathExpression,

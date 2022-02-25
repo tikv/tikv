@@ -16,10 +16,11 @@ use tikv::import::SSTImporter;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, ALL_CFS};
+use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{dummy_scheduler, FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
 
 #[derive(Clone)]
 struct MockTransport;
@@ -76,7 +77,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SSTImporter::new(&p, None).unwrap())
+        Arc::new(SSTImporter::new(&cfg.import, &p, None, cfg.storage.api_version()).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -89,18 +90,13 @@ fn start_raftstore(
     };
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-    let cfg_controller = ConfigController::new(cfg);
-    cfg_controller.register(
-        Module::Raftstore,
-        Box::new(RaftstoreConfigManager(cfg_track.clone())),
-    );
-    let pd_worker = FutureWorker::new("store-config");
+    let pd_worker = LazyWorker::new("store-config");
     let (split_check_scheduler, _) = dummy_scheduler();
 
     system
         .spawn(
             Default::default(),
-            cfg_track,
+            cfg_track.clone(),
             engines,
             MockTransport,
             Arc::new(TestPdClient::new(0, true)),
@@ -114,8 +110,19 @@ fn start_raftstore(
             AutoSplitController::default(),
             Arc::default(),
             ConcurrencyManager::new(1.into()),
+            CollectorRegHandle::new_for_test(),
         )
         .unwrap();
+
+    let cfg_controller = ConfigController::new(cfg);
+    cfg_controller.register(
+        Module::Raftstore,
+        Box::new(RaftstoreConfigManager::new(
+            system.refresh_config_scheduler(),
+            cfg_track,
+        )),
+    );
+
     (cfg_controller, raft_router, system.apply_router(), system)
 }
 

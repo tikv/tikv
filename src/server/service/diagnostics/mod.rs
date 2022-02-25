@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::server::Error;
@@ -12,26 +12,21 @@ use grpcio::{
     Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
+use kvproto::diagnosticspb::SearchLogRequestTarget;
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
+use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::Handle;
-
-#[cfg(feature = "prost-codec")]
-use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget;
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::diagnosticspb::SearchLogRequestTarget;
-
-use security::{check_common_name, SecurityManager};
-use tikv_util::{
-    sys::{SystemExt, SYS_INFO},
-    timer::GLOBAL_TIMER_HANDLE,
-};
 
 mod ioload;
 mod log;
 mod sys;
+
+lazy_static! {
+    pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+}
 
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
@@ -39,21 +34,14 @@ pub struct Service {
     pool: Handle,
     log_file: String,
     slow_log_file: String,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(
-        pool: Handle,
-        log_file: String,
-        slow_log_file: String,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
+    pub fn new(pool: Handle, log_file: String, slow_log_file: String) -> Self {
         Service {
             pool,
             log_file,
             slow_log_file,
-            security_mgr,
         }
     }
 }
@@ -65,9 +53,6 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         mut sink: ServerStreamingSink<SearchLogResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
             self.log_file.to_owned()
         } else {
@@ -78,9 +63,9 @@ impl Diagnostics for Service {
             log::search(log_file, req)
                 .map(|stream| stream.map(|resp| (resp, WriteFlags::default().buffer_hint(true))))
                 .map_err(|e| {
-                    grpcio::Error::RpcFailure(RpcStatus::new(
+                    grpcio::Error::RpcFailure(RpcStatus::with_message(
                         RpcStatusCode::UNKNOWN,
-                        Some(format!("{:?}", e)),
+                        format!("{:?}", e),
                     ))
                 })
         });
@@ -116,9 +101,6 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let tp = req.get_tp();
 
         let collect = async move {

@@ -1,24 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(min_specialization)]
-
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-extern crate hex;
-extern crate kvproto;
-#[macro_use(fail_point)]
-extern crate fail;
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
 
 mod client;
+mod feature_gate;
 pub mod metrics;
+mod tso;
 mod util;
 
 mod config;
@@ -26,17 +13,19 @@ pub mod errors;
 pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
-pub use self::util::validate_endpoints;
-pub use self::util::RECONNECT_INTERVAL_SEC;
+pub use self::feature_gate::{Feature, FeatureGate};
+pub use self::util::PdConnector;
+pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
+use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::{Arc, RwLock};
 
 use futures::future::BoxFuture;
+use grpcio::ClientSStreamReceiver;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
-use semver::{SemVerError, Version};
+use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -51,9 +40,13 @@ pub struct RegionStat {
     pub written_keys: u64,
     pub read_bytes: u64,
     pub read_keys: u64,
+    pub query_stats: QueryStats,
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
+    // cpu_usage is the CPU time usage of the leader region since the last heartbeat,
+    // which is calculated by cpu_time_delta/heartbeat_reported_interval.
+    pub cpu_usage: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,6 +77,21 @@ pub const INVALID_ID: u64 = 0;
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
 pub trait PdClient: Send + Sync {
+    /// Load a list of GlobalConfig
+    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+        unimplemented!();
+    }
+
+    /// Store a list of GlobalConfig
+    fn store_global_config(&self, _list: HashMap<String, String>) -> PdFuture<()> {
+        unimplemented!();
+    }
+
+    /// Watching change of GlobalConfig
+    fn watch_global_config(&self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
+        unimplemented!();
+    }
+
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
@@ -161,8 +169,18 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Gets Region which the key belongs to asynchronously.
+    fn get_region_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<metapb::Region>> {
+        unimplemented!();
+    }
+
     /// Gets Region info which the key belongs to.
     fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
+    }
+
+    /// Gets Region info which the key belongs to asynchronously.
+    fn get_region_info_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<RegionInfo>> {
         unimplemented!();
     }
 
@@ -217,7 +235,11 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+    fn store_heartbeat(
+        &self,
+        _stats: pdpb::StoreStats,
+        _report: Option<pdpb::StoreReport>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
 
@@ -244,8 +266,8 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    /// Gets store state if it is not a tombstone store.
-    fn get_store_stats(&self, _store_id: u64) -> Result<pdpb::StoreStats> {
+    /// Gets store state if it is not a tombstone store asynchronously.
+    fn get_store_stats_async(&self, _store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         unimplemented!();
     }
 
@@ -258,6 +280,11 @@ pub trait PdClient: Send + Sync {
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         unimplemented!()
     }
+
+    /// Gets the internal `FeatureGate`.
+    fn feature_gate(&self) -> &FeatureGate {
+        unimplemented!()
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
@@ -268,39 +295,5 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct ClusterVersion {
-    version: Arc<RwLock<Option<Version>>>,
-}
-
-impl ClusterVersion {
-    pub fn get(&self) -> Option<Version> {
-        self.version.read().unwrap().clone()
-    }
-
-    fn set(&self, version: &str) -> std::result::Result<bool, SemVerError> {
-        let new = Version::parse(version)?;
-        let mut holder = self.version.write().unwrap();
-        match &mut *holder {
-            Some(ref mut old) if *old < new => {
-                *old = new;
-                Ok(true)
-            }
-            None => {
-                *holder = Some(new);
-                Ok(true)
-            }
-            Some(_) => Ok(false),
-        }
-    }
-
-    /// Initialize a `ClusterVersion` as given `version`. Only should be used for tests.
-    pub fn new(version: Version) -> Self {
-        ClusterVersion {
-            version: Arc::new(RwLock::new(Some(version))),
-        }
     }
 }

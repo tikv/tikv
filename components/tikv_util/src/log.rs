@@ -33,6 +33,29 @@ macro_rules! error {
     };
 }
 
+// error_unknown is used the same as the above error macro
+// However, it will always use an error code of UNKNOWN
+// This is for errors that do not implement ErrorCodeExt
+// It is recommended to implement ErrorCodeExt instead of using this macro
+#[macro_export]
+macro_rules! error_unknown {
+    (?$e:expr; $l:literal) => {
+        ::slog_global::error!($l; "err" => ?$e,"err_code" => %error_code::UNKNOWN)
+    };
+
+    (%$e:expr; $l:literal) => {
+        ::slog_global::error!($l; "err" => ?$e,"err_code" => %error_code::UNKNOWN)
+    };
+
+    (?$e:expr; $($args:tt)+) => {
+        ::slog_global::error!($($args)+ "err" => ?$e,"err_code" => %error_code::UNKNOWN)
+    };
+
+    (%$e:expr; $($args:tt)+) => {
+        ::slog_global::error!($($args)+ "err" => %$e,"err_code" => %error_code::UNKNOWN)
+    };
+}
+
 /// Logs a warning level message using the slog global logger.
 #[macro_export]
 macro_rules! warn(($($args:tt)+) => {

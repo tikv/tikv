@@ -1,18 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] Common key utitlies.
+
 //! TiKV key building
 
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
-extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use byteorder::{BigEndian, ByteOrder};
-
-use kvproto::metapb::Region;
 use std::mem;
+
+use byteorder::{BigEndian, ByteOrder};
+use kvproto::metapb::Region;
+use thiserror::Error;
 
 pub mod rewrite;
 
@@ -210,11 +209,17 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
     v
 }
 
+pub fn data_key_with_buffer(key: &[u8], buffer: &mut Vec<u8>) {
+    buffer.clear();
+    buffer.extend_from_slice(DATA_PREFIX_KEY);
+    buffer.extend_from_slice(key);
+}
+
 pub fn origin_key(key: &[u8]) -> &[u8] {
     assert!(
         validate_data_key(key),
         "invalid data key {}",
-        hex::encode_upper(key)
+        &log_wrappers::Value::key(key)
     );
     &key[DATA_PREFIX_KEY.len()..]
 }
@@ -284,21 +289,13 @@ pub fn next_key(key: &[u8]) -> Vec<u8> {
     }
 }
 
-#[derive(Debug, Display, Fail)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
+    #[error("{} is not a valid raft log key", log_wrappers::Value(.0))]
     InvalidRaftLogKey(Vec<u8>),
-    #[display(
-        fmt = "invalid region {} key length for key {}",
-        "_0",
-        "hex::encode_upper(_1)"
-    )]
+    #[error("invalid region {0} key length for key {}", log_wrappers::Value(.1))]
     InvalidRegionKeyLength(String, Vec<u8>),
-    #[display(
-        fmt = "invalid region {} prefix for key {}",
-        "_0",
-        "hex::encode_upper(_1)"
-    )]
+    #[error("invalid region {0} prefix for key {}", log_wrappers::Value(.1))]
     InvalidRegionPrefix(String, Vec<u8>),
 }
 
@@ -313,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_region_id_key() {
-        let region_ids = vec![0, 1, 1024, std::u64::MAX];
+        let region_ids = vec![0, 1, 1024, u64::MAX];
         for region_id in region_ids {
             let prefix = region_raft_prefix(region_id);
 
@@ -431,8 +428,13 @@ mod tests {
 
     #[test]
     fn test_data_key() {
-        assert!(validate_data_key(&data_key(b"abc")));
         assert!(!validate_data_key(b"abc"));
+        assert!(validate_data_key(&data_key(b"abc")));
+        let mut buffer = vec![];
+        data_key_with_buffer(b"abc", &mut buffer);
+        assert_eq!(buffer, data_key(b"abc"));
+        data_key_with_buffer(b"cde", &mut buffer);
+        assert_eq!(buffer, data_key(b"cde"));
 
         let mut region = Region::default();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.

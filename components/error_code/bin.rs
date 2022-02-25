@@ -1,9 +1,12 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{fs, io::Write, path::Path};
 
 use error_code::*;
 
 fn main() {
     let err_codes = vec![
+        cloud::ALL_ERROR_CODES.iter(),
         codec::ALL_ERROR_CODES.iter(),
         coprocessor::ALL_ERROR_CODES.iter(),
         encryption::ALL_ERROR_CODES.iter(),

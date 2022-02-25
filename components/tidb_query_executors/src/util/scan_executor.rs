@@ -135,6 +135,7 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type.set_flen(ci.get_column_len());
     field_type.set_decimal(ci.get_decimal());
     field_type.set_collate(ci.get_collation());
+    field_type.set_elems(protobuf::RepeatedField::from(ci.get_elems()));
     // Note: Charset is not provided in column info.
     field_type
 }

@@ -10,7 +10,7 @@ use crate::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use crate::codec::{datum, Error, Result};
 
 #[inline]
-fn decode_v2_u64(v: &[u8]) -> Result<u64> {
+pub fn decode_v2_u64(v: &[u8]) -> Result<u64> {
     // See `decodeInt` in TiDB.
     match v.len() {
         1 => Ok(u64::from(v[0])),
@@ -114,7 +114,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported FieldType {:?}",
                     fp
-                )))
+                )));
             }
         }
         Ok(())
@@ -143,9 +143,9 @@ mod tests {
     };
     use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};
 
-    fn encode_to_v1_compatible(mut ctx: &mut EvalContext, col: &Column) -> Vec<u8> {
+    fn encode_to_v1_compatible(ctx: &mut EvalContext, col: &Column) -> Vec<u8> {
         let mut buf_v2 = vec![];
-        buf_v2.write_value(&mut ctx, &col).unwrap();
+        buf_v2.write_value(ctx, col).unwrap();
         let mut buf_v1 = vec![];
         buf_v1.write_v2_as_datum(&buf_v2, col.ft()).unwrap();
         buf_v1
@@ -294,8 +294,8 @@ mod tests {
     fn test_duration() {
         let mut ctx = EvalContext::default();
         let cases = vec![
-            Duration::parse(&mut ctx, b"31 11:30:45.123", 4).unwrap(),
-            Duration::parse(&mut ctx, b"-11:30:45.9233456", 4).unwrap(),
+            Duration::parse(&mut ctx, "31 11:30:45.123", 4).unwrap(),
+            Duration::parse(&mut ctx, "-11:30:45.9233456", 4).unwrap(),
         ];
 
         let mut ctx = EvalContext::default();

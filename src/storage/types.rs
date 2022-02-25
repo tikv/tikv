@@ -93,6 +93,10 @@ pub enum TxnStatus {
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
+    /// The primary key is pessimistically rolled back.
+    PessimisticRollBack,
+    /// The txn primary key is not found and nothing is done.
+    LockNotExistDoNothing,
 }
 
 impl TxnStatus {
@@ -117,7 +121,12 @@ pub struct PrewriteResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PessimisticLockRes {
+    /// The previous value is loaded while handling the `AcquirePessimisticLock` command. The i-th
+    /// item is the value of the i-th key in the `AcquirePessimisticLock` command.
     Values(Vec<Option<Value>>),
+    /// Checked whether the key exists while handling the `AcquirePessimisticLock` command. The i-th
+    /// item is true if the i-th key in the `AcquirePessimisticLock` command exists.
+    Existence(Vec<bool>),
     Empty,
 }
 
@@ -125,14 +134,25 @@ impl PessimisticLockRes {
     pub fn push(&mut self, value: Option<Value>) {
         match self {
             PessimisticLockRes::Values(v) => v.push(value),
+            PessimisticLockRes::Existence(v) => v.push(value.is_some()),
             _ => panic!("unexpected PessimisticLockRes"),
         }
     }
 
-    pub fn into_vec(self) -> Vec<Value> {
+    pub fn into_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
         match self {
-            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
-            PessimisticLockRes::Empty => vec![],
+            PessimisticLockRes::Values(vals) => vals
+                .into_iter()
+                .map(|v| {
+                    let is_not_found = v.is_none();
+                    (v.unwrap_or_default(), is_not_found)
+                })
+                .unzip(),
+            PessimisticLockRes::Existence(mut vals) => {
+                vals.iter_mut().for_each(|x| *x = !*x);
+                (vec![], vals)
+            }
+            PessimisticLockRes::Empty => (vec![], vec![]),
         }
     }
 }
@@ -190,6 +210,7 @@ storage_callback! {
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
     SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
+    RawCompareAndSwap((Option<Value>, bool)) ProcessResult::RawCompareAndSwapRes { previous_value, succeed } => (previous_value, succeed),
 }
 
 pub trait StorageCallbackType: Sized {

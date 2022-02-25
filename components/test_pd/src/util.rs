@@ -7,12 +7,13 @@ use tikv_util::config::ReadableDuration;
 use std::sync::Arc;
 
 pub fn new_config(eps: Vec<(String, u16)>) -> Config {
-    let mut cfg = Config::default();
-    cfg.endpoints = eps
-        .into_iter()
-        .map(|addr| format!("{}:{}", addr.0, addr.1))
-        .collect();
-    cfg
+    Config {
+        endpoints: eps
+            .into_iter()
+            .map(|addr| format!("{}:{}", addr.0, addr.1))
+            .collect(),
+        ..Default::default()
+    }
 }
 
 pub fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClient {

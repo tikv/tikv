@@ -7,10 +7,11 @@ use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use crate::codec::chunk::{ChunkColumnEncoder, Column};
-use crate::codec::data_type::{match_template_evaluable, ChunkedVec, LogicalRows, VectorValue};
+use crate::codec::data_type::{ChunkedVec, LogicalRows, VectorValue};
 use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Result;
 use crate::expr::EvalContext;
+use crate::match_template_evaltype;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -53,6 +54,7 @@ impl LazyBatchColumn {
 
     /// Creates a new empty `LazyBatchColumn` with the same schema.
     #[inline]
+    #[must_use]
     pub fn clone_empty(&self, capacity: usize) -> Self {
         match self {
             LazyBatchColumn::Raw(_) => Self::raw_with_capacity(capacity),
@@ -157,7 +159,7 @@ impl LazyBatchColumn {
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
-        logical_rows: LogicalRows,
+        logical_rows: LogicalRows<'_>,
     ) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
@@ -168,7 +170,7 @@ impl LazyBatchColumn {
 
         let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
 
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
                     match logical_rows {

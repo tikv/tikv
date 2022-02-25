@@ -1,7 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, MiscExt, RaftEngine};
 use futures::channel::oneshot;
@@ -21,17 +19,16 @@ use tokio::runtime::Handle;
 use crate::config::ConfigController;
 use crate::server::debug::{Debugger, Error, Result};
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::Callback;
-use security::{check_common_name, SecurityManager};
+use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
 use tikv_util::metrics;
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, Some(msg)),
-        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, Some(msg)),
-        Error::Other(e) => (RpcStatusCode::UNKNOWN, Some(format!("{:?}", e))),
+        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
+        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
+        Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
     };
-    RpcStatus::new(code, msg)
+    RpcStatus::with_message(code, msg)
 }
 
 fn on_grpc_error(tag: &'static str, e: &GrpcError) {
@@ -51,7 +48,6 @@ pub struct Service<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> {
     pool: Handle,
     debugger: Debugger<ER>,
     raft_router: T,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
@@ -61,14 +57,12 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
         pool: Handle,
         raft_router: T,
         cfg_controller: ConfigController,
-        security_mgr: Arc<SecurityManager>,
     ) -> Service<ER, T> {
         let debugger = Debugger::new(engines, cfg_controller);
         Service {
             pool,
             debugger,
             raft_router,
-            security_mgr,
         }
     }
 
@@ -95,9 +89,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
 
 impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<ER, T> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_get";
 
         let db = req.get_db();
@@ -124,9 +115,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         req: RaftLogRequest,
         sink: UnarySink<RaftLogResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_raft_log";
 
         let region_id = req.get_region_id();
@@ -152,9 +140,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         req: RegionInfoRequest,
         sink: UnarySink<RegionInfoResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_region_log";
 
         let region_id = req.get_region_id();
@@ -187,9 +172,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         mut req: RegionSizeRequest,
         sink: UnarySink<RegionSizeResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_region_size";
 
         let region_id = req.get_region_id();
@@ -221,13 +203,10 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
 
     fn scan_mvcc(
         &mut self,
-        ctx: RpcContext<'_>,
+        _: RpcContext<'_>,
         mut req: ScanMvccRequest,
         mut sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let debugger = self.debugger.clone();
         let from = req.take_from_key();
         let to = req.take_to_key();
@@ -262,9 +241,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         req: CompactRequest,
         sink: UnarySink<CompactResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let debugger = self.debugger.clone();
 
         let res = self.pool.spawn(async move {
@@ -292,9 +268,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         mut req: InjectFailPointRequest,
         sink: UnarySink<InjectFailPointResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_inject_fail_point";
 
         let f = self
@@ -321,9 +294,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         mut req: RecoverFailPointRequest,
         sink: UnarySink<RecoverFailPointResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_recover_fail_point";
 
         let f = self
@@ -347,9 +317,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         _: ListFailPointsRequest,
         sink: UnarySink<ListFailPointsResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_list_fail_points";
 
         let f = self
@@ -376,9 +343,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         req: GetMetricsRequest,
         sink: UnarySink<GetMetricsResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_get_metrics";
 
         let debugger = self.debugger.clone();
@@ -386,7 +350,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .pool
             .spawn(async move {
                 let mut resp = GetMetricsResponse::default();
-                resp.set_store_id(debugger.get_store_id()?);
+                resp.set_store_id(debugger.get_store_ident()?.store_id);
                 resp.set_prometheus(metrics::dump());
                 if req.get_all() {
                     let engines = debugger.get_engine();
@@ -407,16 +371,13 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         req: RegionConsistencyCheckRequest,
         sink: UnarySink<RegionConsistencyCheckResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let region_id = req.get_region_id();
         let debugger = self.debugger.clone();
         let router1 = self.raft_router.clone();
         let router2 = self.raft_router.clone();
 
         let consistency_check_task = async move {
-            let store_id = debugger.get_store_id()?;
+            let store_id = debugger.get_store_ident()?.store_id;
             let detail = region_detail(router2, region_id, store_id).await?;
             consistency_check(router1, detail).await
         };
@@ -434,9 +395,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         mut req: ModifyTikvConfigRequest,
         sink: UnarySink<ModifyTikvConfigResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "modify_tikv_config";
 
         let config_name = req.take_config_name();
@@ -458,9 +416,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         req: GetRegionPropertiesRequest,
         sink: UnarySink<GetRegionPropertiesResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "get_region_properties";
         let debugger = self.debugger.clone();
 
@@ -488,9 +443,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         _: GetStoreInfoRequest,
         sink: UnarySink<GetStoreInfoResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_get_store_id";
         let debugger = self.debugger.clone();
 
@@ -498,8 +450,11 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .pool
             .spawn(async move {
                 let mut resp = GetStoreInfoResponse::default();
-                match debugger.get_store_id() {
-                    Ok(store_id) => resp.set_store_id(store_id),
+                match debugger.get_store_ident() {
+                    Ok(ident) => {
+                        resp.set_store_id(ident.get_store_id());
+                        resp.set_api_version(ident.get_api_version());
+                    }
                     Err(_) => resp.set_store_id(0),
                 }
                 Ok(resp)
@@ -515,9 +470,6 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
         _: GetClusterInfoRequest,
         sink: UnarySink<GetClusterInfoResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         const TAG: &str = "debug_get_cluster_id";
         let debugger = self.debugger.clone();
 
@@ -525,9 +477,33 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .pool
             .spawn(async move {
                 let mut resp = GetClusterInfoResponse::default();
-                match debugger.get_cluster_id() {
-                    Ok(cluster_id) => resp.set_cluster_id(cluster_id),
+                match debugger.get_store_ident() {
+                    Ok(ident) => resp.set_cluster_id(ident.get_cluster_id()),
                     Err(_) => resp.set_cluster_id(0),
+                }
+                Ok(resp)
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, TAG);
+    }
+
+    fn get_all_regions_in_store(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: GetAllRegionsInStoreRequest,
+        sink: UnarySink<GetAllRegionsInStoreResponse>,
+    ) {
+        const TAG: &str = "debug_get_all_regions_in_store";
+        let debugger = self.debugger.clone();
+
+        let f = self
+            .pool
+            .spawn(async move {
+                let mut resp = GetAllRegionsInStoreResponse::default();
+                match debugger.get_all_regions_in_store() {
+                    Ok(regions) => resp.set_regions(regions),
+                    Err(_) => resp.set_regions(vec![]),
                 }
                 Ok(resp)
             })
@@ -556,7 +532,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let mut r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
@@ -596,7 +572,7 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
 
     async move {
         raft_router
-            .send_command(raft_cmd, cb)
+            .send_command(raft_cmd, cb, RaftCmdExtraOpts::default())
             .map_err(|e| Error::Other(Box::new(e)))?;
 
         let r = rx.map_err(|e| Error::Other(Box::new(e))).await?;
@@ -610,12 +586,10 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
     }
 }
 
-#[cfg(feature = "protobuf-codec")]
 mod region_size_response {
     pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }
 
-#[cfg(feature = "protobuf-codec")]
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
 }

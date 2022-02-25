@@ -1,11 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 use grpcio::WriteFlags;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::RaftMessage;
@@ -119,13 +116,16 @@ fn test_observe_duplicate_cmd() {
     suite.stop();
 }
 
-#[test]
+// TODO: Change cmd is not used currently, so the test is unneeded,
+// uncomment it after change cmd is used again
+// #[test]
+#[allow(dead_code)]
 fn test_delayed_change_cmd() {
     let mut cluster = new_server_cluster(1, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     suite.cluster.must_put(b"k1", b"v1");
     let region = suite.cluster.pd_client.get_region(&[]).unwrap();
     let leader = new_peer(1, 1);
@@ -141,7 +141,10 @@ fn test_delayed_change_cmd() {
         .direction(Direction::Send)
         .msg_type(MessageType::MsgHeartbeat)
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            if send_flag.compare_and_swap(true, false, Ordering::SeqCst) {
+            if send_flag
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 sx.send(msg.clone()).unwrap();
             }
         }));

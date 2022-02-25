@@ -19,6 +19,9 @@ use crate::codec::mysql::decimal::{
 use crate::codec::mysql::duration::{
     Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
 };
+use crate::codec::mysql::enums::{
+    Enum, EnumDatumPayloadChunkEncoder, EnumDecoder, EnumEncoder, EnumRef,
+};
 use crate::codec::mysql::json::{
     Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef,
 };
@@ -70,7 +73,19 @@ impl Column {
         let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
         match eval_type {
             EvalType::Int => {
-                if field_type.is_unsigned() {
+                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
+                    //Because Mysql define Bit max 64 bits: https://dev.mysql.com/doc/refman/8.0/en/bit-type.html
+                    //And TiDB fix Bit's field_type 8 bytes: tidb/parser/types/field_type.go +352 StorageLength()
+                    //So here field_type.as_accessor().flen() max is 64;
+                    //If field_type flen() excceed 64 bits in the future, should fix it here;
+                    if field_type.as_accessor().flen() > 64 {
+                        unimplemented!()
+                    }
+                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
+                    for &row_index in logical_rows {
+                        col.append_bit_datum(&raw_datums[row_index], &start_idx)?;
+                    }
+                } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         col.append_u64_datum(&raw_datums[row_index])?
                     }
@@ -116,7 +131,11 @@ impl Column {
                     col.append_json_datum(&raw_datums[row_index])?
                 }
             }
-            EvalType::Enum => unimplemented!(),
+            EvalType::Enum => {
+                for &row_index in logical_rows {
+                    col.append_enum_datum(&raw_datums[row_index], field_type)?
+                }
+            }
             EvalType::Set => unimplemented!(),
         }
 
@@ -132,7 +151,24 @@ impl Column {
 
         match v {
             VectorValue::Int(vec) => {
-                if field_type.is_unsigned() {
+                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
+                    //See comments "pub fn from_raw_datum()"
+                    if field_type.as_accessor().flen() > 64 {
+                        unimplemented!()
+                    }
+                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
+                    for &row_index in logical_rows {
+                        match vec.get_option_ref(row_index) {
+                            None => {
+                                col.append_null();
+                            }
+                            Some(val) => {
+                                let byte = val.to_be_bytes();
+                                col.append_bytes(&byte[start_idx..])?;
+                            }
+                        }
+                    }
+                } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         match vec.get_option_ref(row_index) {
                             None => {
@@ -188,7 +224,7 @@ impl Column {
                             col.append_null();
                         }
                         Some(val) => {
-                            col.append_decimal(&val)?;
+                            col.append_decimal(val)?;
                         }
                     }
                 }
@@ -200,7 +236,7 @@ impl Column {
                             col.append_null();
                         }
                         Some(val) => {
-                            col.append_bytes(&val)?;
+                            col.append_bytes(val)?;
                         }
                     }
                 }
@@ -239,7 +275,16 @@ impl Column {
                     }
                 }
             }
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(vec) => {
+                for &row_index in logical_rows {
+                    match vec.get_option_ref(row_index) {
+                        None => {
+                            col.append_null();
+                        }
+                        Some(val) => col.append_enum(val)?,
+                    }
+                }
+            }
             VectorValue::Set(_) => unimplemented!(),
         }
         Ok(col)
@@ -263,6 +308,7 @@ impl Column {
                     Datum::I64(self.get_i64(idx)?)
                 }
             }
+            FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
             FieldTypeTp::Float => Datum::F64(f64::from(self.get_f32(idx)?)),
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
@@ -271,7 +317,8 @@ impl Column {
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
-            FieldTypeTp::Enum | FieldTypeTp::Bit | FieldTypeTp::Set => {
+            FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
+            FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -504,6 +551,30 @@ impl Column {
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
         data.read_u64_le().map_err(Error::from)
+    }
+
+    /// Append bit datum to the column.
+    pub fn append_bit_datum(&mut self, src_datum: &[u8], start_idx: &usize) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::UINT_FLAG | datum::VAR_UINT_FLAG => {
+                self.append_bytes(&raw_datum[*start_idx..])?
+            }
+            _ => {
+                return Err(Error::InvalidDataType(format!(
+                    "Unsupported datum flag {} for Bit vector",
+                    flag
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Append a f64 datum to the column.
@@ -785,7 +856,7 @@ impl Column {
 
     /// Append a json datum to the column.
     #[inline]
-    pub fn append_json(&mut self, j: JsonRef) -> Result<()> {
+    pub fn append_json(&mut self, j: JsonRef<'_>) -> Result<()> {
         self.data.write_json(j)?;
         self.finished_append_var();
         Ok(())
@@ -826,6 +897,58 @@ impl Column {
         data.read_json()
     }
 
+    // Append an Enum datum to the column
+    #[inline]
+    pub fn append_enum(&mut self, e: EnumRef<'_>) -> Result<()> {
+        self.data.write_enum_to_chunk(e.value(), e.name())?;
+        self.finished_append_var();
+        Ok(())
+    }
+
+    pub fn append_enum_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::COMPACT_BYTES_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_compact_bytes(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            datum::UINT_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_uint(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            datum::VAR_UINT_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_var_uint(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            _ => {
+                return Err(Error::InvalidDataType(format!(
+                    "Unsupported datum flag {} for Enum vector",
+                    flag
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the enum datum of the row in the column.
+    #[inline]
+    pub fn get_enum(&self, idx: usize) -> Result<Enum> {
+        let start = idx * self.fixed_len;
+        let end = start + self.fixed_len;
+        let mut data = &self.data[start..end];
+        data.read_enum_from_chunk()
+    }
+
     /// Return the total rows in the column.
     #[inline]
     pub fn len(&self) -> usize {
@@ -843,7 +966,7 @@ impl Column {
         let mut col = Column::new(tp, length);
         col.length = length;
         col.null_cnt = buf.read_u32_le()? as usize;
-        let null_length = (col.length + 7) / 8 as usize;
+        let null_length = (col.length + 7) / 8_usize;
         if col.null_cnt > 0 {
             col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {
@@ -974,8 +1097,8 @@ mod tests {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Float.into()];
         let data = vec![
             Datum::Null,
-            Datum::F64(std::f32::MIN.into()),
-            Datum::F64(std::f32::MAX.into()),
+            Datum::F64(f32::MIN.into()),
+            Datum::F64(f32::MAX.into()),
         ];
         test_colum_datum(fields, data);
     }
@@ -996,7 +1119,7 @@ mod tests {
     #[test]
     fn test_column_duration() {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Duration.into()];
-        let duration = Duration::parse(&mut EvalContext::default(), b"10:11:12", 0).unwrap();
+        let duration = Duration::parse(&mut EvalContext::default(), "10:11:12", 0).unwrap();
         let data = vec![Datum::Null, Datum::Dur(duration)];
         test_colum_datum(fields, data);
     }
@@ -1028,6 +1151,7 @@ mod tests {
             FieldTypeTp::TinyBlob.into(),
             FieldTypeTp::MediumBlob.into(),
             FieldTypeTp::LongBlob.into(),
+            FieldTypeTp::Bit.into(),
         ];
         let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
         test_colum_datum(fields, data);

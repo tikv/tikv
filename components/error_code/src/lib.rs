@@ -28,6 +28,7 @@ pub const UNKNOWN: ErrorCode = ErrorCode {
     workaround: "",
 };
 
+pub mod cloud;
 pub mod codec;
 pub mod coprocessor;
 pub mod encryption;
@@ -55,12 +56,6 @@ impl Display for ErrorCode {
 
 pub trait ErrorCodeExt {
     fn error_code(&self) -> ErrorCode;
-}
-
-impl<T> ErrorCodeExt for T {
-    default fn error_code(&self) -> ErrorCode {
-        UNKNOWN
-    }
 }
 
 #[cfg(test)]

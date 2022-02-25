@@ -9,14 +9,15 @@ use encryption::{
     Iv,
 };
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
-    Iterable, KvEngine, Mutable, SstWriter, SstWriterBuilder,
+    CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
+    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
+use tikv_util::{box_try, debug};
 
-use super::Error;
+use super::{Error, IO_LIMITER_CHUNK_SIZE};
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -43,10 +44,9 @@ pub fn build_plain_cf_file<E>(
 where
     E: KvEngine,
 {
-    let mut file = Some(box_try!(OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)));
+    let mut file = Some(box_try!(
+        OpenOptions::new().write(true).create_new(true).open(path)
+    ));
     let mut encrypted_file: Option<EncrypterWriter<File>> = None;
     let mut should_encrypt = false;
 
@@ -85,7 +85,7 @@ where
         let file = if !should_encrypt {
             file.unwrap()
         } else {
-            encrypted_file.unwrap().finalize()
+            encrypted_file.unwrap().finalize().unwrap()
         };
         box_try!(file.sync_all());
     } else {
@@ -113,9 +113,16 @@ where
 {
     let mut sst_writer = create_sst_file_writer::<E>(engine, cf, path)?;
     let mut stats = BuildStatistics::default();
+    let mut remained_quota = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        io_limiter.blocking_consume(entry_len);
+        while entry_len > remained_quota {
+            // It's possible to acquire more than necessary, but let it be.
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        remained_quota -= entry_len;
+
         stats.key_count += 1;
         stats.total_size += entry_len;
         if let Err(e) = sst_writer.put(key, value) {
@@ -157,15 +164,14 @@ where
     };
 
     let mut wb = db.write_batch();
-    let mut write_to_db =
-        |db: &E, batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
-            batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
-            db.write(&wb)?;
-            wb.clear();
-            callback(batch);
-            batch.clear();
-            Ok(())
-        };
+    let mut write_to_db = |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
+        batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, k, v))?;
+        wb.write()?;
+        wb.clear();
+        callback(batch);
+        batch.clear();
+        Ok(())
+    };
 
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
     let mut batch = Vec::with_capacity(1024);
@@ -178,7 +184,7 @@ where
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if !batch.is_empty() {
-                box_try!(write_to_db(db, &mut batch));
+                box_try!(write_to_db(&mut batch));
             }
             return Ok(());
         }
@@ -186,7 +192,7 @@ where
         batch_data_size += key.len() + value.len();
         batch.push((key, value));
         if batch_data_size >= batch_size {
-            box_try!(write_to_db(db, &mut batch));
+            box_try!(write_to_db(&mut batch));
             batch_data_size = 0;
         }
     }
@@ -196,9 +202,7 @@ pub fn apply_sst_cf_file<E>(path: &str, db: &E, cf: &str) -> Result<(), Error>
 where
     E: KvEngine,
 {
-    let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
-    ingest_opt.move_files(true);
-    box_try!(db.ingest_external_file_cf(cf, &ingest_opt, &[path]));
+    box_try!(db.ingest_external_file_cf(cf, &[path]));
     Ok(())
 }
 
@@ -206,11 +210,15 @@ fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::Ss
 where
     E: KvEngine,
 {
-    let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
+    let builder = E::SstWriterBuilder::new()
+        .set_db(engine)
+        .set_cf(cf)
+        .set_compression_type(Some(SstCompressionType::Zstd));
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }
 
+// TODO: Use DataKeyManager::open_file_for_read() instead.
 pub fn get_decrypter_reader(
     file: &str,
     encryption_key_manager: &DataKeyManager,
@@ -234,7 +242,6 @@ pub fn get_decrypter_reader(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::f64::INFINITY;
 
     use super::*;
     use crate::store::snap::tests::*;
@@ -257,21 +264,21 @@ mod tests {
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
-                let db: KvTestEngine = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
+                let db: KvTestEngine = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                 // Collect keys via the key_callback into a collection.
                 let mut applied_keys: HashMap<_, Vec<_>> = HashMap::new();
                 let dir1 = Builder::new()
                     .prefix("test-snap-cf-db-apply")
                     .tempdir()
                     .unwrap();
-                let db1: KvTestEngine = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
+                let db1: KvTestEngine = open_test_empty_db(dir1.path(), db_opt, None).unwrap();
 
                 let snap = db.snapshot();
                 for cf in SNAPSHOT_CFS {
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                     let plain_file_path = snap_cf_dir.path().join("plain");
                     let stats = build_plain_cf_file::<KvTestEngine>(
-                        &plain_file_path.to_str().unwrap(),
+                        plain_file_path.to_str().unwrap(),
                         None,
                         &snap,
                         cf,
@@ -289,15 +296,15 @@ mod tests {
 
                     let detector = TestStaleDetector {};
                     apply_plain_cf_file(
-                        &plain_file_path.to_str().unwrap(),
+                        plain_file_path.to_str().unwrap(),
                         None,
                         &detector,
                         &db1,
                         cf,
                         16,
                         |v| {
-                            v.to_owned()
-                                .into_iter()
+                            v.iter()
+                                .cloned()
                                 .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
                         },
                     )
@@ -332,16 +339,16 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
-        let limiter = Limiter::new(INFINITY);
+        let limiter = Limiter::new(f64::INFINITY);
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
-                let db = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
+                let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
                 let stats = build_sst_cf_file::<KvTestEngine>(
-                    &sst_file_path.to_str().unwrap(),
+                    sst_file_path.to_str().unwrap(),
                     &db,
                     &db.snapshot(),
                     CF_DEFAULT,
@@ -362,8 +369,8 @@ mod tests {
                     .prefix("test-snap-cf-db-apply")
                     .tempdir()
                     .unwrap();
-                let db1: KvTestEngine = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
+                let db1: KvTestEngine = open_test_empty_db(dir1.path(), db_opt, None).unwrap();
+                apply_sst_cf_file(sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
                 assert_eq_db(&db, &db1);
             }
         }

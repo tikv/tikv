@@ -31,7 +31,7 @@
 #
 # - `release` - create a release profile, optimized build
 
-SHELL := /bin/bash
+SHELL := bash
 ENABLE_FEATURES ?=
 
 # Pick an allocator
@@ -39,6 +39,8 @@ ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
 else ifeq ($(MIMALLOC),1)
 ENABLE_FEATURES += mimalloc
+else ifeq ($(SNMALLOC),1)
+ENABLE_FEATURES += snmalloc
 else ifeq ($(SYSTEM_ALLOC),1)
 # no feature needed for system allocator
 else
@@ -63,6 +65,9 @@ endif
 ifeq ($(shell uname -p),aarch64)
 ROCKSDB_SYS_SSE=0
 endif
+ifeq ($(shell uname -p),arm)
+ROCKSDB_SYS_SSE=0
+endif
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
@@ -79,18 +84,17 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
-# Use Prost instead of rust-protobuf to encode and decode protocol buffers.
-ifeq ($(PROST),1)
-ENABLE_FEATURES += prost-codec
-else
-ENABLE_FEATURES += protobuf-codec
-endif
-
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb
 else
 # Caller is responsible for setting up test engine features
+endif
+
+ifneq ($(NO_CLOUD),1)
+ENABLE_FEATURES += cloud-aws
+ENABLE_FEATURES += cloud-gcp
+ENABLE_FEATURES += cloud-azure
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -278,6 +282,8 @@ pre-clippy: unset-override
 	@rustup component add clippy
 
 clippy: pre-clippy
+	@./scripts/check-redact-log
+	@./scripts/check-docker-build
 	@./scripts/clippy-all
 
 pre-audit:
@@ -311,9 +317,9 @@ ctl:
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 # Actually use make to track dependencies! This saves half a second.
-error_code_files := $(shell find components/error_code/ -type f )
+error_code_files := $(shell find $(PROJECT_DIR)/components/error_code/ -type f )
 etc/error_code.toml: $(error_code_files)
-	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
+	cargo run --manifest-path components/error_code/Cargo.toml
 
 error-code: etc/error_code.toml
 
@@ -350,6 +356,6 @@ x-build-dist: export X_CARGO_CMD=build
 x-build-dist: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-dist: export X_CARGO_RELEASE=1
 x-build-dist: export X_CARGO_CONFIG_FILE=${DIST_CONFIG}
-x-build-dist: export X_PACKAGE=cmd
+x-build-dist: export X_PACKAGE=tikv-server tikv-ctl
 x-build-dist:
 	bash scripts/run-cargo.sh

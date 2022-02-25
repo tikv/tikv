@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -8,7 +9,9 @@ use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use protobuf::Message;
 use raft::eraftpb;
+use tikv_util::box_try;
 
 use super::*;
 use crate::store::CasualRouter;
@@ -302,6 +305,7 @@ where
     E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
+    pub cfg: Config,
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -311,12 +315,16 @@ where
     fn default() -> Self {
         CoprocessorHost {
             registry: Default::default(),
+            cfg: Default::default(),
         }
     }
 }
 
 impl<E: KvEngine> CoprocessorHost<E> {
-    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
+    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
+        ch: C,
+        cfg: Config,
+    ) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -326,13 +334,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
             200,
             BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
         );
-        // TableCheckObserver has higher priority than SizeCheckObserver.
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
         registry.register_split_check_observer(
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        CoprocessorHost { registry }
+        CoprocessorHost { registry, cfg }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -380,7 +387,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn post_apply(&self, region: &Region, cmd: &mut Cmd) {
+    pub fn post_apply(&self, region: &Region, cmd: &Cmd) {
         if !cmd.response.has_admin_response() {
             loop_ob!(
                 region,
@@ -389,7 +396,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 cmd,
             );
         } else {
-            let admin = cmd.response.mut_admin_response();
+            let admin = cmd.response.get_admin_response();
             loop_ob!(
                 region,
                 &self.registry.admin_observers,
@@ -425,14 +432,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn new_split_checker_host<'a>(
-        &self,
-        cfg: &'a Config,
+        &'a self,
         region: &Region,
         engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a, E> {
-        let mut host = SplitCheckerHost::new(auto_split, cfg);
+        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
         loop_ob!(
             region,
             &self.registry.split_check_observers,
@@ -489,59 +495,35 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
-        for cmd_ob in &self.registry.cmd_observers {
-            cmd_ob
-                .observer
-                .inner()
-                .on_prepare_for_apply(observe_id, region_id);
+    pub fn on_flush_applied_cmd_batch(
+        &self,
+        max_level: ObserveLevel,
+        mut cmd_batches: Vec<CmdBatch>,
+        engine: &E,
+    ) {
+        // Some observer assert `cmd_batches` is not empty
+        if cmd_batches.is_empty() {
+            return;
+        }
+        for batch in &cmd_batches {
+            for cmd in &batch.cmds {
+                self.post_apply(Region::default_instance(), cmd);
+            }
+        }
+        for observer in &self.registry.cmd_observers {
+            let observer = observer.observer.inner();
+            observer.on_flush_applied_cmd_batch(max_level, &mut cmd_batches, engine);
         }
     }
 
-    pub fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
-        assert!(
-            !self.registry.cmd_observers.is_empty(),
-            "CmdObserver is not registered"
-        );
-        for i in 0..self.registry.cmd_observers.len() - 1 {
-            self.registry
-                .cmd_observers
-                .get(i)
-                .unwrap()
-                .observer
-                .inner()
-                .on_apply_cmd(observe_id, region_id, cmd.clone())
-        }
-        self.registry
-            .cmd_observers
-            .last()
-            .unwrap()
-            .observer
-            .inner()
-            .on_apply_cmd(observe_id, region_id, cmd)
-    }
-
-    pub fn on_flush_apply(&self, engine: E) {
+    pub fn on_applied_current_term(&self, role: StateRole, region: &Region) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
-
-        for i in 0..self.registry.cmd_observers.len() - 1 {
-            self.registry
-                .cmd_observers
-                .get(i)
-                .unwrap()
-                .observer
-                .inner()
-                .on_flush_apply(engine.clone())
+        for observer in &self.registry.cmd_observers {
+            let observer = observer.observer.inner();
+            observer.on_applied_current_term(role, region);
         }
-        self.registry
-            .cmd_observers
-            .last()
-            .unwrap()
-            .observer
-            .inner()
-            .on_flush_apply(engine)
     }
 
     pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
@@ -569,7 +551,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::*;
-    use std::sync::atomic::*;
     use std::sync::Arc;
 
     use engine_panic::PanicEngine;
@@ -577,6 +558,7 @@ mod tests {
     use kvproto::raft_cmdpb::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
     };
+    use tikv_util::box_err;
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -606,7 +588,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &mut AdminResponse) {
+        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminResponse) {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -631,7 +613,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Cmd) {
+        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -674,15 +656,15 @@ mod tests {
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
-        fn on_prepare_for_apply(&self, _: ObserveID, _: u64) {
-            self.called.fetch_add(11, Ordering::SeqCst);
-        }
-        fn on_apply_cmd(&self, _: ObserveID, _: u64, _: Cmd) {
-            self.called.fetch_add(12, Ordering::SeqCst);
-        }
-        fn on_flush_apply(&self, _: PanicEngine) {
+        fn on_flush_applied_cmd_batch(
+            &self,
+            _: ObserveLevel,
+            _: &mut Vec<CmdBatch>,
+            _: &PanicEngine,
+        ) {
             self.called.fetch_add(13, Ordering::SeqCst);
         }
+        fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
     }
 
     macro_rules! assert_all {
@@ -721,45 +703,41 @@ mod tests {
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
         host.pre_propose(&region, &mut admin_req).unwrap();
-        assert_all!(&[&ob.called], &[1]);
+        assert_all!([&ob.called], &[1]);
         host.pre_apply(&region, &admin_req);
-        assert_all!(&[&ob.called], &[3]);
+        assert_all!([&ob.called], &[3]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &mut Cmd::new(0, admin_req, admin_resp));
-        assert_all!(&[&ob.called], &[6]);
+        host.post_apply(&region, &Cmd::new(0, admin_req, admin_resp));
+        assert_all!([&ob.called], &[6]);
 
         let mut query_req = RaftCmdRequest::default();
         query_req.set_requests(vec![Request::default()].into());
         host.pre_propose(&region, &mut query_req).unwrap();
-        assert_all!(&[&ob.called], &[10]);
+        assert_all!([&ob.called], &[10]);
         host.pre_apply(&region, &query_req);
-        assert_all!(&[&ob.called], &[15]);
+        assert_all!([&ob.called], &[15]);
         let query_resp = RaftCmdResponse::default();
-        host.post_apply(&region, &mut Cmd::new(0, query_req, query_resp));
-        assert_all!(&[&ob.called], &[21]);
+        host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
+        assert_all!([&ob.called], &[21]);
 
         host.on_role_change(&region, StateRole::Leader);
-        assert_all!(&[&ob.called], &[28]);
+        assert_all!([&ob.called], &[28]);
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
-        assert_all!(&[&ob.called], &[36]);
+        assert_all!([&ob.called], &[36]);
 
         host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
-        assert_all!(&[&ob.called], &[45]);
+        assert_all!([&ob.called], &[45]);
         host.post_apply_sst_from_snapshot(&region, "default", "");
-        assert_all!(&[&ob.called], &[55]);
-        let observe_id = ObserveID::new();
-        host.prepare_for_apply(observe_id, 0);
-        assert_all!(&[&ob.called], &[66]);
-        host.on_apply_cmd(
-            observe_id,
-            0,
-            Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
-        );
-        assert_all!(&[&ob.called], &[78]);
-        host.on_flush_apply(PanicEngine);
-        assert_all!(&[&ob.called], &[91]);
+        assert_all!([&ob.called], &[55]);
+
+        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let mut cb = CmdBatch::new(&observe_info, 0);
+        cb.push(&observe_info, 0, Cmd::default());
+        host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
+        // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
+        assert_all!([&ob.called], &[74]);
     }
 
     #[test]
@@ -795,13 +773,13 @@ mod tests {
             host.pre_propose(&region, &mut req).unwrap();
 
             // less means more.
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
+            assert_all!([&ob1.called, &ob2.called], &[0, base_score + 1]);
 
             host.pre_apply(&region, &req);
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
+            assert_all!([&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &mut Cmd::new(0, req.clone(), resp.clone()));
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
+            host.post_apply(&region, &Cmd::new(0, req.clone(), resp.clone()));
+            assert_all!([&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
             set_all!(&[&ob2.bypass], false);
             set_all!(&[&ob2.called], 0);
@@ -809,7 +787,7 @@ mod tests {
             host.pre_propose(&region, &mut req).unwrap();
 
             assert_all!(
-                &[&ob1.called, &ob2.called],
+                [&ob1.called, &ob2.called],
                 &[base_score + 1, base_score + 1]
             );
 
@@ -818,7 +796,7 @@ mod tests {
             // when return error, following coprocessor should not be run.
             set_all!(&[&ob2.return_err], true);
             host.pre_propose(&region, &mut req).unwrap_err();
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
+            assert_all!([&ob1.called, &ob2.called], &[0, base_score + 1]);
         }
     }
 }

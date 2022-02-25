@@ -8,7 +8,6 @@ pub trait EncryptionKeyManager: Sync + Send {
     fn new_file(&self, fname: &str) -> Result<FileEncryptionInfo>;
     fn delete_file(&self, fname: &str) -> Result<()>;
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()>;
-    fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()>;
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -28,7 +27,7 @@ impl Default for FileEncryptionInfo {
 }
 
 impl Debug for FileEncryptionInfo {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "FileEncryptionInfo [method={:?}, key=...<{} bytes>, iv=...<{} bytes>]",
@@ -36,6 +35,12 @@ impl Debug for FileEncryptionInfo {
             self.key.len(),
             self.iv.len()
         )
+    }
+}
+
+impl FileEncryptionInfo {
+    pub fn is_empty(&self) -> bool {
+        self.key.is_empty() && self.iv.is_empty()
     }
 }
 

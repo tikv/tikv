@@ -55,6 +55,9 @@ impl SyncMutable for PanicEngine {
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         panic!()
     }
+    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        panic!()
+    }
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         panic!()
     }
@@ -74,10 +77,10 @@ impl Iterable for PanicEngine {
 pub struct PanicEngineIterator;
 
 impl Iterator for PanicEngineIterator {
-    fn seek(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
         panic!()
     }
 

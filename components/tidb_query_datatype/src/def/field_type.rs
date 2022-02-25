@@ -51,7 +51,7 @@ pub enum FieldTypeTp {
 
 impl FieldTypeTp {
     fn from_i32(i: i32) -> Option<FieldTypeTp> {
-        if (FieldTypeTp::Unspecified as i32 >= 0 && i <= FieldTypeTp::Bit as i32)
+        if (i >= FieldTypeTp::Unspecified as i32 && i <= FieldTypeTp::Bit as i32)
             || (i >= FieldTypeTp::JSON as i32 && i <= FieldTypeTp::Geometry as i32)
         {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
@@ -100,6 +100,8 @@ impl From<FieldTypeTp> for ColumnInfo {
 ///
 /// Legacy Utf8Bin collator (was the default) does not pad. For compatibility,
 /// all new collation with padding behavior is negative.
+///
+/// Please refer to [mysql/charset.go](https://github.com/pingcap/parser/blob/master/mysql/charset.go).
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(i32)]
 pub enum Collation {
@@ -109,6 +111,8 @@ pub enum Collation {
     Utf8Mb4GeneralCi = -45,
     Utf8Mb4UnicodeCi = -224,
     Latin1Bin = -47,
+    GbkBin = -87,
+    GbkChineseCi = -28,
 }
 
 impl Collation {
@@ -123,16 +127,48 @@ impl Collation {
             -46 | -83 | -65 => Ok(Collation::Utf8Mb4Bin),
             -47 => Ok(Collation::Latin1Bin),
             -63 | 63 | 47 => Ok(Collation::Binary),
-            -224 | -182 => Ok(Collation::Utf8Mb4UnicodeCi),
+            -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
+            -87 => Ok(Collation::GbkBin),
+            -28 => Ok(Collation::GbkChineseCi),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
+    }
+
+    pub fn is_bin_collation(&self) -> bool {
+        matches!(self, Collation::Utf8Mb4Bin | Collation::Latin1Bin)
     }
 }
 
 impl fmt::Display for Collation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
+    }
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum Charset {
+    UTF8,
+    UTF8Mb4,
+    Latin1,
+    GBK,
+    Binary,
+    Ascii,
+}
+
+impl Charset {
+    pub fn from_name(name: &str) -> Result<Self, DataTypeError> {
+        match name {
+            "utf8mb4" => Ok(Charset::UTF8Mb4),
+            "utf8" => Ok(Charset::UTF8),
+            "latin1" => Ok(Charset::Latin1),
+            "gbk" => Ok(Charset::GBK),
+            "binary" => Ok(Charset::Binary),
+            "ascii" => Ok(Charset::Ascii),
+            _ => Err(DataTypeError::UnsupportedCharset {
+                name: String::from(name),
+            }),
+        }
     }
 }
 
@@ -152,6 +188,9 @@ bitflags! {
 
         /// Internal: Used for telling boolean literal from integer.
         const IS_BOOLEAN = 1 << 19;
+
+        /// Internal: Used for inferring enum eval type.
+        const ENUM_SET_AS_INT = 1 << 21;
     }
 }
 
@@ -272,6 +311,22 @@ pub trait FieldTypeAccessor {
     fn is_unsigned(&self) -> bool {
         self.flag().contains(FieldTypeFlag::UNSIGNED)
     }
+
+    /// Whether the flag contains `FieldTypeFlag::IS_BOOLEAN`
+    #[inline]
+    fn is_bool(&self) -> bool {
+        self.flag().contains(FieldTypeFlag::IS_BOOLEAN)
+    }
+
+    #[inline]
+    fn need_restored_data(&self) -> bool {
+        self.is_non_binary_string_like()
+            && (!self
+                .collation()
+                .map(|col| col.is_bin_collation())
+                .unwrap_or(false)
+                || self.is_varchar_like())
+    }
 }
 
 impl FieldTypeAccessor for FieldType {
@@ -385,5 +440,138 @@ impl FieldTypeAccessor for ColumnInfo {
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
         self as &mut dyn FieldTypeAccessor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::i32;
+
+    fn field_types() -> Vec<FieldTypeTp> {
+        vec![
+            FieldTypeTp::Unspecified,
+            FieldTypeTp::Tiny,
+            FieldTypeTp::Short,
+            FieldTypeTp::Long,
+            FieldTypeTp::Float,
+            FieldTypeTp::Double,
+            FieldTypeTp::Null,
+            FieldTypeTp::Timestamp,
+            FieldTypeTp::LongLong,
+            FieldTypeTp::Int24,
+            FieldTypeTp::Date,
+            FieldTypeTp::Duration,
+            FieldTypeTp::DateTime,
+            FieldTypeTp::Year,
+            FieldTypeTp::NewDate,
+            FieldTypeTp::VarChar,
+            FieldTypeTp::Bit,
+            FieldTypeTp::JSON,
+            FieldTypeTp::NewDecimal,
+            FieldTypeTp::Enum,
+            FieldTypeTp::Set,
+            FieldTypeTp::TinyBlob,
+            FieldTypeTp::MediumBlob,
+            FieldTypeTp::LongBlob,
+            FieldTypeTp::Blob,
+            FieldTypeTp::VarString,
+            FieldTypeTp::String,
+            FieldTypeTp::Geometry,
+        ]
+    }
+
+    #[test]
+    fn test_field_type_from_i32() {
+        for ft in field_types() {
+            assert_eq!(FieldTypeTp::from_i32(ft as i32), Some(ft));
+        }
+
+        let fail_cases = vec![-1, -42, i32::MIN, i32::MAX, 17, 42, 0xf4, 0x100];
+
+        for fail_case in fail_cases {
+            assert_eq!(FieldTypeTp::from_i32(fail_case), None);
+        }
+    }
+
+    #[test]
+    fn test_field_type_from_u8() {
+        for ft in field_types() {
+            assert_eq!(FieldTypeTp::from_u8(ft as i32 as u8), Some(ft));
+        }
+
+        for fail_case in 17u8..=0xf4u8 {
+            assert_eq!(FieldTypeTp::from_u8(fail_case), None);
+        }
+    }
+
+    #[test]
+    fn test_field_type_to_u8() {
+        for ft in field_types() {
+            assert_eq!(FieldTypeTp::from_u8(ft.to_u8().unwrap()), Some(ft));
+        }
+    }
+
+    #[test]
+    fn test_collate_from_i32() {
+        let cases = vec![
+            (33, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-33, Some(Collation::Utf8Mb4GeneralCi)),
+            (45, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-45, Some(Collation::Utf8Mb4GeneralCi)),
+            (46, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-46, Some(Collation::Utf8Mb4Bin)),
+            (63, Some(Collation::Binary)),
+            (-63, Some(Collation::Binary)),
+            (83, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-83, Some(Collation::Utf8Mb4Bin)),
+            (255, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-255, None),
+            (i32::MAX, Some(Collation::Utf8Mb4BinNoPadding)),
+            (i32::MIN, None),
+            (-192, Some(Collation::Utf8Mb4UnicodeCi)),
+            (-224, Some(Collation::Utf8Mb4UnicodeCi)),
+            (-28, Some(Collation::GbkChineseCi)),
+            (-87, Some(Collation::GbkBin)),
+        ];
+
+        for (collate, expected) in cases {
+            let mut ft = tipb::FieldType::default();
+            ft.set_collate(collate);
+
+            let coll = ft.as_accessor().collation();
+
+            if let Some(c) = expected {
+                assert_eq!(coll.unwrap(), c);
+            } else {
+                assert!(coll.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn test_charset_from_str() {
+        let cases = vec![
+            ("gbk", Some(Charset::GBK)),
+            ("utf8mb4", Some(Charset::UTF8Mb4)),
+            ("utf8", Some(Charset::UTF8)),
+            ("binary", Some(Charset::Binary)),
+            ("latin1", Some(Charset::Latin1)),
+            ("ascii", Some(Charset::Ascii)),
+            ("somethingwrong", None),
+        ];
+
+        for (charset, expected) in cases {
+            let mut ft = tipb::FieldType::default();
+            ft.set_charset(charset.to_string());
+
+            let charset = Charset::from_name(ft.get_charset());
+
+            if let Some(c) = expected {
+                assert_eq!(charset.unwrap(), c);
+            } else {
+                assert!(charset.is_err());
+            }
+        }
     }
 }

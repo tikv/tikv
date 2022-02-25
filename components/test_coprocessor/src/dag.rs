@@ -22,8 +22,9 @@ pub struct DAGSelect {
     pub limit: Option<u64>,
     pub aggregate: Vec<Expr>,
     pub group_by: Vec<Expr>,
-    pub key_range: KeyRange,
+    pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
+    pub paging_size: Option<u64>,
 }
 
 impl DAGSelect {
@@ -44,8 +45,9 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: table.get_record_range_all(),
+            key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
@@ -70,16 +72,19 @@ impl DAGSelect {
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: range,
+            key_ranges: vec![range],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
+    #[must_use]
     pub fn limit(mut self, n: u64) -> DAGSelect {
         self.limit = Some(n);
         self
     }
 
+    #[must_use]
     pub fn order_by(mut self, col: &Column, desc: bool) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::default();
@@ -93,10 +98,12 @@ impl DAGSelect {
         self
     }
 
+    #[must_use]
     pub fn count(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Count)
     }
 
+    #[must_use]
     pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::default();
@@ -116,38 +123,47 @@ impl DAGSelect {
         self
     }
 
+    #[must_use]
     pub fn first(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::First)
     }
 
+    #[must_use]
     pub fn sum(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Sum)
     }
 
+    #[must_use]
     pub fn avg(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Avg)
     }
 
+    #[must_use]
     pub fn max(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Max)
     }
 
+    #[must_use]
     pub fn min(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::Min)
     }
 
+    #[must_use]
     pub fn bit_and(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::AggBitAnd)
     }
 
+    #[must_use]
     pub fn bit_or(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::AggBitOr)
     }
 
+    #[must_use]
     pub fn bit_xor(self, col: &Column) -> DAGSelect {
         self.aggr_col(col, ExprType::AggBitXor)
     }
 
+    #[must_use]
     pub fn group_by(mut self, cols: &[&Column]) -> DAGSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
@@ -160,11 +176,13 @@ impl DAGSelect {
         self
     }
 
+    #[must_use]
     pub fn output_offsets(mut self, output_offsets: Option<Vec<u32>>) -> DAGSelect {
         self.output_offsets = output_offsets;
         self
     }
 
+    #[must_use]
     pub fn where_expr(mut self, expr: Expr) -> DAGSelect {
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeSelection);
@@ -172,6 +190,25 @@ impl DAGSelect {
         selection.mut_conditions().push(expr);
         exec.set_selection(selection);
         self.execs.push(exec);
+        self
+    }
+
+    #[must_use]
+    pub fn desc(mut self, desc: bool) -> DAGSelect {
+        self.execs[0].mut_tbl_scan().set_desc(desc);
+        self
+    }
+
+    #[must_use]
+    pub fn paging_size(mut self, paging_size: u64) -> DAGSelect {
+        assert_ne!(paging_size, 0);
+        self.paging_size = Some(paging_size);
+        self
+    }
+
+    #[must_use]
+    pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DAGSelect {
+        self.key_ranges = key_ranges;
         self
     }
 
@@ -232,7 +269,8 @@ impl DAGSelect {
         req.set_start_ts(next_id() as u64);
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        req.set_ranges(vec![self.key_range].into());
+        req.set_ranges(self.key_ranges.into());
+        req.set_paging_size(self.paging_size.unwrap_or(0));
         req.set_context(ctx);
         req
     }

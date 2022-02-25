@@ -39,6 +39,7 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
     fn from(opts: engine_traits::WriteOptions) -> Self {
         let mut r = RawWriteOptions::default();
         r.set_sync(opts.sync());
+        r.set_no_slowdown(opts.no_slowdown());
         RocksWriteOptions(r)
     }
 }
@@ -70,8 +71,10 @@ fn build_read_opts(iter_opts: engine_traits::IterOptions) -> RawReadOptions {
     }
 
     if iter_opts.hint_min_ts().is_some() || iter_opts.hint_max_ts().is_some() {
-        let ts_filter = TsFilter::new(iter_opts.hint_min_ts(), iter_opts.hint_max_ts());
-        opts.set_table_filter(Box::new(ts_filter))
+        opts.set_table_filter(TsFilter::new(
+            iter_opts.hint_min_ts(),
+            iter_opts.hint_max_ts(),
+        ))
     }
 
     let (lower, upper) = iter_opts.build_bounds();

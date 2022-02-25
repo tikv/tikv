@@ -23,7 +23,7 @@ pub struct ChunkedVecJson {
 
 impl ChunkedVecJson {
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<JsonRef> {
+    pub fn get(&self, idx: usize) -> Option<JsonRef<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
             let json_type = JsonType::try_from(self.data[self.var_offset[idx]]).unwrap();
@@ -117,9 +117,9 @@ impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a ChunkedVecJson {
     }
 }
 
-impl Into<ChunkedVecJson> for Vec<Option<Json>> {
-    fn into(self) -> ChunkedVecJson {
-        ChunkedVecJson::from_vec(self)
+impl From<Vec<Option<Json>>> for ChunkedVecJson {
+    fn from(v: Vec<Option<Json>>) -> ChunkedVecJson {
+        ChunkedVecJson::from_vec(v)
     }
 }
 
@@ -146,10 +146,7 @@ mod tests {
             None,
         ];
         assert_eq!(ChunkedVecJson::from_slice(test_json).to_vec(), test_json);
-        assert_eq!(
-            ChunkedVecJson::from_slice(&test_json.to_vec()).to_vec(),
-            test_json
-        );
+        assert_eq!(ChunkedVecJson::from_slice(test_json).to_vec(), test_json);
     }
 
     #[test]

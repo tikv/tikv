@@ -84,30 +84,34 @@ impl Table {
     /// Create a `KeyRange` which select all records in current table.
     pub fn get_record_range_all(&self) -> KeyRange {
         let mut range = KeyRange::default();
-        range.set_start(table::encode_row_key(self.id, std::i64::MIN));
-        range.set_end(table::encode_row_key(self.id, std::i64::MAX));
+        range.set_start(table::encode_row_key(self.id, i64::MIN));
+        range.set_end(table::encode_row_key(self.id, i64::MAX));
+        range
+    }
+
+    /// Create a `KeyRange` which select records in the range. The end_handle_id is included.
+    pub fn get_record_range(&self, start_handle_id: i64, end_handle_id: i64) -> KeyRange {
+        let mut range = KeyRange::default();
+        range.set_start(table::encode_row_key(self.id, start_handle_id));
+        let mut end_key = table::encode_row_key(self.id, end_handle_id);
+        tidb_query_common::util::convert_to_prefix_next(&mut end_key);
+        range.set_end(end_key);
         range
     }
 
     /// Create a `KeyRange` which select one row in current table.
     pub fn get_record_range_one(&self, handle_id: i64) -> KeyRange {
-        let start_key = table::encode_row_key(self.id, handle_id);
-        let mut end_key = start_key.clone();
-        tidb_query_common::util::convert_to_prefix_next(&mut end_key);
-        let mut range = KeyRange::default();
-        range.set_start(start_key);
-        range.set_end(end_key);
-        range
+        self.get_record_range(handle_id, handle_id)
     }
 
     /// Create a `KeyRange` which select all index records of a specified index in current table.
     pub fn get_index_range_all(&self, idx: i64) -> KeyRange {
         let mut range = KeyRange::default();
         let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(::std::i64::MIN).unwrap();
+        buf.encode_i64(i64::MIN).unwrap();
         range.set_start(table::encode_index_seek_key(self.id, idx, &buf));
         buf.clear();
-        buf.encode_i64(::std::i64::MAX).unwrap();
+        buf.encode_i64(i64::MAX).unwrap();
         range.set_end(table::encode_index_seek_key(self.id, idx, &buf));
         range
     }
@@ -134,6 +138,7 @@ impl TableBuilder {
         }
     }
 
+    #[must_use]
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
         use std::cmp::Ordering::*;
 
@@ -189,5 +194,11 @@ impl TableBuilder {
             column_index_by_name,
             idxs: idx,
         }
+    }
+}
+
+impl Default for TableBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

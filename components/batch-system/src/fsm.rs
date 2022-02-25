@@ -3,6 +3,7 @@
 use crate::mailbox::BasicMailbox;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{ptr, usize};
 
 // The FSM is notified.
@@ -11,6 +12,12 @@ const NOTIFYSTATE_NOTIFIED: usize = 0;
 const NOTIFYSTATE_IDLE: usize = 1;
 // The FSM is expected to be dropped.
 const NOTIFYSTATE_DROP: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Priority {
+    Low,
+    Normal,
+}
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -44,27 +51,37 @@ pub trait Fsm {
     {
         None
     }
+
+    fn get_priority(&self) -> Priority {
+        Priority::Normal
+    }
 }
 
 pub struct FsmState<N> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
+    state_cnt: Arc<AtomicUsize>,
 }
 
 impl<N: Fsm> FsmState<N> {
-    pub fn new(data: Box<N>) -> FsmState<N> {
+    pub fn new(data: Box<N>, state_cnt: Arc<AtomicUsize>) -> FsmState<N> {
+        state_cnt.fetch_add(1, Ordering::Relaxed);
         FsmState {
             status: AtomicUsize::new(NOTIFYSTATE_IDLE),
             data: AtomicPtr::new(Box::into_raw(data)),
+            state_cnt,
         }
     }
 
     /// Take the fsm if it's IDLE.
     pub fn take_fsm(&self) -> Option<Box<N>> {
-        let previous_state =
-            self.status
-                .compare_and_swap(NOTIFYSTATE_IDLE, NOTIFYSTATE_NOTIFIED, Ordering::AcqRel);
-        if previous_state != NOTIFYSTATE_IDLE {
+        let res = self.status.compare_exchange(
+            NOTIFYSTATE_IDLE,
+            NOTIFYSTATE_NOTIFIED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        if res.is_err() {
             return None;
         }
 
@@ -102,20 +119,21 @@ impl<N: Fsm> FsmState<N> {
         let previous = self.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
-            previous_status = self.status.compare_and_swap(
+            let res = self.status.compare_exchange(
                 NOTIFYSTATE_NOTIFIED,
                 NOTIFYSTATE_IDLE,
                 Ordering::AcqRel,
+                Ordering::Acquire,
             );
-            match previous_status {
-                NOTIFYSTATE_NOTIFIED => return,
-                NOTIFYSTATE_DROP => {
+            previous_status = match res {
+                Ok(_) => return,
+                Err(NOTIFYSTATE_DROP) => {
                     let ptr = self.data.swap(ptr::null_mut(), Ordering::AcqRel);
                     unsafe { Box::from_raw(ptr) };
                     return;
                 }
-                _ => {}
-            }
+                Err(s) => s,
+            };
         }
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }
@@ -143,5 +161,6 @@ impl<N> Drop for FsmState<N> {
         if !ptr.is_null() {
             unsafe { Box::from_raw(ptr) };
         }
+        self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }
 }

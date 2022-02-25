@@ -6,6 +6,7 @@ use std::mem;
 use crate::storage::{kv::PerfStatisticsDelta, FlowStatsReporter, Statistics};
 use collections::HashMap;
 use kvproto::metapb;
+use kvproto::pdpb::QueryKind;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
 
@@ -17,8 +18,12 @@ make_auto_flush_static_metric! {
     pub label_enum ReqTag {
         select,
         index,
+        // For AnalyzeType::{TypeColumn,TypeMixed}.
         analyze_table,
+        // For AnalyzeType::{TypeIndex,TypeCommonHandle}.
         analyze_index,
+        // For AnalyzeType::TypeFullSampling.
+        analyze_full_sampling,
         checksum_table,
         checksum_index,
         test,
@@ -47,6 +52,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
     }
 
     pub label_enum WaitType {
@@ -106,6 +112,11 @@ make_auto_flush_static_metric! {
         decrypt_data_nanos,
     }
 
+    pub label_enum MemLockCheckResult {
+        unlocked,
+        locked,
+    }
+
     pub struct CoprReqHistogram: LocalHistogram {
         "req" => ReqTag,
     }
@@ -129,6 +140,10 @@ make_auto_flush_static_metric! {
         "req" => ReqTag,
         "cf" => CF,
         "tag" => ScanKind,
+    }
+
+    pub struct MemLockCheckHistogramVec: LocalHistogram {
+        "result" => MemLockCheckResult,
     }
 }
 
@@ -224,6 +239,16 @@ lazy_static! {
         "The number of tasks waiting for the semaphore"
     )
     .unwrap();
+    pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_coprocessor_mem_lock_check_duration_seconds",
+            "Duration of memory lock checking for coprocessor",
+            &["result"],
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+        )
+        .unwrap();
+    pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
+        auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
 }
 
 make_static_metric! {
@@ -258,13 +283,13 @@ macro_rules! tls_flush_perf_stats {
         COPR_ROCKSDB_PERF_COUNTER_STATIC
             .get($tag)
             .$stat
-            .inc_by($local_stats.0.$stat as i64);
+            .inc_by($local_stats.0.$stat as u64);
     };
 }
 
-impl Into<CF> for GcKeysCF {
-    fn into(self) -> CF {
-        match self {
+impl From<GcKeysCF> for CF {
+    fn from(cf: GcKeysCF) -> CF {
+        match cf {
             GcKeysCF::default => CF::default,
             GcKeysCF::lock => CF::lock,
             GcKeysCF::write => CF::write,
@@ -272,9 +297,9 @@ impl Into<CF> for GcKeysCF {
     }
 }
 
-impl Into<ScanKind> for GcKeysDetail {
-    fn into(self) -> ScanKind {
-        match self {
+impl From<GcKeysDetail> for ScanKind {
+    fn from(detail: GcKeysDetail) -> ScanKind {
+        match detail {
             GcKeysDetail::processed_keys => ScanKind::processed_keys,
             GcKeysDetail::get => ScanKind::get,
             GcKeysDetail::next => ScanKind::next,
@@ -286,6 +311,7 @@ impl Into<ScanKind> for GcKeysDetail {
             GcKeysDetail::prev_tombstone => ScanKind::prev_tombstone,
             GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
             GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
+            GcKeysDetail::ttl_tombstone => ScanKind::ttl_tombstone,
         }
     }
 }
@@ -302,7 +328,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                         .get(req_tag)
                         .get((*cf).into())
                         .get((*tag).into())
-                        .inc_by(*count as i64);
+                        .inc_by(*count as u64);
                 }
             }
         }
@@ -388,7 +414,7 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-pub fn tls_collect_qps(
+pub fn tls_collect_query(
     region_id: u64,
     peer: &metapb::Peer,
     start_key: &[u8],
@@ -398,7 +424,8 @@ pub fn tls_collect_qps(
     TLS_COP_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         let key_range = build_key_range(start_key, end_key, reverse_scan);
-        m.local_read_stats.add_qps(region_id, peer, key_range);
+        m.local_read_stats
+            .add_query_num(region_id, peer, key_range, QueryKind::Coprocessor);
     });
 }
 

@@ -10,7 +10,7 @@ use txn_types::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
-fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_batched(
@@ -32,7 +32,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Ben
     );
 }
 
-fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_batched(
@@ -45,7 +45,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
                 .map(|(k, v)| {
                     (
                         Context::default(),
-                        vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
+                        vec![Mutation::make_put(Key::from_raw(k), v.clone())],
                         k.clone(),
                     )
                 })
@@ -61,7 +61,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
     );
 }
 
-fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     b.iter_batched(
@@ -73,7 +73,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
                 store
                     .prewrite(
                         Context::default(),
-                        vec![Mutation::Put((Key::from_raw(&k), v.clone()))],
+                        vec![Mutation::make_put(Key::from_raw(k), v.clone())],
                         k.clone(),
                         1,
                     )
@@ -95,11 +95,19 @@ pub fn bench_storage<E: Engine, F: EngineFactory<E>>(
     c: &mut Criterion,
     configs: &[BenchConfig<F>],
 ) {
-    c.bench_function_over_inputs(
-        "storage_async_prewrite",
-        storage_prewrite,
-        configs.to_owned(),
-    );
-    c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.to_owned());
-    c.bench_function_over_inputs("storage_async_raw_get", storage_raw_get, configs.to_owned());
+    let mut group = c.benchmark_group("storage");
+    for config in configs {
+        group.bench_with_input(
+            format!("async_prewrite/{:?}", config),
+            config,
+            storage_prewrite,
+        );
+        group.bench_with_input(format!("async_commit/{:?}", config), config, storage_commit);
+        group.bench_with_input(
+            format!("async_raw_get/{:?}", config),
+            config,
+            storage_raw_get,
+        );
+    }
+    group.finish();
 }

@@ -1,16 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use keys::data_end_key;
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::coprocessor::{RegionInfo, RegionInfoAccessor};
+use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
 use raftstore::store::util::{find_peer, new_peer};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
-use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
@@ -21,7 +19,10 @@ fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     let mut res = Vec::new();
     for (end_key, id) in region_ranges {
         let RegionInfo { ref region, role } = regions[&id];
-        assert_eq!(end_key, data_end_key(region.get_end_key()));
+        assert_eq!(
+            end_key,
+            RangeKey::from_end_key(region.get_end_key().to_vec())
+        );
         assert_eq!(id, region.get_id());
         res.push((region.clone(), role));
     }
@@ -87,7 +88,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
 
     // Merge from left to right
     pd_client.must_merge(split_regions[1].0.get_id(), split_regions[2].0.get_id());
-    let merge_regions = dump(&c);
+    let merge_regions = dump(c);
     check_region_ranges(
         &merge_regions,
         &[
@@ -100,7 +101,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
 
     // Merge from right to left
     pd_client.must_merge(merge_regions[2].0.get_id(), merge_regions[1].0.get_id());
-    let mut merge_regions_2 = dump(&c);
+    let mut merge_regions_2 = dump(c);
     check_region_ranges(
         &merge_regions_2,
         &[(&b""[..], &b"k1"[..]), (b"k1", b"k4"), (b"k4", b"")],
@@ -120,7 +121,11 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
     assert!(find_peer(&region2, 2).is_some());
 
     // Change leader
-    pd_client.transfer_leader(region2.get_id(), find_peer(&region2, 2).unwrap().clone());
+    pd_client.transfer_leader(
+        region2.get_id(),
+        find_peer(&region2, 2).unwrap().clone(),
+        vec![],
+    );
     let mut region3 = Region::default();
     let mut role3 = StateRole::default();
     // Wait for transfer leader finish
@@ -168,13 +173,12 @@ fn test_node_cluster_region_info_accessor() {
 
     // Create a RegionInfoAccessor on node 1
     let (tx, rx) = channel();
-    let worker = Worker::new("test");
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
-                let c = RegionInfoAccessor::new(host, &worker);
+                let c = RegionInfoAccessor::new(host);
                 tx.send(c).unwrap();
             }
         }));

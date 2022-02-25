@@ -48,11 +48,19 @@ pub struct IntervalRange {
 }
 
 impl std::fmt::Debug for IntervalRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
-        write!(f, "{}", hex::encode_upper(self.lower_inclusive.as_slice()))?;
+        write!(
+            f,
+            "{}",
+            &log_wrappers::Value::key(self.lower_inclusive.as_slice())
+        )?;
         write!(f, ", ")?;
-        write!(f, "{}", hex::encode_upper(self.upper_exclusive.as_slice()))?;
+        write!(
+            f,
+            "{}",
+            &log_wrappers::Value::key(self.upper_exclusive.as_slice())
+        )?;
         write!(f, ")")
     }
 }
@@ -83,8 +91,8 @@ impl<'a, 'b> From<(&'a str, &'b str)> for IntervalRange {
 pub struct PointRange(pub Vec<u8>);
 
 impl std::fmt::Debug for PointRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", hex::encode_upper(self.0.as_slice()))
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &log_wrappers::Value::key(self.0.as_slice()))
     }
 }
 

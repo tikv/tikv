@@ -32,6 +32,7 @@ impl<'a, E: Engine> Insert<'a, E> {
         }
     }
 
+    #[must_use]
     pub fn set(mut self, col: &Column, value: Datum) -> Self {
         assert!(self.table.column_by_id(col.id).is_some());
         self.values.insert(col.id, value);
@@ -52,8 +53,7 @@ impl<'a, E: Engine> Insert<'a, E> {
         let ids: Vec<_> = self.values.keys().cloned().collect();
         let values: Vec<_> = self.values.values().cloned().collect();
         let value = table::encode_row(&mut EvalContext::default(), values, &ids).unwrap();
-        let mut kvs = vec![];
-        kvs.push((key, value));
+        let mut kvs = vec![(key, value)];
         for (&id, idxs) in &self.table.idxs {
             let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
             v.push(handle.clone());
@@ -89,8 +89,7 @@ impl<'a, E: Engine> Delete<'a, E> {
             .zip(row)
             .collect();
         let key = table::encode_row_key(self.table.id, id);
-        let mut keys = vec![];
-        keys.push(key);
+        let mut keys = vec![key];
         for (&idx_id, idx_cols) in &self.table.idxs {
             let mut v: Vec<_> = idx_cols.iter().map(|id| values[id].clone()).collect();
             v.push(Datum::I64(id));
@@ -116,6 +115,12 @@ impl Store<RocksEngine> {
     }
 }
 
+impl Default for Store<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E: Engine> Store<E> {
     pub fn from_engine(engine: E) -> Self {
         Self {
@@ -124,6 +129,10 @@ impl<E: Engine> Store<E> {
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
+    }
+
+    pub fn current_ts(&self) -> TimeStamp {
+        self.current_ts
     }
 
     pub fn begin(&mut self) {
@@ -136,7 +145,7 @@ impl<E: Engine> Store<E> {
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
-            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
+            .map(|(k, v)| Mutation::make_put(Key::from_raw(&k), v))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
@@ -150,7 +159,7 @@ impl<E: Engine> Store<E> {
         let pk = keys[0].clone();
         let mutations = keys
             .drain(..)
-            .map(|k| Mutation::Delete(Key::from_raw(&k)))
+            .map(|k| Mutation::make_delete(Key::from_raw(&k)))
             .collect();
         self.store
             .prewrite(ctx, mutations, pk, self.current_ts)
@@ -209,6 +218,7 @@ impl<E: Engine> Store<E> {
             self.last_committed_ts,
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         )

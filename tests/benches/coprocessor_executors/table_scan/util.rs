@@ -47,6 +47,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
             black_box(vec![]),
             black_box(false),
             black_box(false),
+            black_box(vec![]),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,

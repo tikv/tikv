@@ -7,6 +7,9 @@ extern crate slog;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+pub mod hex;
+pub use crate::hex::*;
+
 use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
 use std::{
     fmt,
@@ -98,8 +101,8 @@ impl<'a> Value<'a> {
         Value(key)
     }
 
-    pub fn value(value: &'a [u8]) -> Self {
-        Value(value)
+    pub fn value(v: &'a [u8]) -> Self {
+        Value(v)
     }
 }
 
@@ -114,26 +117,26 @@ impl<'a> slog::Value for Value<'a> {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
             serializer.emit_arguments(key, &format_args!("?"))
         } else {
-            serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
+            serializer.emit_arguments(key, &format_args!("{}", crate::hex_encode_upper(self.0)))
         }
     }
 }
 
 impl<'a> fmt::Display for Value<'a> {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
             // Print placeholder instead of the value itself.
             write!(f, "?")
         } else {
-            write!(f, "{}", hex::encode_upper(self.0))
+            write!(f, "{}", crate::hex_encode_upper(self.0))
         }
     }
 }
 
 impl<'a> fmt::Debug for Value<'a> {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }

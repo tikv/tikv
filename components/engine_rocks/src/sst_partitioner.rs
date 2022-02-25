@@ -15,7 +15,7 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
 
     fn create_partitioner(
         &self,
-        context: &rocksdb::SstPartitionerContext,
+        context: &rocksdb::SstPartitionerContext<'_>,
     ) -> Option<Self::Partitioner> {
         let ctx = engine_traits::SstPartitionerContext {
             is_full_compaction: context.is_full_compaction,
@@ -32,8 +32,8 @@ pub struct RocksSstPartitioner<P: engine_traits::SstPartitioner>(P);
 
 impl<P: engine_traits::SstPartitioner> rocksdb::SstPartitioner for RocksSstPartitioner<P> {
     fn should_partition(
-        &self,
-        request: &rocksdb::SstPartitionerRequest,
+        &mut self,
+        request: &rocksdb::SstPartitionerRequest<'_>,
     ) -> rocksdb::SstPartitionerResult {
         let req = engine_traits::SstPartitionerRequest {
             prev_user_key: request.prev_user_key,
@@ -50,7 +50,7 @@ impl<P: engine_traits::SstPartitioner> rocksdb::SstPartitioner for RocksSstParti
         }
     }
 
-    fn can_do_trivial_move(&self, smallest_key: &[u8], largest_key: &[u8]) -> bool {
+    fn can_do_trivial_move(&mut self, smallest_key: &[u8], largest_key: &[u8]) -> bool {
         self.0.can_do_trivial_move(smallest_key, largest_key)
     }
 }

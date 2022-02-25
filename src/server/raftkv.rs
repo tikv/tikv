@@ -1,81 +1,72 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result;
-use std::{borrow::Cow, io::Error as IoError};
+// #[PerformanceCriticalPath]
 use std::{
+    borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
+    io::Error as IoError,
     mem,
+    num::NonZeroU64,
+    result,
+    sync::Arc,
+    time::Duration,
 };
-use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+
+use raft::eraftpb::{self, MessageType};
+use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
-use engine_traits::CF_DEFAULT;
-use engine_traits::{CfName, KvEngine};
-use engine_traits::{
-    IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
-    TablePropertiesExt,
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK};
+use kvproto::{
+    errorpb,
+    kvrpcpb::Context,
+    metapb,
+    raft_cmdpb::{
+        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+        RaftRequestHeader, Request, Response,
+    },
 };
-use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
+use raftstore::{
+    coprocessor::{
+        dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
+    },
+    errors::Error as RaftServerError,
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
+        RegionSnapshot, WriteResponse,
+    },
 };
-use kvproto::{errorpb, metapb};
-use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
+use tikv_util::codec::number::NumberEncoder;
+use tikv_util::time::Instant;
+use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
-    ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
-    SnapContext, Snapshot as EngineSnapshot, WriteData,
+    write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback,
+    Modify, SnapContext, WriteData,
 };
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::{self, kv};
-use raftstore::{
-    coprocessor::dispatcher::BoxReadIndexObserver,
-    store::{RegionIterator, RegionSnapshot},
-};
-use raftstore::{
-    coprocessor::Coprocessor,
-    router::{LocalReadRouter, RaftStoreRouter},
-};
-use raftstore::{
-    coprocessor::CoprocessorHost,
-    store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
-};
-use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
-use tikv_util::time::Instant;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        RequestFailed(e: errorpb::Error) {
-            from()
-            display("{}", e.get_message())
-        }
-        Io(e: IoError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{}", .0.get_message())]
+    RequestFailed(errorpb::Error),
 
-        Server(e: RaftServerError) {
-            from()
-            cause(e)
-            display("{}", e)
-        }
-        InvalidResponse(reason: String) {
-            display("{}", reason)
-        }
-        InvalidRequest(reason: String) {
-            display("{}", reason)
-        }
-        Timeout(d: Duration) {
-            display("timeout after {:?}", d)
-        }
-    }
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("{0}")]
+    Server(#[from] RaftServerError),
+
+    #[error("{0}")]
+    InvalidResponse(String),
+
+    #[error("{0}")]
+    InvalidRequest(String),
+
+    #[error("timeout after {0:?}")]
+    Timeout(Duration),
 }
 
 fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
@@ -96,10 +87,9 @@ fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-        KvError(box KvErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => {
+        KvError(box KvErrorInner::KeyIsLocked(_)) => {
             RequestStatusKind::err_leader_memory_lock_check
         }
-        KvError(box KvErrorInner::Mvcc(_)) => RequestStatusKind::err_other,
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
@@ -118,81 +108,69 @@ impl From<Error> for kv::Error {
     }
 }
 
-impl From<RaftServerError> for KvError {
-    fn from(e: RaftServerError) -> KvError {
-        KvError(Box::new(KvErrorInner::Request(e.into())))
-    }
-}
-
-/// `RaftKv` is a storage engine base on `RaftStore`.
-#[derive(Clone)]
-pub struct RaftKv<S>
+pub enum CmdRes<S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    S: Snapshot,
 {
-    router: S,
-    engine: RocksEngine,
-    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
-}
-
-pub enum CmdRes {
     Resp(Vec<Response>),
-    Snap(RegionSnapshot<RocksSnapshot>),
+    Snap(RegionSnapshot<S>),
 }
 
-fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
-    let mut cb_ctx = CbContext::new();
-    cb_ctx.term = Some(resp.get_header().get_current_term());
-    cb_ctx
-}
-
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse, req_cnt: usize) -> Result<()> {
+fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
-    }
-    if req_cnt != resp.get_responses().len() {
-        return Err(Error::InvalidResponse(format!(
-            "responses count {} is not equal to requests count {}",
-            resp.get_responses().len(),
-            req_cnt
-        )));
     }
 
     Ok(())
 }
 
-fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
-    let cb_ctx = new_ctx(&write_resp.response);
-    if let Err(e) = check_raft_cmd_response(&mut write_resp.response, req_cnt) {
-        return (cb_ctx, Err(e));
+fn on_write_result<S>(mut write_resp: WriteResponse) -> Result<CmdRes<S>>
+where
+    S: Snapshot,
+{
+    if let Err(e) = check_raft_cmd_response(&mut write_resp.response) {
+        return Err(e);
     }
     let resps = write_resp.response.take_responses();
-    (cb_ctx, Ok(CmdRes::Resp(resps.into())))
+    Ok(CmdRes::Resp(resps.into()))
 }
 
-fn on_read_result(
-    mut read_resp: ReadResponse<RocksSnapshot>,
-    req_cnt: usize,
-) -> (CbContext, Result<CmdRes>) {
-    let mut cb_ctx = new_ctx(&read_resp.response);
-    cb_ctx.txn_extra_op = read_resp.txn_extra_op;
-    if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
-        return (cb_ctx, Err(e));
+fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> Result<CmdRes<S>>
+where
+    S: Snapshot,
+{
+    if let Err(e) = check_raft_cmd_response(&mut read_resp.response) {
+        return Err(e);
     }
     let resps = read_resp.response.take_responses();
-    if let Some(snapshot) = read_resp.snapshot {
-        (cb_ctx, Ok(CmdRes::Snap(snapshot)))
+    if let Some(mut snapshot) = read_resp.snapshot {
+        snapshot.term = NonZeroU64::new(read_resp.response.get_header().get_current_term());
+        snapshot.txn_extra_op = read_resp.txn_extra_op;
+        Ok(CmdRes::Snap(snapshot))
     } else {
-        (cb_ctx, Ok(CmdRes::Resp(resps.into())))
+        Ok(CmdRes::Resp(resps.into()))
     }
 }
 
-impl<S> RaftKv<S>
+/// `RaftKv` is a storage engine base on `RaftStore`.
+#[derive(Clone)]
+pub struct RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+{
+    router: S,
+    engine: E,
+    txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+}
+
+impl<E, S> RaftKv<E, S>
+where
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: RocksEngine) -> RaftKv<S> {
+    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
@@ -221,9 +199,17 @@ where
         &self,
         ctx: SnapContext<'_>,
         req: Request,
-        cb: Callback<CmdRes>,
+        cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
-        let header = self.new_request_header(&*ctx.pb_ctx);
+        let mut header = self.new_request_header(&*ctx.pb_ctx);
+        if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
+            let mut data = [0u8; 8];
+            (&mut data[..])
+                .encode_u64(ctx.start_ts.into_inner())
+                .unwrap();
+            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            header.set_flag_data(data.into());
+        }
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
@@ -232,8 +218,7 @@ where
                 ctx.read_id,
                 cmd,
                 StoreCallback::Read(Box::new(move |resp| {
-                    let (cb_ctx, res) = on_read_result(resp, 1);
-                    cb((cb_ctx, res.map_err(Error::into)));
+                    cb(on_read_result(resp).map_err(Error::into));
                 })),
             )
             .map_err(From::from)
@@ -242,8 +227,8 @@ where
     fn exec_write_requests(
         &self,
         ctx: &Context,
-        reqs: Vec<Request>,
-        write_cb: Callback<CmdRes>,
+        batch: WriteData,
+        write_cb: Callback<CmdRes<E::Snapshot>>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -256,11 +241,7 @@ where
                     let region_id = ctx.get_region_id();
                     rid.and_then(|rid| {
                         let rid: u64 = rid.parse().unwrap();
-                        if rid == region_id {
-                            None
-                        } else {
-                            Some(())
-                        }
+                        if rid == region_id { None } else { Some(()) }
                     })
                     .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
                 });
@@ -269,25 +250,37 @@ where
             raftkv_early_error_report_fp()?;
         }
 
-        let len = reqs.len();
-        let header = self.new_request_header(ctx);
+        let reqs = modifies_to_requests(batch.modifies);
+        let txn_extra = batch.extra;
+        let mut header = self.new_request_header(ctx);
+        if txn_extra.one_pc {
+            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+        }
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
-        self.router
-            .send_command(
-                cmd,
-                StoreCallback::write_ext(
-                    Box::new(move |resp| {
-                        let (cb_ctx, res) = on_write_result(resp, len);
-                        write_cb((cb_ctx, res.map_err(Error::into)));
-                    }),
-                    proposed_cb,
-                    committed_cb,
-                ),
-            )
-            .map_err(From::from)
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
+
+        let cb = StoreCallback::write_ext(
+            Box::new(move |resp| {
+                write_cb(on_write_result(resp).map_err(Error::into));
+            }),
+            proposed_cb,
+            committed_cb,
+        );
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        self.router.send_command(cmd, cb, extra_opts)?;
+
+        Ok(())
     }
 }
 
@@ -298,32 +291,35 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     ))
 }
 
-impl<S> Display for RaftKv<S>
+impl<E, S> Display for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S> Debug for RaftKv<S>
+impl<E, S> Debug for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
-impl<S> Engine for RaftKv<S>
+impl<E, S> Engine for RaftKv<E, S>
 where
-    S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
+    E: KvEngine,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    type Snap = RegionSnapshot<RocksSnapshot>;
-    type Local = RocksEngine;
+    type Snap = RegionSnapshot<E::Snapshot>;
+    type Local = E;
 
-    fn kv_engine(&self) -> RocksEngine {
+    fn kv_engine(&self) -> E {
         self.engine.clone()
     }
 
@@ -333,7 +329,7 @@ where
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<RocksSnapshot>::from_raw(
+        Ok(RegionSnapshot::<E::Snapshot>::from_raw(
             self.engine.clone(),
             region,
         ))
@@ -347,6 +343,10 @@ where
                     *key = Key::from_encoded(bytes);
                 }
                 Modify::Put(_, ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
@@ -383,71 +383,28 @@ where
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(batch.modifies.len());
-        for m in batch.modifies {
-            let mut req = Request::default();
-            match m {
-                Modify::Delete(cf, k) => {
-                    let mut delete = DeleteRequest::default();
-                    delete.set_key(k.into_encoded());
-                    if cf != CF_DEFAULT {
-                        delete.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Delete);
-                    req.set_delete(delete);
-                }
-                Modify::Put(cf, k, v) => {
-                    let mut put = PutRequest::default();
-                    put.set_key(k.into_encoded());
-                    put.set_value(v);
-                    if cf != CF_DEFAULT {
-                        put.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Put);
-                    req.set_put(put);
-                }
-                Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                    let mut delete_range = DeleteRangeRequest::default();
-                    delete_range.set_cf(cf.to_string());
-                    delete_range.set_start_key(start_key.into_encoded());
-                    delete_range.set_end_key(end_key.into_encoded());
-                    delete_range.set_notify_only(notify_only);
-                    req.set_cmd_type(CmdType::DeleteRange);
-                    req.set_delete_range(delete_range);
-                }
-            }
-            reqs.push(req);
-        }
-
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !batch.extra.is_empty() {
-                tx.schedule(batch.extra);
-            }
-        }
-
         self.exec_write_requests(
             ctx,
-            reqs,
-            Box::new(move |(cb_ctx, res)| match res {
+            batch,
+            Box::new(move |res| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .write
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     fail_point!("raftkv_async_write_finish");
-                    write_cb((cb_ctx, Ok(())))
+                    write_cb(Ok(()))
                 }
-                Ok(CmdRes::Snap(_)) => write_cb((
-                    cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
-                )),
+                Ok(CmdRes::Snap(_)) => {
+                    write_cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
+                }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    write_cb((cb_ctx, Err(e)))
+                    write_cb(Err(e))
                 }
             }),
             proposed_cb,
@@ -467,7 +424,7 @@ where
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.start_ts.is_zero() {
+        if !ctx.key_ranges.is_empty() && !ctx.start_ts.is_zero() {
             req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
             req.mut_read_index()
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
@@ -477,7 +434,7 @@ where
         self.exec_snapshot(
             ctx,
             req,
-            Box::new(move |(cb_ctx, res)| match res {
+            Box::new(move |res| match res {
                 Ok(CmdRes::Resp(mut r)) => {
                     let e = if r
                         .get(0)
@@ -485,23 +442,23 @@ where
                         .unwrap_or(false)
                     {
                         let locked = r[0].take_read_index().take_locked();
-                        MvccError::from(MvccErrorInner::KeyIsLocked(locked)).into()
+                        KvError::from(KvErrorInner::KeyIsLocked(locked))
                     } else {
                         invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
                     };
-                    cb((cb_ctx, Err(e)))
+                    cb(Err(e))
                 }
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
-                        .observe(begin_instant.elapsed_secs());
+                        .observe(begin_instant.saturating_elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    cb((cb_ctx, Ok(s)))
+                    cb(Ok(s))
                 }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
+                    cb(Err(e))
                 }
             }),
         )
@@ -516,19 +473,6 @@ where
         self.router.release_snapshot_cache();
     }
 
-    fn get_properties_cf(
-        &self,
-        cf: CfName,
-        start: &[u8],
-        end: &[u8],
-    ) -> kv::Result<RocksTablePropertiesCollection> {
-        let start = keys::data_key(start);
-        let end = keys::data_end_key(end);
-        self.engine
-            .get_range_properties_cf(cf, &start, &end)
-            .map_err(|e| e.into())
-    }
-
     fn get_mvcc_properties_cf(
         &self,
         cf: CfName,
@@ -540,133 +484,6 @@ where
         let end = keys::data_end_key(end);
         self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
-    }
-}
-
-impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
-    type Iter = RegionIterator<S>;
-
-    fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
-            "injected error for get"
-        )));
-        let v = box_try!(self.get_value(key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn get_cf(&self, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
-            "injected error for get_cf"
-        )));
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
-            "injected error for get_cf"
-        )));
-        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
-        fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
-            "injected error for iter"
-        )));
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            RegionSnapshot::iter(self, iter_opt),
-            mode,
-            prefix_seek,
-        ))
-    }
-
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> kv::Result<Cursor<Self::Iter>> {
-        fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
-            "injected error for iter_cf"
-        )));
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
-            mode,
-            prefix_seek,
-        ))
-    }
-
-    #[inline]
-    fn lower_bound(&self) -> Option<&[u8]> {
-        Some(self.get_start_key())
-    }
-
-    #[inline]
-    fn upper_bound(&self) -> Option<&[u8]> {
-        Some(self.get_end_key())
-    }
-
-    #[inline]
-    fn get_data_version(&self) -> Option<u64> {
-        self.get_apply_index().ok()
-    }
-
-    fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_sync_status
-            .as_ref()
-            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
-            .unwrap_or(false)
-    }
-}
-
-impl<S: Snapshot> EngineIterator for RegionIterator<S> {
-    fn next(&mut self) -> kv::Result<bool> {
-        RegionIterator::next(self).map_err(KvError::from)
-    }
-
-    fn prev(&mut self) -> kv::Result<bool> {
-        RegionIterator::prev(self).map_err(KvError::from)
-    }
-
-    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
-        fail_point!("raftkv_iter_seek", |_| Err(box_err!(
-            "injected error for iter_seek"
-        )));
-        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
-    }
-
-    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
-        fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
-            "injected error for iter_seek_for_prev"
-        )));
-        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
-    }
-
-    fn seek_to_first(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_first(self).map_err(KvError::from)
-    }
-
-    fn seek_to_last(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_last(self).map_err(KvError::from)
-    }
-
-    fn valid(&self) -> kv::Result<bool> {
-        RegionIterator::valid(self).map_err(KvError::from)
-    }
-
-    fn validate_key(&self, key: &Key) -> kv::Result<()> {
-        self.should_seekable(key.as_encoded()).map_err(From::from)
-    }
-
-    fn key(&self) -> &[u8] {
-        RegionIterator::key(self)
-    }
-
-    fn value(&self) -> &[u8] {
-        RegionIterator::value(self)
     }
 }
 
@@ -698,6 +515,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         assert_eq!(msg.get_entries().len(), 1);
         let mut rctx = ReadIndexContext::parse(msg.get_entries()[0].get_data()).unwrap();
         if let Some(mut request) = rctx.request.take() {
+            let begin_instant = Instant::now();
+
             let start_ts = request.get_start_ts().into();
             self.concurrency_manager.update_max_ts(start_ts);
             for range in request.mut_key_ranges().iter_mut() {
@@ -724,11 +543,66 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 );
                 if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
                     rctx.locked = Some(lock);
+                    REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .locked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                } else {
+                    REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                        .unlocked
+                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
-            msg.mut_entries()[0].set_data(rctx.to_bytes());
+            msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
+}
+
+pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
+    let mut reqs = Vec::with_capacity(modifies.len());
+    for m in modifies {
+        let mut req = Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                put.set_cf(CF_LOCK.to_string());
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        }
+        reqs.push(req);
+    }
+    reqs
 }
 
 #[cfg(test)]
@@ -745,7 +619,7 @@ mod tests {
         m.set_msg_type(MessageType::MsgReadIndex);
         let uuid = Uuid::new_v4();
         let mut e = eraftpb::Entry::default();
-        e.set_data(uuid.as_bytes().to_vec());
+        e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
         checker.on_step(&mut m);

@@ -30,7 +30,7 @@ pub struct ChunkedVecSet {
 
 impl ChunkedVecSet {
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<SetRef> {
+    pub fn get(&self, idx: usize) -> Option<SetRef<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
             Some(SetRef::new(&self.data, self.value[idx]))
@@ -135,9 +135,9 @@ impl<'a> ChunkRef<'a, SetRef<'a>> for &'a ChunkedVecSet {
     }
 }
 
-impl Into<ChunkedVecSet> for Vec<Option<Set>> {
-    fn into(self) -> ChunkedVecSet {
-        ChunkedVecSet::from_vec(self)
+impl From<Vec<Option<Set>>> for ChunkedVecSet {
+    fn from(v: Vec<Option<Set>>) -> ChunkedVecSet {
+        ChunkedVecSet::from_vec(v)
     }
 }
 

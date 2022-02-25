@@ -19,8 +19,11 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     must_kv_pessimistic_lock(client, ctx.clone(), key1.clone(), ts);
     must_kv_pessimistic_lock(client, ctx.clone(), key2.clone(), ts + 1);
 
-    let (client_clone, ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
+    let (client_clone, mut ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
     let handle = thread::spawn(move || {
+        // `resource_group_tag` is set to check if the wait chain reported by the deadlock error
+        // carries the correct information.
+        ctx_clone.set_resource_group_tag(b"tag1".to_vec());
         let resp = kv_pessimistic_lock(
             &client_clone,
             ctx_clone,
@@ -34,14 +37,27 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     });
     // Sleep to make sure txn(ts+1) is waiting for txn(ts)
     thread::sleep(Duration::from_millis(100));
-    let resp = kv_pessimistic_lock(client, ctx.clone(), vec![key2.clone()], ts, ts, false);
+    let mut ctx2 = ctx.clone();
+    ctx2.set_resource_group_tag(b"tag2".to_vec());
+    let resp = kv_pessimistic_lock(client, ctx2, vec![key2.clone()], ts, ts, false);
     handle.join().unwrap();
 
     // Clean up
-    must_kv_pessimistic_rollback(client, ctx.clone(), key1, ts);
-    must_kv_pessimistic_rollback(client, ctx, key2, ts + 1);
+    must_kv_pessimistic_rollback(client, ctx.clone(), key1.clone(), ts);
+    must_kv_pessimistic_rollback(client, ctx, key2.clone(), ts + 1);
 
     assert_eq!(resp.errors.len(), 1);
+    if resp.errors[0].has_deadlock() {
+        let wait_chain = resp.errors[0].get_deadlock().get_wait_chain();
+        assert_eq!(wait_chain[0].get_txn(), ts + 1);
+        assert_eq!(wait_chain[0].get_wait_for_txn(), ts);
+        assert_eq!(wait_chain[0].get_key(), key1.as_slice());
+        assert_eq!(wait_chain[0].get_resource_group_tag(), b"tag1");
+        assert_eq!(wait_chain[1].get_txn(), ts);
+        assert_eq!(wait_chain[1].get_wait_for_txn(), ts + 1);
+        assert_eq!(wait_chain[1].get_key(), key2.as_slice());
+        assert_eq!(wait_chain[1].get_resource_group_tag(), b"tag2");
+    }
     resp.errors[0].has_deadlock()
 }
 
@@ -170,6 +186,22 @@ fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k", 10);
     cluster
+}
+
+#[test]
+fn test_detect_deadlock_basic() {
+    let mut cluster = new_cluster_for_deadlock_test(3);
+    must_split_region(&mut cluster, b"k", b"k");
+    must_transfer_leader(&mut cluster, b"", 1);
+    must_transfer_leader(&mut cluster, b"k", 1);
+    deadlock_detector_leader_must_be(&mut cluster, 1);
+
+    // Detect on leader
+    must_detect_deadlock(&mut cluster, b"k1", 10);
+    // Detect on follower
+    must_transfer_leader(&mut cluster, b"", 2);
+    deadlock_detector_leader_must_be(&mut cluster, 2);
+    must_detect_deadlock(&mut cluster, b"k1", 20);
 }
 
 #[test]

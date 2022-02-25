@@ -127,7 +127,7 @@ where
         match value {
             None => Ok(()),
             Some(value) => {
-                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.sum.add_assign(ctx, &value.into_owned_value())?;
                 self.count += 1;
                 Ok(())
             }
@@ -199,7 +199,7 @@ where
     }
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -274,7 +274,7 @@ where
     }
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -352,7 +352,7 @@ mod tests {
 
         let x: ChunkedVecSized<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
 
-        update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
+        update_vector!(state, &mut ctx, x, &[0, 1, 2]).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
@@ -371,30 +371,25 @@ mod tests {
         let function = AggrFnAvgForEnum::new();
         let mut state = function.create_state();
 
-        // AVG will returns <Int, Decimal>
+        // AVG will return <Int, Decimal>
         let mut result = [
             VectorValue::with_capacity(0, EvalType::Int),
             VectorValue::with_capacity(0, EvalType::Decimal),
         ];
 
-        let mut buf = BufferVec::new();
-        buf.push("我好强啊");
-        buf.push("我太强啦");
-        let buf = Arc::new(buf);
-
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_int_vec(), &[Some(0)]);
         assert_eq!(result[1].to_decimal_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
 
-        update!(state, &mut ctx, Option::<EnumRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<EnumRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -431,7 +426,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
 
-        update!(state, &mut ctx, Option::<SetRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<SetRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -480,7 +475,7 @@ mod tests {
         let exp_result = exp_result.vector_value().unwrap();
         let slice = exp_result.as_ref().to_decimal_vec();
         let slice: ChunkedVecSized<Decimal> = slice.into();
-        update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
+        update_vector!(state, &mut ctx, slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
             VectorValue::with_capacity(0, EvalType::Int),

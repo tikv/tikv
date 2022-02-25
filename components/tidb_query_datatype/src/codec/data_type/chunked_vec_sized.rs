@@ -99,9 +99,9 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSize
     }
 }
 
-impl<T: Clone> Into<ChunkedVecSized<T>> for Vec<Option<T>> {
-    fn into(self) -> ChunkedVecSized<T> {
-        ChunkedVecSized::from_vec(self)
+impl<T: Clone> From<Vec<Option<T>>> for ChunkedVecSized<T> {
+    fn from(v: Vec<Option<T>>) -> ChunkedVecSized<T> {
+        ChunkedVecSized::from_vec(v)
     }
 }
 
@@ -138,8 +138,8 @@ mod tests {
             Real::new(1.01001).ok(),
             Real::new(-0.01).ok(),
             Real::new(1.02001).ok(),
-            Real::new(std::f64::MIN).ok(),
-            Real::new(std::f64::MAX).ok(),
+            Real::new(f64::MIN).ok(),
+            Real::new(f64::MAX).ok(),
             None,
         ];
         assert_eq!(
@@ -152,10 +152,10 @@ mod tests {
         );
         let mut ctx = EvalContext::default();
         let test_duration: &[Option<Duration>] = &[
-            Duration::parse(&mut ctx, b"17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"17:51:04.78", 0).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 0).ok(),
             None,
         ];
         assert_eq!(
@@ -213,8 +213,8 @@ mod tests {
             Real::new(1.01001).ok(),
             Real::new(-0.01).ok(),
             Real::new(1.02001).ok(),
-            Real::new(std::f64::MIN).ok(),
-            Real::new(std::f64::MAX).ok(),
+            Real::new(f64::MIN).ok(),
+            Real::new(f64::MAX).ok(),
             None,
         ];
         let mut chunked_vec = ChunkedVecSized::<Real>::from_slice(test_real);
@@ -234,8 +234,8 @@ mod tests {
         let test_real_1: &[Option<Real>] = &[None, Real::new(1.01001).ok(), Real::new(-0.01).ok()];
         let test_real_2: &[Option<Real>] = &[
             Real::new(1.02001).ok(),
-            Real::new(std::f64::MIN).ok(),
-            Real::new(std::f64::MAX).ok(),
+            Real::new(f64::MIN).ok(),
+            Real::new(f64::MAX).ok(),
             None,
         ];
         let mut chunked_vec_1 = ChunkedVecSized::<Real>::from_slice(test_real_1);
@@ -250,8 +250,8 @@ mod tests {
                 Real::new(1.01001).ok(),
                 Real::new(-0.01).ok(),
                 Real::new(1.02001).ok(),
-                Real::new(std::f64::MIN).ok(),
-                Real::new(std::f64::MAX).ok(),
+                Real::new(f64::MIN).ok(),
+                Real::new(f64::MAX).ok(),
                 None,
             ]
         );

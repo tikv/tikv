@@ -16,6 +16,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_datatype::match_template_evaltype;
 use tidb_query_expr::RpnStackNode;
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
@@ -367,7 +368,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             .drain(keys_range)
             .zip((0..group_by_exps_len).cycle())
         {
-            match_template_evaluable! {
+            match_template_evaltype! {
                 TT, match key {
                     ScalarValue::TT(key) => {
                         group_by_columns[group_index].mut_decoded().push(key);
@@ -403,7 +404,7 @@ fn update_current_states(
         for (state, aggr_fn_input) in current_states.iter_mut().zip(aggr_expr_results) {
             match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_scalar_value_ref() {
                             ScalarValueRef::TT(scalar_value) => {
                                 update_repeat!(
@@ -419,7 +420,7 @@ fn update_current_states(
                 RpnStackNode::Vector { value, .. } => {
                     let physical_vec = value.as_ref();
                     let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
                                 update_vector!(

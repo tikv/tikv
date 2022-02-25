@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cell::RefCell;
 
 use num::traits::Pow;
@@ -9,28 +11,8 @@ use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
 
-const I64_TEN_POWS: [i64; 19] = [
-    1,
-    10,
-    100,
-    1_000,
-    10_000,
-    100_000,
-    1_000_000,
-    10_000_000,
-    100_000_000,
-    1_000_000_000,
-    10_000_000_000,
-    100_000_000_000,
-    1_000_000_000_000,
-    10_000_000_000_000,
-    100_000_000_000_000,
-    1_000_000_000_000_000,
-    10_000_000_000_000_000,
-    100_000_000_000_000_000,
-    1_000_000_000_000_000_000,
-];
-
+const MAX_I64_DIGIT_LENGTH: i64 = 19;
+const MAX_U64_DIGIT_LENGTH: i64 = 20;
 const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 #[rpn_fn]
@@ -42,7 +24,7 @@ pub fn pi() -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 pub fn crc32(arg: BytesRef) -> Result<Option<Int>> {
-    Ok(Some(i64::from(file_system::calc_crc32_bytes(&arg))))
+    Ok(Some(i64::from(file_system::calc_crc32_bytes(arg))))
 }
 
 #[inline]
@@ -239,7 +221,7 @@ impl Floor for FloorIntToInt {
 #[rpn_fn]
 #[inline]
 fn abs_int(arg: &Int) -> Result<Option<Int>> {
-    match (*arg).checked_abs() {
+    match arg.checked_abs() {
         None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
         Some(arg_abs) => Ok(Some(arg_abs)),
     }
@@ -442,15 +424,13 @@ pub fn round_dec(arg: &Decimal) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
-    let x = arg0;
-    let d = arg1;
-    Ok(Some(if *d >= 0 {
-        *x
-    } else if *d <= -(I64_TEN_POWS.len() as i64) {
+    Ok(Some(if *arg1 >= 0 {
+        *arg0
+    } else if *arg1 <= -MAX_I64_DIGIT_LENGTH {
         0
     } else {
-        let shift = I64_TEN_POWS[-*d as usize];
-        *x / shift * shift
+        let shift = 10i64.pow(-*arg1 as u32);
+        *arg0 / shift * shift
     }))
 }
 
@@ -462,23 +442,39 @@ pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 
 #[inline]
 #[rpn_fn]
-pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let x = arg0;
-    let d = arg1;
-    let d = if *d >= 0 {
-        (*d).min(i64::from(i32::max_value())) as i32
+pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
+    Ok(Some(if *arg1 >= 0 {
+        *arg0
+    } else if *arg1 <= -MAX_U64_DIGIT_LENGTH {
+        0
     } else {
-        (*d).max(i64::from(i32::min_value())) as i32
+        let shift = 10u64.pow(-*arg1 as u32);
+        ((*arg0 as u64) / shift * shift) as Int
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
+    Ok(Some(*arg0))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
+    let d = if *arg1 >= 0 {
+        (*arg1).min(i64::from(i32::max_value())) as i32
+    } else {
+        (*arg1).max(i64::from(i32::min_value())) as i32
     };
-    Ok(Some(truncate_real(*x, d)))
+    Ok(Some(truncate_real(*arg0, d)))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let x = arg0;
     let d = (*arg1 as u64).min(i32::max_value() as u64) as i32;
-    Ok(Some(truncate_real(*x, d)))
+    Ok(Some(truncate_real(*arg0, d)))
 }
 
 fn truncate_real(x: Real, d: i32) -> Real {
@@ -491,6 +487,28 @@ fn truncate_real(x: Real, d: i32) -> Real {
     } else {
         Real::from(tmp.trunc() / shift)
     }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_decimal_with_int(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let d = if *arg1 >= 0 {
+        *arg1.min(&127) as i8
+    } else {
+        *arg1.max(&-128) as i8
+    };
+
+    let res: codec::Result<Decimal> = arg0.round(d, RoundMode::Truncate).into();
+    Ok(Some(res?))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_decimal_with_uint(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let d = (*arg1 as u64).min(127) as i8;
+
+    let res: codec::Result<Decimal> = arg0.round(d, RoundMode::Truncate).into();
+    Ok(Some(res?))
 }
 
 #[inline]
@@ -589,7 +607,7 @@ impl IntWithSign {
 
 fn is_valid_base(base: IntWithSign) -> bool {
     let IntWithSign(num, _) = base;
-    num >= 2 && num <= 36
+    (2..=36).contains(&num)
 }
 
 fn extract_num_str(s: &str, from_base: IntWithSign) -> Option<(String, bool)> {
@@ -801,19 +819,14 @@ mod tests {
     fn test_abs_int() {
         let test_cases = vec![
             (ScalarFuncSig::AbsInt, -3, Some(3), false),
-            (
-                ScalarFuncSig::AbsInt,
-                std::i64::MAX,
-                Some(std::i64::MAX),
-                false,
-            ),
+            (ScalarFuncSig::AbsInt, i64::MAX, Some(i64::MAX), false),
             (
                 ScalarFuncSig::AbsUInt,
-                std::u64::MAX as i64,
-                Some(std::u64::MAX as i64),
+                u64::MAX as i64,
+                Some(u64::MAX as i64),
                 false,
             ),
-            (ScalarFuncSig::AbsInt, std::i64::MIN, Some(0), true),
+            (ScalarFuncSig::AbsInt, i64::MIN, Some(0), true),
         ];
 
         for (sig, arg, expect_output, is_err) in test_cases {
@@ -867,8 +880,8 @@ mod tests {
             (4.0, 3.1),
             (-3.0, -3.45),
             (0.0, -0.1),
-            (std::f64::MAX, std::f64::MAX),
-            (std::f64::MIN, std::f64::MIN),
+            (f64::MAX, f64::MAX),
+            (f64::MIN, f64::MIN),
         ];
         for (expected, input) in cases {
             let arg = Real::from(input);
@@ -903,8 +916,8 @@ mod tests {
     #[test]
     fn test_ceil_int_to_dec() {
         let cases = vec![
-            ("-9223372036854775808", std::i64::MIN),
-            ("9223372036854775807", std::i64::MAX),
+            ("-9223372036854775808", i64::MIN),
+            ("9223372036854775807", i64::MAX),
             ("123", 123),
             ("-123", -123),
         ];
@@ -924,7 +937,7 @@ mod tests {
             (124, "123.456"),
             (2, "1.23"),
             (-1, "-1.23"),
-            (std::i64::MIN, "-9223372036854775808"),
+            (i64::MIN, "-9223372036854775808"),
         ];
         for (expected, input) in cases {
             let arg = input.parse::<Decimal>().ok();
@@ -945,8 +958,8 @@ mod tests {
             (666, 666),
             (-3, -3),
             (-233, -233),
-            (std::i64::MAX, std::i64::MAX),
-            (std::i64::MIN, std::i64::MIN),
+            (i64::MAX, i64::MAX),
+            (i64::MIN, i64::MIN),
         ];
 
         for (expected, input) in cases {
@@ -984,8 +997,8 @@ mod tests {
             (-3.45, -4.0),
             (-0.1, -1.0),
             (16140901064495871255.0, 16140901064495871255.0),
-            (std::f64::MAX, std::f64::MAX),
-            (std::f64::MIN, std::f64::MIN),
+            (f64::MAX, f64::MAX),
+            (f64::MIN, f64::MIN),
         ];
         for (input, expected) in cases {
             let arg = Real::from(input);
@@ -1003,8 +1016,8 @@ mod tests {
     #[test]
     fn test_floor_int_to_dec() {
         let tests_cases = vec![
-            (std::i64::MIN, "-9223372036854775808"),
-            (std::i64::MAX, "9223372036854775807"),
+            (i64::MIN, "-9223372036854775808"),
+            (i64::MAX, "9223372036854775807"),
             (123, "123"),
             (-123, "-123"),
         ];
@@ -1048,7 +1061,7 @@ mod tests {
             ("123.456", 123),
             ("1.23", 1),
             ("-1.23", -2),
-            ("-9223372036854775808", std::i64::MIN),
+            ("-9223372036854775808", i64::MIN),
         ];
         for (input, expected) in cases {
             let arg = input.parse::<Decimal>().ok();
@@ -1069,8 +1082,8 @@ mod tests {
             (1, 1),
             (2, 2),
             (-3, -3),
-            (std::i64::MAX, std::i64::MAX),
-            (std::i64::MIN, std::i64::MIN),
+            (i64::MAX, i64::MAX),
+            (i64::MIN, i64::MIN),
         ];
 
         for (expected, input) in cases {
@@ -1109,7 +1122,7 @@ mod tests {
             (Some(64f64), Some(Real::from(8f64))),
             (Some(2f64), Some(Real::from(std::f64::consts::SQRT_2))),
             (Some(-16f64), None),
-            (Some(std::f64::NAN), None),
+            (Some(f64::NAN), None),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1130,11 +1143,8 @@ mod tests {
                 Some(-360_f64),
                 Some(Real::from(-2_f64 * std::f64::consts::PI)),
             ),
-            (Some(std::f64::NAN), None),
-            (
-                Some(std::f64::INFINITY),
-                Some(Real::from(std::f64::INFINITY)),
-            ),
+            (Some(f64::NAN), None),
+            (Some(f64::INFINITY), Some(Real::from(f64::INFINITY))),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1175,7 +1185,7 @@ mod tests {
     fn test_degrees() {
         let tests_cases = vec![
             (None, None),
-            (Some(std::f64::NAN), None),
+            (Some(f64::NAN), None),
             (Some(0f64), Some(Real::from(0f64))),
             (Some(1f64), Some(Real::from(57.29577951308232_f64))),
             (Some(std::f64::consts::PI), Some(Real::from(180.0_f64))),
@@ -1209,7 +1219,7 @@ mod tests {
                 .push_param(Some(Real::from(input)))
                 .evaluate(ScalarFuncSig::Sin)
                 .unwrap();
-            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+            assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
     }
 
@@ -1226,7 +1236,7 @@ mod tests {
                 .push_param(Some(Real::from(input)))
                 .evaluate(ScalarFuncSig::Cos)
                 .unwrap();
-            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+            assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
     }
 
@@ -1247,7 +1257,7 @@ mod tests {
                 .push_param(Some(Real::from(input)))
                 .evaluate(ScalarFuncSig::Tan)
                 .unwrap();
-            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+            assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
     }
 
@@ -1274,12 +1284,14 @@ mod tests {
                 .push_param(Some(Real::from(input)))
                 .evaluate(ScalarFuncSig::Cot)
                 .unwrap();
-            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+            assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
-        assert!(RpnFnScalarEvaluator::new()
-            .push_param(Some(Real::from(0.0_f64)))
-            .evaluate::<Real>(ScalarFuncSig::Cot)
-            .is_err());
+        assert!(
+            RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(0.0_f64)))
+                .evaluate::<Real>(ScalarFuncSig::Cot)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1301,7 +1313,7 @@ mod tests {
                 Some(Real::from(16.0f64)),
             ),
             (
-                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(f64::INFINITY)),
                 Some(Real::from(0.0f64)),
                 Some(Real::from(1.0f64)),
             ),
@@ -1321,18 +1333,20 @@ mod tests {
 
         let invalid_cases = vec![
             (
-                Some(Real::from(std::f64::INFINITY)),
-                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(f64::INFINITY)),
+                Some(Real::from(f64::INFINITY)),
             ),
             (Some(Real::from(0.0f64)), Some(Real::from(-9999999.0f64))),
         ];
 
         for (lhs, rhs) in invalid_cases {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(lhs)
-                .push_param(rhs)
-                .evaluate::<Real>(ScalarFuncSig::Pow)
-                .is_err());
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(lhs)
+                    .push_param(rhs)
+                    .evaluate::<Real>(ScalarFuncSig::Pow)
+                    .is_err()
+            );
         }
     }
 
@@ -1408,10 +1422,10 @@ mod tests {
                 .push_param(input)
                 .evaluate(ScalarFuncSig::Asin)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect.unwrap()).abs() < f64::EPSILON);
         }
         let invalid_test_cases = vec![
-            (Some(Real::from(std::f64::INFINITY)), None),
+            (Some(Real::from(f64::INFINITY)), None),
             (Some(Real::from(2.0_f64)), None),
             (Some(Real::from(-2.0_f64)), None),
         ];
@@ -1446,10 +1460,10 @@ mod tests {
                 .push_param(input)
                 .evaluate(ScalarFuncSig::Acos)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect.unwrap()).abs() < f64::EPSILON);
         }
         let invalid_test_cases = vec![
-            (Some(Real::from(std::f64::INFINITY)), None),
+            (Some(Real::from(f64::INFINITY)), None),
             (Some(Real::from(2.0_f64)), None),
             (Some(Real::from(-2.0_f64)), None),
         ];
@@ -1474,11 +1488,11 @@ mod tests {
                 Some(Real::from(-std::f64::consts::PI / 4.0_f64)),
             ),
             (
-                Some(Real::from(std::f64::MAX)),
+                Some(Real::from(f64::MAX)),
                 Some(Real::from(std::f64::consts::PI / 2.0_f64)),
             ),
             (
-                Some(Real::from(std::f64::MIN)),
+                Some(Real::from(f64::MIN)),
                 Some(Real::from(-std::f64::consts::PI / 2.0_f64)),
             ),
             (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
@@ -1488,7 +1502,7 @@ mod tests {
                 .push_param(input)
                 .evaluate(ScalarFuncSig::Atan1Arg)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect.unwrap()).abs() < f64::EPSILON);
         }
     }
 
@@ -1527,7 +1541,7 @@ mod tests {
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::Atan2Args)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect.unwrap()).abs() < f64::EPSILON);
         }
     }
 
@@ -1643,7 +1657,7 @@ mod tests {
     #[test]
     fn test_truncate_int() {
         let tests = vec![
-            (1028 as i64, 0 as i64, false, 1028 as i64),
+            (1028_i64, 0_i64, false, 1028_i64),
             (1028, 5, false, 1028),
             (1028, -2, false, 1000),
             (1028, 309, false, 1028),
@@ -1667,6 +1681,44 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(expected));
+        }
+    }
+
+    #[test]
+    fn test_truncate_uint() {
+        let tests = vec![
+            (
+                18446744073709551615_u64,
+                u64::max_value() as i64,
+                true,
+                18446744073709551615_u64,
+            ),
+            (
+                18446744073709551615_u64,
+                -2,
+                false,
+                18446744073709551600_u64,
+            ),
+            (18446744073709551615_u64, -20, false, 0),
+            (18446744073709551615_u64, 2, false, 18446744073709551615_u64),
+        ];
+        for (lhs, rhs, rhs_is_unsigned, expected) in tests {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(lhs as Int))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Int>(ScalarFuncSig::TruncateUint)
+                .unwrap();
+
+            assert_eq!(output, Some(expected as Int));
         }
     }
 
@@ -1708,6 +1760,133 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_truncate_decimal() {
+        let tests = vec![
+            (
+                Decimal::from_str("-1.23").unwrap(),
+                0,
+                false,
+                Decimal::from_str("-1").unwrap(),
+            ),
+            (
+                Decimal::from_str("-1.23").unwrap(),
+                1,
+                false,
+                Decimal::from_str("-1.2").unwrap(),
+            ),
+            (
+                Decimal::from_str("-11.23").unwrap(),
+                -1,
+                false,
+                Decimal::from_str("-10").unwrap(),
+            ),
+            (
+                Decimal::from_str("1.58").unwrap(),
+                0,
+                false,
+                Decimal::from_str("1").unwrap(),
+            ),
+            (
+                Decimal::from_str("1.58").unwrap(),
+                1,
+                false,
+                Decimal::from_str("1.5").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                -1,
+                false,
+                Decimal::from_str("20").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                -100,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                100,
+                false,
+                Decimal::from_str("23.298").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                200,
+                false,
+                Decimal::from_str("23.298").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                -200,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                u64::max_value() as i64,
+                true,
+                Decimal::from_str("23.298").unwrap(),
+            ),
+            (
+                Decimal::from_str("1.999999999999999999999999999999").unwrap(),
+                31,
+                false,
+                Decimal::from_str("1.999999999999999999999999999999").unwrap(),
+            ),
+            (
+                Decimal::from_str(
+                    "99999999999999999999999999999999999999999999999999999999999999999",
+                )
+                .unwrap(),
+                -66,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Decimal::from_str(
+                    "99999999999999999999999999999999999.999999999999999999999999999999",
+                )
+                .unwrap(),
+                31,
+                false,
+                Decimal::from_str(
+                    "99999999999999999999999999999999999.999999999999999999999999999999",
+                )
+                .unwrap(),
+            ),
+            (
+                Decimal::from_str(
+                    "99999999999999999999999999999999999.999999999999999999999999999999",
+                )
+                .unwrap(),
+                -36,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+        ];
+
+        for (lhs, rhs, rhs_is_unsigned, expected) in tests {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(lhs))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Decimal>(ScalarFuncSig::TruncateDecimal)
+                .unwrap();
+
+            assert_eq!(output, Some(expected));
         }
     }
 

@@ -170,7 +170,7 @@
 //!             let (text, _) = arg.extract(row_index);
 //!             result.push(regex_match_impl(&regex, text)?);
 //!         }
-//!         Ok(Evaluable::into_vector_value(result))
+//!         Ok(Evaluable::cast_chunk_into_vector_value(result))
 //!     }
 //! }
 //! ```
@@ -314,13 +314,13 @@ impl parse::Parse for RpnFnAttr {
                             max_args = Some(lit.base10_parse()?);
                         }
                         "extra_validator" => {
-                            extra_validator = Some((&**right).into_token_stream());
+                            extra_validator = Some(right.into_token_stream());
                         }
                         "metadata_type" => {
-                            metadata_type = Some((&**right).into_token_stream());
+                            metadata_type = Some(right.into_token_stream());
                         }
                         "metadata_mapper" => {
-                            metadata_mapper = Some((&**right).into_token_stream());
+                            metadata_mapper = Some(right.into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -925,11 +925,11 @@ impl VargsRpnFn {
         }
 
         let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
-        let arg_type = Self::get_args_type(&attr, &fn_arg)?;
+        let arg_type = Self::get_args_type(&attr, fn_arg)?;
         let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
         let ret_type = if attr.writer {
-            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+            parse2::<RpnFnSignatureReturnGuardType>(item_fn.sig.output.to_token_stream())
                 .map_err(|_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -938,7 +938,7 @@ impl VargsRpnFn {
                 })?
                 .into_return_type()?
         } else {
-            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+            parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream()).map_err(
                 |_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -966,7 +966,10 @@ impl VargsRpnFn {
     fn get_args_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<VargsRpnFnSignatureParam> {
         let param = parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream())?;
         if attr.nullable && !param.has_option {
-            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`"))
+            Err(Error::new_spanned(
+                fn_arg,
+                "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`",
+            ))
         } else if !attr.nullable && param.has_option {
             Err(Error::new_spanned(
                 fn_arg,
@@ -1128,7 +1131,7 @@ impl VargsRpnFn {
                         for row_index in 0..output_rows {
                             #arg_loop
                         }
-                        Ok(#vec_type::into_vector_value(result))
+                        Ok(#vec_type::cast_chunk_into_vector_value(result))
                     })
                 }
 
@@ -1171,15 +1174,13 @@ impl RawVargsRpnFn {
             ));
         }
 
-        let ret_type = parse2::<RpnFnSignatureReturnType>(
-            (&item_fn.sig.output).into_token_stream(),
-        )
-        .map_err(|_| {
-            Error::new_spanned(
-                &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T>>`",
-            )
-        })?;
+        let ret_type = parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream())
+            .map_err(|_| {
+                Error::new_spanned(
+                    &item_fn.sig.output,
+                    "Expect return type to be like `Result<Option<T>>`",
+                )
+            })?;
         Ok(Self {
             captures: attr.captures,
             max_args: attr.max_args,
@@ -1271,7 +1272,7 @@ impl RawVargsRpnFn {
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
-                        Ok(#vec_type::into_vector_value(result))
+                        Ok(#vec_type::cast_chunk_into_vector_value(result))
                     })
                 }
 
@@ -1306,7 +1307,6 @@ struct NormalRpnFn {
     evaluator_ident: Ident,
     arg_types: Vec<TokenStream>,
     arg_types_anonymous: Vec<TokenStream>,
-    arg_types_no_ref: Vec<TokenStream>,
     ret_type: TypePath,
 }
 
@@ -1314,7 +1314,10 @@ impl NormalRpnFn {
     fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
         let param = parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream())?;
         if attr.nullable && !param.has_option {
-            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`"))
+            Err(Error::new_spanned(
+                fn_arg,
+                "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`",
+            ))
         } else if !attr.nullable && param.has_option {
             Err(Error::new_spanned(
                 fn_arg,
@@ -1328,7 +1331,6 @@ impl NormalRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
-        let mut arg_types_no_ref = Vec::new();
         let take_cnt = item_fn.sig.inputs.len() - attr.captures.len() - attr.writer as usize;
         let fn_args = item_fn
             .sig
@@ -1337,13 +1339,12 @@ impl NormalRpnFn {
             .skip(attr.captures.len())
             .take(take_cnt);
         for fn_arg in fn_args {
-            let arg_type = Self::get_arg_type(&attr, &fn_arg)?;
+            let arg_type = Self::get_arg_type(&attr, fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
-            arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));
         }
         let ret_type = if attr.writer {
-            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+            parse2::<RpnFnSignatureReturnGuardType>(item_fn.sig.output.to_token_stream())
                 .map_err(|_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1352,7 +1353,7 @@ impl NormalRpnFn {
                 })?
                 .into_return_type()?
         } else {
-            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+            parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream()).map_err(
                 |_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1376,7 +1377,6 @@ impl NormalRpnFn {
             evaluator_ident,
             arg_types,
             arg_types_anonymous,
-            arg_types_no_ref,
             ret_type: ret_type.eval_type,
         })
     }
@@ -1569,7 +1569,7 @@ impl NormalRpnFn {
                 for i in 0..output_rows {
                     result.push(None);
                 }
-                return Ok(#vec_type::into_vector_value(result));
+                return Ok(#vec_type::cast_chunk_into_vector_value(result));
             }
 
             if !fastpath {
@@ -1578,7 +1578,7 @@ impl NormalRpnFn {
                     #nonnull_unwrap
                     #chunked_push_3
                 }
-                return Ok(#vec_type::into_vector_value(result));
+                return Ok(#vec_type::cast_chunk_into_vector_value(result));
             }
 
             for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
@@ -1612,7 +1612,7 @@ impl NormalRpnFn {
                     let arg = &self;
                     let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     #final_loop
-                    Ok(#vec_type::into_vector_value(result))
+                    Ok(#vec_type::cast_chunk_into_vector_value(result))
                 }
             }
 
@@ -1625,7 +1625,7 @@ impl NormalRpnFn {
         let mut impl_evaluator_generics = self.item_fn.sig.generics.clone();
         impl_evaluator_generics.params.push(parse_quote! { 'arg_ });
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-        let (impl_eval_generics, _, _) = impl_evaluator_generics.split_for_impl();
+        let (impl_eval_generics, ..) = impl_evaluator_generics.split_for_impl();
 
         let evaluator_ident = &self.evaluator_ident;
         let fn_trait_ident = &self.fn_trait_ident;
@@ -1826,7 +1826,7 @@ mod tests_normal {
                         let (arg1, arg) = arg.extract(row_index);
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_chunk_into_vector_value(result))
                 }
             }
         };
@@ -1992,7 +1992,7 @@ mod tests_normal {
                         let (arg0, arg) = arg.extract(row_index);
                         result.push(foo::<A, B>(arg0)?);
                     }
-                    Ok(B::into_vector_value(result))
+                    Ok(B::cast_chunk_into_vector_value(result))
                 }
             }
         };
@@ -2144,7 +2144,7 @@ mod tests_normal {
                         let (arg2, arg) = arg.extract(row_index);
                         result.push(foo(ctx, arg0, arg1, arg2)?);
                     }
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_chunk_into_vector_value(result))
                 }
             }
         };
@@ -2228,7 +2228,7 @@ mod tests_normal {
                         for i in 0..output_rows {
                             result.push(None);
                         }
-                        return Ok(Decimal::into_vector_value(result));
+                        return Ok(Decimal::cast_chunk_into_vector_value(result));
                     }
                     if !fastpath {
                         for row_index in 0..output_rows {
@@ -2240,7 +2240,7 @@ mod tests_normal {
                             let arg0 = arg0.unwrap();
                             result.push(foo(arg0)?);
                         }
-                        return Ok(Decimal::into_vector_value(result));
+                        return Ok(Decimal::cast_chunk_into_vector_value(result));
                     }
                     for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
                         if !val {
@@ -2252,7 +2252,7 @@ mod tests_normal {
                         result.push(foo(arg0)?);
                     }
 
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_chunk_into_vector_value(result))
                 }
             }
         };

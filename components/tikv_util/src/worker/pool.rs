@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -7,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
+use futures::compat::Stream01CompatExt;
 use futures::future::{self, FutureExt};
 use futures::stream::StreamExt;
 
@@ -113,6 +115,14 @@ impl<T: Display + Send> Scheduler<T> {
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
         }
+        self.schedule_force(task)
+    }
+
+    /// Schedules a task to run.
+    ///
+    /// Different from the `schedule` function, the task will still be scheduled
+    /// if pending task number exceeds capacity.
+    pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
         if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
@@ -197,6 +207,10 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
         self.stop();
         self.worker.stop()
     }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.worker.remote.clone()
+    }
 }
 
 pub struct ReceiverWrapper<T: Display + Send> {
@@ -264,11 +278,13 @@ impl<S: Into<String>> Builder<S> {
     }
 
     /// Pending tasks won't exceed `pending_capacity`.
+    #[must_use]
     pub fn pending_capacity(mut self, pending_capacity: usize) -> Self {
         self.pending_capacity = pending_capacity;
         self
     }
 
+    #[must_use]
     pub fn thread_count(mut self, thread_count: usize) -> Self {
         self.thread_count = thread_count;
         self
@@ -307,6 +323,7 @@ impl Worker {
     pub fn new<S: Into<String>>(name: S) -> Worker {
         Builder::new(name).create()
     }
+
     pub fn start<R: Runnable + 'static, S: Into<String>>(
         &self,
         name: S,
@@ -339,6 +356,20 @@ impl Worker {
         )
     }
 
+    pub fn spawn_interval_task<F>(&self, interval: Duration, mut func: F)
+    where
+        F: FnMut() + Send + 'static,
+    {
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        self.remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                func();
+            }
+        });
+    }
+
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
         let now = Instant::now();
         let f = GLOBAL_TIMER_HANDLE
@@ -354,13 +385,13 @@ impl Worker {
         &self,
         name: S,
     ) -> LazyWorker<T> {
-        let (rx, receiver) = unbounded();
+        let (tx, rx) = unbounded();
         let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
         LazyWorker {
-            receiver: Some(receiver),
+            receiver: Some(rx),
             worker: self.clone(),
             scheduler: Scheduler::new(
-                rx,
+                tx,
                 self.counter.clone(),
                 self.pending_capacity,
                 metrics_pending_task_count.clone(),
@@ -428,6 +459,7 @@ impl Worker {
                     }
                     Msg::Timeout => {
                         handle.inner.on_timeout();
+                        let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
                 }

@@ -1,0 +1,13 @@
+[package]
+name = "online_config"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+online_config_derive = { path = "./online_config_derive" }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_derive = "1.0"
+toml = "0.5"
