@@ -4122,15 +4122,6 @@ mod tests {
             db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
             false
         );
-
-        // Use deprecated item.
-        cfg_controller
-            .update_config("rocksdb.auto_tuned", "true")
-            .unwrap();
-        assert_eq!(
-            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
-            true
-        );
     }
 
     #[test]
