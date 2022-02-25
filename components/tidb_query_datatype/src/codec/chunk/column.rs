@@ -301,7 +301,6 @@ impl Column {
             | FieldTypeTp::Int24
             | FieldTypeTp::Long
             | FieldTypeTp::LongLong
-            | FieldTypeTp::Bit
             | FieldTypeTp::Year => {
                 if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                     Datum::U64(self.get_u64(idx)?)
@@ -309,6 +308,7 @@ impl Column {
                     Datum::I64(self.get_i64(idx)?)
                 }
             }
+            FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
             FieldTypeTp::Float => Datum::F64(f64::from(self.get_f32(idx)?)),
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
@@ -561,10 +561,12 @@ impl Column {
             ));
         }
         let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
         match flag {
             datum::NIL_FLAG => self.append_null(),
-            //"1 +" means skip src_datum[0]; the same as raw_datum = &src_datum[1..];
-            datum::UINT_FLAG => self.append_bytes(&src_datum[(1 + start_idx)..])?,
+            datum::UINT_FLAG | datum::VAR_UINT_FLAG => {
+                self.append_bytes(&raw_datum[*start_idx..])?
+            }
             _ => {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Bit vector",
@@ -1149,6 +1151,7 @@ mod tests {
             FieldTypeTp::TinyBlob.into(),
             FieldTypeTp::MediumBlob.into(),
             FieldTypeTp::LongBlob.into(),
+            FieldTypeTp::Bit.into(),
         ];
         let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
         test_colum_datum(fields, data);
