@@ -19,6 +19,7 @@ pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
@@ -26,7 +27,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
@@ -67,6 +68,91 @@ impl Deref for RegionInfo {
     fn deref(&self) -> &Self::Target {
         &self.region
     }
+}
+
+pub struct BucketStat {
+    pub version: u64,
+    pub keys: Vec<Vec<u8>>,
+    pub stats: metapb::BucketStats,
+    pub region_epoch: metapb::RegionEpoch,
+    pub last_report_time: Instant,
+}
+
+impl Default for BucketStat {
+    fn default() -> Self {
+        Self {
+            last_report_time: Instant::now(),
+            ..Default::default()
+        }
+    }
+}
+
+impl BucketStat {
+    pub fn merge(&mut self, buckets: &metapb::Buckets) {
+        use std::cmp::Ordering;
+
+        match self.version.cmp(&buckets.version) {
+            Ordering::Equal => {
+                for i in 0..(self.keys.len() - 1) {
+                    self.stats.read_bytes[i] += buckets.get_stats().read_bytes[i];
+                    self.stats.write_bytes[i] += buckets.get_stats().write_bytes[i];
+
+                    self.stats.read_qps[i] += buckets.get_stats().read_qps[i];
+                    self.stats.write_qps[i] += buckets.get_stats().write_qps[i];
+
+                    self.stats.read_keys[i] += buckets.get_stats().read_keys[i];
+                    self.stats.write_keys[i] += buckets.get_stats().write_keys[i];
+                }
+            }
+            // Statistics from a old version, merge incoming stats into current stats.
+            Ordering::Greater => {
+                for i in 0..(buckets.keys.len() - 1) {
+                    let start = &self.keys[i];
+                    let end = &self.keys[i + 1];
+                    let (start_idx, end_idx) = find_overlay_ranges((start, end), &self.keys);
+                    for j in start_idx..end_idx {
+                        self.stats.read_bytes[j] += buckets.get_stats().read_bytes[i];
+                        self.stats.write_bytes[j] += buckets.get_stats().write_bytes[i];
+
+                        self.stats.read_qps[j] += buckets.get_stats().read_qps[i];
+                        self.stats.write_qps[j] += buckets.get_stats().write_qps[i];
+
+                        self.stats.read_keys[j] += buckets.get_stats().read_keys[i];
+                        self.stats.write_keys[j] += buckets.get_stats().write_keys[i];
+                    }
+                }
+            }
+            // Statistics from a new version.
+            Ordering::Less => {
+                let mut stats = buckets.get_stats().clone();
+                for i in 0..(self.keys.len() - 1) {
+                    let start = &buckets.keys[i];
+                    let end = &buckets.keys[i + 1];
+                    let (start_idx, end_idx) = find_overlay_ranges((start, end), &buckets.keys);
+                    for j in start_idx..end_idx {
+                        stats.read_bytes[j] += self.stats.read_bytes[i];
+                        stats.write_bytes[j] += self.stats.write_bytes[i];
+
+                        stats.read_qps[j] += self.stats.read_qps[i];
+                        stats.write_qps[j] += self.stats.write_qps[i];
+
+                        stats.read_keys[j] += self.stats.read_keys[i];
+                        stats.write_keys[j] += self.stats.write_keys[i];
+                    }
+                }
+                self.stats = stats;
+                self.keys = buckets.keys.to_vec();
+            }
+        }
+    }
+}
+
+fn find_overlay_ranges(range: (&Vec<u8>, &Vec<u8>), keys: &[Vec<u8>]) -> (usize, usize) {
+    let start = keys
+        .binary_search(range.0)
+        .unwrap_or_else(|i| if i != 0 { i - 1 } else { 0 });
+    let end = keys.binary_search(range.1).unwrap_or_else(|i| i);
+    (start, end)
 }
 
 pub const INVALID_ID: u64 = 0;
@@ -285,6 +371,16 @@ pub trait PdClient: Send + Sync {
     fn feature_gate(&self) -> &FeatureGate {
         unimplemented!()
     }
+
+    /// Region's Leader uses this to report buckets to PD.
+    fn region_buckets(
+        &self,
+        _region_id: u64,
+        _bucket_stat: &BucketStat,
+        _period: Duration,
+    ) -> PdFuture<()> {
+        unimplemented!();
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
@@ -296,4 +392,33 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
     } else {
         store.take_address()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::find_overlay_ranges;
+
+    #[test]
+    fn test_find_overlay_ranges() {
+        let keys = [
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+            b"k9".to_vec(),
+        ];
+        let cases = [
+            ((&b"k1".to_vec(), &b"k8".to_vec()), (0, 4)),
+            ((&b"k3".to_vec(), &b"k8".to_vec()), (1, 4)),
+            ((&b"k3".to_vec(), &b"k7".to_vec()), (1, 3)),
+            ((&b"k2".to_vec(), &b"k7".to_vec()), (0, 3)),
+            ((&b"k2".to_vec(), &b"k8".to_vec()), (0, 4)),
+        ];
+        for (range, expected) in cases {
+            assert_eq!(find_overlay_ranges(range, &keys), expected, "{:?}", range)
+        }
+    }
+
+    #[test]
+    fn test_merge_bucket_stats() {}
 }

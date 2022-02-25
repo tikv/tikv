@@ -41,7 +41,7 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
-use pd_client::metrics::*;
+use pd_client::{metrics::*, BucketStat};
 use pd_client::{Error, PdClient, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
@@ -171,7 +171,10 @@ where
         duration: RaftstoreDuration,
     },
     RegionCPURecords(Arc<RawRecords>),
-    ReportBuckets(metapb::Buckets),
+    ReportBuckets {
+        buckets: metapb::Buckets,
+        region_epoch: metapb::RegionEpoch,
+    },
 }
 
 pub struct StoreStat {
@@ -234,91 +237,6 @@ pub struct PeerStat {
     pub last_store_report_query_stats: QueryStats,
     pub approximate_keys: u64,
     pub approximate_size: u64,
-}
-
-pub struct BucketStat {
-    pub version: u64,
-    pub keys: Vec<Vec<u8>>,
-    pub stats: metapb::BucketStats,
-    pub region_epoch: metapb::RegionEpoch,
-    pub last_report_time: TiInstant,
-}
-
-impl Default for BucketStat {
-    fn default() -> Self {
-        Self {
-            last_report_time: TiInstant::now(),
-            ..Default::default()
-        }
-    }
-}
-
-impl BucketStat {
-    fn merge(&mut self, buckets: &metapb::Buckets) {
-        use std::cmp::Ordering;
-
-        match self.version.cmp(&buckets.version) {
-            Ordering::Equal => {
-                for i in 0..(self.keys.len() - 1) {
-                    self.stats.read_bytes[i] += buckets.get_stats().read_bytes[i];
-                    self.stats.write_bytes[i] += buckets.get_stats().write_bytes[i];
-
-                    self.stats.read_qps[i] += buckets.get_stats().read_qps[i];
-                    self.stats.write_qps[i] += buckets.get_stats().write_qps[i];
-
-                    self.stats.read_keys[i] += buckets.get_stats().read_keys[i];
-                    self.stats.write_keys[i] += buckets.get_stats().write_keys[i];
-                }
-            }
-            // Statistics from a old version, merge incoming stats into current stats.
-            Ordering::Greater => {
-                for i in 0..(buckets.keys.len() - 1) {
-                    let start = &self.keys[i];
-                    let end = &self.keys[i + 1];
-                    let (start_idx, end_idx) = find_overlay_ranges((start, end), &self.keys);
-                    for j in start_idx..end_idx {
-                        self.stats.read_bytes[j] += buckets.get_stats().read_bytes[i];
-                        self.stats.write_bytes[j] += buckets.get_stats().write_bytes[i];
-
-                        self.stats.read_qps[j] += buckets.get_stats().read_qps[i];
-                        self.stats.write_qps[j] += buckets.get_stats().write_qps[i];
-
-                        self.stats.read_keys[j] += buckets.get_stats().read_keys[i];
-                        self.stats.write_keys[j] += buckets.get_stats().write_keys[i];
-                    }
-                }
-            }
-            // Statistics from a new version.
-            Ordering::Less => {
-                let mut stats = buckets.get_stats().clone();
-                for i in 0..(self.keys.len() - 1) {
-                    let start = &buckets.keys[i];
-                    let end = &buckets.keys[i + 1];
-                    let (start_idx, end_idx) = find_overlay_ranges((start, end), &buckets.keys);
-                    for j in start_idx..end_idx {
-                        stats.read_bytes[j] += self.stats.read_bytes[i];
-                        stats.write_bytes[j] += self.stats.write_bytes[i];
-
-                        stats.read_qps[j] += self.stats.read_qps[i];
-                        stats.write_qps[j] += self.stats.write_qps[i];
-
-                        stats.read_keys[j] += self.stats.read_keys[i];
-                        stats.write_keys[j] += self.stats.write_keys[i];
-                    }
-                }
-                self.stats = stats;
-                self.keys = buckets.keys.to_vec();
-            }
-        }
-    }
-}
-
-fn find_overlay_ranges(range: (&Vec<u8>, &Vec<u8>), keys: &[Vec<u8>]) -> (usize, usize) {
-    let start = keys
-        .binary_search(range.0)
-        .unwrap_or_else(|i| if i != 0 { i - 1 } else { 0 });
-    let end = keys.binary_search(range.1).unwrap_or_else(|i| i);
-    (start, end)
 }
 
 #[derive(Default, Clone)]
@@ -424,8 +342,11 @@ where
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
             }
-            Task::ReportBuckets(ref buckets) => {
-                write!(f, "report buckets: {:?}", buckets)
+            Task::ReportBuckets {
+                ref buckets,
+                ref region_epoch,
+            } => {
+                write!(f, "report buckets: {:?} epoch {:?}", buckets, region_epoch)
             }
         }
     }
@@ -1597,14 +1518,48 @@ where
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
-    fn handle_buckets(&mut self, buckets: metapb::Buckets) {
+    fn handle_buckets(&mut self, buckets: metapb::Buckets, region_epoch: metapb::RegionEpoch) {
+        use std::cmp::Ordering;
+
+        let region_id = buckets.region_id;
+        let buckets_version = buckets.version;
         let bucket_stat = self
             .region_buckets
-            .entry(buckets.region_id)
+            .entry(region_id)
             .or_insert_with(BucketStat::default);
+        match bucket_stat
+            .region_epoch
+            .get_version()
+            .cmp(&region_epoch.get_version())
+        {
+            Ordering::Less => {
+                bucket_stat.version = buckets_version;
+                bucket_stat.keys = buckets.get_keys().to_vec();
+                bucket_stat.region_epoch = region_epoch;
+                bucket_stat.stats = buckets.stats.unwrap_or_default();
+            }
+            Ordering::Equal => {
+                bucket_stat.merge(&buckets);
+            }
+            Ordering::Greater => (),
+        }
         let now = TiInstant::now();
         let period = now.duration_since(bucket_stat.last_report_time);
-        bucket_stat.merge(&buckets);
+        bucket_stat.last_report_time = now;
+        let resp = self
+            .pd_client
+            .region_buckets(region_id, bucket_stat, period);
+        let f = async move {
+            if let Err(e) = resp.await {
+                debug!(
+                    "failed to send buckets";
+                    "region_id" => region_id,
+                    "version" => buckets_version,
+                    "err" => ?e
+                );
+            }
+        };
+        self.remote.spawn(f);
     }
 }
 
@@ -1822,8 +1777,11 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
-            Task::ReportBuckets(buckets) => {
-                self.handle_buckets(buckets);
+            Task::ReportBuckets {
+                buckets,
+                region_epoch,
+            } => {
+                self.handle_buckets(buckets, region_epoch);
             }
         };
     }
@@ -2290,27 +2248,6 @@ mod tests {
 
         for region_id in 1..region_num + 1 {
             assert!(*region_cpu_records.get(&region_id).unwrap_or(&0) > 0)
-        }
-    }
-
-    #[test]
-    fn test_find_overlay_ranges() {
-        let keys = [
-            b"k1".to_vec(),
-            b"k3".to_vec(),
-            b"k5".to_vec(),
-            b"k7".to_vec(),
-            b"k9".to_vec(),
-        ];
-        let cases = [
-            ((&b"k1".to_vec(), &b"k8".to_vec()), (0, 4)),
-            ((&b"k3".to_vec(), &b"k8".to_vec()), (1, 4)),
-            ((&b"k3".to_vec(), &b"k7".to_vec()), (1, 3)),
-            ((&b"k2".to_vec(), &b"k7".to_vec()), (0, 3)),
-            ((&b"k2".to_vec(), &b"k8".to_vec()), (0, 4)),
-        ];
-        for (range, expected) in cases {
-            assert_eq!(find_overlay_ranges(range, &keys), expected, "{:?}", range)
         }
     }
 }
