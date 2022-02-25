@@ -198,7 +198,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b7
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = {git = "https://github.com/longfangsong/kvproto", rev = "00db780adc9e10dbd0a00159be39fe917cd62ca9"}
+kvproto = {git = "https://github.com/longfangsong/kvproto", rev = "e416de06851b1a71b776ec3194bc96245b87d13a"}
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
