@@ -400,17 +400,11 @@ impl IORateLimitConfig {
             warn!("Falling back to write-only mode because io-stats-collector is missing.");
             self.mode = IORateLimitMode::WriteOnly;
         }
-        // Always enable statistics for testing.
-        #[cfg(not(test))]
-        let enable_statistics = !stats_collector_enabled;
-        #[cfg(test)]
-        let enable_statistics = true;
-
         let limiter = IORateLimiter::new(
             self.mode,
             self.strict,
             Some(self.max_buffered_read_bytes.0 as usize), /*batch_buffered_reads*/
-            enable_statistics,
+            !stats_collector_enabled,
         );
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
