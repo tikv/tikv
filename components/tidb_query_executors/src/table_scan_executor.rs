@@ -967,18 +967,8 @@ mod tests {
                 ci.set_column_id(2);
                 ci
             },
-            {
-                let mut ci = ColumnInfo::default();
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ci.set_column_id(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
-                ci
-            },
         ];
-        let schema = vec![
-            FieldTypeTp::LongLong.into(),
-            FieldTypeTp::LongLong.into(),
-            FieldTypeTp::LongLong.into(),
-        ];
+        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let mut ctx = EvalContext::default();
         let mut kv = vec![];
@@ -1040,6 +1030,54 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 1);
+            assert!(result.physical_columns[0].is_decoded());
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(0)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().to_int_vec(),
+                &[Some(7)]
+            );
+        }
+
+        // Case 1b: row 0 + row 1 + row 2
+        // We should get row 0 and error because no further rows should be scanned when there is
+        // an error. With EXTRA_PHYSICAL_TABLE_ID_COL
+        {
+            let mut columns_info = columns_info.clone();
+            columns_info.push({
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
+                ci
+            });
+            let mut schema = schema.clone();
+            schema.push(FieldTypeTp::LongLong.into());
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info,
+                vec![
+                    key_range_point[0].clone(),
+                    key_range_point[1].clone(),
+                    key_range_point[2].clone(),
+                ],
+                vec![],
+                false,
+                false,
+                vec![],
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.is_err());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1082,7 +1120,7 @@ mod tests {
 
             let mut result = executor.next_batch(1);
             assert!(result.is_drained.is_ok());
-            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
@@ -1097,15 +1135,10 @@ mod tests {
                 result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(7)]
             );
-            assert!(result.physical_columns[2].is_decoded());
-            assert_eq!(
-                result.physical_columns[2].decoded().to_int_vec(),
-                &[Some(TABLE_ID)]
-            );
 
             let result = executor.next_batch(1);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
 
@@ -1126,7 +1159,7 @@ mod tests {
 
             let result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
 
@@ -1147,7 +1180,7 @@ mod tests {
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.is_ok());
-            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
             assert_eq!(
@@ -1161,11 +1194,6 @@ mod tests {
             assert_eq!(
                 result.physical_columns[1].decoded().to_int_vec(),
                 &[Some(5), Some(7)]
-            );
-            assert!(result.physical_columns[2].is_decoded());
-            assert_eq!(
-                result.physical_columns[2].decoded().to_int_vec(),
-                &[Some(TABLE_ID), Some(TABLE_ID)]
             );
         }
 
@@ -1186,7 +1214,7 @@ mod tests {
 
             let result = executor.next_batch(10);
             assert!(result.is_drained.is_err());
-            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
     }
@@ -1437,6 +1465,8 @@ mod tests {
         has_column_info: bool,
         // Indicate if this column need to fetch restore data.
         need_restore_data: bool,
+        // Indicate if column ID should be used
+        column_id: i64,
     }
 
     fn test_common_handle_impl(columns: &[Column]) {
@@ -1456,12 +1486,17 @@ mod tests {
                 is_primary_column,
                 has_column_info,
                 need_restore_data,
+                column_id,
             } = column;
 
             if has_column_info {
                 let mut ci = ColumnInfo::default();
 
-                ci.set_column_id(i as i64);
+                if column_id != 0 {
+                    ci.set_column_id(column_id);
+                } else {
+                    ci.set_column_id(i as i64);
+                }
                 if need_restore_data {
                     ci.as_mut_accessor()
                         .set_tp(FieldTypeTp::VarString)
@@ -1536,6 +1571,11 @@ mod tests {
                     &[Some(
                         format!("{}", columns_info[i].get_column_id()).into_bytes()
                     )]
+                );
+            } else if columns_info[i].get_column_id() == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID {
+                assert_eq!(
+                    result.physical_columns[i].decoded().to_int_vec(),
+                    &[Some(TABLE_ID)]
                 );
             } else {
                 assert_eq!(
@@ -1669,6 +1709,7 @@ mod tests {
                 is_primary_column: true,
                 has_column_info: false,
                 need_restore_data: true,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
@@ -1679,6 +1720,115 @@ mod tests {
                 is_primary_column: true,
                 has_column_info: true,
                 need_restore_data: true,
+                ..Default::default()
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                need_restore_data: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                need_restore_data: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                need_restore_data: false,
+                column_id: table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                need_restore_data: false,
+                column_id: table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                need_restore_data: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                need_restore_data: true,
+                ..Default::default()
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                need_restore_data: false,
+                column_id: table::EXTRA_PHYSICAL_TABLE_ID_COL_ID,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                need_restore_data: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                need_restore_data: true,
+                ..Default::default()
             },
         ])
     }

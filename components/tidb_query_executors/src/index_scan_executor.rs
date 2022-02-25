@@ -954,6 +954,59 @@ mod tests {
             let mut executor = BatchIndexScanExecutor::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
+                vec![columns_info[0].clone(), columns_info[1].clone()],
+                key_ranges,
+                0,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(5), Some(5), Some(-5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().to_real_vec(),
+                &[
+                    Real::new(10.5).ok(),
+                    Real::new(5.1).ok(),
+                    Real::new(0.3).ok()
+                ]
+            );
+        }
+
+        {
+            // Case 1.1.b Normal index, without PK, scan total index in reverse order.
+            // With Physical Table ID Column
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+                let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+                range.set_start(start_key);
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+                let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+                range.set_end(end_key);
+                range
+            }];
+
+            let mut executor = BatchIndexScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
                 vec![
                     columns_info[0].clone(),
                     columns_info[1].clone(),
@@ -992,11 +1045,113 @@ mod tests {
                 ]
             );
             result.physical_columns[2]
-                .ensure_all_decoded_for_test(&mut ctx, &schema[2])
+                .ensure_all_decoded_for_test(&mut ctx, &schema[3])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[2].decoded().to_int_vec(),
                 &[Some(TABLE_ID), Some(TABLE_ID), Some(TABLE_ID)]
+            );
+        }
+
+        {
+            // Case 1.1.c Normal index, without PK, scan total index in reverse order.
+            // With Columns in WRONG order!!
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+                let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+                range.set_start(start_key);
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+                let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+                range.set_end(end_key);
+                range
+            }];
+
+            let mut executor = BatchIndexScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[1].clone(), columns_info[0].clone()],
+                key_ranges,
+                0,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            assert!(
+                result.physical_columns[0]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                    .is_err()
+            );
+            assert!(result.physical_columns[1].is_raw());
+            assert!(
+                result.physical_columns[1]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                    .is_err()
+            );
+        }
+
+        {
+            // Case 1.1.d Normal index, without PK, scan total index in reverse order.
+            // With Physical Table ID Column in WRONG order!!
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+                let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+                range.set_start(start_key);
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+                let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+                range.set_end(end_key);
+                range
+            }];
+
+            let mut executor = BatchIndexScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![
+                    columns_info[0].clone(),
+                    columns_info[3].clone(),
+                    columns_info[1].clone(),
+                ],
+                key_ranges,
+                0,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(5), Some(5), Some(-5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            assert!(
+                result.physical_columns[1]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[3])
+                    .is_err()
+            );
+            assert!(result.physical_columns[2].is_raw());
+            assert!(
+                result.physical_columns[2]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                    .is_err()
             );
         }
 
