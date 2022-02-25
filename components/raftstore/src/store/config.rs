@@ -1012,7 +1012,7 @@ mod tests {
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
 
         cfg = Config::new();
-        cfg.raft_max_size_per_msg = 0;
+        cfg.raft_max_size_per_msg = ReadableSize(0);
         assert!(cfg.validate().is_err());
         cfg.raft_max_size_per_msg = ReadableSize::gb(64);
         assert!(cfg.validate().is_err());
