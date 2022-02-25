@@ -266,6 +266,7 @@ mod tests {
                 store_id: 0,
                 region_id: 0,
                 peer_id: 0,
+                key_ranges: vec![],
                 extra_attachment: b"12345".to_vec(),
             }),
             RawRecord {
@@ -311,6 +312,7 @@ mod tests {
                 store_id: 0,
                 region_id: 0,
                 peer_id: 0,
+                key_ranges: vec![],
                 extra_attachment: b"12345".to_vec(),
             }),
             RawRecord {

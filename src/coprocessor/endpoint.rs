@@ -433,7 +433,14 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
+        let key_ranges = req_ctx
+            .ranges
+            .iter()
+            .map(|key_range| (key_range.get_start().to_vec(), key_range.get_end().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
@@ -560,7 +567,14 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let resource_tag = self.resource_tag_factory.new_tag(&req_ctx.context);
+        let key_ranges = req_ctx
+            .ranges
+            .iter()
+            .map(|key_range| (key_range.get_start().to_vec(), key_range.get_end().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
