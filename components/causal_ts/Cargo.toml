@@ -11,6 +11,7 @@ engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 pd_client = { path = "../pd_client", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
@@ -22,7 +23,6 @@ tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 
