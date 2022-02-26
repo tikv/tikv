@@ -18,6 +18,7 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     /// Parse the key prefix and infer key mode. It's safe to parse either raw key or encoded key.
     fn parse_key_mode(key: &[u8]) -> KeyMode;
     fn parse_range_mode(range: (Option<&[u8]>, Option<&[u8]>)) -> KeyMode;
+
     /// Parse from the bytes from storage.
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>>;
     /// This is equivalent to `decode_raw_value()` but returns the owned user value.
@@ -37,6 +38,29 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     fn encode_raw_value(value: RawValue<&[u8]>) -> Vec<u8>;
     /// This is equivalent to `encode_raw_value` but reduced an allocation.
     fn encode_raw_value_owned(value: RawValue<Vec<u8>>) -> Vec<u8>;
+
+    /// Parse from the bytes from storage.
+    fn decode_raw_key(bytes: &[u8]) -> Result<RawKey<Vec<u8>>> {
+        Ok(RawKey {
+            user_key: bytes.to_vec(),
+            ts: None,
+        })
+    }
+    /// This is equivalent to `decode_raw_key()` but returns the owned user key.
+    fn decode_raw_key_owned(bytes: Vec<u8>) -> Result<RawKey<Vec<u8>>> {
+        Ok(RawKey {
+            user_key: bytes,
+            ts: None,
+        })
+    }
+    /// Encode the raw key and optional timestamp into bytes.
+    fn encode_raw_key(key: RawKey<&[u8]>) -> Vec<u8> {
+        key.user_key.to_vec()
+    }
+    /// This is equivalent to `encode_raw_key` but reduced an allocation.
+    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Vec<u8> {
+        key.user_key
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -76,6 +100,41 @@ pub enum KeyMode {
     TiDB,
     /// Unrecognised key mode.
     Unknown,
+}
+
+/// A RawKV Key.
+///
+/// ### ApiVersion::V1 & ApiVersion::V1ttl
+///
+/// This is the plain user value.
+///
+/// ### ApiVersion::V2
+///
+/// The key is encoded as User key + Memcomparable-encoded padding + ^Timestamp (optional), the same as Transaction KV.
+/// Note that whether there is Timestamp or not can only be specified by caller. No detection method is available.
+/// For example:
+/// (without Timestamp)
+/// ```text
+/// --------------------------------------------------
+/// | User key       | Padding                       |
+/// --------------------------------------------------
+/// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0xFA |
+/// --------------------------------------------------
+/// ```
+/// (with Timestamp, Timestamp = 0x5FC16106D04A09F, ^Timestamp = 0xFA03E9EF92FB5F60)
+/// ```text
+/// --------------------------------------------------------------------------------------------
+/// | User key       | Padding                       | ^Timestamp                              |
+/// --------------------------------------------------------------------------------------------
+/// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0xFA | 0xFA 0x03 0xE9 0xEF 0x92 0xFB 0x5F 0x60 |
+/// --------------------------------------------------------------------------------------------
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawKey<T: AsRef<[u8]>> {
+    /// The user key
+    pub user_key: T,
+    /// The timestamp indicating causality of this entry.
+    pub ts: Option<u64>,
 }
 
 /// A RawKV value and it's metadata.
