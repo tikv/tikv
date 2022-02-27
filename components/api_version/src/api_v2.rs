@@ -109,37 +109,35 @@ impl APIVersion for APIV2 {
         value.user_value
     }
 
-    fn decode_raw_key(bytes: &[u8]) -> Result<RawKey<Vec<u8>>> {
-        let mut data = bytes;
-        let key = bytes::decode_bytes(&mut data, false)?;
-        match data.len() {
+    fn decode_raw_key(mut bytes: &[u8]) -> Result<RawKey<Vec<u8>>> {
+        let key = bytes::decode_bytes(&mut bytes, false)?;
+        match bytes.len() {
             0 => Ok(RawKey {
                 user_key: key,
                 ts: None,
             }),
             number::U64_SIZE => Ok(RawKey {
                 user_key: key,
-                ts: Some(number::decode_u64_desc(&mut data)?),
+                ts: Some(number::decode_u64_desc(&mut bytes)?),
             }),
             _ => Err(Error::KeyLength.into()),
         }
     }
 
     fn decode_raw_key_owned(mut bytes: Vec<u8>) -> Result<RawKey<Vec<u8>>> {
-        let key_len = bytes::encoded_bytes_len(&bytes, false);
-        let ts = match bytes.len() - key_len {
+        let (write_offset, read_offset) = bytes::decode_bytes_in_place_ext(&mut bytes, false)?;
+        let ts = match bytes.len() - read_offset {
             0 => None,
             number::U64_SIZE => {
-                let mut ts_slice = &bytes[key_len..];
+                let mut ts_slice = &bytes[read_offset..];
                 let ts = number::decode_u64_desc(&mut ts_slice)?;
-                bytes.truncate(key_len);
                 Some(ts)
             }
             _ => {
                 return Err(Error::KeyLength.into());
             }
         };
-        bytes::decode_bytes_in_place(&mut bytes, false)?;
+        bytes.truncate(write_offset);
         Ok(RawKey {
             user_key: bytes,
             ts,
@@ -157,7 +155,8 @@ impl APIVersion for APIV2 {
 
 impl APIV2 {
     fn encode_raw_key_impl<T: AsRef<[u8]>>(key: RawKey<T>) -> Vec<u8> {
-        let len = bytes::max_encoded_bytes_size(key.user_key.as_ref().len()) + number::U64_SIZE;
+        let len = bytes::max_encoded_bytes_size(key.user_key.as_ref().len())
+            + key.ts.map_or(0, |_| number::U64_SIZE);
         let mut encoded = Vec::with_capacity(len);
         encoded.encode_bytes(key.user_key.as_ref(), false).unwrap();
         if let Some(ts) = key.ts {

@@ -221,6 +221,15 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
 /// Decodes bytes which are encoded by `encode_bytes` before just in place without malloc.
 /// Please use this instead of `decode_bytes` if possible.
 pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
+    let (write_offset, _) = decode_bytes_in_place_ext(data, desc)?;
+    unsafe {
+        data.set_len(write_offset);
+    }
+    Ok(())
+}
+
+/// This is equivalent to `decode_bytes_in_place()` but returns (write_offset, read_offset) for further decoding.
+pub fn decode_bytes_in_place_ext(data: &mut [u8], desc: bool) -> Result<(usize, usize)> {
     let mut write_offset = 0;
     let mut read_offset = 0;
     loop {
@@ -265,15 +274,13 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
             if &data[write_offset - pad_size..write_offset] != padding_slice {
                 return Err(Error::KeyPadding);
             }
-            unsafe {
-                data.set_len(write_offset - pad_size);
-            }
+            write_offset -= pad_size;
             if desc {
-                for k in data {
+                for k in &mut data[..write_offset] {
                     *k = !*k;
                 }
             }
-            return Ok(());
+            return Ok((write_offset, read_offset));
         }
     }
 }
@@ -407,6 +414,13 @@ mod tests {
                     asc.len() - number::U64_SIZE
                 );
             }
+
+            let mut asc1 = asc.clone();
+            let encoded_len = encoded_bytes_len(&asc1, false);
+            let (write_offset, read_offset) = decode_bytes_in_place_ext(&mut asc1, false).unwrap();
+            assert_eq!(&source, &asc1[..write_offset]);
+            assert_eq!(encoded_len, read_offset);
+
             decode_bytes_in_place(&mut asc, false).unwrap();
             assert_eq!(source, asc);
 
@@ -419,6 +433,13 @@ mod tests {
                     desc.len() - number::U64_SIZE
                 );
             }
+
+            let mut desc1 = desc.clone();
+            let encoded_len = encoded_bytes_len(&desc1, true);
+            let (write_offset, read_offset) = decode_bytes_in_place_ext(&mut desc1, true).unwrap();
+            assert_eq!(&source, &desc1[..write_offset]);
+            assert_eq!(encoded_len, read_offset);
+
             decode_bytes_in_place(&mut desc, true).unwrap();
             assert_eq!(source, desc);
         }
@@ -441,7 +462,8 @@ mod tests {
 
         for mut x in invalid_bytes {
             assert!(decode_bytes(&mut x.as_slice(), false).is_err());
-            assert!(decode_bytes_in_place(&mut x, false).is_err());
+            assert!(decode_bytes_in_place(&mut x.clone(), false).is_err());
+            assert!(decode_bytes_in_place_ext(&mut x, false).is_err());
         }
     }
 

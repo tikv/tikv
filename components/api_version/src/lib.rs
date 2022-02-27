@@ -106,12 +106,11 @@ pub enum KeyMode {
 ///
 /// ### ApiVersion::V1 & ApiVersion::V1ttl
 ///
-/// This is the plain user value.
+/// This is the plain user key.
 ///
 /// ### ApiVersion::V2
 ///
 /// The key is encoded as User key + Memcomparable-encoded padding + ^Timestamp (optional), the same as Transaction KV.
-/// Note that whether there is Timestamp or not can only be specified by caller. No detection method is available.
 /// For example:
 /// (without Timestamp)
 /// ```text
@@ -313,13 +312,13 @@ mod tests {
             ),
         ];
         for case in &cases {
-            assert_encode_decode_identity(case.0, None, case.1, ApiVersion::V1);
+            assert_raw_value_encode_decode_identity(case.0, None, case.1, ApiVersion::V1);
         }
         for case in &cases {
-            assert_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl);
+            assert_raw_value_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl);
         }
         for case in &cases {
-            assert_encode_decode_identity(case.0, None, case.3, ApiVersion::V2);
+            assert_raw_value_encode_decode_identity(case.0, None, case.3, ApiVersion::V2);
         }
     }
 
@@ -342,15 +341,20 @@ mod tests {
         ];
 
         for case in &cases {
-            assert_encode_decode_identity(case.0, Some(case.1), case.2, ApiVersion::V1ttl);
+            assert_raw_value_encode_decode_identity(
+                case.0,
+                Some(case.1),
+                case.2,
+                ApiVersion::V1ttl,
+            );
         }
         for case in &cases {
-            assert_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2);
+            assert_raw_value_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2);
         }
     }
 
     #[test]
-    fn test_decode_err() {
+    fn test_value_decode_err() {
         let cases = vec![
             // At least 8 bytes for expire_ts.
             (vec![], ApiVersion::V1ttl),
@@ -379,7 +383,7 @@ mod tests {
         }
     }
 
-    fn assert_encode_decode_identity(
+    fn assert_raw_value_encode_decode_identity(
         user_value: &[u8],
         expire_ts: Option<u64>,
         encoded_bytes: &[u8],
@@ -407,6 +411,127 @@ mod tests {
                     assert_eq!(
                         API::decode_raw_value_owned(encoded_bytes.to_vec()).unwrap(),
                         raw_value
+                    );
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn test_raw_key() {
+        // (user_key, ts, encoded_bytes_V1, encoded_bytes_V1ttl, encoded_bytes_V2)
+        let cases = vec![
+            (
+                &b""[..],
+                None,
+                &[][..],
+                &[][..],
+                &[0, 0, 0, 0, 0, 0, 0, 0, 0xf7][..],
+            ),
+            (
+                &b"a"[..],
+                Some(2),
+                &[b'a'][..],
+                &[b'a'][..],
+                &[
+                    b'a', 0, 0, 0, 0, 0, 0, 0, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfd,
+                ][..],
+            ),
+            (
+                &b"1234567890"[..],
+                Some(3),
+                &b"1234567890"[..],
+                &b"1234567890"[..],
+                &[
+                    b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', 0xff, b'9', b'0', 0, 0, 0, 0,
+                    0, 0, 0xf9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfc,
+                ][..],
+            ),
+        ];
+
+        for case in &cases {
+            assert_raw_key_encode_decode_identity(case.0, case.1, case.2, ApiVersion::V1, None);
+        }
+        for case in &cases {
+            assert_raw_key_encode_decode_identity(case.0, case.1, case.3, ApiVersion::V1ttl, None);
+        }
+        for case in &cases {
+            assert_raw_key_encode_decode_identity(case.0, case.1, case.4, ApiVersion::V2, case.1);
+        }
+    }
+
+    #[test]
+    fn test_v2_key_decode_err() {
+        let cases = vec![
+            // At least 9 bytes for Memcomparable-encoded padding.
+            (vec![], "UnexpectedEof"),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8], "UnexpectedEof"),
+            // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
+            (vec![1, 2, 3, 4, 0, 0, 1, 0, 0xfb], "Codec(KeyPadding)"),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 0xf6], "Codec(KeyPadding)"),
+            // `ts` is 8 more bytes.
+            (
+                vec![
+                    1, 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
+                ],
+                "Codec(KeyLength)",
+            ),
+            (
+                vec![
+                    1, 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0,
+                    0, 1, 0,
+                ],
+                "Codec(KeyLength)",
+            ),
+        ];
+
+        for (idx, (bytes, expected_err)) in cases.into_iter().enumerate() {
+            let res = vec![
+                APIV2::decode_raw_key(&bytes),
+                APIV2::decode_raw_key_owned(bytes),
+            ];
+
+            for r in res {
+                assert!(r.is_err());
+                let err_str = format!("{:?}", r.unwrap_err());
+                assert!(err_str.contains(expected_err), "case {}: {}", idx, err_str);
+            }
+        }
+    }
+
+    fn assert_raw_key_encode_decode_identity(
+        user_key: &[u8],
+        ts: Option<u64>,
+        encoded_bytes: &[u8],
+        api_version: ApiVersion,
+        expected_ts: Option<u64>,
+    ) {
+        match_template_api_version!(
+            API,
+            match api_version {
+                ApiVersion::API => {
+                    assert_eq!(&API::encode_raw_key(RawKey { user_key, ts }), encoded_bytes);
+                    assert_eq!(
+                        API::decode_raw_key(encoded_bytes).unwrap(),
+                        RawKey {
+                            user_key: user_key.to_vec(),
+                            ts: expected_ts,
+                        }
+                    );
+
+                    assert_eq!(
+                        &API::encode_raw_key_owned(RawKey {
+                            user_key: user_key.to_vec(),
+                            ts,
+                        }),
+                        encoded_bytes
+                    );
+                    assert_eq!(
+                        API::decode_raw_key_owned(encoded_bytes.to_vec()).unwrap(),
+                        RawKey {
+                            user_key: user_key.to_vec(),
+                            ts: expected_ts,
+                        }
                     );
                 }
             }
