@@ -314,23 +314,6 @@ where
     ExitForceLeaderState,
 }
 
-#[derive(Debug)]
-pub enum RaftlogFetchResult {
-    Fetching,
-    Fetched {
-        ents: raft::Result<Vec<Entry>>,
-        // because entries may be empty, so store the original low index that the task issued
-        low: u64,
-        // the original max size that the task issued
-        max_size: u64,
-        // if the ents hit max_size
-        hit_size_limit: bool,
-        // the times that async fetch have already tried
-        tried_cnt: usize,
-        // the term when the task issued
-        term: u64,
-}
-
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
