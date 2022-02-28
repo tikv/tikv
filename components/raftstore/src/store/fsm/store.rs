@@ -2217,24 +2217,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             capacity: self.ctx.cfg.capacity.0,
         };
 
-        let dr_autosync_status = {
-            let replication_state = self.ctx.global_replication_state.lock().unwrap();
-            let status = replication_state.status();
-            if status.get_mode() == ReplicationMode::DrAutoSync {
-                let mut s = StoreDrAutoSyncStatus::default();
-                s.set_state(status.get_dr_auto_sync().get_state());
-                s.set_state_id(status.get_dr_auto_sync().get_state_id());
-                Some(s)
-            } else {
-                None
-            }
-        };
-
         let task = PdTask::StoreHeartbeat {
             stats,
             store_info,
             send_detailed_report: false,
-            dr_autosync_status,
+            dr_autosync_status: self
+                .ctx
+                .global_replication_state
+                .lock()
+                .unwrap()
+                .store_dr_autosync_status(),
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";

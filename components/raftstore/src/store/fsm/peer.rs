@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
     RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
+use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode, StoreDrAutoSyncStatus};
 use parking_lot::RwLockWriteGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
@@ -893,6 +893,12 @@ where
                 stats,
                 store_info,
                 send_detailed_report: true,
+                dr_autosync_status: self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .store_dr_autosync_status(),
             };
             if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
                 panic!("fail to send detailed report to pd {:?}", e);
