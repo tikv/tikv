@@ -17,7 +17,6 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Encoding;
 use tidb_query_datatype::codec::convert::*;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::datum_codec::DatumPayloadDecoder;
 use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use tidb_query_datatype::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
 use tidb_query_datatype::codec::mysql::{binary_literal, Time};
