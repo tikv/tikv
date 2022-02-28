@@ -560,14 +560,16 @@ impl Column {
             ));
         }
         let flag = src_datum[0];
-        let raw_datum = &src_datum[1..];
+        let mut raw_datum = &src_datum[1..];
+        let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
         match flag {
             datum::NIL_FLAG => self.append_null(),
             datum::UINT_FLAG => {
-                let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
-                self.append_bytes(&raw_datum[start_idx..])?
+                self.append_bytes(&raw_datum.read_datum_payload_u64()?.to_be_bytes()[start_idx..])?
             }
-            datum::VAR_UINT_FLAG => self.append_bytes(raw_datum)?,
+            datum::VAR_UINT_FLAG => self.append_bytes(
+                &raw_datum.read_datum_payload_var_u64()?.to_be_bytes()[start_idx..],
+            )?,
             _ => {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Bit vector",
