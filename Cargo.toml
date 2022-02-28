@@ -153,7 +153,7 @@ coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 tokio = { version = "1.12", features = ["full"] }
-tokio-timer = "0.2"
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-openssl = "0.6"
 toml = "0.5"
 txn_types = { path = "components/txn_types", default-features = false }
