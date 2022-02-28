@@ -3,7 +3,7 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
@@ -1115,14 +1115,32 @@ where
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
                     if resp.get_require_detailed_report() {
+                        // This store needs to report detailed info of hosted regions to PD.
+                        //
+                        // The info has to be up to date, meaning that all committed changes til now have to be applied before the report is sent.
+                        // The entire process may include:
+                        // 1.	`broadcast_normal` "wait apply" messsages to all peers.
+                        // 2.	`on_unsafe_recovery_wait_apply` examines whether the peer have not-yet-applied entries, if so, memorize the target index.
+                        // 3.	`on_apply_res` checks whether entries before the "unsafe recovery report target commit index" have all been applied.
+                        // The one who finally finds out the number of remaining tasks is 0 schedules an unsafe recovery reporting store heartbeat.
                         info!("required to send detailed report in the next heartbeat");
-                        let task = Task::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
+                        // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
+                        let counter = Arc::new(AtomicUsize::new(1));
+                        let counter_clone = counter.clone();
+                        router.broadcast_normal(|| {
+                            let _ = counter_clone.fetch_add(1, Ordering::Relaxed);
+                            PeerMsg::UnsafeRecoveryWaitApply(counter_clone.clone())
+                        });
+                        // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
+                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                            let task = Task::StoreHeartbeat {
+                                stats: stats_copy,
+                                store_info,
+                                send_detailed_report: true,
+                            };
+                            if let Err(e) = scheduler.schedule(task) {
+                                error!("notify pd failed"; "err" => ?e);
+                            }
                         }
                     } else if resp.has_plan() {
                         info!("asked to execute recovery plan");

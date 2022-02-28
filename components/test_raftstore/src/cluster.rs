@@ -1522,6 +1522,11 @@ impl<T: Simulator> Cluster<T> {
         );
     }
 
+    pub fn must_send_store_heartbeat(&self, node_id: u64) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        StoreRouter::send(&router, StoreMsg::Tick(StoreTick::PdStoreHeartbeat)).unwrap();
+    }
+
     pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         let mut try_cnt = 0;
