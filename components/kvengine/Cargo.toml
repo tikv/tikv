@@ -22,6 +22,7 @@ bytes = "1.0"
 thiserror = "1.0"
 rand = "0.8"
 byteorder = "1.2"
+file_system = { path = "../file_system", default-features = false }
 futures = { version = "0.3", features = ["thread-pool"] }
 dashmap = "4.0"
 dyn-clone = "1.0"

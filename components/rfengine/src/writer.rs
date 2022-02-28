@@ -2,15 +2,15 @@
 
 use crate::*;
 use std::{
+    fs,
     fs::File,
-    fs::{self, OpenOptions},
     mem,
-    os::unix::fs::OpenOptionsExt,
     os::unix::prelude::FileExt,
     path::{Path, PathBuf},
 };
 
 use bytes::BufMut;
+use file_system::open_direct_file;
 
 pub const BATCH_HEADER_SIZE: usize = 12;
 pub(crate) const ALIGN_SIZE: usize = 4096;
@@ -130,20 +130,6 @@ pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {
     Ok(filename)
 }
 
-pub(crate) fn open_direct_file(filename: PathBuf, sync: bool) -> Result<File> {
-    let mut flag = o_direct_flag();
-    if sync {
-        flag |= libc::O_DSYNC;
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .custom_flags(flag)
-        .open(filename)?;
-    Ok(file)
-}
-
 pub(crate) fn aligned_len(origin_len: usize) -> usize {
     ((origin_len + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
 }
@@ -159,15 +145,4 @@ pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {
         }
     }
     Ok(recycle_file)
-}
-
-pub(crate) fn o_direct_flag() -> i32 {
-    if std::env::consts::OS != "linux" {
-        return 0;
-    }
-    if std::env::consts::ARCH == "aarch64" {
-        0x10000
-    } else {
-        0x4000
-    }
 }

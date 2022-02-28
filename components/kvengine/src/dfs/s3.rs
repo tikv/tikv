@@ -6,6 +6,7 @@ use aws_sdk_s3::model::{Tag, Tagging};
 use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Bytes;
+use file_system::{IORateLimiter, IOType, DirectWriter};
 use http::Uri;
 use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -28,9 +29,17 @@ impl S3FS {
         secret_key: String,
         region: String,
         bucket: String,
+        rate_limiter: Arc<IORateLimiter>,
     ) -> Self {
         let core = Arc::new(S3FSCore::new(
-            tenant_id, local_dir, end_point, key_id, secret_key, region, bucket,
+            tenant_id,
+            local_dir,
+            end_point,
+            key_id,
+            secret_key,
+            region,
+            bucket,
+            rate_limiter,
         ));
         Self { core }
     }
@@ -50,6 +59,7 @@ pub struct S3FSCore {
     s3c: aws_sdk_s3::Client,
     bucket: String,
     runtime: tokio::runtime::Runtime,
+    rate_limiter: Arc<file_system::IORateLimiter>,
 }
 
 impl S3FSCore {
@@ -61,6 +71,7 @@ impl S3FSCore {
         secret_key: String,
         region: String,
         bucket: String,
+        rate_limiter: Arc<file_system::IORateLimiter>,
     ) -> Self {
         if !local_dir.exists() {
             std::fs::create_dir_all(&local_dir).unwrap();
@@ -90,6 +101,7 @@ impl S3FSCore {
             s3c,
             bucket,
             runtime,
+            rate_limiter,
         }
     }
 
@@ -127,7 +139,9 @@ impl DFS for S3FS {
         }
         let data = self.read_file(file_id, opts).await?;
         let tmp_file_path = self.tmp_file_path(file_id);
-        std::fs::write(&tmp_file_path, data)?;
+        let mut writer = DirectWriter::new(self.rate_limiter.clone(), IOType::Compaction);
+        writer.reserve(data.len());
+        writer.write_to_file(tmp_file_path.clone())?;
         std::fs::rename(tmp_file_path, local_file_path)?;
         Ok(())
     }
@@ -148,12 +162,6 @@ impl DFS for S3FS {
     }
 
     async fn create(&self, file_id: u64, data: Bytes, _opts: Options) -> crate::dfs::Result<()> {
-        let tmp_file_path = self.tmp_file_path(file_id);
-        debug!("before write local tmp file {:?}", &tmp_file_path);
-        std::fs::write(&tmp_file_path, &data)?;
-        debug!("write local tmp done");
-        std::fs::rename(tmp_file_path, self.local_file_path(file_id))?;
-
         let key = self.file_key(file_id);
         let hyper_body = hyper::Body::from(data);
         let sdk_body = aws_smithy_http::body::SdkBody::from(hyper_body);
@@ -227,9 +235,11 @@ impl File for LocalFile {
 mod tests {
     use crate::dfs::s3::S3FS;
     use crate::dfs::{Options, DFS};
+    use file_system::{IORateLimitMode, IORateLimiter};
     use std::future::Future;
     use std::path::PathBuf;
     use std::str::FromStr;
+    use std::sync::Arc;
 
     #[test]
     fn test_s3() {
@@ -240,6 +250,8 @@ mod tests {
         if !local_dir.exists() {
             std::fs::create_dir(&local_dir);
         }
+        let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
+        rate_limiter.set_io_rate_limit(0);
         let s3fs = S3FS::new(
             123,
             local_dir,
@@ -248,6 +260,7 @@ mod tests {
             "minioadmin".into(),
             "local".into(),
             "shard-db".into(),
+            rate_limiter,
         );
         let file_data = "abcdefgh".to_string().into_bytes();
         let (tx, rx) = tikv_util::mpsc::bounded(1);

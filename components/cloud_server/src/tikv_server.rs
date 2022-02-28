@@ -28,9 +28,7 @@ use crate::{node::*, raftkv::*, resolve, signal_handler};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use error_code::ErrorCodeExt;
-use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
-};
+use file_system::{set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager, IORateLimitMode};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -672,6 +670,8 @@ impl TiKVServer {
         let wal_size = conf.raft_engine.config().target_file_size.0 as usize;
         let rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
+        let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
+        rate_limiter.set_io_rate_limit(conf.storage.io_rate_limit.max_bytes_per_sec.0 as usize);
         let dfs = Arc::new(kvengine::dfs::S3FS::new(
             dfs_conf.tenant_id,
             kv_engine_path,
@@ -680,6 +680,7 @@ impl TiKVServer {
             dfs_conf.s3_secret_key.clone(),
             dfs_conf.s3_region.clone(),
             dfs_conf.s3_bucket.clone(),
+            rate_limiter,
         ));
         let mut kv_opts = kvengine::Options::default();
         let capacity = match conf.storage.block_cache.capacity.0 {

@@ -9,12 +9,14 @@ extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+mod direct;
 mod file;
 mod iosnoop;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
 
+pub use direct::{open_direct_file, DirectWriter};
 pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
