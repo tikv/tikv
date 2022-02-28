@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::Result;
+use tikv_util::codec::bytes::BytesEncoder;
 use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::Error;
+use tikv_util::codec::{bytes, Error};
 
 use super::*;
 
@@ -106,5 +107,61 @@ impl APIVersion for APIV2 {
         }
         value.user_value.push(flags.bits());
         value.user_value
+    }
+
+    fn decode_raw_key(mut bytes: &[u8]) -> Result<RawKey<Vec<u8>>> {
+        let key = bytes::decode_bytes(&mut bytes, false)?;
+        match bytes.len() {
+            0 => Ok(RawKey {
+                user_key: key,
+                ts: None,
+            }),
+            number::U64_SIZE => Ok(RawKey {
+                user_key: key,
+                ts: Some(number::decode_u64_desc(&mut bytes)?),
+            }),
+            _ => Err(Error::KeyLength.into()),
+        }
+    }
+
+    fn decode_raw_key_owned(mut bytes: Vec<u8>) -> Result<RawKey<Vec<u8>>> {
+        let (write_offset, read_offset) = bytes::decode_bytes_in_place_ext(&mut bytes, false)?;
+        let ts = match bytes.len() - read_offset {
+            0 => None,
+            number::U64_SIZE => {
+                let mut ts_slice = &bytes[read_offset..];
+                let ts = number::decode_u64_desc(&mut ts_slice)?;
+                Some(ts)
+            }
+            _ => {
+                return Err(Error::KeyLength.into());
+            }
+        };
+        bytes.truncate(write_offset);
+        Ok(RawKey {
+            user_key: bytes,
+            ts,
+        })
+    }
+
+    fn encode_raw_key(key: RawKey<&[u8]>) -> Vec<u8> {
+        Self::encode_raw_key_impl(key)
+    }
+
+    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Vec<u8> {
+        Self::encode_raw_key_impl(key)
+    }
+}
+
+impl APIV2 {
+    fn encode_raw_key_impl<T: AsRef<[u8]>>(key: RawKey<T>) -> Vec<u8> {
+        let len = bytes::max_encoded_bytes_size(key.user_key.as_ref().len())
+            + key.ts.map_or(0, |_| number::U64_SIZE);
+        let mut encoded = Vec::with_capacity(len);
+        encoded.encode_bytes(key.user_key.as_ref(), false).unwrap();
+        if let Some(ts) = key.ts {
+            encoded.encode_u64_desc(ts).unwrap();
+        }
+        encoded
     }
 }
