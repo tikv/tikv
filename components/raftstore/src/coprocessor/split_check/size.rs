@@ -300,15 +300,14 @@ pub mod tests {
                 _,
                 CasualMessage::RefreshRegionBuckets {
                     region_epoch: _,
-                    region_buckets,
+                    bucket_keys,
                 },
             )) = rx.try_recv()
             {
                 let mut i = 0;
-                let keys = region_buckets.get_keys();
-                assert_eq!(keys.len(), exp_buckets_keys.len());
-                while i < keys.len() {
-                    assert_eq!(keys[i], exp_buckets_keys[i]);
+                assert_eq!(bucket_keys.len(), exp_buckets_keys.len());
+                while i < bucket_keys.len() {
+                    assert_eq!(bucket_keys[i], exp_buckets_keys[i]);
                     i += 1
                 }
                 break;
@@ -493,18 +492,20 @@ pub mod tests {
                 _,
                 CasualMessage::RefreshRegionBuckets {
                     region_epoch: _,
-                    region_buckets,
+                    bucket_keys,
                 },
             )) = rx.try_recv()
             {
-                let keys = region_buckets.get_keys();
-                for i in 1..keys.len() - 2 {
-                    let start: i32 = std::str::from_utf8(&keys[i]).unwrap().parse().unwrap();
-                    let end: i32 = std::str::from_utf8(&keys[i + 1]).unwrap().parse().unwrap();
+                for i in 1..bucket_keys.len() - 2 {
+                    let start: i32 = std::str::from_utf8(&bucket_keys[i])
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let end: i32 = std::str::from_utf8(&bucket_keys[i + 1])
+                        .unwrap()
+                        .parse()
+                        .unwrap();
                     assert!(end - start >= 150 && end - start < 450);
-                    if i == 1 {
-                        assert!(start >= 150 && start < 450);
-                    }
                 }
 
                 break;

@@ -99,10 +99,7 @@ impl<'a, E> Host<'a, E> {
                 region_size / self.cfg.region_bucket_size.0,
                 CheckPolicy::Approximate,
             );
-            let keys = box_try!(bucket_checker.approximate_split_keys(region, engine));
-            if !keys.is_empty() {
-                return Ok(keys);
-            }
+            return bucket_checker.approximate_split_keys(region, engine);
         }
         Ok(vec![])
     }

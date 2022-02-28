@@ -379,7 +379,7 @@ pub enum CasualMessage<EK: KvEngine> {
     },
     RefreshRegionBuckets {
         region_epoch: RegionEpoch,
-        region_buckets: metapb::Buckets,
+        bucket_keys: Vec<Vec<u8>>,
     },
 
     // Try renew leader lease

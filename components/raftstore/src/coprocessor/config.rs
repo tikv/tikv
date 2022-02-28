@@ -121,6 +121,9 @@ impl Config {
                 self.region_bucket_size.0
             ));
         }
+        if self.region_bucket_size.0 == 0 {
+            return Err(box_err!("region_bucket size cannot be 0."));
+        }
         Ok(())
     }
 }

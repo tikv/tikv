@@ -21,7 +21,7 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Region, RegionEpoch};
+use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
@@ -884,9 +884,9 @@ where
             }
             CasualMessage::RefreshRegionBuckets {
                 region_epoch,
-                region_buckets,
+                bucket_keys,
             } => {
-                self.on_refresh_region_buckets(region_epoch, region_buckets);
+                self.on_refresh_region_buckets(region_epoch, bucket_keys);
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
@@ -4551,20 +4551,28 @@ where
         self.register_pd_heartbeat_tick();
     }
 
-    fn on_refresh_region_buckets(
-        &mut self,
-        region_epoch: metapb::RegionEpoch,
-        region_buckets: metapb::Buckets,
-    ) {
+    fn on_refresh_region_buckets(&mut self, region_epoch: RegionEpoch, bucket_keys: Vec<Vec<u8>>) {
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
-            warn!(
+            info!(
                 "receive a stale refresh region bucket message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "epoch" => ?region_epoch,
+                "current_epoch" => ?region.get_region_epoch(),
             );
             return;
         }
+        let mut region_buckets = Buckets::default();
+        let now = monotonic_raw_now();
+        const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+        region_buckets.version = (now.sec as u64) * NANOSECONDS_PER_SECOND + now.nsec as u64;
+        region_buckets.set_keys(bucket_keys.into());
+        // add region's start/end key
+        region_buckets
+            .keys
+            .insert(0, region.get_start_key().to_vec());
+        region_buckets.keys.push(region.get_end_key().to_vec());
         self.fsm.peer.region_buckets = region_buckets;
     }
 
