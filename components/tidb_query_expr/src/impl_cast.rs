@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use byteorder::{BigEndian, ByteOrder};
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -114,6 +115,8 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Int, EvalType::Bytes) => {
             if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
                 cast_year_as_string_fn_meta()
+            } else if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Bit {
+                cast_bit_as_string_fn_meta()
             } else if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
             } else {

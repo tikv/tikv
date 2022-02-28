@@ -150,7 +150,24 @@ impl Column {
 
         match v {
             VectorValue::Int(vec) => {
-                if field_type.is_unsigned() {
+                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
+                    //See comments "pub fn from_raw_datum()"
+                    if field_type.as_accessor().flen() > 64 {
+                        unimplemented!()
+                    }
+                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
+                    for &row_index in logical_rows {
+                        match vec.get_option_ref(row_index) {
+                            None => {
+                                col.append_null();
+                            }
+                            Some(val) => {
+                                let byte = val.to_be_bytes();
+                                col.append_bytes(&byte[start_idx..])?;
+                            }
+                        }
+                    }
+                } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         match vec.get_option_ref(row_index) {
                             None => {
@@ -299,7 +316,8 @@ impl Column {
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
-            FieldTypeTp::Bit | FieldTypeTp::Set => {
+            FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
+            FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -1136,6 +1154,7 @@ mod tests {
             FieldTypeTp::TinyBlob.into(),
             FieldTypeTp::MediumBlob.into(),
             FieldTypeTp::LongBlob.into(),
+            FieldTypeTp::Bit.into(),
         ];
         let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
         test_colum_datum(fields, data);
