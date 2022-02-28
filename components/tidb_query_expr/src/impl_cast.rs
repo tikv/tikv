@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{BigEndian, ByteOrder};
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -115,8 +114,6 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Int, EvalType::Bytes) => {
             if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
                 cast_year_as_string_fn_meta()
-            } else if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Bit {
-                cast_bit_as_string_fn_meta()
             } else if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
             } else {
@@ -643,31 +640,6 @@ fn cast_year_as_string(
         val.to_string().into_bytes()
     };
     cast_as_string_helper(ctx, extra, cast)
-}
-
-#[rpn_fn(nullable, capture = [ctx, extra])]
-#[inline]
-fn cast_bit_as_string(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra,
-    val: Option<&Int>,
-) -> Result<Option<Bytes>> {
-    match val {
-        None => Ok(None),
-        Some(val) => {
-            let mut buf = [0; 8];
-            BigEndian::write_i64(&mut buf, *val);
-            let flen = extra.ret_field_type.as_accessor().flen();
-            if flen > 0 && flen <= 8 {
-                let start_idx: usize = (8 - flen) as usize;
-                let buf = &buf[start_idx..8];
-                cast_as_string_helper(ctx, extra, buf.to_vec())
-            } else {
-                //In cast bit(m) to var_string(n); n may be equal or less than 8, n = int(( m + 7 ) / 8);
-                Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))
-            }
-        }
-    }
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]

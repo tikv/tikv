@@ -8,7 +8,10 @@ use std::io::{self, Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+// Extention Traits
 use fs2::FileExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
 pub struct File {
@@ -228,6 +231,19 @@ impl OpenOptions {
 impl Default for OpenOptions {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl OpenOptionsExt for OpenOptions {
+    fn mode(&mut self, mode: u32) -> &mut Self {
+        self.0.mode(mode);
+        self
+    }
+
+    fn custom_flags(&mut self, flags: i32) -> &mut Self {
+        self.0.custom_flags(flags);
+        self
     }
 }
 
