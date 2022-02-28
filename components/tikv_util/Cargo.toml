@@ -46,9 +46,13 @@ tikv_alloc = { path = "../tikv_alloc" }
 time = "0.1"
 tokio-core = "0.1"
 tokio-executor = "0.1"
+<<<<<<< HEAD
 tokio-sync = "0.1.7"
 tokio-timer = "0.2"
 tempfile = "3.0"
+=======
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+>>>>>>> bb8c5eaaf... *: hotfix panic from tokio-timer (#12004)
 url = "2"
 zeroize = { version = "1.1", features = ["alloc"] }
 

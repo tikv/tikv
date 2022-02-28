@@ -5111,9 +5111,14 @@ dependencies = [
 
 [[package]]
 name = "tokio-timer"
+<<<<<<< HEAD
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2106812d500ed25a4f38235b9cae8f78a09edf43203e16e59c3b769a342a60e"
+=======
+version = "0.2.13"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
+>>>>>>> bb8c5eaaf... *: hotfix panic from tokio-timer (#12004)
 dependencies = [
  "crossbeam-utils 0.6.6",
  "futures 0.1.29",
