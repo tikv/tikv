@@ -1275,6 +1275,9 @@ where
         // become candidate first to increase term
         if !self.fsm.peer.is_leader() {
             self.fsm.peer.raft_group.raft.become_candidate();
+            // trigger candididate twice to increase term by 2, to avoid there is
+            // a existing leader by accident.
+            self.fsm.peer.raft_group.raft.become_candidate();
             self.fsm.peer.raft_group.raft.become_leader();
         }
         assert!(self.fsm.peer.is_leader());
