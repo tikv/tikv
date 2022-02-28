@@ -1194,8 +1194,8 @@ where
 
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
-        // if the peer is being destroyed, ignore the result.
-        if self.fsm.peer.pending_remove {
+        // if the peer is not the leader anymore or being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         }
