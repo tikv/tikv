@@ -4711,7 +4711,10 @@ where
         }
     }
 
-    fn maybe_inject_propose_error(&self, req: &RaftCmdRequest) -> Result<()> {
+    fn maybe_inject_propose_error(
+        &self,
+        #[allow(unused_variables)] req: &RaftCmdRequest,
+    ) -> Result<()> {
         // The return value format is {req_type}:{store_id}
         // Request matching the format will fail to be proposed.
         // Empty `req_type` means matching all kinds of requests.
