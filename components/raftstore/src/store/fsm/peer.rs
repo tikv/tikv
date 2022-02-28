@@ -1219,6 +1219,7 @@ where
             self.fsm.peer.raft_group.raft.become_leader();
         }
         assert!(self.fsm.peer.is_leader());
+        self.fsm.peer.raft_group.set_check_quorum(false);
 
         // forward commit index
         self.fsm.peer.raft_group.raft.raft_log.committed =
@@ -1238,6 +1239,7 @@ where
             .raft_group
             .raft
             .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+        self.fsm.peer.raft_group.set_check_quorum(true);
         self.fsm.has_ready = true;
     }
 
