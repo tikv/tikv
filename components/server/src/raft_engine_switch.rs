@@ -12,6 +12,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft_log_engine::RaftLogEngine;
+use scopeguard::{guard, ScopeGuard};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -91,6 +92,11 @@ pub fn check_and_dump_raft_db(
         return;
     }
 
+    // Add a guard to remove target data directory that is incomplete.
+    let defer = guard((), |_| {
+        let _ = std::fs::remove_dir_all(config.raft_engine.config().dir);
+    });
+
     // Clean the target engine if it exists.
     clear_raft_engine(engine).expect("clear_raft_engine");
 
@@ -147,6 +153,9 @@ pub fn check_and_dump_raft_db(
         count_size.load(Ordering::Relaxed),
         consumed_time.saturating_elapsed(),
     );
+
+    // Defuse the guard.
+    let _ = ScopeGuard::into_inner(defer);
 
     rename_to_tmp_dir(&raftdb_path, &dirty_raftdb_path);
     remove_tmp_dir(&dirty_raftdb_path);
@@ -225,6 +234,12 @@ pub fn check_and_dump_raft_engine(
     if !RaftLogEngine::exists(raft_engine_path) {
         return;
     }
+
+    // Add a guard to remove target data directory that is incomplete.
+    let defer = guard((), |_| {
+        let _ = std::fs::remove_dir_all(config.raft_store.raftdb_path.clone());
+    });
+
     let dirty_raft_engine_path = get_path_for_remove(raft_engine_path);
 
     // Clean the target engine if it exists.
@@ -269,6 +284,8 @@ pub fn check_and_dump_raft_engine(
         consumed_time.saturating_elapsed(),
     );
 
+    // Defuse the guard.
+    let _ = ScopeGuard::into_inner(defer);
     // Atomically rename to avoid leaving partially deleted directory.
     rename_to_tmp_dir(&raft_engine_path, &dirty_raft_engine_path);
     remove_tmp_dir(&dirty_raft_engine_path);
