@@ -10,7 +10,7 @@ use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 
-// Test the case where cache is compacted when one node down to check
+// Test the case that cache is compacted when one node down to check
 // if it goes well after the node is back online which triggers async fetch.
 #[test]
 fn test_node_async_fetch() {
@@ -103,7 +103,7 @@ fn test_node_async_fetch() {
     panic!("cluster is not compacted after inserting 200 entries.");
 }
 
-// Test the case where async fetch is performed while the peer is removed.
+// Test the case that async fetch is performed while the peer is removed.
 #[test]
 fn test_node_async_fetch_remove_peer() {
     let count = 5;
@@ -121,30 +121,13 @@ fn test_node_async_fetch_remove_peer() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    let mut before_states = HashMap::default();
-
-    for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
-        let mut state: RaftApplyState = engines
-            .kv
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
-            .unwrap()
-            .unwrap_or_default();
-        let state = state.take_truncated_state();
-        // compact should not start
-        assert_eq!(RAFT_INIT_LOG_INDEX, state.get_index());
-        assert_eq!(RAFT_INIT_LOG_TERM, state.get_term());
-        before_states.insert(id, state);
-    }
-
+    // cause log lag and trigger async fetch
     cluster.stop_node(5);
-
     for i in 1..60 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
     }
-
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
     cluster.run_node(5).unwrap();
 
@@ -165,6 +148,6 @@ fn test_node_async_fetch_remove_peer() {
     for i in 1..60 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
+        must_get_equal(&cluster.get_engine(1), &k, &v);
     }
 }
