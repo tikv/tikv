@@ -687,16 +687,19 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
         // The corruption format may like this:
         // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
         println!("corruption info:\n{}", line);
-        let parts = line.splitn(2, ':').collect::<Vec<_>>();
-        let path = Path::new(parts[0]);
-        match path.extension() {
-            Some(ext) if ext.to_str().unwrap() == "sst" => {}
-            _ => {
+
+        let r = Regex::new(r"/\w*\.sst").unwrap();
+        let sst_filename = match r.captures(line) {
+            None => {
                 println!("skip bad line format: {}", line);
                 continue;
             }
-        }
-        let sst_file_number = path.file_stem().unwrap().to_str().unwrap();
+            Some(parts) => {
+                let p = parts.get(0).unwrap().as_str();
+                Path::new(p[1..]).to_owned()
+            }
+        };
+        let sst_file_number = sst_filename.file_stem().unwrap().to_str().unwrap();
         let mut args1 = vec![
             "ldb".to_string(),
             "--hex".to_string(),
@@ -756,7 +759,13 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             let end = from_hex(matches.get(2).unwrap().as_str()).unwrap();
 
             if start.starts_with(&[keys::DATA_PREFIX]) {
-                print_overlap_region_and_suggestions(&pd_client, &start[1..], &end[1..], db, path);
+                print_overlap_region_and_suggestions(
+                    &pd_client,
+                    &start[1..],
+                    &end[1..],
+                    db,
+                    &sst_filename,
+                );
             } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
                 println!(
                     "it isn't easy to handle local data, start key:{}",
@@ -765,7 +774,13 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
 
                 // consider the case that include both meta and user data
                 if end.starts_with(&[keys::DATA_PREFIX]) {
-                    print_overlap_region_and_suggestions(&pd_client, &[], &end[1..], db, path);
+                    print_overlap_region_and_suggestions(
+                        &pd_client,
+                        &[],
+                        &end[1..],
+                        db,
+                        &sst_filename,
+                    );
                 }
             } else {
                 println!("unexpected key {}", log_wrappers::Value(&start));
