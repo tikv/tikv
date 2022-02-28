@@ -73,19 +73,7 @@ impl Column {
         let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
         match eval_type {
             EvalType::Int => {
-                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
-                    //Because Mysql define Bit max 64 bits: https://dev.mysql.com/doc/refman/8.0/en/bit-type.html
-                    //And TiDB fix Bit's field_type 8 bytes: tidb/parser/types/field_type.go +352 StorageLength()
-                    //So here field_type.as_accessor().flen() max is 64;
-                    //If field_type flen() excceed 64 bits in the future, should fix it here;
-                    if field_type.as_accessor().flen() > 64 {
-                        unimplemented!()
-                    }
-                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
-                    for &row_index in logical_rows {
-                        col.append_bit_datum(&raw_datums[row_index], &start_idx)?;
-                    }
-                } else if field_type.is_unsigned() {
+                if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         col.append_u64_datum(&raw_datums[row_index])?
                     }
@@ -151,24 +139,7 @@ impl Column {
 
         match v {
             VectorValue::Int(vec) => {
-                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
-                    //See comments "pub fn from_raw_datum()"
-                    if field_type.as_accessor().flen() > 64 {
-                        unimplemented!()
-                    }
-                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
-                    for &row_index in logical_rows {
-                        match vec.get_option_ref(row_index) {
-                            None => {
-                                col.append_null();
-                            }
-                            Some(val) => {
-                                let byte = val.to_be_bytes();
-                                col.append_bytes(&byte[start_idx..])?;
-                            }
-                        }
-                    }
-                } else if field_type.is_unsigned() {
+                if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         match vec.get_option_ref(row_index) {
                             None => {
@@ -301,7 +272,6 @@ impl Column {
             | FieldTypeTp::Int24
             | FieldTypeTp::Long
             | FieldTypeTp::LongLong
-            | FieldTypeTp::Bit
             | FieldTypeTp::Year => {
                 if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                     Datum::U64(self.get_u64(idx)?)
@@ -318,7 +288,7 @@ impl Column {
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
-            FieldTypeTp::Set => {
+            FieldTypeTp::Bit | FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -551,28 +521,6 @@ impl Column {
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
         data.read_u64_le().map_err(Error::from)
-    }
-
-    /// Append bit datum to the column.
-    pub fn append_bit_datum(&mut self, src_datum: &[u8], start_idx: &usize) -> Result<()> {
-        if src_datum.is_empty() {
-            return Err(Error::InvalidDataType(
-                "Failed to decode datum flag".to_owned(),
-            ));
-        }
-        let flag = src_datum[0];
-        match flag {
-            datum::NIL_FLAG => self.append_null(),
-            //"1 +" means skip src_datum[0]; the same as raw_datum = &src_datum[1..];
-            datum::UINT_FLAG => self.append_bytes(&src_datum[(1 + start_idx)..])?,
-            _ => {
-                return Err(Error::InvalidDataType(format!(
-                    "Unsupported datum flag {} for Bit vector",
-                    flag
-                )));
-            }
-        }
-        Ok(())
     }
 
     /// Append a f64 datum to the column.
