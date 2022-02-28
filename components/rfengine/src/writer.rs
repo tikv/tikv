@@ -48,7 +48,8 @@ pub(crate) struct WALWriter {
 impl WALWriter {
     pub(crate) fn new(dir: &Path, epoch_id: u32, wal_size: usize) -> Result<Self> {
         let wal_size = (wal_size + ALIGN_SIZE - 1) & ALIGN_MASK as usize;
-        let fd = open_direct_file(dir, epoch_id, wal_size)?;
+        let file_path = get_wal_file_path(dir, epoch_id)?;
+        let fd = open_direct_file(file_path, true)?;
         let mut buf = alloc_aligned(INITIAL_BUF_SIZE);
         buf.resize(BATCH_HEADER_SIZE, 0);
         Ok(Self {
@@ -74,10 +75,6 @@ impl WALWriter {
         let _ = mem::replace(&mut self.buf, new_buf);
     }
 
-    pub(crate) fn aligned_buf_len(&self) -> usize {
-        ((self.buf.len() + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
-    }
-
     pub(crate) fn append_region_data(&mut self, region_data: &RegionData) {
         if self.buf.len() + region_data.encoded_len() > self.buf.capacity() {
             self.reallocate();
@@ -87,7 +84,7 @@ impl WALWriter {
 
     pub(crate) fn flush(&mut self) -> Result<bool> {
         let mut rotated = false;
-        if self.aligned_buf_len() + self.file_off as usize > self.wal_size {
+        if aligned_len(self.buf.len()) + self.file_off as usize > self.wal_size {
             self.rotate()?;
             rotated = true;
         }
@@ -97,9 +94,9 @@ impl WALWriter {
         batch_header.put_u32_le(self.epoch_id);
         batch_header.put_u32_le(checksum);
         batch_header.put_u32_le(batch_payload.len() as u32);
-        self.buf.resize(self.aligned_buf_len(), 0);
+        self.buf.resize(aligned_len(self.buf.len()), 0);
         self.fd.write_all_at(&self.buf[..], self.file_off)?;
-        self.file_off += self.aligned_buf_len() as u64;
+        self.file_off += self.buf.len() as u64;
         self.reset_batch();
         Ok(rotated)
     }
@@ -114,28 +111,41 @@ impl WALWriter {
     }
 
     pub(crate) fn open_file(&mut self) -> Result<()> {
-        let file = open_direct_file(&self.dir, self.epoch_id, self.wal_size)?;
+        let filename = get_wal_file_path(&self.dir, self.epoch_id)?;
+        let file = open_direct_file(filename, true)?;
+        file.set_len(self.wal_size as u64)?;
         self.fd = file;
         self.file_off = 0;
         Ok(())
     }
 }
 
-pub(crate) fn open_direct_file(dir: &Path, epoch_id: u32, wal_size: usize) -> Result<File> {
+pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {
     let filename = wal_file_name(dir, epoch_id);
     if !filename.exists() {
         if let Ok(Some(recycle_filename)) = find_recycled_file(dir) {
             fs::rename(recycle_filename, filename.clone())?;
         }
     }
+    Ok(filename)
+}
+
+pub(crate) fn open_direct_file(filename: PathBuf, sync: bool) -> Result<File> {
+    let mut flag = o_direct_flag();
+    if sync {
+        flag |= libc::O_DSYNC;
+    }
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
-        .custom_flags(o_direct_flag() | libc::O_DSYNC)
+        .custom_flags(flag)
         .open(filename)?;
-    file.set_len(wal_size as u64)?;
     Ok(file)
+}
+
+pub(crate) fn aligned_len(origin_len: usize) -> usize {
+    ((origin_len + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
 }
 
 pub(crate) fn find_recycled_file(dir: &Path) -> Result<Option<PathBuf>> {

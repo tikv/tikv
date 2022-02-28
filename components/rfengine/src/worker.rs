@@ -1,12 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::FileExt;
 use std::sync::{Arc, RwLock};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
-    io::Write,
-    mem,
+    fs, mem,
     path::Path,
     path::PathBuf,
     sync::mpsc::Receiver,
@@ -17,12 +16,14 @@ use slog_global::*;
 
 use crate::*;
 
+const WORKER_WRITE_BATCH_SIZE: usize = 256 * 1024;
+
 pub(crate) struct Worker {
     dir: PathBuf,
     epoches: Vec<Epoch>,
     region_data: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
     truncated_idx: HashMap<u64, u64>,
-    buf: BytesMut,
+    buf: Vec<u8>,
     task_rx: Receiver<Task>,
     all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
 }
@@ -39,7 +40,7 @@ impl Worker {
             epoches,
             region_data,
             truncated_idx: HashMap::new(),
-            buf: BytesMut::new(),
+            buf: alloc_aligned(WORKER_WRITE_BATCH_SIZE),
             task_rx,
             all_states: HashMap::default(),
         }
@@ -78,7 +79,18 @@ impl Worker {
     }
 
     fn write_all_states(&mut self, epoch_id: u32) -> Result<()> {
-        self.buf.truncate(0);
+        let mut all_states_len = 4;
+        for (id, region_states) in &self.all_states {
+            for (k, v) in region_states {
+                all_states_len += 8 + 2 + k.len() + 4 + v.len();
+            }
+        }
+        let aligned_capacity = aligned_len(all_states_len);
+        if self.buf.capacity() < aligned_capacity {
+            self.buf = alloc_aligned(aligned_capacity);
+        } else {
+            self.buf.truncate(0);
+        }
         for (id, region_states) in &self.all_states {
             for (k, v) in region_states {
                 self.buf.put_u64_le(*id);
@@ -88,22 +100,36 @@ impl Worker {
                 self.buf.extend_from_slice(v.chunk());
             }
         }
-        let checksum = crc32c::crc32c(self.buf.chunk());
-        self.buf.put_u32_le(checksum);
         let filename = states_file_name(&self.dir, epoch_id);
-        let mut file = fs::File::create(filename)?;
-        file.write_all(self.buf.chunk())?;
-        file.sync_all()?;
-        info!(
-            "write state file for epoch {}, len {}",
-            epoch_id,
-            self.buf.len()
-        );
+        self.write_buf_to_direct_file(filename)?;
+        info!("write state file for epoch {}", epoch_id,);
         if epoch_id == 1 {
             return Ok(());
         }
         let old_epoch_state_file = states_file_name(&self.dir, epoch_id - 1);
         fs::remove_file(old_epoch_state_file)?;
+        Ok(())
+    }
+
+    fn write_buf_to_direct_file(&mut self, filename: PathBuf) -> Result<()> {
+        let file = open_direct_file(filename, false)?;
+        let checksum = crc32c::crc32c(&self.buf);
+        self.buf.put_u32_le(checksum);
+        let origin_buf_len = self.buf.len();
+        self.buf.resize(aligned_len(origin_buf_len), 0);
+        let mut cursor = 0usize;
+        while cursor < self.buf.len() {
+            let mut end = cursor + WORKER_WRITE_BATCH_SIZE;
+            if end > self.buf.len() {
+                end = self.buf.len();
+            }
+            file.write_all_at(&self.buf[cursor..end], cursor as u64)?;
+            // A simple way to lower the I/O priority.
+            std::thread::yield_now();
+            cursor = end;
+        }
+        file.set_len(origin_buf_len as u64)?;
+        file.sync_all()?;
         Ok(())
     }
 
@@ -118,14 +144,13 @@ impl Worker {
         let epoch_id = self.epoches[epoch_idx].id;
         let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
-        it.iterate(|region_data| {
+        it.iterate(|mut region_data| {
+            if let Some(truncated_idx) = self.truncated_idx.get(&region_data.region_id) {
+                region_data.truncate(*truncated_idx);
+            }
             batch.merge_region(&region_data);
         })?;
-        info!(
-            "epoch {} compact wal file generated {} files",
-            epoch_id,
-            batch.regions.len()
-        );
+        let mut generated_files = 0;
         for (_, mut region_data) in batch.regions {
             let new_states = mem::replace(&mut region_data.states, BTreeMap::default());
             let region_states = self.get_region_states(region_data.region_id);
@@ -136,8 +161,15 @@ impl Worker {
                     region_states.insert(k.clone(), v.clone());
                 }
             }
-            self.write_raft_log_file(epoch_idx, &region_data)?;
+            if region_data.raft_logs.len() > 0 {
+                self.write_raft_log_file(epoch_idx, &region_data)?;
+                generated_files += 1;
+            }
         }
+        info!(
+            "epoch {} compact wal file generated {} files",
+            epoch_id, generated_files,
+        );
         self.write_all_states(epoch_id)?;
         let wal_filename = wal_file_name(&self.dir, epoch_id);
         let recycle_filename = recycle_file_name(&self.dir, epoch_id);
@@ -153,13 +185,15 @@ impl Worker {
             region_data.region_id,
             region_data.range,
         );
-        let mut file = fs::File::create(filename)?;
-        self.buf.truncate(0);
+        let encoded_len = region_data.encoded_len() + 4;
+        let aligned_capacity = aligned_len(encoded_len);
+        if aligned_capacity > self.buf.capacity() {
+            self.buf = alloc_aligned(aligned_capacity);
+        } else {
+            self.buf.truncate(0);
+        }
         region_data.encode_to(&mut self.buf);
-        let checksum = crc32c::crc32c(self.buf.chunk());
-        self.buf.put_u32_le(checksum);
-        file.write_all(self.buf.chunk())?;
-        file.sync_all()?;
+        self.write_buf_to_direct_file(filename)?;
         self.epoches[epoch_idx]
             .raft_log_files
             .lock()
