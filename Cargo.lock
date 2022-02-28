@@ -5955,8 +5955,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.29",
@@ -5975,16 +5974,10 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
 name = "tokio-util"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
-=======
-name = "tokio-timer"
-version = "0.2.13"
-source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
->>>>>>> bb8c5eaaf... *: hotfix panic from tokio-timer (#12004)
 dependencies = [
  "bytes 0.5.3",
  "futures-core",
