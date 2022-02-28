@@ -86,9 +86,7 @@ pub fn check_and_dump_raft_db(
     thread_num: usize,
 ) {
     let raftdb_path = &config.raft_store.raftdb_path;
-    let dirty_raftdb_path = get_path_for_remove(raftdb_path);
     if !RocksEngine::exists(raftdb_path) {
-        remove_tmp_dir(&dirty_raftdb_path);
         return;
     }
 
@@ -157,6 +155,7 @@ pub fn check_and_dump_raft_db(
     // Defuse the guard.
     let _ = ScopeGuard::into_inner(defer);
 
+    let dirty_raftdb_path = get_path_for_remove(raftdb_path);
     rename_to_tmp_dir(&raftdb_path, &dirty_raftdb_path);
     remove_tmp_dir(&dirty_raftdb_path);
 }
@@ -230,7 +229,6 @@ pub fn check_and_dump_raft_engine(
 ) {
     let raft_engine_config = config.raft_engine.config();
     let raft_engine_path = &raft_engine_config.dir;
-
     if !RaftLogEngine::exists(raft_engine_path) {
         return;
     }
@@ -239,8 +237,6 @@ pub fn check_and_dump_raft_engine(
     let defer = guard((), |_| {
         let _ = std::fs::remove_dir_all(config.raft_store.raftdb_path.clone());
     });
-
-    let dirty_raft_engine_path = get_path_for_remove(raft_engine_path);
 
     // Clean the target engine if it exists.
     clear_raft_db(rocks_engine).expect("clear_raft_db");
@@ -287,6 +283,7 @@ pub fn check_and_dump_raft_engine(
     // Defuse the guard.
     let _ = ScopeGuard::into_inner(defer);
     // Atomically rename to avoid leaving partially deleted directory.
+    let dirty_raft_engine_path = get_path_for_remove(raft_engine_path);
     rename_to_tmp_dir(&raft_engine_path, &dirty_raft_engine_path);
     remove_tmp_dir(&dirty_raft_engine_path);
 }
