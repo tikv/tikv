@@ -2671,6 +2671,11 @@ impl TiKvConfig {
         {
             return Err("default rocksdb doesn't exist, but raftdb or raft engine exists".into());
         }
+        if RocksEngine::exists(&self.raft_store.raftdb_path)
+            && RaftLogEngine::exists(&self.raft_engine.config.dir)
+        {
+            return Err("raftdb and raft engine both exist".into());
+        }
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
