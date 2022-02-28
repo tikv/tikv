@@ -22,29 +22,21 @@ use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
 
-pub struct SplitInfo {
-    pub region_id: u64,
-    pub split_key: Vec<u8>,
-    pub peer: Peer,
-}
-
-pub struct Sample {
-    pub key: Vec<u8>,
-    pub left: i32,
-    pub contained: i32,
-    pub right: i32,
-}
-
-impl Sample {
-    fn new(key: &[u8]) -> Sample {
-        Sample {
-            key: key.to_owned(),
-            left: 0,
-            contained: 0,
-            right: 0,
-        }
-    }
-}
+// LOAD_BASE_SPLIT_EVENT metrics label definitions.
+// Workload fits the QPS threshold or byte threshold.
+const LOAD_FIT: &str = "load_fit";
+// Split info has been collected, ready to split.
+const READY_TO_SPLIT: &str = "ready_to_split";
+// Split info has not been collected yet, not ready to split.
+const NOT_READY_TO_SPLIT: &str = "not_ready_to_split";
+// The number of sampled keys does not meet the threshold.
+const NO_ENOUGH_SAMPLED_KEY: &str = "no_enough_sampled_key";
+// The number of sampled keys located on left and right does not meet the threshold.
+const NO_ENOUGH_LR_KEY: &str = "no_enough_lr_key";
+// The number of balanced keys does not meet the score.
+const NO_BALANCE_KEY: &str = "no_balance_key";
+// The number of contained keys does not meet the score.
+const NO_UNCROSS_KEY: &str = "no_uncross_key";
 
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
@@ -99,57 +91,23 @@ where
     sampled_key_ranges
 }
 
-// RegionInfo will maintain key_ranges with sample_num length by reservoir sampling.
-// And it will save qps num and peer.
-#[derive(Debug, Clone)]
-pub struct RegionInfo {
-    pub sample_num: usize,
-    pub query_stats: QueryStats,
-    pub peer: Peer,
-    pub key_ranges: Vec<KeyRange>,
-    pub flow: FlowStatistics,
+pub struct Sample {
+    pub key: Vec<u8>,
+    // left means the number of key ranges located on the sample's left.
+    pub left: i32,
+    // contained means the number of key ranges the sample locates inside.
+    pub contained: i32,
+    // right means the number of key ranges located on the sample's right.
+    pub right: i32,
 }
 
-impl RegionInfo {
-    fn new(sample_num: usize) -> RegionInfo {
-        RegionInfo {
-            sample_num,
-            query_stats: QueryStats::default(),
-            key_ranges: Vec::with_capacity(sample_num),
-            peer: Peer::default(),
-            flow: FlowStatistics::default(),
-        }
-    }
-
-    fn get_read_qps(&self) -> usize {
-        self.query_stats.get_read_query_num() as usize
-    }
-
-    fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
-        &mut self.key_ranges
-    }
-
-    fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
-        for (i, key_range) in key_ranges.into_iter().enumerate() {
-            let n = self.get_read_qps() + i;
-            if n == 0 || self.key_ranges.len() < self.sample_num {
-                self.key_ranges.push(key_range);
-            } else {
-                let j = rand::thread_rng().gen_range(0..n) as usize;
-                if j < self.sample_num {
-                    self.key_ranges[j] = key_range;
-                }
-            }
-        }
-    }
-
-    fn add_query_num(&mut self, kind: QueryKind, query_num: u64) {
-        self.query_stats.add_query_num(kind, query_num);
-    }
-
-    fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
-            self.peer = peer.clone();
+impl Sample {
+    fn new(key: &[u8]) -> Sample {
+        Sample {
+            key: key.to_owned(),
+            left: 0,
+            contained: 0,
+            right: 0,
         }
     }
 }
@@ -200,49 +158,51 @@ impl Samples {
     }
 
     // split the keys with the given split config and sampled data.
-    fn split_key(
-        &self,
-        split_balance_score: f64,
-        split_contained_score: f64,
-        sample_threshold: u64,
-    ) -> Vec<u8> {
+    fn split_key(&self, split_balance_score: f64, split_contained_score: f64) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in self.0.iter().enumerate() {
             if sample.key.is_empty() {
                 continue;
             }
-            let sampled = (sample.contained + sample.left + sample.right) as u64;
-            if (sample.left + sample.right) == 0 || sampled < sample_threshold {
+            let evaluated_key_num_lr = sample.left + sample.right;
+            if evaluated_key_num_lr == 0 {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_enough_key"])
+                    .with_label_values(&[NO_ENOUGH_LR_KEY])
                     .inc();
                 continue;
             }
+            let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as f64;
 
-            let diff = (sample.left - sample.right) as f64;
-            let balance_score = diff.abs() / (sample.left + sample.right) as f64;
+            // The balance score is the difference in the number of requested keys between the left and right of a sample key.
+            // The smaller the balance score, the more balanced the load will be after this splitting.
+            let balance_score =
+                (sample.left as f64 - sample.right as f64).abs() / evaluated_key_num_lr as f64;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["balance_score"])
                 .observe(balance_score);
             if balance_score >= split_balance_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_balance_key"])
+                    .with_label_values(&[NO_BALANCE_KEY])
                     .inc();
                 continue;
             }
 
-            let contained_score = sample.contained as f64 / sampled as f64;
+            // The contained score is the ratio of a sample key that are contained in the requested key.
+            // The larger the contained score, the more RPCs the cluster will receive after this splitting.
+            let contained_score = sample.contained as f64 / evaluated_key_num;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
             if contained_score >= split_contained_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_uncross_key"])
+                    .with_label_values(&[NO_UNCROSS_KEY])
                     .inc();
                 continue;
             }
 
+            // We try to find a split key that has the smallest balance score and the smallest contained score
+            // to make the splitting keep the load balanced while not increasing too many RPCs.
             let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
@@ -303,33 +263,74 @@ impl Recorder {
             |x| x,
         );
         let mut samples = Samples::from(sampled_key_ranges);
-        self.key_ranges.iter().flatten().for_each(|key_range| {
+        let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
+        // Because we need to observe the number of `no_enough_key` of all the actual keys,
+        // so we do this check after the samples are calculated.
+        if (recorded_key_ranges.len() as u64) < config.sample_threshold {
+            LOAD_BASE_SPLIT_EVENT
+                .with_label_values(&[NO_ENOUGH_SAMPLED_KEY])
+                .inc_by(samples.0.len() as u64);
+            return vec![];
+        }
+        recorded_key_ranges.into_iter().for_each(|key_range| {
             samples.evaluate(key_range);
         });
-        samples.split_key(
-            config.split_balance_score,
-            config.split_contained_score,
-            config.sample_threshold,
-        )
+        samples.split_key(config.split_balance_score, config.split_contained_score)
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct WriteStats {
-    pub region_infos: HashMap<u64, QueryStats>,
+// RegionInfo will maintain key_ranges with sample_num length by reservoir sampling.
+// And it will save qps num and peer.
+#[derive(Debug, Clone)]
+pub struct RegionInfo {
+    pub sample_num: usize,
+    pub query_stats: QueryStats,
+    pub peer: Peer,
+    pub key_ranges: Vec<KeyRange>,
+    pub flow: FlowStatistics,
 }
 
-impl WriteStats {
-    pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
-        let query_stats = self
-            .region_infos
-            .entry(region_id)
-            .or_insert_with(QueryStats::default);
-        query_stats.add_query_num(kind, 1);
+impl RegionInfo {
+    fn new(sample_num: usize) -> RegionInfo {
+        RegionInfo {
+            sample_num,
+            query_stats: QueryStats::default(),
+            key_ranges: Vec::with_capacity(sample_num),
+            peer: Peer::default(),
+            flow: FlowStatistics::default(),
+        }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.region_infos.is_empty()
+    fn get_read_qps(&self) -> usize {
+        self.query_stats.get_read_query_num() as usize
+    }
+
+    fn get_key_ranges_mut(&mut self) -> &mut Vec<KeyRange> {
+        &mut self.key_ranges
+    }
+
+    fn add_key_ranges(&mut self, key_ranges: Vec<KeyRange>) {
+        for (i, key_range) in key_ranges.into_iter().enumerate() {
+            let n = self.get_read_qps() + i;
+            if n == 0 || self.key_ranges.len() < self.sample_num {
+                self.key_ranges.push(key_range);
+            } else {
+                let j = rand::thread_rng().gen_range(0..n) as usize;
+                if j < self.sample_num {
+                    self.key_ranges[j] = key_range;
+                }
+            }
+        }
+    }
+
+    fn add_query_num(&mut self, kind: QueryKind, query_num: u64) {
+        self.query_stats.add_query_num(kind, query_num);
+    }
+
+    fn update_peer(&mut self, peer: &Peer) {
+        if self.peer != *peer {
+            self.peer = peer.clone();
+        }
     }
 }
 
@@ -402,6 +403,31 @@ impl Default for ReadStats {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct WriteStats {
+    pub region_infos: HashMap<u64, QueryStats>,
+}
+
+impl WriteStats {
+    pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
+        let query_stats = self
+            .region_infos
+            .entry(region_id)
+            .or_insert_with(QueryStats::default);
+        query_stats.add_query_num(kind, 1);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.region_infos.is_empty()
+    }
+}
+
+pub struct SplitInfo {
+    pub region_id: u64,
+    pub split_key: Vec<u8>,
+    pub peer: Peer,
+}
+
 pub struct AutoSplitController {
     // RegionID -> Recorder
     pub recorders: HashMap<u64, Recorder>,
@@ -422,7 +448,8 @@ impl AutoSplitController {
         AutoSplitController::new(SplitConfigManager::default())
     }
 
-    fn collect_read_stats(&self, read_stats_vec: Vec<ReadStats>) -> HashMap<u64, Vec<RegionInfo>> {
+    // collect the read stats from read_stats_vec and dispatch them to a region hashmap.
+    fn collect_read_stats(read_stats_vec: Vec<ReadStats>) -> HashMap<u64, Vec<RegionInfo>> {
         // collect from different thread
         let mut region_infos_map = HashMap::default(); // regionID-regionInfos
         let capacity = read_stats_vec.len();
@@ -437,10 +464,12 @@ impl AutoSplitController {
         region_infos_map
     }
 
+    // flush the read stats info into the recorder and check if the region needs to be split
+    // according to all the stats info the recorder has collected before.
     pub fn flush(&mut self, read_stats_vec: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut split_infos = vec![];
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
-        let region_infos_map = self.collect_read_stats(read_stats_vec);
+        let region_infos_map = Self::collect_read_stats(read_stats_vec);
 
         for (region_id, region_infos) in region_infos_map {
             let qps_prefix_sum = prefix_sum(region_infos.iter(), RegionInfo::get_read_qps);
@@ -466,7 +495,7 @@ impl AutoSplitController {
                 continue;
             }
 
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&[LOAD_FIT]).inc();
 
             let detect_times = self.cfg.detect_times;
             let recorder = self
@@ -492,7 +521,7 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     });
                     LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&["prepare_to_split"])
+                        .with_label_values(&[READY_TO_SPLIT])
                         .inc();
                     info!("load base split region";
                         "region_id" => region_id,
@@ -502,7 +531,7 @@ impl AutoSplitController {
                 self.recorders.remove(&region_id);
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_fit_key"])
+                    .with_label_values(&[NOT_READY_TO_SPLIT])
                     .inc();
             }
 
@@ -616,6 +645,25 @@ mod tests {
             );
         }
         qps_stats
+    }
+
+    #[test]
+    fn test_recorder() {
+        let mut config = SplitConfig::default();
+        config.detect_times = 10;
+        config.sample_threshold = 20;
+
+        let mut recorder = Recorder::new(config.detect_times);
+        for _ in 0..config.detect_times {
+            assert!(!recorder.is_ready());
+            recorder.record(vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ]);
+        }
+        assert!(recorder.is_ready());
+        let key = recorder.collect(&config);
+        assert_eq!(key, b"b");
     }
 
     #[test]
