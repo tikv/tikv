@@ -2719,7 +2719,7 @@ dependencies = [
  "slog-global",
  "tikv_alloc",
  "tikv_util",
- "tokio-timer",
+ "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
  "txn_types",
 ]
 
@@ -3168,7 +3168,7 @@ dependencies = [
  "tokio 0.2.13",
  "tokio-core",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
  "txn_types",
  "uuid",
  "yatp",
@@ -4387,7 +4387,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
  "txn_types",
 ]
 
@@ -4712,7 +4712,7 @@ dependencies = [
  "tokio-sync",
  "tokio-tcp",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
  "toml",
  "txn_types",
  "url",
@@ -4821,7 +4821,7 @@ dependencies = [
  "tokio-core",
  "tokio-executor",
  "tokio-sync",
- "tokio-timer",
+ "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
  "toml",
  "url",
  "utime",
@@ -4927,7 +4927,7 @@ dependencies = [
  "tokio-sync",
  "tokio-tcp",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-udp",
  "tokio-uds",
 ]
@@ -4983,7 +4983,7 @@ dependencies = [
  "tokio-executor",
  "tokio-io",
  "tokio-reactor",
- "tokio-timer",
+ "tokio-timer 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5111,16 +5111,22 @@ dependencies = [
 
 [[package]]
 name = "tokio-timer"
-<<<<<<< HEAD
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2106812d500ed25a4f38235b9cae8f78a09edf43203e16e59c3b769a342a60e"
-=======
 version = "0.2.13"
 source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
->>>>>>> bb8c5eaaf... *: hotfix panic from tokio-timer (#12004)
 dependencies = [
- "crossbeam-utils 0.6.6",
+ "crossbeam-utils 0.7.2",
+ "futures 0.1.29",
+ "slab",
+ "tokio-executor",
+]
+
+[[package]]
+name = "tokio-timer"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+dependencies = [
+ "crossbeam-utils 0.7.2",
  "futures 0.1.29",
  "slab",
  "tokio-executor",
