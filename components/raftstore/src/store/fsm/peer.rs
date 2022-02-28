@@ -32,7 +32,7 @@ use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
     RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
-use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode, StoreDrAutoSyncStatus};
+use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};

@@ -28,7 +28,7 @@ use kvproto::pdpb::QueryStats;
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus};
+use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::StateRole;
 use time::{self, Timespec};
