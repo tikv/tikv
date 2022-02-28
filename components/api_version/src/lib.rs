@@ -54,12 +54,12 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
         })
     }
     /// Encode the raw key and optional timestamp into bytes.
-    fn encode_raw_key(key: RawKey<&[u8]>) -> Vec<u8> {
-        key.user_key.to_vec()
+    fn encode_raw_key(key: RawKey<&[u8]>) -> Result<Vec<u8>> {
+        Ok(key.user_key.to_vec())
     }
     /// This is equivalent to `encode_raw_key` but reduced an allocation.
-    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Vec<u8> {
-        key.user_key
+    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Result<Vec<u8>> {
+        Ok(key.user_key)
     }
 }
 
@@ -429,21 +429,21 @@ mod tests {
                 &[0, 0, 0, 0, 0, 0, 0, 0, 0xf7][..],
             ),
             (
-                &b"a"[..],
+                &b"r"[..],
                 Some(2),
-                &[b'a'][..],
-                &[b'a'][..],
+                &[b'r'][..],
+                &[b'r'][..],
                 &[
-                    b'a', 0, 0, 0, 0, 0, 0, 0, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfd,
+                    b'r', 0, 0, 0, 0, 0, 0, 0, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfd,
                 ][..],
             ),
             (
-                &b"1234567890"[..],
+                &b"r234567890"[..],
                 Some(3),
-                &b"1234567890"[..],
-                &b"1234567890"[..],
+                &b"r234567890"[..],
+                &b"r234567890"[..],
                 &[
-                    b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', 0xff, b'9', b'0', 0, 0, 0, 0,
+                    b'r', b'2', b'3', b'4', b'5', b'6', b'7', b'8', 0xff, b'9', b'0', 0, 0, 0, 0,
                     0, 0, 0xf9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfc,
                 ][..],
             ),
@@ -456,30 +456,40 @@ mod tests {
             assert_raw_key_encode_decode_identity(case.0, case.1, case.3, ApiVersion::V1ttl, None);
         }
         for case in &cases {
-            assert_raw_key_encode_decode_identity(case.0, case.1, case.4, ApiVersion::V2, case.1);
+            if !case.0.is_empty() {
+                assert_raw_key_encode_decode_identity(
+                    case.0,
+                    case.1,
+                    case.4,
+                    ApiVersion::V2,
+                    case.1,
+                );
+            }
         }
     }
 
     #[test]
     fn test_v2_key_decode_err() {
-        let cases = vec![
+        let cases: Vec<(Vec<u8>, &str)> = vec![
+            // Invalid key prefix
+            (vec![], "Codec(KeyPrefix(None))"),
+            (vec![42], "Codec(KeyPrefix(Some(42)))"),
             // At least 9 bytes for Memcomparable-encoded padding.
-            (vec![], "UnexpectedEof"),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8], "UnexpectedEof"),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], "UnexpectedEof"),
             // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
-            (vec![1, 2, 3, 4, 0, 0, 1, 0, 0xfb], "Codec(KeyPadding)"),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 0xf6], "Codec(KeyPadding)"),
+            (vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb], "Codec(KeyPadding)"),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6], "Codec(KeyPadding)"),
             // `ts` is 8 more bytes.
             (
                 vec![
-                    1, 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
+                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
                 ],
                 "Codec(KeyLength)",
             ),
             (
                 vec![
-                    1, 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0, 0,
-                    0, 1, 0,
+                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0,
+                    0, 0, 1, 0,
                 ],
                 "Codec(KeyLength)",
             ),
@@ -510,7 +520,10 @@ mod tests {
             API,
             match api_version {
                 ApiVersion::API => {
-                    assert_eq!(&API::encode_raw_key(RawKey { user_key, ts }), encoded_bytes);
+                    assert_eq!(
+                        &API::encode_raw_key(RawKey { user_key, ts }).unwrap(),
+                        encoded_bytes
+                    );
                     assert_eq!(
                         API::decode_raw_key(encoded_bytes).unwrap(),
                         RawKey {
@@ -523,7 +536,8 @@ mod tests {
                         &API::encode_raw_key_owned(RawKey {
                             user_key: user_key.to_vec(),
                             ts,
-                        }),
+                        })
+                        .unwrap(),
                         encoded_bytes
                     );
                     assert_eq!(

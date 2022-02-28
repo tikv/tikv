@@ -110,6 +110,7 @@ impl APIVersion for APIV2 {
     }
 
     fn decode_raw_key(mut bytes: &[u8]) -> Result<RawKey<Vec<u8>>> {
+        Self::check_prefix(bytes)?;
         let key = bytes::decode_bytes(&mut bytes, false)?;
         match bytes.len() {
             0 => Ok(RawKey {
@@ -125,6 +126,7 @@ impl APIVersion for APIV2 {
     }
 
     fn decode_raw_key_owned(mut bytes: Vec<u8>) -> Result<RawKey<Vec<u8>>> {
+        Self::check_prefix(&bytes)?;
         let (write_offset, read_offset) = bytes::decode_bytes_in_place_ext(&mut bytes, false)?;
         let ts = match bytes.len() - read_offset {
             0 => None,
@@ -144,17 +146,18 @@ impl APIVersion for APIV2 {
         })
     }
 
-    fn encode_raw_key(key: RawKey<&[u8]>) -> Vec<u8> {
+    fn encode_raw_key(key: RawKey<&[u8]>) -> Result<Vec<u8>> {
         Self::encode_raw_key_impl(key)
     }
 
-    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Vec<u8> {
+    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Result<Vec<u8>> {
         Self::encode_raw_key_impl(key)
     }
 }
 
 impl APIV2 {
-    fn encode_raw_key_impl<T: AsRef<[u8]>>(key: RawKey<T>) -> Vec<u8> {
+    fn encode_raw_key_impl<T: AsRef<[u8]>>(key: RawKey<T>) -> Result<Vec<u8>> {
+        Self::check_prefix(key.user_key.as_ref())?;
         let len = bytes::max_encoded_bytes_size(key.user_key.as_ref().len())
             + key.ts.map_or(0, |_| number::U64_SIZE);
         let mut encoded = Vec::with_capacity(len);
@@ -162,6 +165,15 @@ impl APIV2 {
         if let Some(ts) = key.ts {
             encoded.encode_u64_desc(ts).unwrap();
         }
-        encoded
+        Ok(encoded)
+    }
+
+    #[inline]
+    fn check_prefix(bytes: &[u8]) -> Result<()> {
+        if let KeyMode::Raw = Self::parse_key_mode(bytes) {
+            Ok(())
+        } else {
+            Err(Error::KeyPrefix(bytes.get(0).cloned()).into())
+        }
     }
 }
