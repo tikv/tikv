@@ -58,6 +58,22 @@ pub fn date(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     Ok(Some(res))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sysdate_with_fsp(ctx: &mut EvalContext, fsp: &Int) -> Result<Option<DateTime>> {
+    DateTime::from_local_time(ctx, TimeType::DateTime, *fsp as i8)
+        .map(Some)
+        .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sysdate_without_fsp(ctx: &mut EvalContext) -> Result<Option<DateTime>> {
+    DateTime::from_local_time(ctx, TimeType::DateTime, 0)
+        .map(Some)
+        .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
+}
+
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn week_with_mode(

@@ -27,6 +27,7 @@ define_error_codes!(
     SERVER_IS_BUSY => ("ServerIsBusy", "", ""),
     DATA_IS_NOT_READY => ("DataIsNotReady", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
+    PENDING_PREPARE_MERGE => ("PendingPrepareMerge", "", ""),
     RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),

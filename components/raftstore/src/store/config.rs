@@ -58,7 +58,6 @@ pub struct Config {
     pub raft_max_election_timeout_ticks: usize,
     #[online_config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
-    #[online_config(hidden)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -422,6 +421,14 @@ impl Config {
                 self.raft_min_election_timeout_ticks,
                 self.raft_max_election_timeout_ticks,
                 self.raft_election_timeout_ticks
+            ));
+        }
+
+        // The adjustment of this value is related to the number of regions, usually 16384 is
+        // already a large enough value
+        if self.raft_max_inflight_msgs == 0 || self.raft_max_inflight_msgs > 16384 {
+            return Err(box_err!(
+                "raft max inflight msgs should be greater than 0 and less than or equal to 16384"
             ));
         }
 
