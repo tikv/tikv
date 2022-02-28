@@ -218,15 +218,9 @@ tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
-<<<<<<< HEAD
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "1.5", features = ["full"] }
-tokio-timer = "0.2"
-=======
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-tokio = { version = "1.12", features = ["full"] }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
->>>>>>> bb8c5eaaf... *: hotfix panic from tokio-timer (#12004)
 tokio-openssl = "0.6"
 toml = "0.5"
 txn_types = { path = "components/txn_types", default-features = false }
