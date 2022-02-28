@@ -321,6 +321,9 @@ struct PdCluster {
 
     // for merging
     pub check_merge_target_integrity: bool,
+
+    unsafe_recovery_require_report: bool,
+    unsafe_recovery_store_reported: HashMap<u64, i32>,
 }
 
 impl PdCluster {
@@ -353,6 +356,8 @@ impl PdCluster {
             replication_status: None,
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
+            unsafe_recovery_require_report: false,
+            unsafe_recovery_store_reported: HashMap::default(),
         }
     }
 
@@ -709,6 +714,33 @@ impl PdCluster {
 
     fn get_gc_safe_point(&self) -> u64 {
         self.gc_safe_point
+    }
+
+    fn handle_store_heartbeat(&mut self) -> Result<pdpb::StoreHeartbeatResponse> {
+        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        resp.set_require_detailed_report(self.unsafe_recovery_require_report);
+        self.unsafe_recovery_require_report = false;
+
+        Ok(resp)
+    }
+
+    fn set_require_report(&mut self, require_report: bool) {
+        self.unsafe_recovery_require_report = require_report;
+    }
+
+    fn get_store_reported(&self, store_id: &u64) -> i32 {
+        *self
+            .unsafe_recovery_store_reported
+            .get(store_id)
+            .unwrap_or(&0)
+    }
+
+    fn store_reported_inc(&mut self, store_id: u64) {
+        let reported = self
+            .unsafe_recovery_store_reported
+            .entry(store_id)
+            .or_insert(0);
+        *reported += 1;
     }
 }
 
@@ -1255,6 +1287,14 @@ impl TestPdClient {
     pub fn reset_version(&self, version: &str) {
         unsafe { self.feature_gate.reset_version(version).unwrap() }
     }
+
+    pub fn must_set_require_report(&self, require_report: bool) {
+        self.cluster.wl().set_require_report(require_report);
+    }
+
+    pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
+        self.cluster.rl().get_store_reported(store_id)
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1405,6 +1445,11 @@ impl PdClient for TestPdClient {
     {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
+        {
+            if let Err(e) = self.cluster.try_write() {
+                println!("try write {:?}", e);
+            }
+        }
         let mut cluster = self.cluster.wl();
         let store = cluster
             .stores
@@ -1505,7 +1550,7 @@ impl PdClient for TestPdClient {
     fn store_heartbeat(
         &self,
         stats: pdpb::StoreStats,
-        _: Option<pdpb::StoreReport>,
+        report: Option<pdpb::StoreReport>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
@@ -1535,7 +1580,12 @@ impl PdClient for TestPdClient {
 
         cluster.store_stats.insert(store_id, stats);
 
-        let mut resp = pdpb::StoreHeartbeatResponse::default();
+        if report.is_some() {
+            cluster.store_reported_inc(store_id);
+        }
+
+        let mut resp = cluster.handle_store_heartbeat().unwrap();
+
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());
         }
