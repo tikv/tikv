@@ -140,7 +140,7 @@ where
     async fn starts_flush_ticks(router: Router) {
         let ticker = tick(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 5));
         loop {
-            // wait 10s to trigger tick
+            // wait 1min to trigger tick
             let _ = ticker.recv().unwrap();
             debug!("backup stream trigger flush tick");
             router.tick().await;

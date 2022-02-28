@@ -355,7 +355,7 @@ impl RouterInner {
     }
 
     pub async fn unregister_task(&self, task_name: &str) {
-        if let Some(_) = self.tasks.lock().await.remove(task_name) {
+        if self.tasks.lock().await.remove(task_name).is_some() {
             info!(
                 "backup stream unregister task";
                 "task" => task_name,
@@ -985,6 +985,7 @@ impl std::fmt::Debug for DataFile {
 struct KeyRange(Vec<u8>);
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct TaskRange {
     end: Vec<u8>,
     task_name: String,

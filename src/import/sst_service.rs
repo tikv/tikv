@@ -9,6 +9,7 @@ use collections::HashSet;
 use engine_traits::{KvEngine, CF_WRITE};
 use file_system::{set_io_type, IOType};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
+use futures::future::join_all;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use futures::TryFutureExt;
@@ -23,10 +24,12 @@ use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
 use kvproto::raft_cmdpb::*;
+use protobuf::Message;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, RaftCmdExtraOpts, RegionSnapshot};
+use tikv_util::config::ReadableSize;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
@@ -51,6 +54,7 @@ where
     importer: Arc<SSTImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
+    raft_entry_max_size: ReadableSize,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
@@ -65,6 +69,7 @@ where
 {
     pub fn new(
         cfg: Config,
+        raft_entry_max_size: ReadableSize,
         router: Router,
         engine: E,
         importer: Arc<SSTImporter>,
@@ -90,6 +95,7 @@ where
             importer,
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
+            raft_entry_max_size,
         }
     }
 
@@ -153,6 +159,57 @@ where
             return Some(errorpb);
         }
         None
+    }
+
+    fn build_apply_request<'a, 'b>(
+        &self,
+        reqs: &'a mut Vec<Request>,
+        cmd_reqs: &'a mut Vec<RaftCmdRequest>,
+        is_delete: bool,
+        cf: &'b str,
+        context: Context,
+    ) -> Box<dyn FnMut(Vec<u8>, Vec<u8>) + 'b>
+    where
+        'a: 'b,
+    {
+        let mut req_size = 0_u64;
+        let raft_size = self.raft_entry_max_size.0;
+
+        // use callback to collect kv data.
+        if is_delete {
+            Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
+                let mut req = Request::default();
+                let mut del = DeleteRequest::default();
+                del.set_key(k);
+                del.set_cf(cf.to_string());
+                req.set_cmd_type(CmdType::Delete);
+                req.set_delete(del);
+                req_size += req.compute_size() as u64;
+                reqs.push(req);
+                if req_size > raft_size / 2 {
+                    req_size = 0;
+                    let cmd = make_request(reqs, context.clone());
+                    cmd_reqs.push(cmd);
+                }
+            })
+        } else {
+            Box::new(move |k: Vec<u8>, v: Vec<u8>| {
+                let mut req = Request::default();
+                let mut put = PutRequest::default();
+                put.set_key(k);
+                put.set_value(v);
+                put.set_cf(cf.to_string());
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+                req_size += req.compute_size() as u64;
+                reqs.push(req);
+                if req_size > raft_size / 2 {
+                    req_size = 0;
+                    let cmd = make_request(reqs, context.clone());
+                    cmd_reqs.push(cmd);
+                }
+            })
+        }
     }
 
     fn ingest_files(
@@ -374,40 +431,87 @@ where
     }
 
     // Downloads KV file and performs key-rewrite then apply kv into this tikv store.
-    fn apply(&mut self, _ctx: RpcContext<'_>, req: ApplyRequest, sink: UnarySink<ApplyResponse>) {
+    fn apply(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut req: ApplyRequest,
+        sink: UnarySink<ApplyResponse>,
+    ) {
         let label = "apply";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
-        let engine = self.engine.clone();
+        let router = self.router.clone();
         let limiter = self.limiter.clone();
         let start = Instant::now();
+
+        let mut futs = vec![];
+        let mut apply_resp = ApplyResponse::default();
+        let context = req.take_context();
+        let meta = req.get_meta();
+
+        let result = (|| -> Result<()> {
+            let temp_file =
+                importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
+            let mut reqs = vec![];
+            let mut cmd_reqs = vec![];
+            let mut build_req_fn = self.build_apply_request(
+                reqs.as_mut(),
+                cmd_reqs.as_mut(),
+                meta.get_is_delete(),
+                meta.get_cf(),
+                context.clone(),
+            );
+            let range = importer.do_apply_kv_file(
+                meta.get_restore_ts(),
+                temp_file,
+                req.get_rewrite_rule(),
+                &mut build_req_fn,
+            )?;
+            drop(build_req_fn);
+            if !reqs.is_empty() {
+                let cmd = make_request(reqs.as_mut(), context);
+                cmd_reqs.push(cmd);
+            }
+            for cmd in cmd_reqs {
+                let (cb, future) = paired_future_callback();
+                match router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default()) {
+                    Ok(_) => futs.push(future),
+                    Err(e) => {
+                        let mut import_err = kvproto::import_sstpb::Error::default();
+                        import_err.set_message(format!("failed to send raft command: {}", e));
+                        apply_resp.set_error(import_err);
+                    }
+                }
+            }
+            if let Some(r) = range {
+                apply_resp.set_range(r);
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            apply_resp.set_error(e.into());
+        }
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-
-            let res = importer.apply::<E>(
-                req.get_meta(),
-                req.get_storage_backend(),
-                req.get_rewrite_rule(),
-                limiter,
-                engine,
-            );
-            let mut resp = ApplyResponse::default();
-            match res {
-                Ok(range) => {
-                    if let Some(r) = range {
-                        resp.set_range(r);
-                    }
+            let resp = Ok(join_all(futs).await.iter().fold(apply_resp, |mut resp, x| {
+                if let Err(e) = x {
+                    let mut import_err = kvproto::import_sstpb::Error::default();
+                    import_err.set_message(format!("failed to complete raft command: {}", e));
+                    resp.set_error(import_err);
                 }
-                Err(e) => resp.set_error(e.into()),
-            }
-            let resp = Ok(resp);
+                resp
+            }));
+            // Records how long the apply task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&["finish"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            debug!("finished apply kv file with {:?}", resp);
             crate::send_rpc_response!(resp, sink, label, timer);
         };
-
         self.threads.spawn_ok(handle_task);
     }
 
@@ -746,4 +850,12 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
     header.set_region_id(region_id);
     header.set_region_epoch(context.take_region_epoch());
     header
+}
+
+fn make_request(reqs: &mut Vec<Request>, context: Context) -> RaftCmdRequest {
+    let mut cmd = RaftCmdRequest::default();
+    let header = make_request_header(context);
+    cmd.set_header(header);
+    cmd.set_requests(std::mem::take(reqs).into());
+    cmd
 }

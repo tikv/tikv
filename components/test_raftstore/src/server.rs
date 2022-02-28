@@ -373,6 +373,7 @@ impl Simulator for ServerCluster {
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
+            cfg.raft_store.raft_entry_max_size,
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
