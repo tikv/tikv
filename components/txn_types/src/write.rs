@@ -190,6 +190,7 @@ impl Write {
     }
 
     #[inline]
+    #[must_use]
     pub fn set_overlapped_rollback(
         mut self,
         has_overlapped_rollback: bool,

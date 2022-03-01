@@ -1127,6 +1127,7 @@ impl SnapManager {
         Ok(())
     }
 
+    // [PerformanceCriticalPath]?? I/O involved API should be called in background thread
     // Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.
@@ -1489,14 +1490,17 @@ pub struct SnapManagerBuilder {
 }
 
 impl SnapManagerBuilder {
+    #[must_use]
     pub fn max_write_bytes_per_sec(mut self, bytes: i64) -> SnapManagerBuilder {
         self.max_write_bytes_per_sec = bytes;
         self
     }
+    #[must_use]
     pub fn max_total_size(mut self, bytes: u64) -> SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
+    #[must_use]
     pub fn encryption_key_manager(mut self, m: Option<Arc<DataKeyManager>>) -> SnapManagerBuilder {
         self.key_manager = m;
         self

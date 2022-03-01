@@ -18,7 +18,10 @@ use pd_client::PdClient;
 use raftstore::store::{Callback, WriteResponse};
 use raftstore::Result;
 use test_raftstore::*;
+use tikv::storage::kv::SnapshotExt;
+use tikv::storage::Snapshot;
 use tikv_util::config::*;
+use txn_types::{Key, PessimisticLock};
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -386,11 +389,14 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_secs(1));
     let snap_dir = cluster.get_snap_dir(3);
     // no snaps should be sent.
-    let snapfiles: Vec<_> = fs::read_dir(snap_dir)
-        .unwrap()
-        .map(|p| p.unwrap().path())
-        .collect();
-    assert!(snapfiles.is_empty());
+
+    assert!(
+        fs::read_dir(snap_dir)
+            .unwrap()
+            .map(|p| p.unwrap().path())
+            .next()
+            .is_none()
+    );
 
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");
@@ -888,4 +894,77 @@ fn test_split_with_epoch_not_match() {
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
     assert!(resp.get_header().get_error().has_epoch_not_match());
+}
+
+#[test]
+fn test_split_with_in_memory_pessimistic_locks() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // Set two pessimistic locks in the original region.
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    let lock_a = PessimisticLock {
+        primary: b"a".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    let lock_c = PessimisticLock {
+        primary: b"c".to_vec().into_boxed_slice(),
+        start_ts: 20.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    {
+        let mut locks = txn_ext.pessimistic_locks.write();
+        assert!(
+            locks
+                .insert(vec![
+                    (Key::from_raw(b"a"), lock_a.clone()),
+                    (Key::from_raw(b"c"), lock_c.clone())
+                ])
+                .is_ok()
+        );
+    }
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"b");
+
+    // After splitting, each new region should contain one lock.
+
+    let region = cluster.get_region(b"a");
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(region.id)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        txn_ext.pessimistic_locks.read().get(&Key::from_raw(b"a")),
+        Some(&(lock_a, false))
+    );
+
+    let region = cluster.get_region(b"c");
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(region.id)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        txn_ext.pessimistic_locks.read().get(&Key::from_raw(b"c")),
+        Some(&(lock_c, false))
+    );
 }

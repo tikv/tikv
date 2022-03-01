@@ -60,7 +60,7 @@ struct TestNotifier {
 }
 
 impl Notifier for TestNotifier {
-    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64, _now: Instant) {
+    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64) {
         self.tx.send((region_id, (peer_id, ready_number))).unwrap()
     }
 }
@@ -163,7 +163,7 @@ fn delete_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8]) {
 }
 
 struct TestWorker {
-    worker: Worker<KvTestEngine, KvTestEngine, TestTransport, TestNotifier>,
+    worker: Worker<KvTestEngine, KvTestEngine, TestNotifier, TestTransport>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
@@ -276,7 +276,7 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_3);
 
-    t.worker.write_to_db();
+    t.worker.write_to_db(true);
 
     let snapshot = engines.kv.snapshot();
     assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");

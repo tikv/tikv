@@ -199,7 +199,7 @@ where
     }
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -274,7 +274,7 @@ where
     }
 
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -352,7 +352,7 @@ mod tests {
 
         let x: ChunkedVecSized<Real> = vec![Real::new(0.0).ok(), Real::new(-4.5).ok(), None].into();
 
-        update_vector!(state, &mut ctx, &x, &[0, 1, 2]).unwrap();
+        update_vector!(state, &mut ctx, x, &[0, 1, 2]).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
 
-        update!(state, &mut ctx, Option::<EnumRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<EnumRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -426,7 +426,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(2)]);
         assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
 
-        update!(state, &mut ctx, Option::<SetRef>::None).unwrap();
+        update!(state, &mut ctx, Option::<SetRef<'_>>::None).unwrap();
         result[0].clear();
         result[1].clear();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -475,7 +475,7 @@ mod tests {
         let exp_result = exp_result.vector_value().unwrap();
         let slice = exp_result.as_ref().to_decimal_vec();
         let slice: ChunkedVecSized<Decimal> = slice.into();
-        update_vector!(state, &mut ctx, &slice, exp_result.logical_rows()).unwrap();
+        update_vector!(state, &mut ctx, slice, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [
             VectorValue::with_capacity(0, EvalType::Int),

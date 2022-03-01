@@ -42,7 +42,7 @@ make_static_metric! {
         no_region,
         no_lease,
         epoch,
-        appiled_term,
+        applied_term,
         channel_full,
         safe_ts,
     }
@@ -121,6 +121,44 @@ lazy_static! {
     pub static ref LOCAL_READ_EXECUTED_CACHE_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_cache_requests",
         "Total number of requests directly executed by local reader."
+    )
+    .unwrap();
+    pub static ref LOCAL_READ_EXECUTED_STALE_READ_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_executed_stale_read_requests",
+        "Total number of stale read requests directly executed by local reader."
+    )
+    .unwrap();
+    pub static ref RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_raft_log_gc_write_duration_secs",
+        "Bucketed histogram of write duration of raft log gc.",
+        exponential_buckets(0.0001, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref RAFT_LOG_GC_SEEK_OPERATIONS: IntCounter = register_int_counter!(
+        "tikv_raftstore_raft_log_gc_seek_operations_count",
+        "Total number of seek operations from raft log gc."
+    )
+    .unwrap();
+    pub static ref RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_raft_log_gc_deleted_keys",
+        "Bucket of number of deleted keys from raft log gc.",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref RAFT_LOG_GC_FAILED: IntCounter = register_int_counter!(
+        "tikv_raftstore_raft_log_gc_failed",
+        "Total number of failed raft log gc."
+    )
+    .unwrap();
+    pub static ref RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_raft_log_kv_sync_duration_secs",
+        "Bucketed histogram of kv sync duration of raft log gc.",
+        exponential_buckets(0.0001, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_renew_lease_advance_count",
+        "Total number of renewing lease in advance from local reader."
     )
     .unwrap();
 }

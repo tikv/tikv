@@ -42,6 +42,9 @@ pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERS
 /// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
+/// ID for physical table id column, see <https://github.com/tikv/tikv/issues/11888>
+pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
+
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
@@ -658,8 +661,7 @@ mod tests {
         let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
-        let mut datums: HashMap<_, _>;
-        datums = cut_row_as_owned(&bs, &col_id_set);
+        let mut datums: HashMap<_, _> = cut_row_as_owned(&bs, &col_id_set);
         assert_eq!(col_encoded, datums);
 
         cols.insert(4, FieldTypeTp::Float.into());

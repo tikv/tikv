@@ -66,6 +66,9 @@ pub struct BatchExecutorsRunner<SS> {
     /// 1. default: result is encoded row by row using datum format.
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
+
+    /// If it's a paging request, paging_size indicates to the required size for current page.
+    paging_size: Option<u64>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -132,6 +135,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeProjection => {
                     other_err!("Projection executor not implemented");
                 }
+                ExecType::TypePartitionTableScan => {
+                    other_err!("PartitionTableScan executor not implemented");
+                }
             }
         }
 
@@ -159,13 +165,13 @@ pub fn build_executors<S: Storage + 'static>(
         .next()
         .ok_or_else(|| other_err!("No executors"))?;
 
-    let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>>;
     let mut summary_slot_index = 0;
     // Limit executor use this flag to check if its src is table/index scan.
     // Performance enhancement for plan like: limit 1 -> table/index scan.
     let mut is_src_scan_executor = true;
 
-    match first_ed.get_tp() {
+    let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match first_ed.get_tp()
+    {
         ExecType::TypeTableScan => {
             EXECUTOR_COUNT_METRICS.batch_table_scan.inc();
 
@@ -174,7 +180,7 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
-            executor = Box::new(
+            Box::new(
                 BatchTableScanExecutor::new(
                     storage,
                     config.clone(),
@@ -186,7 +192,7 @@ pub fn build_executors<S: Storage + 'static>(
                     primary_prefix_column_ids,
                 )?
                 .collect_summary(summary_slot_index),
-            );
+            )
         }
         ExecType::TypeIndexScan => {
             EXECUTOR_COUNT_METRICS.batch_index_scan.inc();
@@ -194,7 +200,7 @@ pub fn build_executors<S: Storage + 'static>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
-            executor = Box::new(
+            Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
@@ -206,7 +212,7 @@ pub fn build_executors<S: Storage + 'static>(
                     is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
-            );
+            )
         }
         _ => {
             return Err(other_err!(
@@ -214,12 +220,12 @@ pub fn build_executors<S: Storage + 'static>(
                 first_ed.get_tp()
             ));
         }
-    }
+    };
 
     for mut ed in executor_descriptors {
         summary_slot_index += 1;
 
-        let new_executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match ed.get_tp() {
+        executor = match ed.get_tp() {
             ExecType::TypeSelection => {
                 EXECUTOR_COUNT_METRICS.batch_selection.inc();
 
@@ -328,7 +334,6 @@ pub fn build_executors<S: Storage + 'static>(
                 ));
             }
         };
-        executor = new_executor;
         is_src_scan_executor = false;
     }
 
@@ -343,6 +348,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         deadline: Deadline,
         stream_row_limit: usize,
         is_streaming: bool,
+        paging_size: Option<u64>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -353,7 +359,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             storage,
             ranges,
             config.clone(),
-            is_streaming, // For streaming request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -386,6 +392,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             exec_stats,
             stream_row_limit,
             encode_type,
+            paging_size,
         })
     }
 
@@ -395,11 +402,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         BATCH_INITIAL_SIZE
     }
 
-    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
+    /// handle_request returns the response of selection and an optional range,
+    /// only paging request will return Some(IntervalRange),
+    /// this should be used when calculating ranges of the next batch.
+    /// IntervalRange records whole range scanned though there are gaps in multi ranges.
+    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1, k4).
+    pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
+        let mut record_all = 0;
 
         let mut time_slice_start = Instant::now();
         loop {
@@ -422,11 +435,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             if record_len > 0 {
                 chunks.push(chunk);
+                record_all += record_len;
             }
 
-            if drained {
+            if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
                 self.out_most_executor
                     .collect_exec_stats(&mut self.exec_stats);
+
+                let range = self
+                    .paging_size
+                    .map(|_| self.out_most_executor.take_scanned_range());
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
@@ -459,7 +477,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
-                return Ok(sel_resp);
+                return Ok((sel_resp, range));
             }
 
             // Grow batch size
@@ -607,9 +625,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 }
 
 #[inline]
+fn batch_grow_factor() -> usize {
+    fail_point!("copr_batch_grow_size", |r| r
+        .map_or(1, |e| e.parse().unwrap()));
+    BATCH_GROW_FACTOR
+}
+
+#[inline]
 fn grow_batch_size(batch_size: &mut usize) {
     if *batch_size < BATCH_MAX_SIZE {
-        *batch_size *= BATCH_GROW_FACTOR;
+        *batch_size *= batch_grow_factor();
         if *batch_size > BATCH_MAX_SIZE {
             *batch_size = BATCH_MAX_SIZE
         }

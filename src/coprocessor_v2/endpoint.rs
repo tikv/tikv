@@ -11,6 +11,7 @@ use super::plugin_registry::PluginRegistry;
 use super::raw_storage_impl::RawStorageImpl;
 use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 
+#[allow(clippy::large_enum_variant)]
 enum CoprocessorError {
     RegionError(kvproto::errorpb::Error),
     Other(String),
@@ -123,7 +124,7 @@ impl Endpoint {
 
 fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> {
     match error {
-        PluginError::Other(other_err) => other_err
+        PluginError::Other(_, other_err) => other_err
             .downcast_ref::<storage::Result<()>>()
             .and_then(|e| storage::errors::extract_region_error::<()>(e)),
         _ => None,

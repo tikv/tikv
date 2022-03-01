@@ -8,6 +8,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::Collator;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::mysql::MAX_FSP;
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::EvalContext;
 
@@ -103,7 +104,7 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *rhs < 0 || *lhs as u64 > std::i64::MAX as u64 {
+                let ordering = if *rhs < 0 || *lhs as u64 > i64::MAX as u64 {
                     Ordering::Greater
                 } else {
                     lhs.cmp(rhs)
@@ -127,7 +128,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *lhs < 0 || *rhs as u64 > std::i64::MAX as u64 {
+                let ordering = if *lhs < 0 || *rhs as u64 > i64::MAX as u64 {
                     Ordering::Less
                 } else {
                     lhs.cmp(rhs)
@@ -373,14 +374,9 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+pub fn least_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     // Max datetime range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
-    let mut least = Some(Time::parse_datetime(
-        &mut ctx,
-        "9999-12-31 23:59:59",
-        0,
-        true,
-    )?);
+    let mut least = Some(Time::parse_datetime(ctx, "9999-12-31 23:59:59", 0, true)?);
     for arg in args {
         match arg {
             Some(arg_val) => {
@@ -393,6 +389,143 @@ pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resul
                     }
                 };
                 match Time::parse_datetime(ctx, s, Time::parse_fsp(s), true) {
+                    Ok(t) => least = min(least, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn greatest_date(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    let mut greatest = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_date(ctx, s) {
+                    Ok(t) => greatest = max(greatest, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(greatest.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn least_date(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    // Max date range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
+    let mut least = Some(Time::parse_date(ctx, "9999-12-31")?);
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_date(ctx, s) {
+                    Ok(t) => least = min(least, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn greatest_duration(
+    ctx: &mut EvalContext,
+    args: &[Option<BytesRef>],
+) -> Result<Option<Bytes>> {
+    let mut greatest = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Duration::parse_exactly(ctx, s, Time::parse_fsp(s)) {
+                    Ok(t) => greatest = max(greatest, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(greatest.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn least_duration(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+    // Max date range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
+    let mut least = Some(Duration::parse_exactly(ctx, "838:59:59.000000", MAX_FSP)?);
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Duration::parse_exactly(ctx, s, Time::parse_fsp(s)) {
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
                         return ctx
@@ -768,44 +901,32 @@ mod tests {
     fn test_compare_int_2() {
         let test_cases = vec![
             (Some(5), false, Some(3), false, Ordering::Greater),
+            (Some(u64::MAX as i64), false, Some(5), false, Ordering::Less),
             (
-                Some(std::u64::MAX as i64),
-                false,
-                Some(5),
-                false,
-                Ordering::Less,
-            ),
-            (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some((std::u64::MAX - 1) as i64),
+                Some((u64::MAX - 1) as i64),
                 true,
                 Ordering::Greater,
             ),
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
                 Some(5),
                 true,
                 Ordering::Greater,
             ),
-            (Some(5), true, Some(std::i64::MIN), false, Ordering::Greater),
+            (Some(5), true, Some(i64::MIN), false, Ordering::Greater),
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
                 Ordering::Greater,
             ),
             (Some(5), true, Some(3), false, Ordering::Greater),
-            (Some(std::i64::MIN), false, Some(3), true, Ordering::Less),
-            (
-                Some(5),
-                false,
-                Some(std::u64::MAX as i64),
-                true,
-                Ordering::Less,
-            ),
+            (Some(i64::MIN), false, Some(3), true, Ordering::Less),
+            (Some(5), false, Some(u64::MAX as i64), true, Ordering::Less),
             (Some(5), false, Some(3), true, Ordering::Greater),
         ];
         for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, ordering) in test_cases {
@@ -1358,10 +1479,18 @@ mod tests {
             ),
         ];
 
-        for (row, expected) in cases {
+        for (row, expected) in cases.clone() {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::GreatestTime)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestCmpStringAsTime)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -1416,12 +1545,269 @@ mod tests {
             ),
         ];
 
-        for (row, expected) in cases {
+        for (row, expected) in cases.clone() {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::LeastTime)
                 .unwrap() as Option<Vec<u8>>;
 
+            assert_eq!(output, expected);
+        }
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastCmpStringAsTime)
+                .unwrap() as Option<Vec<u8>>;
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_date() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-31".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2018-04-03".to_owned().to_vec()),
+                ],
+                Some(b"2018-04-03".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases.clone() {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestDate)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestCmpStringAsDate)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_date() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2018-04-03".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases.clone() {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastDate)
+                .unwrap() as Option<Vec<u8>>;
+
+            assert_eq!(output, expected);
+        }
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastCmpStringAsDate)
+                .unwrap() as Option<Vec<u8>>;
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_duration() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"234:23:23".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"123:12:23".to_owned().to_vec()),
+                    Some(b"123:24:35".to_owned().to_vec()),
+                ],
+                Some(b"123:24:35".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"123:12:23".to_owned().to_vec()),
+                    Some(b"123:24:35".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"123:12:23".to_owned().to_vec()),
+                    Some(b"123:24:35".to_owned().to_vec()),
+                    Some(b"124:59:59".to_owned().to_vec()),
+                    Some(b"125:01:01".to_owned().to_vec()),
+                ],
+                Some(b"125:01:01".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_duration() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"234:23:23".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"123:12:23".to_owned().to_vec()),
+                    Some(b"123:24:35".to_owned().to_vec()),
+                ],
+                Some(b"123:12:12".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"123:12:23".to_owned().to_vec()),
+                    Some(b"123:24:35".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(b"123:12:23".to_owned().to_vec()),
+                    Some(b"123:24:35".to_owned().to_vec()),
+                    Some(b"124:59:59".to_owned().to_vec()),
+                    Some(b"125:01:01".to_owned().to_vec()),
+                ],
+                Some(b"123:12:12".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"123:12:12".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastDuration)
+                .unwrap();
             assert_eq!(output, expected);
         }
     }

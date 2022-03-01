@@ -3,18 +3,12 @@
 use std::sync::*;
 use std::time::Duration;
 
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use futures::SinkExt;
 use grpcio::WriteFlags;
-#[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::*;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::{
-    event::{row::OpType as EventRowOpType, Event as Event_oneof_event, LogType as EventLogType},
-    ChangeDataEvent,
-};
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -23,7 +17,7 @@ use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
@@ -56,7 +50,7 @@ fn test_cdc_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
+                assert_eq!(d.downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -149,7 +143,7 @@ fn test_cdc_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
+                assert_eq!(d.downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -222,7 +216,7 @@ fn test_cdc_not_leader() {
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
+                assert_eq!(d.downstreams().len(), 1);
                 tx_.send(()).unwrap();
             }),
         )))
@@ -255,12 +249,12 @@ fn test_cdc_not_leader() {
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
-            .is_some()
+            .is_none()
     );
 
     // Sleep a while to make sure the stream is deregistered.
@@ -288,12 +282,12 @@ fn test_cdc_not_leader() {
         other => panic!("unknown event {:?}", other),
     }
     assert!(
-        !suite
+        suite
             .obs
             .get(&leader.get_store_id())
             .unwrap()
             .is_subscribed(1)
-            .is_some()
+            .is_none()
     );
 
     event_feed_wrap.replace(None);
@@ -975,6 +969,7 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
     let ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
+
     // Update value
     let mut m2 = Mutation::default();
     m2.set_op(Op::Put);
@@ -984,6 +979,8 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
     let ts4 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1], ts3, ts4);
+
+    // The downstream 1 can get old values as expected.
     let mut event_count = 0;
     loop {
         let events = receive_event_1(false).events.to_vec();
@@ -1009,6 +1006,7 @@ fn test_old_value_multi_changefeeds() {
         }
     }
 
+    // The downstream 2 can also get old values because `req`.`extra_op` field is ignored now.
     event_count = 0;
     loop {
         let events = receive_event_2(false).events.to_vec();
@@ -1017,7 +1015,11 @@ fn test_old_value_multi_changefeeds() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
-                            assert_eq!(row.get_old_value(), b"");
+                            if row.get_start_ts() == ts3.into_inner() {
+                                assert_eq!(row.get_old_value(), b"v1");
+                            } else {
+                                assert_eq!(row.get_old_value(), b"");
+                            }
                             event_count += 1;
                         }
                     }
@@ -1317,7 +1319,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1359,7 +1361,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1401,7 +1403,7 @@ fn test_old_value_cache_hit() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1455,7 +1457,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1482,7 +1484,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1514,7 +1516,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))
@@ -1541,7 +1543,7 @@ fn test_old_value_cache_hit_pessimistic() {
     scheduler
         .schedule(Task::Validate(Validate::OldValueCache(Box::new(
             move |old_value_cache| {
-                tx_.send((old_value_cache.access_count, old_value_cache.miss_count))
+                tx_.send((old_value_cache.access_count(), old_value_cache.miss_count()))
                     .unwrap();
             },
         ))))

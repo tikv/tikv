@@ -73,7 +73,15 @@ impl Column {
         let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
         match eval_type {
             EvalType::Int => {
-                if field_type.is_unsigned() {
+                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
+                    // The max supported bytes for type MysqlBit is 64 bit in TiDB now.
+                    if field_type.as_accessor().flen() > 64 {
+                        unimplemented!()
+                    }
+                    for &row_index in logical_rows {
+                        col.append_bit_datum(&raw_datums[row_index], field_type)?;
+                    }
+                } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         col.append_u64_datum(&raw_datums[row_index])?
                     }
@@ -139,7 +147,24 @@ impl Column {
 
         match v {
             VectorValue::Int(vec) => {
-                if field_type.is_unsigned() {
+                if field_type.as_accessor().tp() == FieldTypeTp::Bit {
+                    // The max supported bytes for type MysqlBit is 64 bit in TiDB now.
+                    if field_type.as_accessor().flen() > 64 {
+                        unimplemented!()
+                    }
+                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
+                    for &row_index in logical_rows {
+                        match vec.get_option_ref(row_index) {
+                            None => {
+                                col.append_null();
+                            }
+                            Some(val) => {
+                                let byte = val.to_be_bytes();
+                                col.append_bytes(&byte[start_idx..])?;
+                            }
+                        }
+                    }
+                } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
                         match vec.get_option_ref(row_index) {
                             None => {
@@ -288,7 +313,8 @@ impl Column {
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
-            FieldTypeTp::Bit | FieldTypeTp::Set => {
+            FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
+            FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -521,6 +547,34 @@ impl Column {
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
         data.read_u64_le().map_err(Error::from)
+    }
+
+    /// Append bit datum to the column.
+    pub fn append_bit_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let mut raw_datum = &src_datum[1..];
+        let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::UINT_FLAG => {
+                self.append_bytes(&raw_datum.read_datum_payload_u64()?.to_be_bytes()[start_idx..])?
+            }
+            datum::VAR_UINT_FLAG => self.append_bytes(
+                &raw_datum.read_datum_payload_var_u64()?.to_be_bytes()[start_idx..],
+            )?,
+            _ => {
+                return Err(Error::InvalidDataType(format!(
+                    "Unsupported datum flag {} for Bit vector",
+                    flag
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Append a f64 datum to the column.
@@ -802,7 +856,7 @@ impl Column {
 
     /// Append a json datum to the column.
     #[inline]
-    pub fn append_json(&mut self, j: JsonRef) -> Result<()> {
+    pub fn append_json(&mut self, j: JsonRef<'_>) -> Result<()> {
         self.data.write_json(j)?;
         self.finished_append_var();
         Ok(())
@@ -845,7 +899,7 @@ impl Column {
 
     // Append an Enum datum to the column
     #[inline]
-    pub fn append_enum(&mut self, e: EnumRef) -> Result<()> {
+    pub fn append_enum(&mut self, e: EnumRef<'_>) -> Result<()> {
         self.data.write_enum_to_chunk(e.value(), e.name())?;
         self.finished_append_var();
         Ok(())
@@ -1043,8 +1097,8 @@ mod tests {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Float.into()];
         let data = vec![
             Datum::Null,
-            Datum::F64(std::f32::MIN.into()),
-            Datum::F64(std::f32::MAX.into()),
+            Datum::F64(f32::MIN.into()),
+            Datum::F64(f32::MAX.into()),
         ];
         test_colum_datum(fields, data);
     }
@@ -1097,6 +1151,7 @@ mod tests {
             FieldTypeTp::TinyBlob.into(),
             FieldTypeTp::MediumBlob.into(),
             FieldTypeTp::LongBlob.into(),
+            FieldTypeTp::Bit.into(),
         ];
         let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
         test_colum_datum(fields, data);

@@ -15,9 +15,10 @@ use crate::server::metrics::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 
+use super::compaction_filter::is_compaction_filter_allowed;
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowed, Result};
+use super::Result;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -205,9 +206,7 @@ impl GcManagerHandle {
             .stop_signal_sender
             .send(())
             .map_err(|e| box_err!("failed to send stop signal to gc worker thread: {:?}", e));
-        if res.is_err() {
-            return res;
-        }
+        res?;
         self.join_handle
             .join()
             .map_err(|e| box_err!("failed to join gc worker thread: {:?}", e))

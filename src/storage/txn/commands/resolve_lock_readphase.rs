@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::MvccReader;
 use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand};
 use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
@@ -40,8 +41,7 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag();
         let (ctx, txn_status) = (self.ctx, self.txn_status);
-        let mut reader =
-            MvccReader::new(snapshot, Some(ScanMode::Forward), !ctx.get_not_fill_cache());
+        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let result = reader.scan_locks(
             self.scan_key.as_ref(),
             None,

@@ -1,3 +1,7 @@
+[log]
+
+[log.file]
+
 [readpool.coprocessor]
 
 [readpool.storage]

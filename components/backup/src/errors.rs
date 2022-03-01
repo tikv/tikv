@@ -11,6 +11,7 @@ use thiserror::Error;
 use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tokio::sync::AcquireError;
 
 use crate::metrics::*;
 
@@ -113,6 +114,10 @@ pub enum Error {
     ClusterID { current: u64, request: u64 },
     #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
+    #[error("Failed to acquire the semaphore {0}")]
+    Semaphore(#[from] AcquireError),
+    #[error("Channel is closed")]
+    ChannelClosed,
 }
 
 macro_rules! impl_from {
@@ -129,6 +134,12 @@ macro_rules! impl_from {
 
 impl_from! {
     String => Rocks,
+}
+
+impl<T> From<async_channel::SendError<T>> for Error {
+    fn from(_: async_channel::SendError<T>) -> Self {
+        Self::ChannelClosed
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

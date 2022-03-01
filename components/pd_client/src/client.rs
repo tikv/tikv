@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,7 +17,9 @@ use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use kvproto::replication_modepb::{
+    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+};
 use security::SecurityManager;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -282,6 +285,50 @@ impl fmt::Debug for RpcClient {
 const LEADER_CHANGE_RETRY: usize = 10;
 
 impl PdClient for RpcClient {
+    fn load_global_config(&self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+        use kvproto::pdpb::LoadGlobalConfigRequest;
+        let mut req = LoadGlobalConfigRequest::new();
+        req.set_names(list.into());
+        let executor = |client: &Client, req| match client
+            .inner
+            .rl()
+            .client_stub
+            .clone()
+            .load_global_config_async(&req)
+        {
+            Ok(grpc_response) => Box::pin(async move {
+                match grpc_response.await {
+                    Ok(grpc_response) => {
+                        let mut res = HashMap::with_capacity(grpc_response.get_items().len());
+                        for c in grpc_response.get_items() {
+                            if c.has_error() {
+                                error!("failed to load global config with key {:?}", c.get_error());
+                            } else {
+                                res.insert(c.get_name().to_owned(), c.get_value().to_owned());
+                            }
+                        }
+                        Ok(res)
+                    }
+                    Err(err) => Err(box_err!("{:?}", err)),
+                }
+            }) as PdFuture<_>,
+            Err(err) => Box::pin(async move { Err(box_err!("{:?}", err)) }) as PdFuture<_>,
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn watch_global_config(
+        &self,
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        use kvproto::pdpb::WatchGlobalConfigRequest;
+        let req = WatchGlobalConfigRequest::default();
+        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
+            client.watch_global_config(&req)
+        })
+    }
+
     fn get_cluster_id(&self) -> Result<u64> {
         Ok(self.cluster_id)
     }
@@ -672,6 +719,8 @@ impl PdClient for RpcClient {
     fn store_heartbeat(
         &self,
         mut stats: pdpb::StoreStats,
+        report_opt: Option<pdpb::StoreReport>,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
 
@@ -681,7 +730,12 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-
+        if let Some(report) = report_opt {
+            req.set_store_report(report);
+        }
+        if let Some(status) = dr_autosync_status {
+            req.set_dr_autosync_status(status);
+        }
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
             let handler = client

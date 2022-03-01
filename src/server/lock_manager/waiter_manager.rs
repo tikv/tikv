@@ -95,6 +95,7 @@ impl Future for Delay {
 
 pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
+#[allow(clippy::large_enum_variant)]
 pub enum Task {
     WaitFor {
         // which txn waits for the lock
