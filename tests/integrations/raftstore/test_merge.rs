@@ -8,7 +8,7 @@ use std::time::*;
 use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 use raft::eraftpb::MessageType;
 
@@ -1384,4 +1384,37 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     assert!(res.recv().is_ok());
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
+}
+
+#[test]
+fn test_stale_message_after_merge() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    pd_client.must_remove_peer(left.get_id(), find_peer(&left, 3).unwrap().to_owned());
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 1004));
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(left.get_id());
+    raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());
+    raft_msg.set_to_peer(find_peer(&left, 1).unwrap().to_owned());
+    raft_msg.set_region_epoch(left.get_region_epoch().to_owned());
+    cluster.send_raft_msg(raft_msg).unwrap();
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
