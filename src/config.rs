@@ -4785,15 +4785,18 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         assert!(cfg.validate().is_ok());
 
-        cfg.raft_store.raft_entry_max_size = ReadableSize::gb(1);
-        assert!(cfg.validate().is_err());
-
-        // Must fail due to `server.raft_client_grpc_send_msg_buffer`
-        cfg.raft_store.raft_entry_max_size.0 = cfg.server.max_grpc_send_msg_len as u64;
-        assert!(cfg.validate().is_err());
-
-        // Set `server.raft_client_grpc_send_msg_buffer` to zero
-        cfg.server.raft_client_grpc_send_msg_buffer = 0;
+        let max_grpc_send_msg_len = cfg.server.max_grpc_send_msg_len;
+        cfg.raft_store.raft_entry_max_size.0 = cfg.raft_store.raft_entry_max_size.0 / 2;
         assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.server.max_grpc_send_msg_len, max_grpc_send_msg_len);
+
+        cfg.raft_store.raft_entry_max_size = ReadableSize::gb(1);
+        assert!(cfg.validate().is_ok());
+        // `server.max_grpc_send_msg_len` is adjusted according to `cfg.raft_store.raft_entry_max_size`
+        assert_eq!(
+            cfg.server.max_grpc_send_msg_len as u64,
+            cfg.raft_store.raft_entry_max_size.0
+                + cfg.server.raft_client_grpc_send_msg_buffer as u64
+        );
     }
 }
