@@ -3263,7 +3263,7 @@ where
         fail_point!("on_handle_apply", |_| {});
         fail_point!(
             "on_handle_apply_store_1",
-            apply_ctx.get_store_id() == 1,
+            apply_ctx.store_id == 1,
             |_| {}
         );
 
