@@ -705,7 +705,7 @@ impl PrewriteKind for Pessimistic {
 /// For optimistic txns, this is `Mutation`.
 /// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
 /// whether the mutation takes a pessimistic lock or not.
-trait MutationLock {
+trait MutationLock: std::fmt::Debug {
     fn is_pessimistic_lock(&self) -> bool;
     fn into_mutation(self) -> Mutation;
 }
