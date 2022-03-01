@@ -74,10 +74,7 @@ impl Column {
         match eval_type {
             EvalType::Int => {
                 if field_type.as_accessor().tp() == FieldTypeTp::Bit {
-                    //Because Mysql define Bit max 64 bits: https://dev.mysql.com/doc/refman/8.0/en/bit-type.html
-                    //And TiDB fix Bit's field_type 8 bytes: tidb/parser/types/field_type.go +352 StorageLength()
-                    //So here field_type.as_accessor().flen() max is 64;
-                    //If field_type flen() excceed 64 bits in the future, should fix it here;
+                    // The max supported bytes for type MysqlBit is 64 bit in TiDB now.
                     if field_type.as_accessor().flen() > 64 {
                         unimplemented!()
                     }
@@ -151,7 +148,7 @@ impl Column {
         match v {
             VectorValue::Int(vec) => {
                 if field_type.as_accessor().tp() == FieldTypeTp::Bit {
-                    //See comments "pub fn from_raw_datum()"
+                    // The max supported bytes for type MysqlBit is 64 bit in TiDB now.
                     if field_type.as_accessor().flen() > 64 {
                         unimplemented!()
                     }

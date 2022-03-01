@@ -661,10 +661,9 @@ fn cast_bit_as_string(
             if flen > 0 && flen <= 8 {
                 let start_idx: usize = (8 - flen) as usize;
                 let buf = &buf[start_idx..8];
-                // For MysqlBit, directly returning instead of cast string
                 Ok(Some(buf.to_vec()))
             } else {
-                //In cast bit(m) to var_string(n); n may be equal or less than 8, n = int(( m + 7 ) / 8);
+                // The length of casting bit to string should between 0 and 8.
                 Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))
             }
         }
