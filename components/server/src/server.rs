@@ -1265,17 +1265,28 @@ impl TiKVServer<RocksEngine> {
             .unwrap();
 
         // Create raft engine.
-        let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
+        let raft_db_path = &self.config.raft_store.raftdb_path;
+        let newly_created = !RocksEngine::exists(raft_db_path);
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
+            raft_db_path,
             raft_db_opts,
             raft_db_cf_opts,
         )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+        .unwrap_or_else(|e| {
+            if newly_created {
+                fatal!(
+                    "Failed to create raft engine: {}. Incomplete data in {} should be removed.",
+                    e,
+                    raft_db_path
+                );
+            } else {
+                fatal!("Failed to create raft engine: {}", e)
+            }
+        });
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
@@ -1351,12 +1362,23 @@ impl TiKVServer<RaftLogEngine> {
 
         // Create raft engine.
         let raft_config = self.config.raft_engine.config();
+        let newly_created = !RaftLogEngine::exists(&raft_config.dir);
         let raft_engine = RaftLogEngine::new(
-            raft_config,
+            raft_config.clone(),
             self.encryption_key_manager.clone(),
             get_io_rate_limiter(),
         )
-        .unwrap_or_else(|e| fatal!("failed to create raft engine: {}", e));
+        .unwrap_or_else(|e| {
+            if newly_created {
+                fatal!(
+                    "Failed to create raft engine: {}. Incomplete data in {} should be removed.",
+                    e,
+                    raft_config.dir
+                );
+            } else {
+                fatal!("Failed to create raft engine: {}", e)
+            }
+        });
 
         // Try to dump and recover raft data.
         check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
