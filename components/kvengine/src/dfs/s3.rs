@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
 use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_types::credentials::SharedCredentialsProvider;
-use bytes::Bytes;
-use file_system::{IORateLimiter, IOType, DirectWriter};
+use bytes::{Buf, Bytes};
+use file_system::{DirectWriter, IORateLimiter, IOType};
 use http::Uri;
 use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -141,7 +141,8 @@ impl DFS for S3FS {
         let tmp_file_path = self.tmp_file_path(file_id);
         let mut writer = DirectWriter::new(self.rate_limiter.clone(), IOType::Compaction);
         writer.reserve(data.len());
-        writer.write_to_file(tmp_file_path.clone())?;
+        writer.extend_from_slice(data.chunk());
+        writer.write_to_file(tmp_file_path.clone()).await?;
         std::fs::rename(tmp_file_path, local_file_path)?;
         Ok(())
     }

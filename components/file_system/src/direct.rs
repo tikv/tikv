@@ -43,7 +43,7 @@ impl DirectWriter {
         }
     }
 
-    pub fn write_to_file(&mut self, filename: PathBuf) -> io::Result<()> {
+    pub async fn write_to_file(&mut self, filename: PathBuf) -> io::Result<()> {
         assert!(
             self.buf.len() < self.reserved_cap,
             "call reserve before write to buffer"
@@ -58,7 +58,8 @@ impl DirectWriter {
                 end = self.buf.len();
             }
             self.rate_limiter
-                .request(self.io_type, IOOp::Write, WRITE_BATCH_SIZE);
+                .async_request(self.io_type, IOOp::Write, WRITE_BATCH_SIZE)
+                .await;
             file.write_all_at(&self.buf[cursor..end], cursor as u64)?;
             cursor = end;
         }
