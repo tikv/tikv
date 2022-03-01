@@ -27,7 +27,7 @@ macro_rules! fatal {
             eprintln!($lvl $(, $arg)*);
         }
         slog_global::clear_global();
-        ::std::process::exit(1)
+        panic!("fatal");
     })
 }
 

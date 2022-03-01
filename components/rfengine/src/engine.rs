@@ -149,15 +149,28 @@ impl RFEngine {
             worker_handle: Arc::new(Mutex::new(None)),
         };
         let mut offset = 0;
+        let mut worker_states = HashMap::new();
         for ep in &epoches {
             offset = en.load_epoch(ep)?;
+            if ep.has_state_file {
+                for e in en.regions.iter() {
+                    let region = e.value().read().unwrap();
+                    worker_states.insert(region.region_id, region.states.clone());
+                }
+            }
         }
         en.writer.lock().unwrap().seek(offset);
         if epoches.len() > 0 {
             epoches.pop();
         }
         {
-            let mut worker = Worker::new(dir.to_owned(), epoches, rx, en.regions.clone());
+            let mut worker = Worker::new(
+                dir.to_owned(),
+                epoches,
+                rx,
+                en.regions.clone(),
+                worker_states,
+            );
             let join_handle = thread::spawn(move || worker.run());
             let mut handle_ref = en.worker_handle.lock().unwrap();
             *handle_ref = Some(join_handle);
@@ -589,6 +602,12 @@ mod tests {
         let tmp_dir = tempfile::tempdir().unwrap();
         let wal_size = 128 * 1024 as usize;
         let mut engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
+        let mut wb = WriteBatch::new();
+        for region_id in 1..=10_u64 {
+            let (key, val) = make_state_kv(2, 1);
+            wb.set_state(region_id, key.chunk(), val.chunk());
+        }
+        engine.write(wb).unwrap();
 
         for idx in 1..=1050_u64 {
             let mut wb = WriteBatch::new();
@@ -597,7 +616,7 @@ mod tests {
                     continue;
                 }
                 wb.append_raft_log(region_id, &make_log_data(idx, 128));
-                let (key, val) = make_state_kv(region_id, idx);
+                let (key, val) = make_state_kv(1, idx);
                 wb.set_state(region_id, key.chunk(), val.chunk());
                 if idx % 100 == 0 && region_id != 1 {
                     wb.truncate_raft_log(region_id, idx - 100);
@@ -614,7 +633,7 @@ mod tests {
         }
         assert_eq!(old_entries_map.len(), 10);
         engine.stop_worker();
-        for _ in 0..1 {
+        for _ in 0..2 {
             let engine = RFEngine::open(tmp_dir.path(), wal_size).unwrap();
             engine.iterate_all_states(false, |region_id, key, _| {
                 let old_region_data = old_entries_map.get(&region_id).unwrap();
@@ -650,9 +669,9 @@ mod tests {
         entry
     }
 
-    fn make_state_kv(region_id: u64, idx: u64) -> (BytesMut, BytesMut) {
+    fn make_state_kv(key_byte: u8, idx: u64) -> (BytesMut, BytesMut) {
         let mut key = BytesMut::new();
-        key.put_u64_le(region_id);
+        key.put_u8(key_byte);
         let mut val = BytesMut::new();
         val.put_u64_le(idx);
         (key, val)

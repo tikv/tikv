@@ -33,6 +33,7 @@ impl Worker {
         epoches: Vec<Epoch>,
         task_rx: Receiver<Task>,
         region_data: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
+        all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
     ) -> Self {
         let rate_limiter = Arc::new(file_system::IORateLimiter::new(
             IORateLimitMode::WriteOnly,
@@ -48,7 +49,7 @@ impl Worker {
             truncated_idx: HashMap::new(),
             writer,
             task_rx,
-            all_states: HashMap::default(),
+            all_states,
             buf: vec![],
         }
     }
