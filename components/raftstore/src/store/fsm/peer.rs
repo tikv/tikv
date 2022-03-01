@@ -75,7 +75,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTick,
+    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -893,6 +893,12 @@ where
                 stats,
                 store_info,
                 send_detailed_report: true,
+                dr_autosync_status: self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .store_dr_autosync_status(),
             };
             if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
                 panic!("fail to send detailed report to pd {:?}", e);
@@ -2473,13 +2479,16 @@ where
     fn propose_locks_before_transfer_leader(&mut self) -> bool {
         // 1. Disable in-memory pessimistic locks.
         let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
-        // If `is_valid` is false, the locks should have been proposed. But we still need to
-        // return true to propose another TransferLeader command. Otherwise, some write requests
-        // that have marked some locks as deleted will fail because raft rejects more proposals.
-        if !pessimistic_locks.is_valid {
+        // If it is not writable, it's probably because it's a retried TransferLeader and the locks
+        // have been proposed. But we still need to return true to propose another TransferLeader
+        // command. Otherwise, some write requests that have marked some locks as deleted will fail
+        // because raft rejects more proposals.
+        // It is OK to return true here if it's in other states like MergingRegion or NotLeader.
+        // In those cases, the locks will fail to propose and nothing will happen.
+        if !pessimistic_locks.is_writable() {
             return true;
         }
-        pessimistic_locks.is_valid = false;
+        pessimistic_locks.status = LocksStatus::TransferingLeader;
 
         // 2. Propose pessimistic locks
         if pessimistic_locks.is_empty() {
@@ -3678,7 +3687,12 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "commit_index" => commit,
             );
-            self.fsm.peer.txn_ext.pessimistic_locks.write().is_valid = true;
+            {
+                let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+                if pessimistic_locks.status == LocksStatus::MergingRegion {
+                    pessimistic_locks.status = LocksStatus::Normal;
+                }
+            }
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
     }

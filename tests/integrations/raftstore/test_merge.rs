@@ -16,7 +16,7 @@ use engine_rocks::Compat;
 use engine_traits::Peekable;
 use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
-use raftstore::store::Callback;
+use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use tikv::storage::kv::SnapContext;
 use tikv::storage::kv::SnapshotExt;
@@ -1384,6 +1384,71 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     assert!(res.recv().is_ok());
 
     assert_eq!(cluster.must_get(b"k1").unwrap(), b"new_val");
+}
+
+#[test]
+fn test_merge_pessimistic_locks_repeated_merge() {
+    let mut cluster = new_server_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let snapshot = cluster.must_get_snapshot_of_region(left.id);
+    let txn_ext = snapshot.ext().get_txn_ext().unwrap().clone();
+    let lock = PessimisticLock {
+        primary: b"k1".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"k1"), lock.clone())])
+            .is_ok()
+    );
+
+    // Filter MsgAppend, so the proposed PrepareMerge will not succeed
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.id, 2)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+    cluster.merge_region(left.id, right.id, Callback::None);
+    cluster.merge_region(left.id, right.id, Callback::None);
+    thread::sleep(Duration::from_millis(150));
+
+    // After that, the pessimistic locks status should remain in Merging state.
+    // Failing to propose the second merge region will not revert the state
+    assert_eq!(
+        txn_ext.pessimistic_locks.read().status,
+        LocksStatus::MergingRegion
+    );
+
+    cluster.clear_send_filters();
+    pd_client.check_merged_timeout(left.id, Duration::from_secs(5));
+    let snapshot = cluster.must_get_snapshot_of_region(right.id);
+    let value = snapshot
+        .get_cf(CF_LOCK, &Key::from_raw(b"k1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(value, lock.into_lock().to_bytes());
 }
 
 #[test]
