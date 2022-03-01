@@ -79,7 +79,13 @@ pub fn check_and_dump_raft_db(
 
     // Add a guard to remove target data directory that is incomplete.
     let defer = guard((), |_| {
-        let _ = std::fs::remove_dir_all(config.raft_engine.config().dir);
+        let p = config.raft_engine.config().dir;
+        if let Err(e) = std::fs::remove_dir_all(&p) {
+            error!(
+                "Failed to remove incomplete data directory {}: {:?}. Please delete it manually.",
+                p, e
+            );
+        }
     });
 
     // Target engine should be newly created and empty.
@@ -222,7 +228,13 @@ pub fn check_and_dump_raft_engine(
 
     // Add a guard to remove target data directory that is incomplete.
     let defer = guard((), |_| {
-        let _ = std::fs::remove_dir_all(config.raft_store.raftdb_path.clone());
+        let p = config.raft_store.raftdb_path.clone();
+        if let Err(e) = std::fs::remove_dir_all(&p) {
+            error!(
+                "Failed to remove incomplete data directory {}: {:?}. Please delete it manually.",
+                p, e
+            );
+        }
     });
 
     // Target engine should be newly created and empty.
