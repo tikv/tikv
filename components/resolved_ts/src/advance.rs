@@ -11,7 +11,7 @@ use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::select_all;
-use futures::FutureExt;
+use futures::{FutureExt, TryFutureExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
 use kvproto::metapb::{Peer, PeerRole};
@@ -21,16 +21,16 @@ use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
+use tikv_util::info;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
-use tikv_util::{error, info};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::Mutex;
 use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
-use crate::errors::{Error, Result};
+use crate::errors::Result;
 use crate::metrics::*;
 use crate::util;
 
@@ -220,20 +220,14 @@ pub async fn region_resolved_ts_store(
             let region_num = regions.len() as u32;
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
+
+            // Check leadership for `regions` on `to_store`.
             async move {
                 let client =
                     get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
-                        .await;
-                let client = match client {
-                    Ok(client) => client,
-                    Err(err) => {
-                        error!("check leader failed";
-                                "error" => ?err,
-                                "store_id" => store_id, "to_store" => to_store);
-                        tikv_clients.lock().await.remove(&to_store);
-                        return Err(Error::Other(box_err!(err)));
-                    }
-                };
+                        .await
+                        .map_err(|e| (to_store, true, format!("{}", e)))?;
+
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
@@ -242,52 +236,29 @@ pub async fn region_resolved_ts_store(
                     let elapsed = start.saturating_elapsed();
                     slow_log!(
                         elapsed,
-                        "check leader rpc costs too long, store_id: {}, to_store: {}",
-                        store_id,
+                        "check leader rpc costs too long, to_store: {}",
                         to_store
                     );
                     RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
                         .with_label_values(&["rpc"])
                         .observe(elapsed.as_secs_f64());
                 });
-                let rpc = match client.check_leader_async(&req) {
-                    Ok(rpc) => rpc,
-                    Err(err) => {
-                        error!("check leader failed";
-                            "error" => ?err,
-                            "store_id" => store_id, "to_store" => to_store);
-                        tikv_clients.lock().await.remove(&to_store);
-                        return Err(Error::Other(box_err!(err)));
-                    }
-                };
+
+                let rpc = client
+                    .check_leader_async(&req)
+                    .map_err(|e| (to_store, true, format!("{}", e)))?;
                 let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
-                let res_timout = tokio::time::timeout(timeout, rpc).await;
-                let res = match res_timout {
-                    Ok(res) => res,
-                    Err(err) => {
-                        error!("check leader failed";
-                            "error" => ?err,
-                            "store_id" => store_id, "to_store" => to_store);
-                        tikv_clients.lock().await.remove(&to_store);
-                        return Err(Error::Other(box_err!(err)));
-                    }
-                };
-                let resp = match res {
-                    Ok(resp) => resp,
-                    Err(err) => {
-                        error!("check leader failed";
-                            "error" => ?err,
-                            "store_id" => store_id, "to_store" => to_store);
-                        tikv_clients.lock().await.remove(&to_store);
-                        return Err(Error::Other(box_err!(err)));
-                    }
-                };
-                Result::Ok((to_store, resp))
+                let resp = tokio::time::timeout(timeout, rpc)
+                    .map_err(|e| (to_store, true, format!("{}", e)))
+                    .await?
+                    .map_err(|e| (to_store, true, format!("{}", e)))?;
+                std::result::Result::Ok((to_store, resp))
             }
             .boxed()
         })
         .collect();
     let start = Instant::now_coarse();
+
     defer!({
         RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
             .with_label_values(&["all"])
@@ -297,11 +268,19 @@ pub async fn region_resolved_ts_store(
         // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
         let (res, _, remains) = select_all(stores).await;
         stores = remains;
-        if let Ok((store_id, resp)) = res {
-            for region_id in resp.regions {
-                resp_map.entry(region_id).or_default().push(store_id);
-                if region_has_quorum(&region_map[&region_id], &resp_map[&region_id]) {
-                    valid_regions.insert(region_id);
+        match res {
+            Ok((to_store, resp)) => {
+                for region_id in resp.regions {
+                    resp_map.entry(region_id).or_default().push(to_store);
+                    if region_has_quorum(&region_map[&region_id], &resp_map[&region_id]) {
+                        valid_regions.insert(region_id);
+                    }
+                }
+            }
+            Err((to_store, reconnect, err)) => {
+                info!("check leader failed"; "error" => ?err, "to_store" => to_store);
+                if reconnect {
+                    tikv_clients.lock().await.remove(&to_store);
                 }
             }
         }
