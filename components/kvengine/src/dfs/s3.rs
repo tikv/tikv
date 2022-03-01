@@ -140,9 +140,7 @@ impl DFS for S3FS {
         let data = self.read_file(file_id, opts).await?;
         let tmp_file_path = self.tmp_file_path(file_id);
         let mut writer = DirectWriter::new(self.rate_limiter.clone(), IOType::Compaction);
-        writer.reserve(data.len());
-        writer.extend_from_slice(data.chunk());
-        writer.async_write_to_file(tmp_file_path.clone()).await?;
+        writer.write_to_file(data.chunk(), tmp_file_path.clone())?;
         std::fs::rename(tmp_file_path, local_file_path)?;
         Ok(())
     }

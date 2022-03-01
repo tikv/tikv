@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
-use std::ops::DerefMut;
 use std::sync::{Arc, RwLock};
 use std::{
     collections::{HashMap, HashSet},
@@ -25,6 +24,7 @@ pub(crate) struct Worker {
     writer: DirectWriter,
     task_rx: Receiver<Task>,
     all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
+    buf: Vec<u8>,
 }
 
 impl Worker {
@@ -49,6 +49,7 @@ impl Worker {
             writer,
             task_rx,
             all_states: HashMap::default(),
+            buf: vec![],
         }
     }
 
@@ -85,27 +86,20 @@ impl Worker {
     }
 
     fn write_all_states(&mut self, epoch_id: u32) -> Result<()> {
-        let mut all_states_len = 4;
-        for (_id, region_states) in &self.all_states {
-            for (k, v) in region_states {
-                all_states_len += 8 + 2 + k.len() + 4 + v.len();
-            }
-        }
-        self.writer.truncate(0);
-        self.writer.reserve(all_states_len);
+        self.buf.truncate(0);
         for (id, region_states) in &self.all_states {
             for (k, v) in region_states {
-                self.writer.put_u64_le(*id);
-                self.writer.put_u16_le(k.len() as u16);
-                self.writer.extend_from_slice(k.chunk());
-                self.writer.put_u32_le(v.len() as u32);
-                self.writer.extend_from_slice(v.chunk());
+                self.buf.put_u64_le(*id);
+                self.buf.put_u16_le(k.len() as u16);
+                self.buf.extend_from_slice(k.chunk());
+                self.buf.put_u32_le(v.len() as u32);
+                self.buf.extend_from_slice(v.chunk());
             }
         }
-        let crc32 = crc32c::crc32c(&self.writer);
-        self.writer.put_u32_le(crc32);
+        let crc32 = crc32c::crc32c(&self.buf);
+        self.buf.put_u32_le(crc32);
         let filename = states_file_name(&self.dir, epoch_id);
-        self.writer.write_to_file(filename)?;
+        self.writer.write_to_file(&self.buf, filename)?;
         info!("write state file for epoch {}", epoch_id);
         if epoch_id == 1 {
             return Ok(());
@@ -167,13 +161,11 @@ impl Worker {
             region_data.region_id,
             region_data.range,
         );
-        self.writer.truncate(0);
-        let encoded_len = region_data.encoded_len() + 4;
-        self.writer.reserve(encoded_len);
-        region_data.encode_to(self.writer.deref_mut());
-        let checksum = crc32c::crc32c(&self.writer);
-        self.writer.put_u32_le(checksum);
-        self.writer.write_to_file(filename)?;
+        self.buf.truncate(0);
+        region_data.encode_to(&mut self.buf);
+        let checksum = crc32c::crc32c(&self.buf);
+        self.buf.put_u32_le(checksum);
+        self.writer.write_to_file(&self.buf, filename)?;
         self.epoches[epoch_idx]
             .raft_log_files
             .lock()

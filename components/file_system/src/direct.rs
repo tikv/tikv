@@ -2,7 +2,6 @@
 
 use crate::{IOOp, IORateLimiter, IOType};
 use std::fs::{File, OpenOptions};
-use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,88 +12,41 @@ const ALIGN_SIZE: usize = 4096;
 const ALIGN_MASK: u64 = 0xffff_f000;
 
 pub struct DirectWriter {
-    buf: Vec<u8>,
+    aligned_buf: Vec<u8>,
     rate_limiter: Arc<IORateLimiter>,
     io_type: IOType,
-    reserved_cap: usize,
-}
-
-impl Deref for DirectWriter {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buf
-    }
-}
-
-impl DerefMut for DirectWriter {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.buf
-    }
 }
 
 impl DirectWriter {
     pub fn new(rate_limiter: Arc<IORateLimiter>, io_type: IOType) -> Self {
         Self {
-            buf: vec![],
+            aligned_buf: alloc_aligned(WRITE_BATCH_SIZE),
             rate_limiter,
             io_type,
-            reserved_cap: 0,
         }
     }
 
-    pub async fn async_write_to_file(&mut self, filename: PathBuf) -> io::Result<()> {
-        assert!(self.reserved_cap > 0 && self.buf.len() <= self.reserved_cap,
-                "call reserve before write to buffer");
+    pub fn write_to_file(&mut self, buf: &[u8], filename: PathBuf) -> io::Result<()> {
         let file = open_direct_file(filename, false)?;
-        let origin_buf_len = self.buf.len();
-        self.resize(aligned_len(origin_buf_len), 0);
+        let origin_buf_len = buf.len();
         let mut cursor = 0usize;
-        while cursor < self.buf.len() {
+        while cursor < buf.len() {
             let mut end = cursor + WRITE_BATCH_SIZE;
-            if end > self.buf.len() {
-                end = self.buf.len();
+            if end > buf.len() {
+                end = buf.len();
             }
             self.rate_limiter
                 .request(self.io_type, IOOp::Write, WRITE_BATCH_SIZE);
-            file.write_all_at(&self.buf[cursor..end], cursor as u64)?;
+            self.aligned_buf.truncate(0);
+            self.aligned_buf.extend_from_slice(&buf[cursor..end]);
+            let aligned_batch_len = aligned_len(self.aligned_buf.len());
+            self.aligned_buf.resize(aligned_batch_len, 0);
+            file.write_all_at(&self.aligned_buf, cursor as u64)?;
             cursor = end;
         }
         file.set_len(origin_buf_len as u64)?;
         file.sync_all()?;
         Ok(())
-    }
-
-    pub fn write_to_file(&mut self, filename: PathBuf) -> io::Result<()> {
-        assert!(self.reserved_cap > 0 && self.buf.len() < self.reserved_cap,
-                "call reserve before write to buffer");
-        let file = open_direct_file(filename, false)?;
-        let origin_buf_len = self.buf.len();
-        self.resize(aligned_len(origin_buf_len), 0);
-        let mut cursor = 0usize;
-        while cursor < self.buf.len() {
-            let mut end = cursor + WRITE_BATCH_SIZE;
-            if end > self.buf.len() {
-                end = self.buf.len();
-            }
-            self.rate_limiter
-                .request(self.io_type, IOOp::Write, WRITE_BATCH_SIZE);
-            file.write_all_at(&self.buf[cursor..end], cursor as u64)?;
-            cursor = end;
-        }
-        file.set_len(origin_buf_len as u64)?;
-        file.sync_all()?;
-        Ok(())
-    }
-
-    /// Make sure the buffer has sufficient capacity.
-    pub fn reserve(&mut self, additional: usize) {
-        if self.buf.len() + additional > self.buf.capacity() {
-            let mut new_buf = alloc_aligned(self.buf.len() + additional + self.buf.len() / 2);
-            self.reserved_cap = new_buf.capacity();
-            new_buf.extend_from_slice(self.buf.as_slice());
-            self.buf = new_buf;
-        }
     }
 }
 
