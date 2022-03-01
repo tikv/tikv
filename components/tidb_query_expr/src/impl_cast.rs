@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{BigEndian, ByteOrder};
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::num::IntErrorKind;
 
+use byteorder::{BigEndian, ByteOrder};
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
