@@ -190,6 +190,9 @@ where
 
         let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut());
         drop(resolver);
+        if kvs.len() == 0 {
+            return;
+        }
 
         HANDLE_EVENT_DURATION_HISTOGRAM
             .with_label_values(&["to_stream_event"])

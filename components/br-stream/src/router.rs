@@ -422,7 +422,8 @@ impl RouterInner {
     /// returns `None` if failed.
     pub async fn do_flush(&self, task_name: &str, store_id: u64) -> Option<u64> {
         debug!("backup stream do flush"; "task" => task_name);
-        match self.tasks.lock().await.get(task_name) {
+        let task = self.tasks.lock().await.get(task_name).cloned();
+        match task {
             Some(task_info) => {
                 let result = task_info.do_flush(store_id).await;
                 if let Err(ref e) = result {
