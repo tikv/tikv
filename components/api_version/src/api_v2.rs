@@ -109,8 +109,8 @@ impl APIVersion for APIV2 {
     }
 
     fn decode_raw_key(encoded_key: &Key, with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
-        debug_assert!(Self::verify_encoded_key(encoded_key, with_ts));
-        let ts = Self::decode_raw_key_timestamp(encoded_key, with_ts)?;
+        debug_assert!(verify_encoded_key(encoded_key, with_ts));
+        let ts = decode_raw_key_timestamp(encoded_key, with_ts)?;
         Ok((encoded_key.to_raw()?, ts))
     }
 
@@ -118,23 +118,12 @@ impl APIVersion for APIV2 {
         encoded_key: Key,
         with_ts: bool,
     ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
-        debug_assert!(Self::verify_encoded_key(&encoded_key, with_ts));
-        let ts = Self::decode_raw_key_timestamp(&encoded_key, with_ts)?;
-        Ok((encoded_key.to_raw()?, ts))
+        debug_assert!(verify_encoded_key(&encoded_key, with_ts));
+        let ts = decode_raw_key_timestamp(&encoded_key, with_ts)?;
+        Ok((encoded_key.into_raw()?, ts))
     }
 
     fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
-        Self::encode_raw_key_impl(user_key, ts)
-    }
-
-    fn encode_raw_key_owned(user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {
-        Self::encode_raw_key_impl(user_key, ts)
-    }
-}
-
-impl APIV2 {
-    fn encode_raw_key_impl<T: AsRef<[u8]>>(user_key: T, ts: Option<TimeStamp>) -> Key {
-        let user_key = user_key.as_ref();
         debug_assert_eq!(Self::parse_key_mode(user_key), KeyMode::Raw);
         let encoded_key = Key::from_raw(user_key);
         if let Some(ts) = ts {
@@ -144,26 +133,32 @@ impl APIV2 {
         }
     }
 
-    #[inline]
-    fn verify_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
-        let encoded_bytes = &encoded_key.as_encoded()[..];
-        if !matches!(Self::parse_key_mode(encoded_bytes), KeyMode::Raw) {
-            return false;
-        }
-        let mut len = encoded_bytes.len();
-        if with_ts {
-            len = len.checked_sub(number::U64_SIZE).unwrap();
-        }
-        len > 0 && (len % (tikv_util::codec::bytes::ENC_GROUP_SIZE + 1) == 0)
+    // `encode_raw_key_owned` has improvement only for APIV1|APIV1TTL, but not for APIV2.
+    // As there is no "in place" implementation available for encoding.
+    fn encode_raw_key_owned(user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {
+        Self::encode_raw_key(&user_key, ts)
     }
+}
 
-    #[inline]
-    fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<TimeStamp>> {
-        let ts = if with_ts {
-            Some(encoded_key.decode_ts()?)
-        } else {
-            None
-        };
-        Ok(ts)
+#[inline]
+fn verify_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
+    let encoded_bytes = &encoded_key.as_encoded()[..];
+    if !matches!(APIV2::parse_key_mode(encoded_bytes), KeyMode::Raw) {
+        return false;
     }
+    let mut len = encoded_bytes.len();
+    if with_ts {
+        len = len.checked_sub(number::U64_SIZE).unwrap();
+    }
+    len > 0 && (len % (tikv_util::codec::bytes::ENC_GROUP_SIZE + 1) == 0)
+}
+
+#[inline]
+fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<TimeStamp>> {
+    let ts = if with_ts {
+        Some(encoded_key.decode_ts()?)
+    } else {
+        None
+    };
+    Ok(ts)
 }
