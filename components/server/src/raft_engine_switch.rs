@@ -42,7 +42,10 @@ fn rename_to_tmp_dir<P1: AsRef<Path>, P2: AsRef<Path>>(src: P1, dst: P2) {
 }
 
 fn check_raft_engine_is_empty(engine: &RaftLogEngine) {
-    assert!(engine.raft_groups().is_empty());
+    assert!(
+        engine.raft_groups().is_empty(),
+        "Cannot transfer data from RaftDb to non-empty Raft Engine."
+    );
 }
 
 fn check_raft_db_is_empty(engine: &RocksEngine) {
@@ -55,7 +58,10 @@ fn check_raft_db_is_empty(engine: &RocksEngine) {
             Ok(true)
         })
         .unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(
+        count, 0,
+        "Cannot transfer data from Raft Engine to non-empty RaftDB."
+    );
 }
 
 /// Check the potential original raftdb directory and try to dump data out.
