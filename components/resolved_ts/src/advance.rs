@@ -189,12 +189,15 @@ pub async fn region_resolved_ts_store(
             if peer.store_id == store_id && peer.id == leader_id {
                 resp_map.entry(region_id).or_default().push(store_id);
             } else if peer.get_role() != PeerRole::Learner {
+                // It's unnecessary to check leader on learners as they can't vote.
                 store_map
                     .entry(peer.store_id)
                     .or_default()
                     .push(leader_info.clone());
             }
         }
+        // Check `region_has_quorum` here because `store_map` can be empty, in which case
+        // `region_has_quorum` won't be called any more.
         if region_has_quorum(&peer_list, &resp_map[&region_id]) {
             valid_regions.insert(region_id);
         } else {
