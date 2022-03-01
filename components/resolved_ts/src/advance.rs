@@ -188,17 +188,18 @@ pub async fn region_resolved_ts_store(
         for peer in &peer_list {
             if peer.store_id == store_id && peer.id == leader_id {
                 resp_map.entry(region_id).or_default().push(store_id);
-                if peer_list.len() == 1 {
-                    valid_regions.insert(region_id);
-                }
-                continue;
+            } else if peer.get_role() != PeerRole::Learner {
+                store_map
+                    .entry(peer.store_id)
+                    .or_default()
+                    .push(leader_info.clone());
             }
-            store_map
-                .entry(peer.store_id)
-                .or_default()
-                .push(leader_info.clone());
         }
-        region_map.insert(region_id, peer_list);
+        if region_has_quorum(&peer_list, &resp_map[&region_id]) {
+            valid_regions.insert(region_id);
+        } else {
+            region_map.insert(region_id, peer_list);
+        }
     }
     // Approximate `LeaderInfo` size
     let leader_info_size = store_map

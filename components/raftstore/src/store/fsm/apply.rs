@@ -641,10 +641,6 @@ where
         self.committed_count = 0;
         is_synced
     }
-
-    pub fn get_store_id(&self) -> u64 {
-        self.store_id
-    }
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
