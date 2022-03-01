@@ -1,44 +1,105 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel::{unbounded, Receiver};
-use encryption_export::DataKeyManager;
-use engine_rocks::{self, raw::Env, RocksEngine};
+use engine_rocks::{self, RocksEngine};
 use engine_traits::{Iterable, Iterator, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SeekKey};
-use file_system::{delete_dir_if_exist, IORateLimiter};
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use raft_log_engine::RaftLogEngine;
-use scopeguard::{guard, ScopeGuard};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::{cmp, fs};
-use tikv::config::TiKvConfig;
 
 const BATCH_THRESHOLD: usize = 32 * 1024;
 
-fn get_path_for_remove(path: &str) -> PathBuf {
-    let mut flag_path = PathBuf::from(path);
-    flag_path.set_extension("REMOVE");
-    flag_path
-}
+pub fn dump_raftdb_to_raft_engine(source: &RocksEngine, target: &RaftLogEngine, threads: usize) {
+    check_raft_engine_is_empty(target);
 
-fn remove_tmp_dir<P: AsRef<Path>>(dir: P) {
-    match delete_dir_if_exist(&dir) {
-        Err(e) => warn!("Cannot remove {:?}: {}", dir.as_ref(), e),
-        Ok(true) => info!("Remove {:?} success", dir.as_ref()),
-        Ok(_) => {}
+    let count_size = Arc::new(AtomicUsize::new(0));
+    let mut count_region = 0;
+    let mut workers = vec![];
+    let (tx, rx) = unbounded();
+    for _ in 0..threads {
+        let source = source.clone();
+        let target = target.clone();
+        let count_size = count_size.clone();
+        let rx = rx.clone();
+        let t = std::thread::spawn(move || {
+            run_dump_raftdb_worker(&rx, &source, &target, &count_size);
+        });
+        workers.push(t);
     }
+
+    info!("Start to scan raft log from RocksEngine and dump into RaftLogEngine");
+    let consumed_time = tikv_util::time::Instant::now();
+    // Seek all region id from raftdb and send them to workers.
+    let mut it = source.iterator().unwrap();
+    let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
+    while valid {
+        match keys::decode_raft_key(it.key()) {
+            Err(e) => {
+                panic!("Error happened when decoding raft key: {}", e);
+            }
+            Ok((id, _)) => {
+                tx.send(id).unwrap();
+                count_region += 1;
+                let next_key = keys::raft_log_prefix(id + 1);
+                valid = it.seek(SeekKey::Key(&next_key)).unwrap();
+            }
+        }
+    }
+    drop(tx);
+    info!("Scanned all region id and waiting for dump");
+    for t in workers {
+        t.join().unwrap();
+    }
+    target.sync().unwrap();
+    info!(
+        "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
+        count_region,
+        count_size.load(Ordering::Relaxed),
+        consumed_time.saturating_elapsed(),
+    );
 }
 
-fn rename_to_tmp_dir<P1: AsRef<Path>, P2: AsRef<Path>>(src: P1, dst: P2) {
-    fs::rename(&src, &dst).unwrap();
+pub fn dump_raft_engine_to_raftdb(source: &RaftLogEngine, target: &RocksEngine, threads: usize) {
+    check_raft_db_is_empty(target);
 
-    let mut dir = dst.as_ref().to_path_buf();
-    assert!(dir.pop());
-    fs::File::open(&dir).and_then(|d| d.sync_all()).unwrap();
-    info!("Rename {:?} to {:?} correctly", src.as_ref(), dst.as_ref());
+    let count_size = Arc::new(AtomicUsize::new(0));
+    let mut count_region = 0;
+    let mut workers = vec![];
+    let (tx, rx) = unbounded();
+    for _ in 0..threads {
+        let source = source.clone();
+        let target = target.clone();
+        let count_size = count_size.clone();
+        let rx = rx.clone();
+        let t = std::thread::spawn(move || {
+            run_dump_raft_engine_worker(&rx, &source, &target, &count_size);
+        });
+        workers.push(t);
+    }
+
+    info!("Start to scan raft log from RaftLogEngine and dump into RocksEngine");
+    let consumed_time = tikv_util::time::Instant::now();
+    // Seek all region id from RaftLogEngine and send them to workers.
+    for id in source.raft_groups() {
+        tx.send(id).unwrap();
+        count_region += 1;
+    }
+    drop(tx);
+
+    info!("Scanned all region id and waiting for dump");
+    for t in workers {
+        t.join().unwrap();
+    }
+    target.sync().unwrap();
+    info!(
+        "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
+        count_region,
+        count_size.load(Ordering::Relaxed),
+        consumed_time.saturating_elapsed(),
+    );
 }
 
 fn check_raft_engine_is_empty(engine: &RaftLogEngine) {
@@ -64,102 +125,6 @@ fn check_raft_db_is_empty(engine: &RocksEngine) {
     );
 }
 
-/// Check the potential original raftdb directory and try to dump data out.
-///
-/// Procedure:
-///     1. Check whether the dump has been completed. If there is a dirty dir,
-///        delete the original raftdb safely and return.
-///     2. Scan and dump raft data into raft engine.
-///     3. Rename original raftdb dir to indicate that dump operation is done.
-///     4. Delete the original raftdb safely.
-pub fn check_and_dump_raft_db(
-    config: &TiKvConfig,
-    engine: &RaftLogEngine,
-    env: &Arc<Env>,
-    thread_num: usize,
-) {
-    let raftdb_path = &config.raft_store.raftdb_path;
-    if !RocksEngine::exists(raftdb_path) {
-        return;
-    }
-
-    // Add a guard to remove target data directory that is incomplete.
-    let defer = guard((), |_| {
-        let p = config.raft_engine.config().dir;
-        if let Err(e) = std::fs::remove_dir_all(&p) {
-            error!(
-                "Failed to remove incomplete data directory {}: {:?}. Please delete it manually.",
-                p, e
-            );
-        }
-    });
-
-    // Target engine should be newly created and empty.
-    check_raft_engine_is_empty(engine);
-
-    let config_raftdb = &config.raftdb;
-    let mut raft_db_opts = config_raftdb.build_opt();
-    raft_db_opts.set_env(env.clone());
-    let raft_db_cf_opts = config_raftdb.build_cf_opts(&None);
-    let db = engine_rocks::raw_util::new_engine_opt(raftdb_path, raft_db_opts, raft_db_cf_opts)
-        .unwrap_or_else(|s| fatal!("failed to create origin raft db: {}", s));
-    let src_engine = RocksEngine::from_db(Arc::new(db));
-
-    let count_size = Arc::new(AtomicUsize::new(0));
-    let mut count_region = 0;
-    let mut threads = vec![];
-    let (tx, rx) = unbounded();
-    for _ in 0..thread_num {
-        let src_engine = src_engine.clone();
-        let dst_engine = engine.clone();
-        let count_size = count_size.clone();
-        let rx = rx.clone();
-        let t = std::thread::spawn(move || {
-            run_dump_raftdb_worker(&rx, &src_engine, &dst_engine, &count_size);
-        });
-        threads.push(t);
-    }
-
-    info!("Start to scan raft log from RocksEngine and dump into RaftLogEngine");
-    let consumed_time = tikv_util::time::Instant::now();
-    // Seek all region id from raftdb and send them to workers.
-    let mut it = src_engine.iterator().unwrap();
-    let mut valid = it.seek(SeekKey::Key(keys::REGION_RAFT_MIN_KEY)).unwrap();
-    while valid {
-        match keys::decode_raft_key(it.key()) {
-            Err(e) => {
-                panic!("Error happened when decoding raft key: {}", e);
-            }
-            Ok((id, _)) => {
-                tx.send(id).unwrap();
-                count_region += 1;
-                let next_key = keys::raft_log_prefix(id + 1);
-                valid = it.seek(SeekKey::Key(&next_key)).unwrap();
-            }
-        }
-    }
-    drop(tx);
-    info!("Scanned all region id and waiting for dump");
-    for t in threads {
-        t.join().unwrap();
-    }
-    engine.sync().unwrap();
-    info!(
-        "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
-        count_region,
-        count_size.load(Ordering::Relaxed),
-        consumed_time.saturating_elapsed(),
-    );
-
-    // Defuse the guard.
-    let _ = ScopeGuard::into_inner(defer);
-
-    let dirty_raftdb_path = get_path_for_remove(raftdb_path);
-    rename_to_tmp_dir(&raftdb_path, &dirty_raftdb_path);
-    remove_tmp_dir(&dirty_raftdb_path);
-}
-
-// Worker receives region id and scan the related range.
 fn run_dump_raftdb_worker(
     rx: &Receiver<u64>,
     old_engine: &RocksEngine,
@@ -219,80 +184,6 @@ fn run_dump_raftdb_worker(
     count_size.fetch_add(size, Ordering::Relaxed);
 }
 
-pub fn check_and_dump_raft_engine(
-    config: &TiKvConfig,
-    key_manager: Option<Arc<DataKeyManager>>,
-    io_rate_limiter: Option<Arc<IORateLimiter>>,
-    rocks_engine: &RocksEngine,
-    thread_num: usize,
-) {
-    let raft_engine_config = config.raft_engine.config();
-    let raft_engine_path = &raft_engine_config.dir;
-    if !RaftLogEngine::exists(raft_engine_path) {
-        return;
-    }
-
-    // Add a guard to remove target data directory that is incomplete.
-    let defer = guard((), |_| {
-        let p = config.raft_store.raftdb_path.clone();
-        if let Err(e) = std::fs::remove_dir_all(&p) {
-            error!(
-                "Failed to remove incomplete data directory {}: {:?}. Please delete it manually.",
-                p, e
-            );
-        }
-    });
-
-    // Target engine should be newly created and empty.
-    check_raft_db_is_empty(rocks_engine);
-
-    let raft_engine = RaftLogEngine::new(raft_engine_config.clone(), key_manager, io_rate_limiter)
-        .expect("open raft engine");
-
-    let count_size = Arc::new(AtomicUsize::new(0));
-    let mut count_region = 0;
-    let mut threads = vec![];
-    let (tx, rx) = unbounded();
-    for _ in 0..thread_num {
-        let src_engine = raft_engine.clone();
-        let dst_engine = rocks_engine.clone();
-        let count_size = count_size.clone();
-        let rx = rx.clone();
-        let t = std::thread::spawn(move || {
-            run_dump_raft_engine_worker(&rx, &src_engine, &dst_engine, &count_size);
-        });
-        threads.push(t);
-    }
-
-    info!("Start to scan raft log from RaftLogEngine and dump into RocksEngine");
-    let consumed_time = tikv_util::time::Instant::now();
-    // Seek all region id from RaftLogEngine and send them to workers.
-    for id in raft_engine.raft_groups() {
-        tx.send(id).unwrap();
-        count_region += 1;
-    }
-    drop(tx);
-
-    info!("Scanned all region id and waiting for dump");
-    for t in threads {
-        t.join().unwrap();
-    }
-    rocks_engine.sync().unwrap();
-    info!(
-        "Finished dump, total regions: {}; Total bytes: {}; Consumed time: {:?}",
-        count_region,
-        count_size.load(Ordering::Relaxed),
-        consumed_time.saturating_elapsed(),
-    );
-
-    // Defuse the guard.
-    let _ = ScopeGuard::into_inner(defer);
-    // Atomically rename to avoid leaving partially deleted directory.
-    let dirty_raft_engine_path = get_path_for_remove(raft_engine_path);
-    rename_to_tmp_dir(&raft_engine_path, &dirty_raft_engine_path);
-    remove_tmp_dir(&dirty_raft_engine_path);
-}
-
 fn run_dump_raft_engine_worker(
     rx: &Receiver<u64>,
     old_engine: &RaftLogEngine,
@@ -306,7 +197,7 @@ fn run_dump_raft_engine_worker(
             let mut batch = new_engine.log_batch(0);
             let mut begin = old_engine.first_index(id).unwrap();
             while begin <= last_index {
-                let end = cmp::min(begin + 1024, last_index + 1);
+                let end = std::cmp::min(begin + 1024, last_index + 1);
                 let mut entries = Vec::with_capacity((end - begin) as usize);
                 begin += old_engine
                     .fetch_entries_to(id, begin, end, Some(BATCH_THRESHOLD), &mut entries)
@@ -341,61 +232,53 @@ mod tests {
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
 
         // Prepare some data for the RocksEngine.
-        {
-            let db = engine_rocks::raw_util::new_engine_opt(
-                &cfg.raft_store.raftdb_path,
-                cfg.raftdb.build_opt(),
-                cfg.raftdb.build_cf_opts(&None),
-            )
-            .unwrap();
-            let engine = RocksEngine::from_db(Arc::new(db));
-            let mut batch = engine.log_batch(0);
-            set_write_batch(1, &mut batch);
-            engine.consume(&mut batch, false).unwrap();
-            set_write_batch(5, &mut batch);
-            engine.consume(&mut batch, false).unwrap();
-            set_write_batch(15, &mut batch);
-            engine.consume(&mut batch, false).unwrap();
-            engine.sync().unwrap();
-        }
+        let raftdb = engine_rocks::raw_util::new_engine_opt(
+            &cfg.raft_store.raftdb_path,
+            cfg.raftdb.build_opt(),
+            cfg.raftdb.build_cf_opts(&None),
+        )
+        .unwrap();
+        let raftdb = RocksEngine::from_db(Arc::new(raftdb));
+        let mut batch = raftdb.log_batch(0);
+        set_write_batch(1, &mut batch);
+        raftdb.consume(&mut batch, false).unwrap();
+        set_write_batch(5, &mut batch);
+        raftdb.consume(&mut batch, false).unwrap();
+        set_write_batch(15, &mut batch);
+        raftdb.consume(&mut batch, false).unwrap();
+        raftdb.sync().unwrap();
 
         // Dump logs from RocksEngine to RaftLogEngine.
-        {
-            let raft_engine = RaftLogEngine::new(
-                cfg.raft_engine.config(),
-                None, /*key_manager*/
-                None, /*io_rate_limiter*/
-            )
-            .expect("open raft engine");
+        let raft_engine = RaftLogEngine::new(
+            cfg.raft_engine.config(),
+            None, /*key_manager*/
+            None, /*io_rate_limiter*/
+        )
+        .expect("open raft engine");
 
-            check_and_dump_raft_db(&cfg, &raft_engine, &Arc::new(Env::default()), 4);
-            assert(1, &raft_engine);
-            assert(5, &raft_engine);
-            assert(15, &raft_engine);
-        }
+        dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 4);
+        assert(1, &raft_engine);
+        assert(5, &raft_engine);
+        assert(15, &raft_engine);
+
+        // Remove old raftdb.
+        std::mem::drop(raftdb);
+        std::fs::remove_dir_all(&cfg.raft_store.raftdb_path).unwrap();
 
         // Dump logs from RaftLogEngine to RocksEngine.
-        {
-            let rocks_engine = {
-                let db = engine_rocks::raw_util::new_engine_opt(
-                    &cfg.raft_store.raftdb_path,
-                    DBOptions::new(),
-                    vec![],
-                )
-                .unwrap();
-                RocksEngine::from_db(Arc::new(db))
-            };
-            check_and_dump_raft_engine(
-                &cfg,
-                None, /*key_manager*/
-                None, /*io_rate_limiter*/
-                &rocks_engine,
-                4,
-            );
-            assert(1, &rocks_engine);
-            assert(5, &rocks_engine);
-            assert(15, &rocks_engine);
-        }
+        let raftdb = {
+            let db = engine_rocks::raw_util::new_engine_opt(
+                &cfg.raft_store.raftdb_path,
+                DBOptions::new(),
+                vec![],
+            )
+            .unwrap();
+            RocksEngine::from_db(Arc::new(db))
+        };
+        dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 4);
+        assert(1, &raftdb);
+        assert(5, &raftdb);
+        assert(15, &raftdb);
     }
 
     #[test]

@@ -4595,7 +4595,6 @@ dependencies = [
  "rand 0.8.3",
  "resolved_ts",
  "resource_metering",
- "scopeguard",
  "security",
  "serde_json",
  "signal",
