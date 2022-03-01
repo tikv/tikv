@@ -65,7 +65,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
-use pd_client::INVALID_ID;
+use pd_client::{BucketStat, INVALID_ID};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk::DiskUsage;
@@ -603,6 +603,8 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+    /// region buckets.
+    pub buckets: Option<BucketStat>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -726,6 +728,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            buckets: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2365,6 +2368,7 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
+                self.buckets.as_ref().map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()

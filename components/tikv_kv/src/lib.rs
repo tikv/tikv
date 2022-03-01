@@ -39,7 +39,7 @@ use engine_traits::{
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
-use kvproto::metapb::Buckets;
+use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
@@ -293,7 +293,7 @@ pub trait SnapshotExt {
         None
     }
 
-    fn get_buckets(&self) -> Option<&Buckets> {
+    fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
     }
 }

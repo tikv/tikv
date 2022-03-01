@@ -33,6 +33,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
+use pd_client::merge_bucket_stats;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
@@ -1497,6 +1498,15 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
+                if let Some(delta) = res.buckets {
+                    let buckets = self.fsm.peer.buckets.as_mut().unwrap();
+                    merge_bucket_stats(
+                        &buckets.meta.keys,
+                        &mut buckets.stats,
+                        &delta.meta.keys,
+                        &delta.stats,
+                    );
+                }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,

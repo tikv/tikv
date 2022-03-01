@@ -1528,27 +1528,27 @@ where
             .entry(region_id)
             .or_insert_with(BucketStat::default);
         match bucket_stat
+            .meta
             .region_epoch
             .get_version()
             .cmp(&region_epoch.get_version())
         {
             Ordering::Less => {
-                bucket_stat.version = buckets_version;
-                bucket_stat.keys = buckets.get_keys().to_vec();
-                bucket_stat.region_epoch = region_epoch;
-                bucket_stat.stats = buckets.stats.unwrap_or_default();
+                // Epoch updated, clear the status of the old buckets.
+                // bucket_stat.version = buckets_version;
+                // bucket_stat.keys = buckets.get_keys().to_vec();
+                // bucket_stat.region_epoch = region_epoch;
+                // bucket_stat.stats = buckets.stats.unwrap_or_default();
             }
             Ordering::Equal => {
-                bucket_stat.merge(&buckets);
+                // bucket_stat.merge(&buckets);
             }
             Ordering::Greater => (),
         }
         let now = TiInstant::now();
         let period = now.duration_since(bucket_stat.last_report_time);
         bucket_stat.last_report_time = now;
-        let resp = self
-            .pd_client
-            .region_buckets(region_id, bucket_stat, period);
+        let resp = self.pd_client.region_buckets(bucket_stat, period);
         let f = async move {
             if let Err(e) = resp.await {
                 debug!(

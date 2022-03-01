@@ -899,24 +899,19 @@ impl PdClient for RpcClient {
         &self.pd_client.feature_gate
     }
 
-    fn region_buckets(
-        &self,
-        region_id: u64,
-        bucket_stat: &BucketStat,
-        period: Duration,
-    ) -> PdFuture<()> {
+    fn region_buckets(&self, bucket_stat: &BucketStat, period: Duration) -> PdFuture<()> {
         PD_BUCKETS_COUNTER_VEC.with_label_values(&["send"]).inc();
 
         let mut buckets = metapb::Buckets::default();
-        buckets.set_region_id(region_id);
-        buckets.set_version(bucket_stat.version);
+        buckets.set_region_id(bucket_stat.meta.region_id);
+        buckets.set_version(bucket_stat.meta.version);
+        buckets.set_keys(bucket_stat.meta.keys.clone().into());
         buckets.set_period_in_ms(period.as_millis() as u64);
-        buckets.set_keys(bucket_stat.keys.clone().into());
         buckets.set_stats(bucket_stat.stats.clone());
         let mut req = pdpb::ReportBucketsRequest::default();
         req.set_header(self.header());
         req.set_buckets(buckets);
-        req.set_region_epoch(bucket_stat.region_epoch.clone());
+        req.set_region_epoch(bucket_stat.meta.region_epoch.clone());
 
         let executor = |client: &Client, req: pdpb::ReportBucketsRequest| {
             let mut inner = client.inner.wl();
