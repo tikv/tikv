@@ -99,9 +99,12 @@ fn main() {
                 _ => Opt::clap().print_help().unwrap(),
             }
         }
-        Cmd::BadSsts { db, manifest, pd } => {
+        Cmd::BadSsts { manifest, pd } => {
+            let data_dir = opt.data_dir.as_deref();
+            assert!(data_dir.is_some(), "--data-dir must be specified");
+            let data_dir = data_dir.unwrap();
             let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
-            print_bad_ssts(&db, manifest.as_deref(), pd_client, &cfg);
+            print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
         }
         Cmd::DumpSnapMeta { file } => {
             let path = file.as_ref();
@@ -654,7 +657,13 @@ fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
     engine_rocks::raw::run_sst_dump_tool(&args, &opts);
 }
 
-fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
+fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
+    let db = &cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
+    println!(
+        "\nstart to print bad ssts; data_dir:{}; db:{}",
+        data_dir, db
+    );
+
     let mut args = vec![
         "sst_dump".to_string(),
         "--output_hex".to_string(),
@@ -665,16 +674,31 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
     let mut stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
     let opts = cfg.rocksdb.build_opt();
-    match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)).unwrap()
-    {
-        0 => {}
-        status => {
-            let mut err = String::new();
-            stderr.read_to_string(&mut err).unwrap();
-            println!("failed to run {}:\n{}", args.join(" "), err);
-            tikv_util::logger::exit_process_gracefully(status);
+
+    match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
+        Ok(code) => {
+            if code != 0 {
+                let mut err = String::new();
+                stderr.read_to_string(&mut err).unwrap();
+                println!("failed to run {}:\n{}", args.join(" "), err);
+                tikv_util::logger::exit_process_gracefully(code);
+            }
         }
-    };
+        Err(e) => {
+            let mut stderr_buf = stderr.into_inner();
+            let mut stdout_buf = stdout.into_inner();
+            let mut err_buf = Vec::new();
+            let mut out_buf = Vec::new();
+            stderr_buf.read_to_end(&mut err_buf).unwrap();
+            stdout_buf.read_to_end(&mut out_buf).unwrap();
+            let err_info = unsafe { String::from_utf8_unchecked(err_buf) };
+            let out_info = unsafe { String::from_utf8_unchecked(out_buf) };
+            panic!(
+                "run_and_wait_child_process return error:{}; std error:{}; std out:{};",
+                e, err_info, out_info
+            );
+        }
+    }
 
     let mut stderr_buf = stderr.into_inner();
     drop(stdout);
@@ -689,17 +713,24 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
         println!("corruption info:\n{}", line);
 
         let r = Regex::new(r"/\w*\.sst").unwrap();
-        let sst_filename = match r.captures(line) {
+        let sst_file_number = match r.captures(line) {
             None => {
                 println!("skip bad line format: {}", line);
                 continue;
             }
             Some(parts) => {
-                let p = parts.get(0).unwrap().as_str();
-                Path::new(p[1..]).to_owned()
+                if let Some(part) = parts.get(0) {
+                    Path::new(&part.as_str()[1..])
+                        .file_stem()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                } else {
+                    println!("skip bad line format: {}", line);
+                    continue;
+                }
             }
         };
-        let sst_file_number = sst_filename.file_stem().unwrap().to_str().unwrap();
         let mut args1 = vec![
             "ldb".to_string(),
             "--hex".to_string(),
@@ -758,13 +789,16 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
             let start = from_hex(matches.get(1).unwrap().as_str()).unwrap();
             let end = from_hex(matches.get(2).unwrap().as_str()).unwrap();
 
+            println!("start key:{:?}; end key:{:?}", &start, &end);
+
             if start.starts_with(&[keys::DATA_PREFIX]) {
                 print_overlap_region_and_suggestions(
                     &pd_client,
                     &start[1..],
                     &end[1..],
                     db,
-                    &sst_filename,
+                    data_dir,
+                    sst_file_number,
                 );
             } else if start.starts_with(&[keys::LOCAL_PREFIX]) {
                 println!(
@@ -774,12 +808,14 @@ fn print_bad_ssts(db: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &
 
                 // consider the case that include both meta and user data
                 if end.starts_with(&[keys::DATA_PREFIX]) {
+                    println!("WARNING: the range includes both meta and user data.");
                     print_overlap_region_and_suggestions(
                         &pd_client,
                         &[],
                         &end[1..],
                         db,
-                        &sst_filename,
+                        data_dir,
+                        sst_file_number,
                     );
                 }
             } else {
@@ -802,7 +838,8 @@ fn print_overlap_region_and_suggestions(
     start: &[u8],
     end: &[u8],
     db: &str,
-    sst_path: &Path,
+    data_dir: &str,
+    sst_file_number: &str,
 ) {
     let mut key = start.to_vec();
     let mut regions_to_print = vec![];
@@ -827,15 +864,15 @@ fn print_overlap_region_and_suggestions(
         key = region.get_end_key().to_vec();
     }
 
-    println!("\nsuggested operations:");
+    println!("\nrefer operations:");
     println!(
-        "tikv-ctl ldb --db={} unsafe_remove_sst_file {:?}",
-        db, sst_path
+        "tikv-ctl ldb --db={} unsafe_remove_sst_file {}",
+        db, sst_file_number
     );
     for region in regions_to_print {
         println!(
-            "tikv-ctl --db={} tombstone -r {} --pd <endpoint>",
-            db, region.id
+            "tikv-ctl --data-dir={} tombstone -r {} -p <endpoint>",
+            data_dir, region.id
         );
     }
 }

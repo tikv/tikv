@@ -534,10 +534,6 @@ pub enum Cmd {
     /// Print bad ssts related infos
     BadSsts {
         #[structopt(long)]
-        /// db directory.
-        db: String,
-
-        #[structopt(long)]
         /// specify manifest, if not set, it will look up manifest file in db path
         manifest: Option<String>,
 
