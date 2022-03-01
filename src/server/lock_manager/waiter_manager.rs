@@ -25,6 +25,7 @@ use futures::{Async, Future, Poll};
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::config::ReadableDuration;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_core::reactor::Handle;
 
 struct DelayInner {
@@ -48,7 +49,7 @@ impl Delay {
     /// Create a new `Delay` instance that elapses at `deadline`.
     fn new(deadline: Instant) -> Self {
         let inner = DelayInner {
-            timer: tokio_timer::Delay::new(deadline),
+            timer: GLOBAL_TIMER_HANDLE.delay(deadline),
             cancelled: false,
         };
         Self {
