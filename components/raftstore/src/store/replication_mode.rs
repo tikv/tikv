@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use collections::{HashMap, HashMapEntry};
 use kvproto::metapb;
-use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus};
 use tikv_util::info;
 
 /// A registry that maps store to a group.
@@ -172,6 +172,18 @@ impl GlobalReplicationState {
             }
         }
         &mut self.group_buffer
+    }
+
+    pub fn store_dr_autosync_status(&self) -> Option<StoreDrAutoSyncStatus> {
+        match self.status.get_mode() {
+            ReplicationMode::DrAutoSync => {
+                let mut s = StoreDrAutoSyncStatus::new();
+                s.set_state(self.status.get_dr_auto_sync().get_state());
+                s.set_state_id(self.status.get_dr_auto_sync().get_state_id());
+                Some(s)
+            }
+            ReplicationMode::Majority => None,
+        }
     }
 }
 
