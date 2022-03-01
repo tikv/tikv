@@ -39,10 +39,22 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             // No need to cast. Return directly without changing anything.
             return Ok(());
         }
-        EvalType::Int => FieldTypeBuilder::new()
-            .tp(FieldTypeTp::NewDecimal)
-            .flen(tidb_query_datatype::MAX_DECIMAL_WIDTH)
-            .build(),
+        EvalType::Int => {
+            // For type MysqlBit, the aggregation return type should be Double
+            // which is also defined in in TiDB typeInfer4Sum() and typeInfer4Avg()
+            if ret_field_type.tp() == FieldTypeTp::Bit {
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::Double)
+                    .flen(tidb_query_datatype::MAX_REAL_WIDTH)
+                    .decimal(tidb_query_datatype::UNSPECIFIED_LENGTH)
+                    .build()
+            } else {
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::NewDecimal)
+                    .flen(tidb_query_datatype::MAX_DECIMAL_WIDTH)
+                    .build()
+            }
+        }
         _ => FieldTypeBuilder::new()
             .tp(FieldTypeTp::Double)
             .flen(tidb_query_datatype::MAX_REAL_WIDTH)
