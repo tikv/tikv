@@ -40,9 +40,8 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             return Ok(());
         }
         EvalType::Int => {
-            //Codes tidb/expression/aggregation/base_func.go defined
-            //typeInfer4Sum()、typeInfer4Avg(), For Bit's sum(), avg() expression RetType is
-            //Double.
+            // For type MysqlBit, the aggregation return type should be Double
+            // which is also defined in in TiDB typeInfer4Sum() and typeInfer4Avg()
             if ret_field_type.tp() == FieldTypeTp::Bit {
                 FieldTypeBuilder::new()
                     .tp(FieldTypeTp::Double)

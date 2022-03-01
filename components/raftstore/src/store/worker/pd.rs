@@ -17,7 +17,7 @@ use kvproto::raft_cmdpb::{
     SplitRequest,
 };
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::RegionReplicationStatus;
+use kvproto::replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus};
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
 use prometheus::local::LocalHistogram;
@@ -136,6 +136,7 @@ where
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
         send_detailed_report: bool,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -949,6 +950,7 @@ where
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
         send_detailed_report: bool,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
@@ -1107,7 +1109,9 @@ where
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_report);
+        let resp =
+            self.pd_client
+                .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1137,6 +1141,7 @@ where
                                 stats: stats_copy,
                                 store_info,
                                 send_detailed_report: true,
+                                dr_autosync_status,
                             };
                             if let Err(e) = scheduler.schedule(task) {
                                 error!("notify pd failed"; "err" => ?e);
@@ -1171,6 +1176,7 @@ where
                             stats: stats_copy,
                             store_info,
                             send_detailed_report: true,
+                            dr_autosync_status,
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
@@ -1720,7 +1726,13 @@ where
                 stats,
                 store_info,
                 send_detailed_report,
-            } => self.handle_store_heartbeat(stats, store_info, send_detailed_report),
+                dr_autosync_status,
+            } => self.handle_store_heartbeat(
+                stats,
+                store_info,
+                send_detailed_report,
+                dr_autosync_status,
+            ),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
