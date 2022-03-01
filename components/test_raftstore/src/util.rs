@@ -810,7 +810,7 @@ pub fn put_cf_till_size<T: Simulator>(
         for _ in 0..batch_size / 74 + 1 {
             key.clear();
             let key_id = range.next().unwrap();
-            write!(&mut key, "{:09}", key_id).unwrap();
+            write!(key, "{:09}", key_id).unwrap();
             rng.fill_bytes(&mut value);
             // plus 1 for the extra encoding prefix
             len += key.len() as u64 + 1;

@@ -3,7 +3,7 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io};
@@ -17,7 +17,7 @@ use kvproto::raft_cmdpb::{
     SplitRequest,
 };
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use kvproto::replication_modepb::RegionReplicationStatus;
+use kvproto::replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus};
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
 use prometheus::local::LocalHistogram;
@@ -136,6 +136,7 @@ where
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
         send_detailed_report: bool,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
         regions: Vec<metapb::Region>,
@@ -1009,6 +1010,7 @@ where
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
         send_detailed_report: bool,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
@@ -1167,7 +1169,9 @@ where
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_report);
+        let resp =
+            self.pd_client
+                .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1175,14 +1179,33 @@ where
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
                     if resp.get_require_detailed_report() {
+                        // This store needs to report detailed info of hosted regions to PD.
+                        //
+                        // The info has to be up to date, meaning that all committed changes til now have to be applied before the report is sent.
+                        // The entire process may include:
+                        // 1.	`broadcast_normal` "wait apply" messsages to all peers.
+                        // 2.	`on_unsafe_recovery_wait_apply` examines whether the peer have not-yet-applied entries, if so, memorize the target index.
+                        // 3.	`on_apply_res` checks whether entries before the "unsafe recovery report target commit index" have all been applied.
+                        // The one who finally finds out the number of remaining tasks is 0 schedules an unsafe recovery reporting store heartbeat.
                         info!("required to send detailed report in the next heartbeat");
-                        let task = Task::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
+                        // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
+                        let counter = Arc::new(AtomicUsize::new(1));
+                        let counter_clone = counter.clone();
+                        router.broadcast_normal(|| {
+                            let _ = counter_clone.fetch_add(1, Ordering::Relaxed);
+                            PeerMsg::UnsafeRecoveryWaitApply(counter_clone.clone())
+                        });
+                        // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
+                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                            let task = Task::StoreHeartbeat {
+                                stats: stats_copy,
+                                store_info,
+                                send_detailed_report: true,
+                                dr_autosync_status,
+                            };
+                            if let Err(e) = scheduler.schedule(task) {
+                                error!("notify pd failed"; "err" => ?e);
+                            }
                         }
                     } else if resp.has_plan() {
                         info!("asked to execute recovery plan");
@@ -1213,6 +1236,7 @@ where
                             stats: stats_copy,
                             store_info,
                             send_detailed_report: true,
+                            dr_autosync_status,
                         };
                         if let Err(e) = scheduler.schedule(task) {
                             error!("notify pd failed"; "err" => ?e);
@@ -1774,7 +1798,13 @@ where
                 stats,
                 store_info,
                 send_detailed_report,
-            } => self.handle_store_heartbeat(stats, store_info, send_detailed_report),
+                dr_autosync_status,
+            } => self.handle_store_heartbeat(
+                stats,
+                store_info,
+                send_detailed_report,
+                dr_autosync_status,
+            ),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),

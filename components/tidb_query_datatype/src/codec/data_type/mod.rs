@@ -76,7 +76,7 @@ impl AsMySQLBool for Real {
 impl<'a, T: AsMySQLBool> AsMySQLBool for &'a T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        (&**self).as_mysql_bool(context)
+        (**self).as_mysql_bool(context)
     }
 }
 

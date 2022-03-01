@@ -22,6 +22,22 @@ use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
 
+// LOAD_BASE_SPLIT_EVENT metrics label definitions.
+// Workload fits the QPS threshold or byte threshold.
+const LOAD_FIT: &str = "load_fit";
+// Split info has been collected, ready to split.
+const READY_TO_SPLIT: &str = "ready_to_split";
+// Split info has not been collected yet, not ready to split.
+const NOT_READY_TO_SPLIT: &str = "not_ready_to_split";
+// The number of sampled keys does not meet the threshold.
+const NO_ENOUGH_SAMPLED_KEY: &str = "no_enough_sampled_key";
+// The number of sampled keys located on left and right does not meet the threshold.
+const NO_ENOUGH_LR_KEY: &str = "no_enough_lr_key";
+// The number of balanced keys does not meet the score.
+const NO_BALANCE_KEY: &str = "no_balance_key";
+// The number of contained keys does not meet the score.
+const NO_UNCROSS_KEY: &str = "no_uncross_key";
+
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
 #[inline(always)]
@@ -142,12 +158,7 @@ impl Samples {
     }
 
     // split the keys with the given split config and sampled data.
-    fn split_key(
-        &self,
-        split_balance_score: f64,
-        split_contained_score: f64,
-        sample_threshold: u64,
-    ) -> Vec<u8> {
+    fn split_key(&self, split_balance_score: f64, split_contained_score: f64) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in self.0.iter().enumerate() {
@@ -155,13 +166,13 @@ impl Samples {
                 continue;
             }
             let evaluated_key_num_lr = sample.left + sample.right;
-            let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as u64;
-            if evaluated_key_num_lr == 0 || evaluated_key_num < sample_threshold {
+            if evaluated_key_num_lr == 0 {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_enough_key"])
+                    .with_label_values(&[NO_ENOUGH_LR_KEY])
                     .inc();
                 continue;
             }
+            let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as f64;
 
             // The balance score is the difference in the number of requested keys between the left and right of a sample key.
             // The smaller the balance score, the more balanced the load will be after this splitting.
@@ -172,20 +183,20 @@ impl Samples {
                 .observe(balance_score);
             if balance_score >= split_balance_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_balance_key"])
+                    .with_label_values(&[NO_BALANCE_KEY])
                     .inc();
                 continue;
             }
 
             // The contained score is the ratio of a sample key that are contained in the requested key.
             // The larger the contained score, the more RPCs the cluster will receive after this splitting.
-            let contained_score = sample.contained as f64 / evaluated_key_num as f64;
+            let contained_score = sample.contained as f64 / evaluated_key_num;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
                 .observe(contained_score);
             if contained_score >= split_contained_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_uncross_key"])
+                    .with_label_values(&[NO_UNCROSS_KEY])
                     .inc();
                 continue;
             }
@@ -252,14 +263,19 @@ impl Recorder {
             |x| x,
         );
         let mut samples = Samples::from(sampled_key_ranges);
-        self.key_ranges.iter().flatten().for_each(|key_range| {
+        let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
+        // Because we need to observe the number of `no_enough_key` of all the actual keys,
+        // so we do this check after the samples are calculated.
+        if (recorded_key_ranges.len() as u64) < config.sample_threshold {
+            LOAD_BASE_SPLIT_EVENT
+                .with_label_values(&[NO_ENOUGH_SAMPLED_KEY])
+                .inc_by(samples.0.len() as u64);
+            return vec![];
+        }
+        recorded_key_ranges.into_iter().for_each(|key_range| {
             samples.evaluate(key_range);
         });
-        samples.split_key(
-            config.split_balance_score,
-            config.split_contained_score,
-            config.sample_threshold,
-        )
+        samples.split_key(config.split_balance_score, config.split_contained_score)
     }
 }
 
@@ -479,7 +495,7 @@ impl AutoSplitController {
                 continue;
             }
 
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&[LOAD_FIT]).inc();
 
             let detect_times = self.cfg.detect_times;
             let recorder = self
@@ -505,7 +521,7 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     });
                     LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&["prepare_to_split"])
+                        .with_label_values(&[READY_TO_SPLIT])
                         .inc();
                     info!("load base split region";
                         "region_id" => region_id,
@@ -515,7 +531,7 @@ impl AutoSplitController {
                 self.recorders.remove(&region_id);
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_fit_key"])
+                    .with_label_values(&[NOT_READY_TO_SPLIT])
                     .inc();
             }
 
@@ -629,6 +645,25 @@ mod tests {
             );
         }
         qps_stats
+    }
+
+    #[test]
+    fn test_recorder() {
+        let mut config = SplitConfig::default();
+        config.detect_times = 10;
+        config.sample_threshold = 20;
+
+        let mut recorder = Recorder::new(config.detect_times);
+        for _ in 0..config.detect_times {
+            assert!(!recorder.is_ready());
+            recorder.record(vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ]);
+        }
+        assert!(recorder.is_ready());
+        let key = recorder.collect(&config);
+        assert_eq!(key, b"b");
     }
 
     #[test]

@@ -24,7 +24,9 @@ use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use kvproto::replication_modepb::{
+    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+};
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
@@ -239,6 +241,7 @@ pub trait PdClient: Send + Sync {
         &self,
         _stats: pdpb::StoreStats,
         _report: Option<pdpb::StoreReport>,
+        _status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
