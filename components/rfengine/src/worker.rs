@@ -105,7 +105,7 @@ impl Worker {
         let crc32 = crc32c::crc32c(&self.writer);
         self.writer.put_u32_le(crc32);
         let filename = states_file_name(&self.dir, epoch_id);
-        futures::executor::block_on(self.writer.write_to_file(filename))?;
+        self.writer.write_to_file(filename)?;
         info!("write state file for epoch {}", epoch_id);
         if epoch_id == 1 {
             return Ok(());
@@ -173,7 +173,7 @@ impl Worker {
         region_data.encode_to(self.writer.deref_mut());
         let checksum = crc32c::crc32c(&self.writer);
         self.writer.put_u32_le(checksum);
-        futures::executor::block_on(self.writer.write_to_file(filename))?;
+        self.writer.write_to_file(filename)?;
         self.epoches[epoch_idx]
             .raft_log_files
             .lock()

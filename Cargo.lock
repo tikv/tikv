@@ -4518,7 +4518,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
- "futures 0.3.15",
  "kvproto",
  "libc 0.2.108",
  "protobuf",
