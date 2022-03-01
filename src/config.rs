@@ -2833,10 +2833,20 @@ impl TiKvConfig {
             < self.raft_store.raft_entry_max_size.0
                 + self.server.raft_client_grpc_send_msg_buffer as u64
         {
-            return Err(format!(
-                "server.max-grpc-send-msg-len {} should >= server.raft-client-grpc-send-msg-buffer {} + raftstore.raft-entry-max-size {}",
-                self.server.max_grpc_send_msg_len, self.server.raft_client_grpc_send_msg_buffer, self.raft_store.raft_entry_max_size.0
-            ).into());
+            warn!(
+                "server.max-grpc-send-msg-len {} < server.raft-client-grpc-send-msg-buffer {} + raftstore.raft-entry-max-size {},
+                 reset server.max-grpc-send-msg-len to {} = {} + {}",
+                self.server.max_grpc_send_msg_len,
+                self.server.raft_client_grpc_send_msg_buffer,
+                self.raft_store.raft_entry_max_size.0,
+                self.server.raft_client_grpc_send_msg_buffer as u64
+                    + self.raft_store.raft_entry_max_size.0,
+                self.server.raft_client_grpc_send_msg_buffer,
+                self.raft_store.raft_entry_max_size.0
+            );
+            self.server.max_grpc_send_msg_len =
+                (self.server.raft_client_grpc_send_msg_buffer as u64
+                    + self.raft_store.raft_entry_max_size.0) as i32;
         }
 
         Ok(())
