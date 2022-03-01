@@ -185,20 +185,25 @@ pub async fn region_resolved_ts_store(
         if util::find_store_id(&peer_list, leader_id) != Some(store_id) {
             continue;
         }
+        let mut unvotes = 0;
         for peer in &peer_list {
             if peer.store_id == store_id && peer.id == leader_id {
                 resp_map.entry(region_id).or_default().push(store_id);
-            } else if peer.get_role() != PeerRole::Learner {
-                // It's unnecessary to check leader on learners as they can't vote.
+            } else {
+                // It's still necessary to check leader on learners even if they don't vote
+                // because performing stale read on learners require it.
                 store_map
                     .entry(peer.store_id)
                     .or_default()
                     .push(leader_info.clone());
+                if peer.get_role() != PeerRole::Learner {
+                    unvotes += 1;
+                }
             }
         }
-        // Check `region_has_quorum` here because `store_map` can be empty, in which case
-        // `region_has_quorum` won't be called any more.
-        if region_has_quorum(&peer_list, &resp_map[&region_id]) {
+        // Check `region_has_quorum` here because `store_map` can be empty,
+        // in which case `region_has_quorum` won't be called any more.
+        if unvotes == 0 && region_has_quorum(&peer_list, &resp_map[&region_id]) {
             valid_regions.insert(region_id);
         } else {
             region_map.insert(region_id, peer_list);
@@ -271,9 +276,12 @@ pub async fn region_resolved_ts_store(
         match res {
             Ok((to_store, resp)) => {
                 for region_id in resp.regions {
-                    resp_map.entry(region_id).or_default().push(to_store);
-                    if region_has_quorum(&region_map[&region_id], &resp_map[&region_id]) {
-                        valid_regions.insert(region_id);
+                    if let Some(r) = region_map.get(&region_id) {
+                        let resps = resp_map.entry(region_id).or_default();
+                        resps.push(to_store);
+                        if region_has_quorum(r, resps) {
+                            valid_regions.insert(region_id);
+                        }
                     }
                 }
             }
