@@ -627,6 +627,7 @@ checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 name = "causal_ts"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "collections",
  "engine_rocks",
  "engine_traits",

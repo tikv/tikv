@@ -3,9 +3,6 @@
 #[macro_use]
 extern crate tikv_util;
 
-mod causal_ts;
-pub use causal_ts::*;
-
 mod errors;
 pub use errors::*;
 
@@ -17,3 +14,15 @@ pub use hlc::*;
 
 mod observer;
 pub use observer::*;
+
+use crate::errors::Result;
+use txn_types::TimeStamp;
+
+/// Trait of causal timestamp provider.
+pub trait CausalTsProvider: Send + Sync {
+    /// Get a new ts
+    fn get_ts(&self) -> Result<TimeStamp>;
+
+    /// Advance to not less than ts, to make following event "happen-after" this ts.
+    fn advance(&self, ts: TimeStamp) -> Result<()>;
+}

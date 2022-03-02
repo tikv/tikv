@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+api_version = { path = "../api_version" }
 collections = { path = "../collections" }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }

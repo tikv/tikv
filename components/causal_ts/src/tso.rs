@@ -9,7 +9,7 @@ use crate::CausalTsProvider;
 use txn_types::TimeStamp;
 
 /// A simple implementation acquiring TSO on every request.
-/// For test purpose only.
+/// For test purpose only. Do not use in production.
 pub struct TsoSimpleProvider {
     pd_client: Arc<dyn PdClient>,
 }

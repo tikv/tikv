@@ -59,7 +59,9 @@ pub struct HlcProvider {
     pd_client: Arc<dyn PdClient>,
     tso_worker: Worker,
 
-    // Smaller interval will get more accurate metrics, but more pressure on PD.
+    /// Interval of Physical Clock refresh from TSO.
+    /// Smaller interval will get more accurate metrics, but more pressure on PD.
+    /// Can be Duration::ZERO, which means never refresh from TSO. For test purpose ONLY.
     tso_refresh_interval: Duration,
 
     initialized: AtomicBool,
@@ -107,8 +109,10 @@ impl HlcProvider {
             }
         };
 
-        self.tso_worker
-            .spawn_interval_async_task(self.tso_refresh_interval, task);
+        if self.tso_refresh_interval > Duration::ZERO {
+            self.tso_worker
+                .spawn_interval_async_task(self.tso_refresh_interval, task);
+        }
         Ok(())
     }
 }
