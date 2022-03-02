@@ -2558,7 +2558,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
     ) {
-        debug!(
+        info!(
             "handle reads with a read index";
             "request_id" => ?read.id,
             "region_id" => self.region_id,
@@ -2625,6 +2625,7 @@ where
                     "re-propose read index request because the response is lost";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
+                    "uuid" => %read.id,
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.send_read_command(ctx, read_cmd);
