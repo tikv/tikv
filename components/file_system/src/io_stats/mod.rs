@@ -6,6 +6,7 @@ mod stub {
     use crate::IOType;
 
     use std::cell::Cell;
+    use strum::EnumCount;
 
     pub fn init() -> Result<(), String> {
         Err("No I/O tracing tool available".to_owned())

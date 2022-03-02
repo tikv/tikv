@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{BigEndian, ByteOrder};
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::num::IntErrorKind;
 
+use byteorder::{BigEndian, ByteOrder};
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
@@ -648,7 +648,7 @@ fn cast_year_as_string(
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_bit_as_string(
-    ctx: &mut EvalContext,
+    _ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     val: Option<&Int>,
 ) -> Result<Option<Bytes>> {
@@ -656,14 +656,14 @@ fn cast_bit_as_string(
         None => Ok(None),
         Some(val) => {
             let mut buf = [0; 8];
-            BigEndian::write_i64(&mut buf, *val);
+            BigEndian::write_u64(&mut buf, *val as u64);
             let flen = extra.ret_field_type.as_accessor().flen();
             if flen > 0 && flen <= 8 {
                 let start_idx: usize = (8 - flen) as usize;
                 let buf = &buf[start_idx..8];
-                cast_as_string_helper(ctx, extra, buf.to_vec())
+                Ok(Some(buf.to_vec()))
             } else {
-                //In cast bit(m) to var_string(n); n may be equal or less than 8, n = int(( m + 7 ) / 8);
+                // The length of casting bit to string should between 0 and 8.
                 Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))
             }
         }
