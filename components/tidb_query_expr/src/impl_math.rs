@@ -478,7 +478,11 @@ pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> 
 }
 
 fn truncate_real(x: Real, d: i32) -> Real {
-    let shift = 10_f64.powi(d);
+    let mut shift = 10_f64.powi(d);
+    if shift.is_infinite() {
+        // mysql's behavior
+        shift = 10_f64.powi(15)
+    }
     let tmp = x * shift;
     if *tmp == 0_f64 {
         Real::from(0_f64)
