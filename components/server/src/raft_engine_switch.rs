@@ -214,6 +214,7 @@ fn run_dump_raft_engine_worker(
 mod tests {
     use super::*;
     use engine_rocks::raw::DBOptions;
+    use tikv::config::TiKvConfig;
 
     fn do_test_switch(custom_raft_db_wal: bool) {
         let data_path = tempfile::Builder::new().tempdir().unwrap().into_path();
@@ -231,23 +232,6 @@ mod tests {
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
 
-        // Prepare some data for the RocksEngine.
-        let raftdb = engine_rocks::raw_util::new_engine_opt(
-            &cfg.raft_store.raftdb_path,
-            cfg.raftdb.build_opt(),
-            cfg.raftdb.build_cf_opts(&None),
-        )
-        .unwrap();
-        let raftdb = RocksEngine::from_db(Arc::new(raftdb));
-        let mut batch = raftdb.log_batch(0);
-        set_write_batch(1, &mut batch);
-        raftdb.consume(&mut batch, false).unwrap();
-        set_write_batch(5, &mut batch);
-        raftdb.consume(&mut batch, false).unwrap();
-        set_write_batch(15, &mut batch);
-        raftdb.consume(&mut batch, false).unwrap();
-        raftdb.sync().unwrap();
-
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(
             cfg.raft_engine.config(),
@@ -256,13 +240,31 @@ mod tests {
         )
         .expect("open raft engine");
 
-        dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 4);
-        assert(1, &raft_engine);
-        assert(5, &raft_engine);
-        assert(15, &raft_engine);
+        {
+            // Prepare some data for the RocksEngine.
+            let raftdb = engine_rocks::raw_util::new_engine_opt(
+                &cfg.raft_store.raftdb_path,
+                cfg.raftdb.build_opt(),
+                cfg.raftdb.build_cf_opts(&None),
+            )
+            .unwrap();
+            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
+            let mut batch = raftdb.log_batch(0);
+            set_write_batch(1, &mut batch);
+            raftdb.consume(&mut batch, false).unwrap();
+            set_write_batch(5, &mut batch);
+            raftdb.consume(&mut batch, false).unwrap();
+            set_write_batch(15, &mut batch);
+            raftdb.consume(&mut batch, false).unwrap();
+            raftdb.sync().unwrap();
+
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 4);
+            assert(1, &raft_engine);
+            assert(5, &raft_engine);
+            assert(15, &raft_engine);
+        }
 
         // Remove old raftdb.
-        std::mem::drop(raftdb);
         std::fs::remove_dir_all(&cfg.raft_store.raftdb_path).unwrap();
 
         // Dump logs from RaftLogEngine to RocksEngine.
