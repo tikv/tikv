@@ -11,7 +11,7 @@ extern crate test;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[allow(unused_imports)]
+#[cfg(test)]
 #[macro_use]
 extern crate more_asserts;
 

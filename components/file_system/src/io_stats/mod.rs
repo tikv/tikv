@@ -2,8 +2,7 @@
 
 #[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
 mod stub {
-    use crate::IOBytes;
-    use crate::IOType;
+    use crate::{IOBytes, IOContext, IOType};
 
     use std::cell::Cell;
     use strum::EnumCount;
@@ -13,7 +12,7 @@ mod stub {
     }
 
     thread_local! {
-        static IO_CTX: IOContext = IOContext::new(IOType::Other);
+        static IO_CTX: Cell<IOContext> = Cell::new(IOContext::new(IOType::Other));
     }
 
     pub(crate) fn get_io_context() -> IOContext {
