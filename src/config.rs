@@ -966,8 +966,6 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
-    pub enable_pipelined_commit: bool,
-    #[online_config(skip)]
     pub enable_unordered_write: bool,
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
@@ -1018,8 +1016,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: false,
-            enable_pipelined_commit: true,
-            enable_multi_batch_write: false,
+            enable_multi_batch_write: true,
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1078,8 +1075,9 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write && !self.enable_unordered_write);
-        opts.enable_pipelined_commit(self.enable_pipelined_commit);
+        opts.enable_pipelined_write(self.enable_pipelined_write);
+        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
@@ -1122,10 +1120,6 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            self.enable_pipelined_commit = false;
-            self.enable_pipelined_write = false;
-        } else if self.enable_pipelined_commit {
-            self.enable_unordered_write = false;
             self.enable_pipelined_write = false;
         }
 
@@ -2693,6 +2687,12 @@ impl TiKvConfig {
                 )
                 .into());
             }
+        }
+
+        if self.rocksdb.enable_multi_batch_write {
+            warn!(
+                "rocksdb.enable_multi_batch_write has been discarded. This configuration will not take effect. "
+            );
         }
 
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
