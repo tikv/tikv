@@ -3328,6 +3328,9 @@ mod tests {
 
     #[test]
     fn test_msg_size_check() {
+        let mut cfg = TiKvConfig::default();
+        assert!(cfg.validate().is_ok());
+
         let max_grpc_send_msg_len = cfg.server.max_grpc_send_msg_len;
         cfg.raft_store.raft_entry_max_size.0 = cfg.raft_store.raft_entry_max_size.0 / 2;
         assert!(cfg.validate().is_ok());
