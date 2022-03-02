@@ -107,8 +107,6 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> (term, leader_peer_id)
-    pub leaders: HashMap<u64, (u64, u64)>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -140,7 +138,6 @@ impl StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
-            leaders: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
@@ -2211,6 +2208,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             stats,
             store_info,
             send_detailed_report: false,
+            dr_autosync_status: self
+                .ctx
+                .global_replication_state
+                .lock()
+                .unwrap()
+                .store_dr_autosync_status(),
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";

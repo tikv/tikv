@@ -376,18 +376,21 @@ mod tests {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"a".to_vec(),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"b".to_vec(),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"c".to_vec(),
         });
         let mut records = Records::default();
@@ -432,18 +435,21 @@ mod tests {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"a".to_vec(),
         });
         let tag2 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"b".to_vec(),
         });
         let tag3 = Arc::new(TagInfos {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"c".to_vec(),
         });
         let mut records = HashMap::default();

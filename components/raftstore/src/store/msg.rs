@@ -3,6 +3,8 @@
 // #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -13,14 +15,14 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
-use raft::{eraftpb::Entry, GetEntriesContext, SnapshotStatus};
+use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
-use crate::store::SnapKey;
+use crate::store::{RaftlogFetchResult, SnapKey};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -306,25 +308,7 @@ where
     // Reports the result of asynchronous Raft logs fetching.
     RaftlogFetched {
         context: GetEntriesContext,
-        res: RaftlogFetchResult,
-    },
-}
-
-#[derive(Debug)]
-pub enum RaftlogFetchResult {
-    Fetching,
-    Fetched {
-        ents: raft::Result<Vec<Entry>>,
-        // because entries may be empty, so store the original low index that the task issued
-        low: u64,
-        // the original max size that the task issued
-        max_size: u64,
-        // if the ents hit max_size
-        hit_size_limit: bool,
-        // the times that async fetch have already tried
-        tried_cnt: usize,
-        // the term when the task issued
-        term: u64,
+        res: Box<RaftlogFetchResult>,
     },
 }
 
@@ -544,6 +528,7 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
     Destroy(u64),
     UpdateRegionForUnsafeRecover(metapb::Region),
+    UnsafeRecoveryWaitApply(Arc<AtomicUsize>),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -575,6 +560,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                 write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
             }
+            PeerMsg::UnsafeRecoveryWaitApply(counter) => write!(fmt, "WaitApply {:?}", *counter),
         }
     }
 }

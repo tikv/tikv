@@ -9,6 +9,7 @@ use std::{result, thread};
 use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
+use kvproto::kvrpcpb::Context;
 use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -1521,6 +1522,11 @@ impl<T: Simulator> Cluster<T> {
         );
     }
 
+    pub fn must_send_store_heartbeat(&self, node_id: u64) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        StoreRouter::send(&router, StoreMsg::Tick(StoreTick::PdStoreHeartbeat)).unwrap();
+    }
+
     pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         let mut try_cnt = 0;
@@ -1602,6 +1608,17 @@ impl<T: Simulator> Cluster<T> {
             "gc peer timeout: region id {}, node id {}, peer {:?}",
             region_id, node_id, peer
         );
+    }
+
+    pub fn get_ctx(&mut self, key: &[u8]) -> Context {
+        let region = self.get_region(key);
+        let leader = self.leader_of_region(region.id).unwrap();
+        let epoch = self.get_region_epoch(region.id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region.id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+        ctx
     }
 }
 

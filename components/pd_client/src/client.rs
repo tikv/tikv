@@ -17,7 +17,9 @@ use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use kvproto::replication_modepb::{
+    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+};
 use security::SecurityManager;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -718,6 +720,7 @@ impl PdClient for RpcClient {
         &self,
         mut stats: pdpb::StoreStats,
         report_opt: Option<pdpb::StoreReport>,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
 
@@ -729,6 +732,9 @@ impl PdClient for RpcClient {
         req.set_stats(stats);
         if let Some(report) = report_opt {
             req.set_store_report(report);
+        }
+        if let Some(status) = dr_autosync_status {
+            req.set_dr_autosync_status(status);
         }
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
