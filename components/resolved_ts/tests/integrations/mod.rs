@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use std::time::Duration;
 use test_raftstore::sleep_ms;
-
+use txn_types::TimeStamp;
 #[test]
 fn test_resolved_ts_basic() {
     let mut suite = TestSuite::new(1);
@@ -109,13 +109,21 @@ fn test_report_min_resolved_ts() {
     mutation.value = v.to_vec();
     suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
 
+    // resolved-ts should be less than all unapplied commit ts
+    let ts2 = suite.cluster.pd_client.get_min_resolved_ts();
+    assert!(ts2 == ts1);
+    assert!(TimeStamp::new(ts2) < start_ts);
+
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
 
     sleep_ms(1000);
-    let ts2 = suite.cluster.pd_client.get_min_resolved_ts();
-    assert!(ts2 > ts1);
+    let ts3 = suite.cluster.pd_client.get_min_resolved_ts();
+    let unapplied_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    assert!(ts3 > ts1);
+    assert!(TimeStamp::new(ts3) > commit_ts);
+    assert!(TimeStamp::new(ts3) < unapplied_ts);
     fail::remove("mock_tick_interval");
     fail::remove("mock_collect_tick_interval");
     suite.stop();
