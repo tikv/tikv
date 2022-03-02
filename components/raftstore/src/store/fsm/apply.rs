@@ -612,7 +612,6 @@ where
             Some(t) => t,
             None => return false,
         };
-
         // Write to engine
         // raftstore.sync-log = true means we need prevent data loss when power failure.
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
@@ -622,6 +621,7 @@ where
 
         if !self.apply_res.is_empty() {
             let apply_res = mem::take(&mut self.apply_res);
+            info!("notify apply"; "apply_res" => ?apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -1192,7 +1192,7 @@ where
             return exec_result;
         }
 
-        debug!(
+        info!(
             "applied command";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
@@ -1510,6 +1510,7 @@ where
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        info!("handle put"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(key), "index" => ctx.exec_log_index);
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 

@@ -3724,6 +3724,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "futures-util",
+ "hex 0.4.2",
  "into_other",
  "itertools 0.10.0",
  "keys",

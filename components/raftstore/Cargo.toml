@@ -35,6 +35,7 @@ encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"
+hex = "0.4"
 openssl = "0.10"
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"

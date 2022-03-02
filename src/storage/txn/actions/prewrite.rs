@@ -603,7 +603,7 @@ fn async_commit_timestamps(
         }
 
         lock.min_commit_ts = min_commit_ts;
-        info!("set memory lock"; "lock" => ?lock);
+        info!("set memory lock"; "key" => ?key, "lock" => ?lock);
         *l = Some(lock.clone());
         Ok(min_commit_ts)
     })?;
