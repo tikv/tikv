@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommitRequest, Context, GetRequest, Op,
-    PrewriteRequest, RawPutRequest,
+    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context,
+    GetRequest, Op, PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
 
@@ -16,15 +16,19 @@ use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::*;
+use tikv::config::{ConfigController, Module};
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{self, test_util::*, *};
+use tikv::storage::txn::{
+    commands, flow_controller::FlowController, Error as TxnError, ErrorInner as TxnErrorInner,
+};
+use tikv::storage::{self, config_manager::StorageConfigManger, test_util::*, *};
 use tikv::storage::{
     kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 use tikv_util::future::paired_future_callback;
+use tikv_util::worker::dummy_scheduler;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 use txn_types::{Mutation, OldValues, TimeStamp};
@@ -219,6 +223,114 @@ fn test_raftkv_early_error_report() {
         }
     }
     fail::remove(raftkv_fp);
+}
+
+#[test]
+fn test_scale_scheduler_pool() {
+    let snapshot_fp = "scheduler_async_snapshot_finish";
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine.clone(),
+        DummyLockManager {},
+        ApiVersion::V1,
+    )
+    .build()
+    .unwrap();
+
+    let cfg = new_tikv_config(1);
+    let kv_engine = storage.get_engine().kv_engine();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let flow_controller = Arc::new(FlowController::new(
+        &cfg.storage.flow_control,
+        kv_engine.clone(),
+        rx,
+    ));
+
+    let cfg_controller = ConfigController::new(cfg.clone());
+    let (scheduler, _receiver) = dummy_scheduler();
+    cfg_controller.register(
+        Module::Storage,
+        Box::new(StorageConfigManger::new(
+            kv_engine,
+            cfg.storage.block_cache.shared,
+            scheduler,
+            flow_controller.clone(),
+            storage.get_scheduler(),
+        )),
+    );
+    let scheduler = storage.get_scheduler();
+
+    let region = cluster.get_region(b"k1");
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.id);
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(cluster.leader_of_region(region.id).unwrap());
+
+    let do_prewrite = |key: &[u8], val: &[u8]| {
+        // prewrite
+        let (prewrite_tx, prewrite_rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(key), val.to_vec())],
+                    key.to_vec(),
+                    10.into(),
+                    100,
+                    false,
+                    2,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    ctx.clone(),
+                ),
+                Box::new(move |res: storage::Result<_>| {
+                    prewrite_tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        prewrite_rx.recv_timeout(Duration::from_secs(2))
+    };
+
+    cfg_controller
+        .update_config("storage.scheduler-worker-pool-size", "1")
+        .unwrap();
+    assert_eq!(
+        scheduler
+            .get_sched_pool(CommandPri::Normal)
+            .pool
+            .get_pool_size(),
+        1
+    );
+
+    fail::cfg(snapshot_fp, "1*pause").unwrap();
+    // propose one prewrite to block the only worker
+    assert!(do_prewrite(b"k1", b"v1").is_err());
+
+    cfg_controller
+        .update_config("storage.scheduler-worker-pool-size", "2")
+        .unwrap();
+    assert_eq!(
+        scheduler
+            .get_sched_pool(CommandPri::Normal)
+            .pool
+            .get_pool_size(),
+        2
+    );
+
+    // do prewrite again, as we scale another worker, this request should success
+    let res = do_prewrite(b"k2", b"v2").unwrap().unwrap();
 }
 
 #[test]

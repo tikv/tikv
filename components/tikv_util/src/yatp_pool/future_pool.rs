@@ -4,7 +4,10 @@
 //! is invoked no less than the specific interval.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
@@ -23,13 +26,23 @@ struct Env {
     metrics_pool_schedule_duration: Histogram,
 }
 
-#[derive(Clone)]
 pub struct FuturePool {
     pool: Arc<ThreadPool>,
     env: Env,
     // for accessing pool_size config since yatp doesn't offer such getter.
-    pool_size: usize,
+    pool_size: AtomicUsize,
     max_tasks: usize,
+}
+
+impl Clone for FuturePool {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            env: self.env.clone(),
+            pool_size: AtomicUsize::new(self.pool_size.load(Ordering::Relaxed)),
+            max_tasks: self.max_tasks,
+        }
+    }
 }
 
 impl std::fmt::Debug for FuturePool {
@@ -54,7 +67,7 @@ impl FuturePool {
         FuturePool {
             pool: Arc::new(pool),
             env,
-            pool_size,
+            pool_size: AtomicUsize::new(pool_size),
             max_tasks,
         }
     }
@@ -62,7 +75,12 @@ impl FuturePool {
     /// Gets inner thread pool size.
     #[inline]
     pub fn get_pool_size(&self) -> usize {
-        self.pool_size
+        self.pool_size.load(Ordering::Relaxed)
+    }
+
+    pub fn scale_pool_size(&self, thread_count: usize) {
+        self.pool.scale_workers(thread_count);
+        self.pool_size.store(thread_count, Ordering::Release);
     }
 
     /// Gets current running task count.
@@ -231,7 +249,9 @@ mod tests {
             tx.send(seq).unwrap();
         });
 
-        let pool = Builder::new(ticker).thread_count(1, 1).build_future_pool();
+        let pool = Builder::new(ticker)
+            .thread_count(1, 1, 1)
+            .build_future_pool();
         let try_recv_tick = || {
             let rx = rx.clone();
             block_on(
@@ -288,7 +308,9 @@ mod tests {
             tx.send(seq).unwrap();
         });
 
-        let pool = Builder::new(ticker).thread_count(2, 2).build_future_pool();
+        let pool = Builder::new(ticker)
+            .thread_count(2, 2, 2)
+            .build_future_pool();
 
         assert!(rx.try_recv().is_err());
 
@@ -318,7 +340,7 @@ mod tests {
     #[test]
     fn test_handle_result() {
         let pool = Builder::new(DefaultTicker {})
-            .thread_count(1, 1)
+            .thread_count(1, 1, 1)
             .build_future_pool();
 
         let handle = pool.spawn_handle(async { 42 });
@@ -330,7 +352,7 @@ mod tests {
     fn test_running_task_count() {
         let pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_for_running_task_test") // The name is important
-            .thread_count(2, 2)
+            .thread_count(2, 2, 2)
             .build_future_pool();
 
         assert_eq!(pool.get_running_task_count(), 0);
@@ -382,7 +404,7 @@ mod tests {
 
         let read_pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_test_full")
-            .thread_count(2, 2)
+            .thread_count(2, 2, 2)
             .max_tasks(4)
             .build_future_pool();
 

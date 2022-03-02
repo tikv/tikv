@@ -289,6 +289,11 @@ impl<L: LockManager> SchedulerInner<L> {
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.lock_mgr.dump_wait_for_entries(cb);
     }
+
+    fn scale_pool_size(&self, pool_size: usize) {
+        self.worker_pool.pool.scale_pool_size(pool_size);
+        self.high_priority_pool.pool.scale_pool_size(pool_size);
+    }
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
@@ -360,6 +365,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.inner.dump_wait_for_entries(cb);
+    }
+
+    pub fn scale_pool_size(&self, pool_size: usize) {
+        self.inner.scale_pool_size(pool_size)
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
@@ -456,7 +465,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
+    // pub for test
+    pub fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
         if priority == CommandPri::High {
             &self.inner.high_priority_pool
         } else {
@@ -663,6 +673,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
         async {
             let tag = task.cmd.tag();
+            println!("start process cmd: {}", task.cmd);
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
