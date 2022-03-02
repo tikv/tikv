@@ -5,7 +5,6 @@ define_error_codes!(
 
     IO => ("Io", "", ""),
     BAD_PADDING => ("BadPadding", "", ""),
-    KEY_PREFIX => ("KeyPrefix", "", ""),
     KEY_LENGTH => ("KeyLength", "", ""),
     KEY_NOT_FOUND => ("KeyNotFound", "", ""),
     VALUE_LENGTH => ("ValueLength", "", ""),

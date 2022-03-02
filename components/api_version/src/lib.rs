@@ -10,6 +10,7 @@ use engine_traits::Result;
 use kvproto::kvrpcpb::ApiVersion;
 
 pub use match_template::match_template;
+use txn_types::{Key, TimeStamp};
 
 pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     const TAG: ApiVersion;
@@ -39,27 +40,25 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     /// This is equivalent to `encode_raw_value` but reduced an allocation.
     fn encode_raw_value_owned(value: RawValue<Vec<u8>>) -> Vec<u8>;
 
-    /// Parse from the bytes from storage.
-    fn decode_raw_key(bytes: &[u8]) -> Result<RawKey<Vec<u8>>> {
-        Ok(RawKey {
-            user_key: bytes.to_vec(),
-            ts: None,
-        })
+    /// Parse from the txn_types::Key from storage. Default implementation for API V1|V1TTL.
+    /// Return: (user key, optional timestamp)
+    fn decode_raw_key(encoded_key: &Key, _with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
+        Ok((encoded_key.as_encoded().clone(), None))
     }
     /// This is equivalent to `decode_raw_key()` but returns the owned user key.
-    fn decode_raw_key_owned(bytes: Vec<u8>) -> Result<RawKey<Vec<u8>>> {
-        Ok(RawKey {
-            user_key: bytes,
-            ts: None,
-        })
+    fn decode_raw_key_owned(
+        encoded_key: Key,
+        _with_ts: bool,
+    ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
+        Ok((encoded_key.into_encoded(), None))
     }
-    /// Encode the raw key and optional timestamp into bytes.
-    fn encode_raw_key(key: RawKey<&[u8]>) -> Result<Vec<u8>> {
-        Ok(key.user_key.to_vec())
+    /// Encode the user key & optional timestamp into txn_types::Key. Default implementation for API V1|V1TTL.
+    fn encode_raw_key(user_key: &[u8], _ts: Option<TimeStamp>) -> Key {
+        Key::from_encoded_slice(user_key)
     }
     /// This is equivalent to `encode_raw_key` but reduced an allocation.
-    fn encode_raw_key_owned(key: RawKey<Vec<u8>>) -> Result<Vec<u8>> {
-        Ok(key.user_key)
+    fn encode_raw_key_owned(user_key: Vec<u8>, _ts: Option<TimeStamp>) -> Key {
+        Key::from_encoded(user_key)
     }
 }
 
@@ -100,40 +99,6 @@ pub enum KeyMode {
     TiDB,
     /// Unrecognised key mode.
     Unknown,
-}
-
-/// A RawKV Key.
-///
-/// ### ApiVersion::V1 & ApiVersion::V1ttl
-///
-/// This is the plain user key.
-///
-/// ### ApiVersion::V2
-///
-/// The key is encoded as User key + Memcomparable-encoded padding + ^Timestamp (optional), the same as Transaction KV.
-/// For example:
-/// (without Timestamp)
-/// ```text
-/// --------------------------------------------------
-/// | User key       | Padding                       |
-/// --------------------------------------------------
-/// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0xFA |
-/// --------------------------------------------------
-/// ```
-/// (with Timestamp, Timestamp = 0x5FC16106D04A09F, ^Timestamp = 0xFA03E9EF92FB5F60)
-/// ```text
-/// --------------------------------------------------------------------------------------------
-/// | User key       | Padding                       | ^Timestamp                              |
-/// --------------------------------------------------------------------------------------------
-/// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0xFA | 0xFA 0x03 0xE9 0xEF 0x92 0xFB 0x5F 0x60 |
-/// --------------------------------------------------------------------------------------------
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RawKey<T: AsRef<[u8]>> {
-    /// The user key
-    pub user_key: T,
-    /// The timestamp indicating causality of this entry.
-    pub ts: Option<u64>,
 }
 
 /// A RawKV value and it's metadata.
@@ -430,7 +395,14 @@ mod tests {
             ),
             (
                 &b"r"[..],
-                Some(2),
+                None,
+                &[b'r'][..],
+                &[b'r'][..],
+                &[b'r', 0, 0, 0, 0, 0, 0, 0, 0xf8][..],
+            ),
+            (
+                &b"r"[..],
+                Some(2.into()),
                 &[b'r'][..],
                 &[b'r'][..],
                 &[
@@ -439,7 +411,7 @@ mod tests {
             ),
             (
                 &b"r234567890"[..],
-                Some(3),
+                Some(3.into()),
                 &b"r234567890"[..],
                 &b"r234567890"[..],
                 &[
@@ -470,82 +442,101 @@ mod tests {
 
     #[test]
     fn test_v2_key_decode_err() {
-        let cases: Vec<(Vec<u8>, &str)> = vec![
-            // Invalid key prefix
-            (vec![], "Codec(KeyPrefix(None))"),
-            (vec![42], "Codec(KeyPrefix(Some(42)))"),
-            // At least 9 bytes for Memcomparable-encoded padding.
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], "UnexpectedEof"),
-            // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
-            (vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb], "Codec(KeyPadding)"),
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6], "Codec(KeyPadding)"),
-            // `ts` is 8 more bytes.
+        let cases: Vec<(Vec<u8>, bool, &str)> = vec![
+            // Invalid prefix
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], false, "panic"),
+            // Memcomparable-encoded padding: n * 9 + Optional 8
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], false, "panic"),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], false, "panic"),
+            (
+                vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                true,
+                "panic",
+            ),
             (
                 vec![
                     b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
                 ],
-                "Codec(KeyLength)",
+                true,
+                "panic",
             ),
             (
                 vec![
                     b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0,
                     0, 0, 1, 0,
                 ],
-                "Codec(KeyLength)",
+                true,
+                "panic",
+            ),
+            // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
+            (
+                vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb],
+                false,
+                "Codec(KeyPadding)",
+            ),
+            (
+                vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6],
+                false,
+                "Codec(KeyPadding)",
             ),
         ];
 
-        for (idx, (bytes, expected_err)) in cases.into_iter().enumerate() {
-            let res = vec![
-                APIV2::decode_raw_key(&bytes),
-                APIV2::decode_raw_key_owned(bytes),
-            ];
-
-            for r in res {
-                assert!(r.is_err());
-                let err_str = format!("{:?}", r.unwrap_err());
-                assert!(err_str.contains(expected_err), "case {}: {}", idx, err_str);
+        for (idx, (bytes, with_ts, expected_err)) in cases.into_iter().enumerate() {
+            if expected_err == "panic" {
+                let res = vec![
+                    panic_hook::recover_safe(|| {
+                        let _ = APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
+                    }),
+                    panic_hook::recover_safe(|| {
+                        let _ = APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
+                    }),
+                ];
+                for r in res {
+                    assert!(r.is_err(), "case {}: {:?}", idx, r);
+                }
+            } else {
+                let res = vec![
+                    APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts),
+                    APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts),
+                ];
+                for r in res {
+                    assert!(r.is_err(), "case {}: {:?}", idx, r);
+                    let err_str = format!("{:?}", r.unwrap_err());
+                    assert!(err_str.contains(expected_err), "case {}: {}", idx, err_str);
+                }
             }
         }
     }
 
     fn assert_raw_key_encode_decode_identity(
         user_key: &[u8],
-        ts: Option<u64>,
+        ts: Option<TimeStamp>,
         encoded_bytes: &[u8],
         api_version: ApiVersion,
-        expected_ts: Option<u64>,
+        expected_ts: Option<TimeStamp>,
     ) {
         match_template_api_version!(
             API,
             match api_version {
                 ApiVersion::API => {
+                    let encoded_key = Key::from_encoded_slice(encoded_bytes);
+
                     assert_eq!(
-                        &API::encode_raw_key(RawKey { user_key, ts }).unwrap(),
+                        &API::encode_raw_key(user_key, ts).into_encoded(),
                         encoded_bytes
                     );
                     assert_eq!(
-                        API::decode_raw_key(encoded_bytes).unwrap(),
-                        RawKey {
-                            user_key: user_key.to_vec(),
-                            ts: expected_ts,
-                        }
+                        API::decode_raw_key(&encoded_key, expected_ts.is_some()).unwrap(),
+                        (user_key.to_vec(), expected_ts)
                     );
 
                     assert_eq!(
-                        &API::encode_raw_key_owned(RawKey {
-                            user_key: user_key.to_vec(),
-                            ts,
-                        })
-                        .unwrap(),
+                        &API::encode_raw_key_owned(user_key.to_vec(), ts).into_encoded(),
                         encoded_bytes
                     );
                     assert_eq!(
-                        API::decode_raw_key_owned(encoded_bytes.to_vec()).unwrap(),
-                        RawKey {
-                            user_key: user_key.to_vec(),
-                            ts: expected_ts,
-                        }
+                        API::decode_raw_key_owned(encoded_key, expected_ts.is_some()).unwrap(),
+                        (user_key.to_vec(), expected_ts)
                     );
                 }
             }

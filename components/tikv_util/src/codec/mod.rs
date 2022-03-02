@@ -25,8 +25,6 @@ pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSli
 pub enum Error {
     #[error("{0}")]
     Io(#[from] io::Error),
-    #[error("bad format key(prefix)")]
-    KeyPrefix(Option<u8>),
     #[error("bad format key(length)")]
     KeyLength,
     #[error("bad format key(padding)")]
@@ -42,7 +40,6 @@ pub enum Error {
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         match *self {
-            Error::KeyPrefix(prefix) => Some(Error::KeyPrefix(prefix)),
             Error::KeyLength => Some(Error::KeyLength),
             Error::KeyPadding => Some(Error::KeyPadding),
             Error::KeyNotFound => Some(Error::KeyNotFound),
@@ -62,7 +59,6 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::Io(_) => error_code::codec::IO,
-            Error::KeyPrefix(_) => error_code::codec::KEY_PREFIX,
             Error::KeyLength => error_code::codec::KEY_LENGTH,
             Error::KeyPadding => error_code::codec::BAD_PADDING,
             Error::KeyNotFound => error_code::codec::KEY_NOT_FOUND,
