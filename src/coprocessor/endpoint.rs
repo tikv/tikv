@@ -108,6 +108,7 @@ impl<E: Engine> Endpoint<E> {
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
+        info!("cop check"; "req_ctx" => ?req_ctx);
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager.update_max_ts(start_ts);
@@ -373,6 +374,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
+        info!("snapshot got"; "req_ctx" => ?tracker.req_ctx);
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
