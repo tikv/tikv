@@ -257,7 +257,7 @@ pub async fn region_resolved_ts_store(
                     .map_err(|e| (to_store, true, format!("{}", e)))
                     .await?
                     .map_err(|e| (to_store, true, format!("{}", e)))?;
-                std::result::Result::Ok((to_store, resp))
+                Ok((to_store, resp))
             }
             .boxed()
         })
