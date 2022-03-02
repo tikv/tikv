@@ -54,8 +54,8 @@ where
 }
 
 // This function uses the distributed/parallel reservoir sampling algorithm.
-// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple key_ranges_providers with the same possibility.
-// NOTICE: prefix_sum should be calculated from the lists, so they should have the same length too.
+// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple `key_ranges_provider` with the same possibility.
+// NOTICE: `prefix_sum` should be calculated from the `key_ranges_providers`, so they should have the same length too.
 fn sample<F, T>(
     sample_num: usize,
     prefix_sum: &[usize],
@@ -825,12 +825,17 @@ mod tests {
         for _ in 0..100 {
             let prefix_sum = prefix_sum(key_ranges.iter(), Vec::len);
             let sampled_key_ranges = sample(sample_num, &prefix_sum, key_ranges.clone(), |x| x);
-            assert_eq!(sampled_key_ranges.len(), sample_num);
+            let all_key_ranges_num = *prefix_sum.last().unwrap();
+            assert_eq!(
+                sampled_key_ranges.len(),
+                std::cmp::min(sample_num, all_key_ranges_num)
+            );
         }
     }
 
     #[test]
     fn test_sample_length() {
+        // Test the sample_num <= all_key_ranges_length.
         let sample_num = 20;
         let mut key_ranges = vec![];
         for _ in 0..sample_num {
@@ -854,6 +859,31 @@ mod tests {
             key_ranges.push(ranges);
         }
         check_sample_length(sample_num, key_ranges);
+
+        // Test the sample_num > all_key_ranges_length.
+        let sample_num = 20;
+        let mut key_ranges = vec![];
+        for _ in 0..sample_num - 1 {
+            key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
+        }
+        check_sample_length(sample_num, key_ranges.clone());
+
+        // Test the wrong length of prefix_sum or key_ranges_providers.
+        let prefix_sum = prefix_sum(key_ranges.clone().iter(), Vec::len);
+        let sampled_key_ranges = sample(
+            sample_num,
+            &prefix_sum[..prefix_sum.len() - 1],
+            key_ranges.clone(),
+            |x| x,
+        );
+        assert!(sampled_key_ranges.is_empty());
+        let sampled_key_ranges = sample(
+            sample_num,
+            &prefix_sum,
+            key_ranges.clone()[..key_ranges.len() - 1].to_vec(),
+            |x| x,
+        );
+        assert!(sampled_key_ranges.is_empty());
     }
 
     #[test]
