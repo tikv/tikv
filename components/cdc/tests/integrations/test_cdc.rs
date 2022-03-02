@@ -1111,7 +1111,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
     let _guard = lock_key(b"a", 90);
     // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resovled_ts because the first several resolved ts received
+    // Retry until receiving an unchanged resolved_ts because the first several resolved ts received
     // might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;

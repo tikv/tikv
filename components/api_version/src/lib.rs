@@ -60,7 +60,7 @@ macro_rules! match_template_api_version {
      }}
 }
 
-/// The key mode infered from the key prefix.
+/// The key mode inferred from the key prefix.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum KeyMode {
     /// Raw key.

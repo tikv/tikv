@@ -80,7 +80,7 @@ You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-ti
 
 ### Deploy a playground with binary
 
-TiKV is able to run separatedly with PD, which is the minimal deployment required.
+TiKV is able to run separately with PD, which is the minimal deployment required.
 
 1. Download and extract binaries.
 
