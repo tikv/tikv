@@ -68,9 +68,9 @@ impl RaftDataStateMachine {
             || Self::data_exists(&self.target);
         if exists != should_exist {
             if should_exist {
-                return Err(format!("Cannot find raft data set.",));
+                return Err("Cannot find raft data set.".to_owned());
             } else {
-                return Err(format!("Found raft data set when it should not exist.",));
+                return Err("Found raft data set when it should not exist.".to_owned());
             }
         }
         Ok(())
@@ -143,7 +143,7 @@ mod tests {
         let mut source = root.clone();
         source.push("source");
         fs::create_dir_all(&source).unwrap();
-        let mut target = root.clone();
+        let mut target = root;
         target.push("target");
         fs::create_dir_all(&target).unwrap();
 
@@ -160,7 +160,7 @@ mod tests {
         // Dump to target.
         let new_source = state.before_open_target().unwrap();
         validate_restart(&source, &target, true);
-        let mut new_source_file = new_source.clone();
+        let mut new_source_file = new_source;
         new_source_file.push("file");
         let mut target_file = target.clone();
         target_file.push("file");
