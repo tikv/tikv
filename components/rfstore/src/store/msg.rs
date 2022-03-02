@@ -126,8 +126,7 @@ impl MsgRegistration {
 
 #[derive(Debug)]
 pub struct MsgApplyChangeSetResult {
-    pub change_set: kvenginepb::ChangeSet,
-    pub err: Option<String>,
+    pub result: std::result::Result<kvenginepb::ChangeSet, String>,
 }
 
 #[derive(Debug)]

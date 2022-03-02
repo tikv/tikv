@@ -3,7 +3,8 @@
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
-use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
+use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region, RetryConfig};
+use aws_smithy_types::retry::RetryMode;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
 use file_system::{DirectWriter, IORateLimiter, IOType};
@@ -88,6 +89,10 @@ impl S3FSCore {
             let endpoint = Endpoint::immutable(Uri::from_str(end_point.as_str()).unwrap());
             s3_conf_builder = s3_conf_builder.endpoint_resolver(endpoint);
         }
+        let retry_config = RetryConfig::new()
+            .with_max_attempts(10)
+            .with_retry_mode(RetryMode::Adaptive);
+        s3_conf_builder = s3_conf_builder.retry_config(retry_config);
         let cfg = s3_conf_builder.build();
         let s3c = Client::from_conf(cfg);
         let runtime = tokio::runtime::Builder::new_multi_thread()

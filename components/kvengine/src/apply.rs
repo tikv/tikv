@@ -308,8 +308,15 @@ impl Engine {
                 tx.send(res).unwrap();
             });
         }
+        let mut errors = vec![];
         for _ in 0..length {
-            result_rx.recv().unwrap()?;
+            if let Err(err) = result_rx.recv().unwrap() {
+                error!("prefetch failed {:?}", &err);
+                errors.push(err);
+            }
+        }
+        if errors.len() > 0 {
+            return Err(errors.pop().unwrap().into());
         }
         Ok(())
     }

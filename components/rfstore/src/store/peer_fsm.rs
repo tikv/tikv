@@ -1281,22 +1281,21 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_apply_change_set_result(&mut self, mut msg: MsgApplyChangeSetResult) {
-        let change = msg.change_set;
         let tag = self.peer.tag();
-        if msg.err.is_some() {
-            let err = msg.err.take().unwrap();
+        if msg.result.is_err() {
+            let err = msg.result.unwrap_err();
             error!(
                 "region failed to apply change set";
                 "err" => ?err,
                 "region" => tag,
             );
-            if change.has_snapshot() {
+            if self.peer.mut_store().snap_state == SnapState::Applying {
                 self.peer.mut_store().snap_state = SnapState::ApplyAborted;
             }
             return;
         }
         info!("on apply change set result"; "region" => tag);
-
+        let change = msg.result.unwrap();
         if change.has_snapshot() {
             let store = self.peer.mut_store();
             store.initial_flushed = true;

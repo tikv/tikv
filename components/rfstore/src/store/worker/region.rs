@@ -142,9 +142,14 @@ impl Runnable for Runner {
         let desc = task.to_string();
         match task {
             Task::ApplyChangeSet { change } => {
+                let id_ver = RegionIDVer::new(change.shard_id, change.shard_ver);
                 if let Some(receiver) = self.prepare_region_resource(change) {
                     self.apply_scheduler
-                        .schedule(ApplyTask { desc, receiver })
+                        .schedule(ApplyTask {
+                            desc,
+                            receiver,
+                            id_ver,
+                        })
                         .unwrap();
                 }
             }
@@ -183,6 +188,7 @@ impl ApplyRunner {
 pub struct ApplyTask {
     desc: String,
     receiver: Receiver<crate::Result<Task>>,
+    id_ver: RegionIDVer,
 }
 
 impl Display for ApplyTask {
@@ -195,33 +201,32 @@ impl Runnable for ApplyRunner {
     type Task = ApplyTask;
     fn run(&mut self, task: ApplyTask) {
         let res = task.receiver.recv().unwrap();
+        let msg;
         if res.is_err() {
             let err = res.err().unwrap();
-            error!("failed to prepare snapshot resource"; "err" => ?err);
-            return;
+            let err_msg = format!("{:?}", &err);
+            error!("failed to prepare change set resource"; "err" => ?err);
+            msg = PeerMsg::ApplyChangeSetResult(MsgApplyChangeSetResult {
+                result: Err(err_msg),
+            });
+        } else {
+            let task = res.unwrap();
+            match task {
+                Task::ApplyChangeSet { change } => {
+                    let result = self
+                        .handle_apply_change_set(&change)
+                        .map(|_| change)
+                        .map_err(|e| format!("{:?}", e));
+                    msg = PeerMsg::ApplyChangeSetResult(MsgApplyChangeSetResult { result });
+                }
+                Task::RejectChangeSet { .. } => unreachable!(),
+            };
         }
-        let task = res.unwrap();
-        match task {
-            Task::ApplyChangeSet { change } => {
-                let id_ver = RegionIDVer::new(change.shard_id, change.shard_ver);
-                let mut err_str = None;
-                if let Err(err) = self.handle_apply_change_set(&change) {
-                    err_str = Some(format!("{:?}", err));
-                    warn!("failed to apply change set"; "region" => id_ver, "error" => ?err);
-                }
-                let msg_result = MsgApplyChangeSetResult {
-                    change_set: change,
-                    err: err_str,
-                };
-                let apply_result = PeerMsg::ApplyChangeSetResult(msg_result);
-                if let Err(err) = self.router.send(id_ver.id(), apply_result) {
-                    warn!(
-                        "failed to send apply change set result for {}, error {:?}",
-                        id_ver, err
-                    );
-                }
-            }
-            Task::RejectChangeSet { .. } => unreachable!(),
-        };
+        if let Err(err) = self.router.send(task.id_ver.id(), msg) {
+            warn!(
+                "failed to send apply change set result for {}, error {:?}",
+                task.id_ver, err
+            );
+        }
     }
 }
