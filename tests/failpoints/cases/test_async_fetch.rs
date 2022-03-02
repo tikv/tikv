@@ -103,7 +103,7 @@ fn test_node_async_fetch() {
     panic!("cluster is not compacted after inserting 200 entries.");
 }
 
-// Test the case that async fetch is performed while the peer is removed.
+// Test the case that async fetch is performed well while the peer is removed.
 #[test]
 fn test_node_async_fetch_remove_peer() {
     let count = 5;
@@ -146,6 +146,76 @@ fn test_node_async_fetch_remove_peer() {
 
     // logs should be replicated to node 1 successfully.
     for i in 1..60 {
+        let k = i.to_string().into_bytes();
+        let v = k.clone();
+        must_get_equal(&cluster.get_engine(1), &k, &v);
+    }
+}
+
+// Test the case that async fetch is performed well after the leader has stepped
+// down to follower and is applying snapshot.
+#[test]
+fn test_node_async_fetch_leader_change() {
+    test_util::init_log_for_test();
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 80;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
+    cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::millis(100);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // cause log lag and trigger async fetch
+    cluster.stop_node(5);
+    for i in 1..60 {
+        let k = i.to_string().into_bytes();
+        let v = k.clone();
+        cluster.must_put(&k, &v);
+    }
+    fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
+    cluster.run_node(5).unwrap();
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    // make recent active
+    cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
+    cluster.pd_client.must_add_peer(1, new_peer(5, 5));
+    // trigger log gc
+    for i in 60..100 {
+        let k = i.to_string().into_bytes();
+        let v = k.clone();
+        cluster.must_put(&k, &v);
+    }
+    sleep_ms(100);
+
+    // isolate node 1
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    fail::cfg("apply_pending_snapshot", "return").unwrap();
+    // cause log lag and trigger log gc and make node 1 requesting snapshot
+    for i in 100..200 {
+        let k = i.to_string().into_bytes();
+        let v = k.clone();
+        cluster.must_put(&k, &v);
+    }
+    // wait log gc.
+    sleep_ms(100);
+
+    // trigger applying snapshot
+    cluster.clear_send_filters();
+    sleep_ms(100);
+    fail::remove("worker_async_fetch_raft_log");
+
+    sleep_ms(100);
+    fail::remove("apply_pending_snapshot");
+
+    // logs should be replicated to node 1 successfully.
+    for i in 1..200 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         must_get_equal(&cluster.get_engine(1), &k, &v);
