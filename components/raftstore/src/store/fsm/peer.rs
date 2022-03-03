@@ -1307,6 +1307,8 @@ where
             .raft_group
             .raft
             .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+        // let it trigger election immediately.
+        let _ = self.fsm.peer.raft_group.campaign();
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.has_ready = true;
     }
