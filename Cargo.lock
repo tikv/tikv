@@ -1353,7 +1353,6 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "tempfile",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
