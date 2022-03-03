@@ -3915,7 +3915,7 @@ mod tests {
         cfg_controller.register(
             Module::Storage,
             Box::new(StorageConfigManger::new(
-                engine.clone(),
+                engine,
                 shared,
                 scheduler,
                 flow_controller.clone(),
