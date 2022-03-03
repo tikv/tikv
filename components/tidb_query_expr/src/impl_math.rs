@@ -528,20 +528,11 @@ fn test() {
         f64::MIN,
         -8e307 + 2.0,
         3.141592653589793,
-        2.0/3.0,
+        2.0 / 3.0,
         1145141919.810,
-        2.0/3.0*1e308
+        2.0 / 3.0 * 1e308,
     ];
-    let truncate_cases = [
-        i32::MAX,
-        i32::MIN,
-        5,
-        2,
-        0,
-        -2,
-        -5,
-        -307,
-    ];
+    let truncate_cases = [i32::MAX, i32::MIN, 5, 2, 0, -2, -5, -307];
     for i in 0..test_cases.len() {
         let x = Real::new(test_cases[i]).unwrap();
         for j in 0..truncate_cases.len() {
