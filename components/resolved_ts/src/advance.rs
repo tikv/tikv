@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use futures::future::select_all;
-use futures::FutureExt;
+use futures::{FutureExt, TryFutureExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
 use kvproto::metapb::{Peer, PeerRole};
@@ -185,20 +185,29 @@ pub async fn region_resolved_ts_store(
         if util::find_store_id(&peer_list, leader_id) != Some(store_id) {
             continue;
         }
+        let mut unvotes = 0;
         for peer in &peer_list {
             if peer.store_id == store_id && peer.id == leader_id {
                 resp_map.entry(region_id).or_default().push(store_id);
-                if peer_list.len() == 1 {
-                    valid_regions.insert(region_id);
+            } else {
+                // It's still necessary to check leader on learners even if they don't vote
+                // because performing stale read on learners require it.
+                store_map
+                    .entry(peer.store_id)
+                    .or_default()
+                    .push(leader_info.clone());
+                if peer.get_role() != PeerRole::Learner {
+                    unvotes += 1;
                 }
-                continue;
             }
-            store_map
-                .entry(peer.store_id)
-                .or_default()
-                .push(leader_info.clone());
         }
-        region_map.insert(region_id, peer_list);
+        // Check `region_has_quorum` here because `store_map` can be empty,
+        // in which case `region_has_quorum` won't be called any more.
+        if unvotes == 0 && region_has_quorum(&peer_list, &resp_map[&region_id]) {
+            valid_regions.insert(region_id);
+        } else {
+            region_map.insert(region_id, peer_list);
+        }
     }
     // Approximate `LeaderInfo` size
     let leader_info_size = store_map
@@ -216,45 +225,45 @@ pub async fn region_resolved_ts_store(
             let region_num = regions.len() as u32;
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
+
+            // Check leadership for `regions` on `to_store`.
             async move {
-                let client = box_try!(
+                let client =
                     get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
                         .await
-                );
+                        .map_err(|e| (to_store, true, format!("{}", e)))?;
+
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
                 let start = Instant::now_coarse();
-                let res = box_try!(
-                    tokio::time::timeout(
-                        Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS),
-                        box_try!(client.check_leader_async(&req))
-                    )
-                    .await
-                );
-                let elapsed = start.saturating_elapsed();
-                slow_log!(
-                    elapsed,
-                    "check leader rpc costs too long, store_id: {}, to_store: {}",
-                    store_id,
-                    to_store
-                );
-                RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
-                    .with_label_values(&["rpc"])
-                    .observe(elapsed.as_secs_f64());
-                let resp = match res {
-                    Ok(resp) => resp,
-                    Err(err) => {
-                        tikv_clients.lock().await.remove(&to_store);
-                        return Err(box_err!(err));
-                    }
-                };
-                Result::Ok((to_store, resp))
+                defer!({
+                    let elapsed = start.saturating_elapsed();
+                    slow_log!(
+                        elapsed,
+                        "check leader rpc costs too long, to_store: {}",
+                        to_store
+                    );
+                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                        .with_label_values(&["rpc"])
+                        .observe(elapsed.as_secs_f64());
+                });
+
+                let rpc = client
+                    .check_leader_async(&req)
+                    .map_err(|e| (to_store, true, format!("{}", e)))?;
+                let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+                let resp = tokio::time::timeout(timeout, rpc)
+                    .map_err(|e| (to_store, true, format!("{}", e)))
+                    .await?
+                    .map_err(|e| (to_store, true, format!("{}", e)))?;
+                Ok((to_store, resp))
             }
             .boxed()
         })
         .collect();
     let start = Instant::now_coarse();
+
     defer!({
         RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
             .with_label_values(&["all"])
@@ -264,11 +273,22 @@ pub async fn region_resolved_ts_store(
         // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
         let (res, _, remains) = select_all(stores).await;
         stores = remains;
-        if let Ok((store_id, resp)) = res {
-            for region_id in resp.regions {
-                resp_map.entry(region_id).or_default().push(store_id);
-                if region_has_quorum(&region_map[&region_id], &resp_map[&region_id]) {
-                    valid_regions.insert(region_id);
+        match res {
+            Ok((to_store, resp)) => {
+                for region_id in resp.regions {
+                    if let Some(r) = region_map.get(&region_id) {
+                        let resps = resp_map.entry(region_id).or_default();
+                        resps.push(to_store);
+                        if region_has_quorum(r, resps) {
+                            valid_regions.insert(region_id);
+                        }
+                    }
+                }
+            }
+            Err((to_store, reconnect, err)) => {
+                info!("check leader failed"; "error" => ?err, "to_store" => to_store);
+                if reconnect {
+                    tikv_clients.lock().await.remove(&to_store);
                 }
             }
         }
