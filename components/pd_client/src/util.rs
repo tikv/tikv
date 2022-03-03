@@ -26,6 +26,7 @@ use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
+use kvproto::metapb::BucketStats;
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
@@ -36,6 +37,8 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
+
+use crate::BucketMeta;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
@@ -778,5 +781,105 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
             Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
         }
         ErrorType::Ok => Ok(()),
+    }
+}
+
+pub fn new_bucket_stats(meta: &BucketMeta) -> BucketStats {
+    let count = meta.keys.len() - 1;
+    let mut stats = BucketStats::default();
+    stats.set_write_bytes(vec![0; count]);
+    stats.set_read_bytes(vec![0; count]);
+    stats.set_write_qps(vec![0; count]);
+    stats.set_read_qps(vec![0; count]);
+    stats.set_write_keys(vec![0; count]);
+    stats.set_read_keys(vec![0; count]);
+    stats
+}
+
+/// Merge incoming bucket stats. If a range in new buckets overlaps with multiple ranges in
+/// current buckets, stats of the new range will be added to all stats of current ranges.
+pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
+    cur: &[C],
+    cur_stats: &mut BucketStats,
+    incoming: &[I],
+    delta_stats: &BucketStats,
+) {
+    // Return the range [start, end) of indices of buckets
+    fn find_overlay_ranges<S: AsRef<[u8]>>(range: (&[u8], &[u8]), keys: &[S]) -> (usize, usize) {
+        let start = keys
+            .binary_search_by(|p| p.as_ref().cmp(range.0))
+            .unwrap_or_else(|i| if i != 0 { i - 1 } else { 0 });
+        let end = if range.1.is_empty() {
+            keys.len() - 1
+        } else {
+            keys.binary_search_by(|p| p.as_ref().cmp(range.1))
+                .unwrap_or_else(|i| if i == keys.len() { i - 1 } else { i })
+        };
+        (start, end)
+    }
+
+    macro_rules! stats_add {
+        ($right:ident, $ridx:expr, $left:ident, $lidx:expr, $member:ident) => {
+            if let Some(s) = $right.$member.get_mut($ridx) {
+                *s += $left.$member.get($lidx).copied().unwrap_or_default();
+            }
+        };
+    }
+
+    for new_idx in 0..(incoming.len() - 1) {
+        let start = &incoming[new_idx];
+        let end = &incoming[new_idx + 1];
+        let (start_idx, end_idx) = find_overlay_ranges((start.as_ref(), end.as_ref()), cur);
+        for cur_idx in start_idx..end_idx {
+            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_bytes);
+            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_bytes);
+
+            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_qps);
+            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_qps);
+
+            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_keys);
+            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_keys);
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::merge_bucket_stats;
+    use kvproto::metapb::BucketStats;
+
+    #[test]
+    fn test_merge_bucket_stats() {
+        let cases = [
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                vec![2, 2, 2, 2],
+            ),
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                (vec![b"k0", b"k6", b"k8"], vec![1, 1]),
+                vec![2, 2, 3, 2],
+            ),
+            (
+                (vec![b"k0", b"k6", b"k8"], vec![1, 1]),
+                (
+                    vec![b"k1", b"k3", b"k5", b"k7", b"k9", b"ka"],
+                    vec![1, 1, 1, 1, 1],
+                ),
+                vec![4, 3],
+            ),
+        ];
+        for (current, incoming, expected) in cases {
+            let cur_keys = unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(current.0.as_slice()) };
+            let incoming_keys =
+                unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(incoming.0.as_slice()) };
+            let mut cur_stats = BucketStats::default();
+            cur_stats.set_read_qps(current.1);
+            let mut incoming_stats = BucketStats::default();
+            incoming_stats.set_read_qps(incoming.1);
+            merge_bucket_stats(cur_keys, &mut cur_stats, incoming_keys, &incoming_stats);
+            assert_eq!(cur_stats.get_read_qps(), expected);
+        }
     }
 }

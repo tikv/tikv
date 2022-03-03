@@ -16,9 +16,11 @@ pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
 pub use self::util::PdConnector;
 pub use self::util::REQUEST_RECONNECT_INTERVAL;
+pub use self::util::{merge_bucket_stats, new_bucket_stats};
 
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
@@ -28,7 +30,7 @@ use kvproto::replication_modepb::{
     RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
@@ -68,6 +70,59 @@ impl Deref for RegionInfo {
 
     fn deref(&self) -> &Self::Target {
         &self.region
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct BucketMeta {
+    pub region_id: u64,
+    pub version: u64,
+    pub region_epoch: metapb::RegionEpoch,
+    pub keys: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BucketStat {
+    pub meta: Arc<BucketMeta>,
+    pub stats: metapb::BucketStats,
+    pub last_report_time: Instant,
+}
+
+impl Default for BucketStat {
+    fn default() -> Self {
+        Self {
+            last_report_time: Instant::now(),
+            meta: Arc::default(),
+            stats: metapb::BucketStats::default(),
+        }
+    }
+}
+
+impl BucketStat {
+    pub fn new(meta: Arc<BucketMeta>, stats: metapb::BucketStats) -> Self {
+        Self {
+            meta,
+            stats,
+            last_report_time: Instant::now(),
+        }
+    }
+
+    pub fn write_key(&mut self, key: &[u8], value: Option<&[u8]>) {
+        let idx = self
+            .meta
+            .keys
+            .binary_search_by(|b| b.as_slice().cmp(key))
+            .unwrap_or_else(|x| x);
+        if idx == 0 || idx == self.meta.keys.len() {
+            return;
+        }
+        let size = key.len() + value.map_or(0, |v| v.len());
+        if let Some(keys) = self.stats.mut_write_keys().get_mut(idx - 1) {
+            *keys += 1;
+        }
+        if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx - 1) {
+            *bytes += size as u64;
+        }
     }
 }
 
