@@ -45,7 +45,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, timespec_to_ns, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -4654,9 +4654,7 @@ where
             return;
         }
         let mut region_buckets = Buckets::default();
-        let now = monotonic_raw_now();
-        const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
-        region_buckets.version = (now.sec as u64) * NANOSECONDS_PER_SECOND + now.nsec as u64;
+        region_buckets.version = timespec_to_ns(monotonic_raw_now());
         region_buckets.set_keys(bucket_keys.into());
         // add region's start/end key
         region_buckets
