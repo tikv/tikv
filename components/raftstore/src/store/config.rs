@@ -59,6 +59,7 @@ pub struct Config {
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
+    #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
