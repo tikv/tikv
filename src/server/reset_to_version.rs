@@ -338,7 +338,7 @@ mod tests {
         }
         wb.write().unwrap();
 
-        let mut manager = ResetToVersionManager::new(fake_engine.c().clone());
+        let manager = ResetToVersionManager::new(fake_engine.c().clone());
         manager.start(100.into());
         manager.wait();
 
