@@ -189,7 +189,9 @@ impl Clone for ResetToVersionManager {
 #[allow(dead_code)]
 impl ResetToVersionManager {
     pub fn new(engine: RocksEngine) -> Self {
-        let state = Arc::new(Mutex::new(ResetToVersionState::RemovingWrite { scanned: 0 }));
+        let state = Arc::new(Mutex::new(ResetToVersionState::RemovingWrite {
+            scanned: 0,
+        }));
         ResetToVersionManager {
             state,
             engine,
@@ -378,7 +380,7 @@ mod tests {
             remaining_locks.push((key, lock));
         }
 
-        // Writes which start_ts >= 100 should be removed. 
+        // Writes which start_ts >= 100 should be removed.
         assert_eq!(remaining_writes.len(), 1);
         let (key, _) = &remaining_writes[0];
         // So the only write left is the one with start_ts = 99
