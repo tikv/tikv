@@ -3469,9 +3469,9 @@ impl ConfigController {
         change: Option<HashMap<String, String>>,
     ) -> CfgResult<()> {
         diff = {
-            let mut incoming = self.get_current();
+            let incoming = self.get_current();
             let mut updated = incoming.clone();
-            updated.update(diff.clone());
+            updated.update(diff);
             // Config might be adjusted in `validate`.
             updated.validate()?;
             incoming.diff(&updated)

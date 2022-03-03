@@ -146,24 +146,22 @@ fn test_update_raftstore_config() {
     config.validate().unwrap();
     let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
-    // dispatch updated config
-    let change = {
-        let mut m = std::collections::HashMap::new();
-        m.insert("raftstore.messages-per-tick".to_owned(), "12345".to_owned());
-        m.insert(
-            "raftstore.raft-log-gc-threshold".to_owned(),
-            "54321".to_owned(),
-        );
-        m.insert(
-            "raftstore.apply-max-batch-size".to_owned(),
-            "1234".to_owned(),
-        );
-        m.insert(
-            "raftstore.store-max-batch-size".to_owned(),
-            "4321".to_owned(),
-        );
+    let new_changes = |cfgs: Vec<(&str, &str)>| {
+        let mut m = std::collections::HashMap::with_capacity(cfgs.len());
+        for (key, val) in cfgs {
+            m.insert(key.to_owned(), val.to_owned());
+        }
         m
     };
+
+    // dispatch updated config
+    let change = new_changes(vec![
+        ("raftstore.messages-per-tick", "12345"),
+        ("raftstore.raft-log-gc-threshold", "54321"),
+        ("raftstore.apply-max-batch-size", "1234"),
+        ("raftstore.store-max-batch-size", "4321"),
+    ]);
+
     cfg_controller.update(change).unwrap();
 
     // config should be updated
@@ -172,9 +170,44 @@ fn test_update_raftstore_config() {
     raft_store.raft_log_gc_threshold = 54321;
     raft_store.apply_batch_system.max_batch_size = 1234;
     raft_store.store_batch_system.max_batch_size = 4321;
-    validate_store(&router, move |cfg: &Config| {
-        assert_eq!(cfg, &raft_store);
-    });
+    let validate_store_cfg = |raft_cfg: &Config| {
+        let raftstore_cfg = raft_cfg.clone();
+        validate_store(&router, move |cfg: &Config| {
+            assert_eq!(cfg, &raftstore_cfg);
+        });
+    };
+    validate_store_cfg(&raft_store);
+
+    let invalid_cfgs = vec![
+        ("raftstore.apply-max-batch-size", "10241"),
+        ("raftstore.store-max-batch-size", "10241"),
+    ];
+    for cfg in invalid_cfgs {
+        let change = new_changes(vec![cfg]);
+        assert!(cfg_controller.update(change).is_err());
+
+        // update failed, original config should not be changed.
+        validate_store_cfg(&raft_store);
+    }
+
+    let default_cfg = vec![
+        ("raftstore.apply-max-batch-size", "0"),
+        ("raftstore.store-max-batch-size", "0"),
+    ];
+    cfg_controller.update(new_changes(default_cfg)).unwrap();
+    raft_store.apply_batch_system.max_batch_size = 256;
+    raft_store.store_batch_system.max_batch_size = 256;
+    validate_store_cfg(&raft_store);
+
+    let max_cfg = vec![
+        ("raftstore.apply-max-batch-size", "10240"),
+        ("raftstore.store-max-batch-size", "10240"),
+    ];
+    cfg_controller.update(new_changes(max_cfg)).unwrap();
+    raft_store.apply_batch_system.max_batch_size = 10240;
+    raft_store.store_batch_system.max_batch_size = 10240;
+    validate_store_cfg(&raft_store);
 
     system.shutdown();
 }
+
