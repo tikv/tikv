@@ -240,7 +240,7 @@ fn test_scale_scheduler_pool() {
         .unwrap()
         .clone();
     let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
+        engine,
         DummyLockManager {},
         ApiVersion::V1,
     )
@@ -264,7 +264,7 @@ fn test_scale_scheduler_pool() {
             kv_engine,
             cfg.storage.block_cache.shared,
             scheduler,
-            flow_controller.clone(),
+            flow_controller,
             storage.get_scheduler(),
         )),
     );
