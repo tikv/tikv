@@ -587,10 +587,19 @@ pub(crate) fn load_table_files(
             atx.send(res).unwrap();
         });
     }
+    let mut errors = vec![];
     for id in tbl_ids {
-        let data = rx.recv().unwrap()?;
-        let file = dfs::InMemFile::new(*id, data);
-        files.push(file);
+        let data = rx.recv().unwrap();
+        match rx.recv().unwrap() {
+            Err(err) => errors.push(err),
+            Ok(data) => {
+                let file = dfs::InMemFile::new(*id, data);
+                files.push(file);
+            }
+        }
+    }
+    if errors.len() > 0 {
+        return Err(errors.pop().unwrap().into());
     }
     Ok(files)
 }
