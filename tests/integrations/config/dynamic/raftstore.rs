@@ -154,6 +154,14 @@ fn test_update_raftstore_config() {
             "raftstore.raft-log-gc-threshold".to_owned(),
             "54321".to_owned(),
         );
+        m.insert(
+            "raftstore.apply-max-batch-size".to_owned(),
+            "1234".to_owned(),
+        );
+        m.insert(
+            "raftstore.store-max-batch-size".to_owned(),
+            "4321".to_owned(),
+        );
         m
     };
     cfg_controller.update(change).unwrap();
@@ -162,6 +170,8 @@ fn test_update_raftstore_config() {
     let mut raft_store = config.raft_store;
     raft_store.messages_per_tick = 12345;
     raft_store.raft_log_gc_threshold = 54321;
+    raft_store.apply_batch_system.max_batch_size = 1234;
+    raft_store.store_batch_system.max_batch_size = 4321;
     validate_store(&router, move |cfg: &Config| {
         assert_eq!(cfg, &raft_store);
     });

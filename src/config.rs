@@ -3465,14 +3465,17 @@ impl ConfigController {
 
     fn update_impl(
         &self,
-        diff: HashMap<String, ConfigValue>,
+        mut diff: HashMap<String, ConfigValue>,
         change: Option<HashMap<String, String>>,
     ) -> CfgResult<()> {
-        {
+        diff = {
             let mut incoming = self.get_current();
-            incoming.update(diff.clone());
-            incoming.validate()?;
-        }
+            let mut updated = incoming.clone();
+            updated.update(diff.clone());
+            // Config might be adjusted in `validate`.
+            updated.validate()?;
+            incoming.diff(&updated)
+        };
         let mut inner = self.inner.write().unwrap();
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {

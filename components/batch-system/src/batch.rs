@@ -392,14 +392,15 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             // if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
             // update some online config if needed.
-            let mut new_batch_size = None;
-            self.handler.begin(max_batch_size, |cfg| {
-                new_batch_size = Some(cfg.max_batch_size);
-            });
-            if let Some(batch_size) = new_batch_size {
-                self.max_batch_size = batch_size;
-                max_batch_size = std::cmp::max(batch_size, batch.normals.len());
+            {
+                // Closure can't capture disjoint field from a struct, so we need to explicitly borrow it first.
+                // We may avoid this once https://github.com/rust-lang/rfcs/pull/2229 is implemented.
+                let batch_size = &mut self.max_batch_size;
+                self.handler.begin(max_batch_size, |cfg| {
+                    *batch_size = cfg.max_batch_size;
+                });
             }
+            max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
 
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
