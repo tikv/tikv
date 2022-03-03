@@ -871,7 +871,8 @@ mod test {
             ),
         ];
         for (current, incoming, expected) in cases {
-            let cur_keys = unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(current.0.as_slice()) };
+            let cur_keys =
+                unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(current.0.as_slice()) };
             let incoming_keys =
                 unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(incoming.0.as_slice()) };
             let mut cur_stats = BucketStats::default();
