@@ -154,7 +154,10 @@ fn test_update_raftstore_config() {
             "raftstore.raft-log-gc-threshold".to_owned(),
             "54321".to_owned(),
         );
-        m.insert("raftstore.raft-max-size-per-msg", "128MiB");
+        m.insert(
+            "raftstore.raft-max-size-per-msg".to_owned(),
+            "128MiB".to_owned(),
+        );
         m
     };
     cfg_controller.update(change).unwrap();
