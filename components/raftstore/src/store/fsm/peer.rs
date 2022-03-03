@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
@@ -22,7 +23,7 @@ use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
+use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
     StatusCmdType, StatusResponse,
@@ -56,7 +57,7 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
+    ExecResult, StoreInfo,
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftMetrics;
@@ -74,7 +75,7 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTick,
+    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -143,6 +144,12 @@ where
     /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
     /// can start destroying without seeking.
     logs_gc_flushed: bool,
+
+    /// To make sure the reported store/peer meta is up to date, each peer has to wait for the log
+    /// at its target commit index to be applied. The last peer does so triggers the next procedure
+    /// which is reporting the store/peer meta to PD.
+    unsafe_recovery_target_commit_index: Option<u64>,
+    unsafe_recovery_wait_apply_counter: Option<Arc<AtomicUsize>>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -260,6 +267,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                unsafe_recovery_target_commit_index: None,
+                unsafe_recovery_wait_apply_counter: None,
             }),
         ))
     }
@@ -313,6 +322,8 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                unsafe_recovery_target_commit_index: None,
+                unsafe_recovery_wait_apply_counter: None,
             }),
         ))
     }
@@ -663,6 +674,9 @@ where
                 PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                     self.on_update_region_for_unsafe_recover(region)
                 }
+                PeerMsg::UnsafeRecoveryWaitApply(counter) => {
+                    self.on_unsafe_recovery_wait_apply(counter)
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -859,6 +873,56 @@ where
         self.register_raft_base_tick();
     }
 
+    fn finish_unsafe_recovery_wait_apply(&mut self) {
+        if self
+            .fsm
+            .unsafe_recovery_wait_apply_counter
+            .as_ref()
+            .unwrap()
+            .fetch_sub(1, Ordering::Relaxed)
+            == 1
+        {
+            let mut stats = StoreStats::default();
+            stats.set_store_id(self.store_id());
+            let store_info = StoreInfo {
+                kv_engine: self.ctx.engines.kv.clone(),
+                raft_engine: self.ctx.engines.raft.clone(),
+                capacity: self.ctx.cfg.capacity.0,
+            };
+            let task = PdTask::StoreHeartbeat {
+                stats,
+                store_info,
+                send_detailed_report: true,
+                dr_autosync_status: self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .store_dr_autosync_status(),
+            };
+            if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                panic!("fail to send detailed report to pd {:?}", e);
+            }
+        }
+        self.fsm.unsafe_recovery_target_commit_index = None;
+        self.fsm.unsafe_recovery_wait_apply_counter = None;
+    }
+
+    fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
+        self.fsm.unsafe_recovery_target_commit_index =
+            Some(self.fsm.peer.raft_group.store().commit_index());
+        self.fsm.unsafe_recovery_wait_apply_counter = Some(counter);
+        // If the applied index equals to the commit index, there is nothing to wait for, proceeds
+        // to the next step immediately. If they are not equal, further checks will be performed in
+        // on_apply_res().
+        if self.fsm.stopped
+            || self.fsm.peer.raft_group.store().applied_index()
+                == self.fsm.peer.raft_group.store().commit_index()
+        {
+            self.finish_unsafe_recovery_wait_apply();
+        }
+    }
+
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -882,7 +946,8 @@ where
             CasualMessage::RegionApproximateKeys { keys } => {
                 self.on_approximate_region_keys(keys);
             }
-            CasualMessage::RefreshRegionBuckets {
+            CasualMessage::RefreshRegion
+          {
                 region_epoch,
                 bucket_keys,
             } => {
@@ -975,6 +1040,7 @@ where
             "region_id" => self.region_id(),
         );
         self.fsm.tick_registry[tick as usize] = false;
+        self.fsm.peer.adjust_cfg_if_changed(self.ctx);
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),
@@ -1541,6 +1607,12 @@ where
                         .unwrap();
                     *is_ready = true;
                 }
+            }
+        }
+        // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
+        if let Some(target_commit_index) = self.fsm.unsafe_recovery_target_commit_index {
+            if self.fsm.peer.raft_group.store().applied_index() >= target_commit_index {
+                self.finish_unsafe_recovery_wait_apply();
             }
         }
     }
@@ -2414,13 +2486,16 @@ where
     fn propose_locks_before_transfer_leader(&mut self) -> bool {
         // 1. Disable in-memory pessimistic locks.
         let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
-        // If `is_valid` is false, the locks should have been proposed. But we still need to
-        // return true to propose another TransferLeader command. Otherwise, some write requests
-        // that have marked some locks as deleted will fail because raft rejects more proposals.
-        if !pessimistic_locks.is_valid {
+        // If it is not writable, it's probably because it's a retried TransferLeader and the locks
+        // have been proposed. But we still need to return true to propose another TransferLeader
+        // command. Otherwise, some write requests that have marked some locks as deleted will fail
+        // because raft rejects more proposals.
+        // It is OK to return true here if it's in other states like MergingRegion or NotLeader.
+        // In those cases, the locks will fail to propose and nothing will happen.
+        if !pessimistic_locks.is_writable() {
             return true;
         }
-        pessimistic_locks.is_valid = false;
+        pessimistic_locks.status = LocksStatus::TransferingLeader;
 
         // 2. Propose pessimistic locks
         if pessimistic_locks.is_empty() {
@@ -2596,6 +2671,11 @@ where
         let region_id = self.region_id();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
+
+        // No need to wait for the apply anymore.
+        if self.fsm.unsafe_recovery_target_commit_index.is_some() {
+            self.finish_unsafe_recovery_wait_apply();
+        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
@@ -2788,6 +2868,12 @@ where
                     if self.fsm.peer.is_leader() {
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
+                        // As `raft_max_inflight_msgs` may have been updated via online config
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
                     }
                 }
                 ConfChangeType::RemoveNode => {
@@ -3608,7 +3694,12 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "commit_index" => commit,
             );
-            self.fsm.peer.txn_ext.pessimistic_locks.write().is_valid = true;
+            {
+                let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+                if pessimistic_locks.status == LocksStatus::MergingRegion {
+                    pessimistic_locks.status = LocksStatus::Normal;
+                }
+            }
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
     }
@@ -4277,7 +4368,7 @@ where
             // Raft log size ecceeds the limit.
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            applied_idx
+            std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft logs.
             // There will be at least 3 entries left after one compaction:

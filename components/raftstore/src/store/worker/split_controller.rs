@@ -22,6 +22,22 @@ use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
 
+// LOAD_BASE_SPLIT_EVENT metrics label definitions.
+// Workload fits the QPS threshold or byte threshold.
+const LOAD_FIT: &str = "load_fit";
+// Split info has been collected, ready to split.
+const READY_TO_SPLIT: &str = "ready_to_split";
+// Split info has not been collected yet, not ready to split.
+const NOT_READY_TO_SPLIT: &str = "not_ready_to_split";
+// The number of sampled keys does not meet the threshold.
+const NO_ENOUGH_SAMPLED_KEY: &str = "no_enough_sampled_key";
+// The number of sampled keys located on left and right does not meet the threshold.
+const NO_ENOUGH_LR_KEY: &str = "no_enough_lr_key";
+// The number of balanced keys does not meet the score.
+const NO_BALANCE_KEY: &str = "no_balance_key";
+// The number of contained keys does not meet the score.
+const NO_UNCROSS_KEY: &str = "no_uncross_key";
+
 // It will return prefix sum of the given iter,
 // `read` is a function to process the item from the iter.
 #[inline(always)]
@@ -38,8 +54,8 @@ where
 }
 
 // This function uses the distributed/parallel reservoir sampling algorithm.
-// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple key_ranges_providers with the same possibility.
-// NOTICE: prefix_sum should be calculated from the lists, so they should have the same length too.
+// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple `key_ranges_provider` with the same possibility.
+// NOTICE: `prefix_sum` should be calculated from the `key_ranges_providers`, so they should have the same length too.
 fn sample<F, T>(
     sample_num: usize,
     prefix_sum: &[usize],
@@ -152,7 +168,7 @@ impl Samples {
             let evaluated_key_num_lr = sample.left + sample.right;
             if evaluated_key_num_lr == 0 {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_enough_key"])
+                    .with_label_values(&[NO_ENOUGH_LR_KEY])
                     .inc();
                 continue;
             }
@@ -167,7 +183,7 @@ impl Samples {
                 .observe(balance_score);
             if balance_score >= split_balance_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_balance_key"])
+                    .with_label_values(&[NO_BALANCE_KEY])
                     .inc();
                 continue;
             }
@@ -180,7 +196,7 @@ impl Samples {
                 .observe(contained_score);
             if contained_score >= split_contained_score {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_uncross_key"])
+                    .with_label_values(&[NO_UNCROSS_KEY])
                     .inc();
                 continue;
             }
@@ -247,15 +263,16 @@ impl Recorder {
             |x| x,
         );
         let mut samples = Samples::from(sampled_key_ranges);
+        let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
         // Because we need to observe the number of `no_enough_key` of all the actual keys,
         // so we do this check after the samples are calculated.
-        if (self.key_ranges.len() as u64) < config.sample_threshold {
+        if (recorded_key_ranges.len() as u64) < config.sample_threshold {
             LOAD_BASE_SPLIT_EVENT
-                .with_label_values(&["no_enough_key"])
+                .with_label_values(&[NO_ENOUGH_SAMPLED_KEY])
                 .inc_by(samples.0.len() as u64);
             return vec![];
         }
-        self.key_ranges.iter().flatten().for_each(|key_range| {
+        recorded_key_ranges.into_iter().for_each(|key_range| {
             samples.evaluate(key_range);
         });
         samples.split_key(config.split_balance_score, config.split_contained_score)
@@ -478,7 +495,7 @@ impl AutoSplitController {
                 continue;
             }
 
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&[LOAD_FIT]).inc();
 
             let detect_times = self.cfg.detect_times;
             let recorder = self
@@ -504,7 +521,7 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     });
                     LOAD_BASE_SPLIT_EVENT
-                        .with_label_values(&["prepare_to_split"])
+                        .with_label_values(&[READY_TO_SPLIT])
                         .inc();
                     info!("load base split region";
                         "region_id" => region_id,
@@ -514,7 +531,7 @@ impl AutoSplitController {
                 self.recorders.remove(&region_id);
             } else {
                 LOAD_BASE_SPLIT_EVENT
-                    .with_label_values(&["no_fit_key"])
+                    .with_label_values(&[NOT_READY_TO_SPLIT])
                     .inc();
             }
 
@@ -628,6 +645,25 @@ mod tests {
             );
         }
         qps_stats
+    }
+
+    #[test]
+    fn test_recorder() {
+        let mut config = SplitConfig::default();
+        config.detect_times = 10;
+        config.sample_threshold = 20;
+
+        let mut recorder = Recorder::new(config.detect_times);
+        for _ in 0..config.detect_times {
+            assert!(!recorder.is_ready());
+            recorder.record(vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ]);
+        }
+        assert!(recorder.is_ready());
+        let key = recorder.collect(&config);
+        assert_eq!(key, b"b");
     }
 
     #[test]
@@ -789,12 +825,17 @@ mod tests {
         for _ in 0..100 {
             let prefix_sum = prefix_sum(key_ranges.iter(), Vec::len);
             let sampled_key_ranges = sample(sample_num, &prefix_sum, key_ranges.clone(), |x| x);
-            assert_eq!(sampled_key_ranges.len(), sample_num);
+            let all_key_ranges_num = *prefix_sum.last().unwrap();
+            assert_eq!(
+                sampled_key_ranges.len(),
+                std::cmp::min(sample_num, all_key_ranges_num)
+            );
         }
     }
 
     #[test]
     fn test_sample_length() {
+        // Test the sample_num <= all_key_ranges_length.
         let sample_num = 20;
         let mut key_ranges = vec![];
         for _ in 0..sample_num {
@@ -818,6 +859,31 @@ mod tests {
             key_ranges.push(ranges);
         }
         check_sample_length(sample_num, key_ranges);
+
+        // Test the sample_num > all_key_ranges_length.
+        let sample_num = 20;
+        let mut key_ranges = vec![];
+        for _ in 0..sample_num - 1 {
+            key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
+        }
+        check_sample_length(sample_num, key_ranges.clone());
+
+        // Test the wrong length of prefix_sum or key_ranges_providers.
+        let prefix_sum = prefix_sum(key_ranges.clone().iter(), Vec::len);
+        let sampled_key_ranges = sample(
+            sample_num,
+            &prefix_sum[..prefix_sum.len() - 1],
+            key_ranges.clone(),
+            |x| x,
+        );
+        assert!(sampled_key_ranges.is_empty());
+        let sampled_key_ranges = sample(
+            sample_num,
+            &prefix_sum,
+            key_ranges.clone()[..key_ranges.len() - 1].to_vec(),
+            |x| x,
+        );
+        assert!(sampled_key_ranges.is_empty());
     }
 
     #[test]
