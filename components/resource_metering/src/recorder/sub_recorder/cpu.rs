@@ -84,7 +84,7 @@ struct ThreadStat {
 }
 
 #[cfg(test)]
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
 
@@ -98,7 +98,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests {
     use super::*;
     use crate::{RawRecords, TagInfos};
@@ -121,10 +121,13 @@ mod tests {
             store_id: 0,
             region_id: 0,
             peer_id: 0,
+            key_ranges: vec![],
             extra_attachment: b"abc".to_vec(),
         });
-        let mut store = LocalStorage::default();
-        store.attached_tag = SharedTagInfos::new(info);
+        let store = LocalStorage {
+            attached_tag: SharedTagInfos::new(info),
+            ..Default::default()
+        };
         let mut recorder = CpuRecorder::default();
         recorder.thread_created(thread::thread_id(), &store);
         let pid = thread::process_id();

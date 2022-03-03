@@ -298,8 +298,12 @@ fn test_propose_in_memory_pessimistic_locks() {
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     {
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-        assert!(pessimistic_locks.is_valid);
-        pessimistic_locks.insert(vec![(Key::from_raw(b"key"), lock.clone())]);
+        assert!(pessimistic_locks.is_writable());
+        assert!(
+            pessimistic_locks
+                .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+                .is_ok()
+        );
     }
 
     cluster.must_transfer_leader(1, new_peer(2, 2));
