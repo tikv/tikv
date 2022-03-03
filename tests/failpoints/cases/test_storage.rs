@@ -330,7 +330,7 @@ fn test_scale_scheduler_pool() {
     );
 
     // do prewrite again, as we scale another worker, this request should success
-    let res = do_prewrite(b"k2", b"v2").unwrap().unwrap();
+    do_prewrite(b"k2", b"v2").unwrap().unwrap();
 }
 
 #[test]
