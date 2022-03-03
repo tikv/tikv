@@ -894,6 +894,44 @@ impl PdClient for RpcClient {
             .execute()
     }
 
+    fn update_service_safe_point(
+        &self,
+        name: String,
+        safe_point: TimeStamp,
+        ttl: Duration,
+    ) -> PdFuture<()> {
+        let begin = Instant::now();
+        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
+        req.set_header(self.header());
+        req.set_service_id(name.into());
+        req.set_ttl(ttl.as_secs() as _);
+        req.set_safe_point(safe_point.into_inner());
+        let executor = move |client: &Client, r: pdpb::UpdateServiceGcSafePointRequest| {
+            let handler = client
+                .inner
+                .rl()
+                .client_stub
+                .update_service_gc_safe_point_async_opt(&r, Self::call_option(client))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "update_service_safe_point", e
+                    )
+                });
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["update_service_safe_point"])
+                    .observe(duration_to_sec(begin.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(())
+            }) as PdFuture<_>
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn feature_gate(&self) -> &FeatureGate {
         &self.pd_client.feature_gate
     }

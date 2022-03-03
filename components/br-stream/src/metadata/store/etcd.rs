@@ -104,6 +104,7 @@ impl MetaStore for EtcdStore {
                         Err(err) => Box::pin(tokio_stream::once(Err(err.into()))),
                         Ok(events) => Box::pin(tokio_stream::iter(
                             // TODO: remove the copy here via access the protobuf field directly.
+                            #[allow(clippy::unnecessary_to_owned)]
                             events.events().to_owned().into_iter().filter_map(|event| {
                                 let kv = event.kv()?;
                                 Some(Ok(KvEvent {

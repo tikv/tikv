@@ -19,6 +19,7 @@ pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
@@ -278,6 +279,16 @@ pub trait PdClient: Send + Sync {
 
     /// Gets a timestamp from PD.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+
+    /// Set a service safe point.
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
         unimplemented!()
     }
 

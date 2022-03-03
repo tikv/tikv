@@ -50,8 +50,8 @@ raftstore = { path = "../raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
 online_config = { path = "../online_config" }
 resolved_ts = { path = "../resolved_ts"}
+pd_client = {path = "../pd_client"}
 
 [dev-dependencies]
-assert_matches = "1.5"
 rand = "0.8.0"
 engine_panic = {path = "../engine_panic"}

@@ -11,6 +11,7 @@ use dashmap::DashMap;
 use engine_traits::KvEngine;
 
 use kvproto::metapb::Region;
+use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
 use resolved_ts::Resolver;
@@ -22,6 +23,7 @@ use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 
+use crate::errors::Error;
 use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
@@ -42,7 +44,7 @@ use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 
-pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
+pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
     #[allow(dead_code)]
     config: BackupStreamConfig,
     meta_client: Option<MetadataClient<S>>,
@@ -56,14 +58,16 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT> {
     regions: R,
     engine: PhantomData<E>,
     router: RT,
+    pd_client: Arc<PDC>,
     resolvers: Arc<DashMap<u64, Resolver>>,
 }
 
-impl<R, E, RT> Endpoint<EtcdStore, R, E, RT>
+impl<R, E, RT, PDC> Endpoint<EtcdStore, R, E, RT, PDC>
 where
     R: RegionInfoProvider + 'static + Clone,
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
+    PDC: PdClient + 'static,
 {
     pub fn new<S: AsRef<str>>(
         store_id: u64,
@@ -73,7 +77,8 @@ where
         observer: BackupStreamObserver,
         accessor: R,
         router: RT,
-    ) -> Endpoint<EtcdStore, R, E, RT> {
+        pd_client: Arc<PDC>,
+    ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
@@ -101,16 +106,12 @@ where
             let scheduler_clone = scheduler.clone();
             // TODO build a error handle mechanism #error 2
             pool.spawn(async {
-                if let Err(err) =
-                    Endpoint::<_, R, E, RT>::starts_watch_tasks(meta_client_clone, scheduler_clone)
-                        .await
+                if let Err(err) = Self::starts_watch_tasks(meta_client_clone, scheduler_clone).await
                 {
                     err.report("failed to start watch tasks");
                 }
             });
-            pool.spawn(Endpoint::<EtcdStore, R, E, RT>::starts_flush_ticks(
-                range_router.clone(),
-            ));
+            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
 
         info!("the endpoint of stream backup started"; "path" => %config.streaming_path);
@@ -125,17 +126,19 @@ where
             regions: accessor,
             engine: PhantomData,
             router,
+            pd_client,
             resolvers: Default::default(),
         }
     }
 }
 
-impl<S, R, E, RT> Endpoint<S, R, E, RT>
+impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
+    PDC: PdClient + 'static,
 {
     async fn starts_flush_ticks(router: Router) {
         let ticker = tick(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 5));
@@ -349,6 +352,22 @@ where
         });
     }
 
+    /// try advance the resolved ts by the pd tso.
+    async fn try_resolve(pd_client: Arc<PDC>, resolvers: Arc<DashMap<u64, Resolver>>) -> TimeStamp {
+        let tso = pd_client
+            .get_tso()
+            .await
+            .map_err(|err| Error::from(err).report("failed to get tso from pd"))
+            .unwrap_or_default();
+        let new_tso = resolvers
+            .as_ref()
+            .iter_mut()
+            .map(|mut r| r.value_mut().resolve(tso))
+            .min();
+        debug!("try resolve resolved ts from PD"; "new_tso" => ?new_tso);
+        new_tso.unwrap_or_default()
+    }
+
     pub fn on_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
         let cli = self
@@ -356,8 +375,29 @@ where
             .as_ref()
             .expect("on_flush: executed from an endpoint without cli")
             .clone();
+        let pd_cli = self.pd_client.clone();
+        let resolvers = self.resolvers.clone();
         self.pool.spawn(async move {
-            if let Some(rts) = router.do_flush(&task, store_id).await {
+            // NOTE: Maybe push down the resolve step to the router?
+            //       Or if there are too many duplicated `Flush` command, we may do some useless works.
+            let new_rts = Self::try_resolve(pd_cli.clone(), resolvers).await;
+            if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
+                info!("flushing and refreshing checkpoint ts."; "checkpoint_ts" => %rts, "task" => %task);
+                if rts == 0 {
+                    // We cannot advance the resolved ts for now.
+                    return;
+                }
+                if let Err(err) = pd_cli
+                    .update_service_safe_point(
+                        format!("br-stream-{}-{}", task, store_id),
+                        TimeStamp::new(rts),
+                        Duration::from_secs(600),
+                    )
+                    .await
+                {
+                    Error::from(err).report("failed to update service safe point!");
+                    // don't give up?
+                }
                 if let Err(err) = cli.step_task(&task, rts).await {
                     err.report(format!("on flushing task {}", task));
                     // we can advance the progress at next time.
@@ -393,6 +433,7 @@ where
     /// >      When the follower progress faster than leader and then be elected,
     /// >      there is a risk of losing data.
     pub fn on_modify_observe(&self, op: ObserveOp) {
+        info!("br-stream: on_modify_observe"; "op" => ?op);
         match op {
             ObserveOp::Start { region } => {
                 if let Err(e) = self.observe_over(&region) {
@@ -498,12 +539,13 @@ impl fmt::Display for Task {
     }
 }
 
-impl<S, R, E, RT> Runnable for Endpoint<S, R, E, RT>
+impl<S, R, E, RT, PDC> Runnable for Endpoint<S, R, E, RT, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
     RT: RaftStoreRouter<E> + 'static,
+    PDC: PdClient + 'static,
 {
     type Task = Task;
 

@@ -1,4 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(assert_matches)]
+
 pub mod config;
 mod endpoint;
 pub mod errors;

@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use etcd_client::Error as EtcdError;
+use pd_client::Error as PdError;
 use protobuf::ProtobufError;
 use slog_global::error;
 use std::error::Error as StdError;
@@ -29,6 +30,8 @@ pub enum Error {
     Txn(#[from] TxnError),
     #[error("TiKV scheduler error: {0}")]
     Sched(#[from] ScheduleError<Task>),
+    #[error("PD client meet error: {0}")]
+    Pd(#[from] PdError),
     #[error("Other Error: {0}")]
     Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
 }
@@ -66,6 +69,7 @@ impl Error {
             Error::Txn(_) => "transaction",
             Error::Other(_) => "unknown",
             Error::Sched(_) => "schedule",
+            Error::Pd(_) => "pd",
         }
     }
 }

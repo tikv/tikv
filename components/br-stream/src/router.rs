@@ -420,12 +420,17 @@ impl RouterInner {
 
     /// flush the specified task, once once success, return the min resolved ts of this flush.
     /// returns `None` if failed.
-    pub async fn do_flush(&self, task_name: &str, store_id: u64) -> Option<u64> {
+    pub async fn do_flush(
+        &self,
+        task_name: &str,
+        store_id: u64,
+        resolve_to: TimeStamp,
+    ) -> Option<u64> {
         debug!("backup stream do flush"; "task" => task_name);
         let task = self.tasks.lock().await.get(task_name).cloned();
         match task {
             Some(task_info) => {
-                let result = task_info.do_flush(store_id).await;
+                let result = task_info.do_flush(store_id, resolve_to).await;
                 if let Err(ref e) = result {
                     warn!("backup steam do flush fail"; "err" => ?e);
                 }
@@ -443,9 +448,7 @@ impl RouterInner {
     pub async fn tick(&self) {
         for (name, task_info) in self.tasks.lock().await.iter() {
             // if stream task need flush this time, schedule Task::Flush, or update time justly.
-            if task_info.should_flush().await
-                && task_info.set_flushing_status_cas(false, true).is_ok()
-            {
+            if task_info.should_flush() && task_info.set_flushing_status_cas(false, true).is_ok() {
                 info!(
                     "backup stream trigger flush task by tick";
                     "task" => ?task_info,
@@ -697,9 +700,8 @@ impl StreamTaskInfo {
         unsafe { Box::from_raw(ptr) };
     }
 
-    pub async fn should_flush(&self) -> bool {
+    pub fn should_flush(&self) -> bool {
         self.get_last_flush_time().saturating_elapsed() >= self.flush_interval
-            && !self.files.read().await.is_empty()
     }
 
     pub fn is_flushing(&self) -> bool {
@@ -776,19 +778,33 @@ impl StreamTaskInfo {
 
     /// execute the flush: copy local files to external storage.
     /// if success, return the last resolved ts of this flush.
-    pub async fn do_flush(&self, store_id: u64) -> Result<Option<u64>> {
+    /// The caller can try to advance the resolved ts and provide it to the function,
+    /// and we would use max(resolved_ts_provided, resolved_ts_from_file).
+    pub async fn do_flush(
+        &self,
+        store_id: u64,
+        resolved_ts_provided: TimeStamp,
+    ) -> Result<Option<u64>> {
         // do nothing if not flushing status.
         if !self.is_flushing() {
             return Ok(None);
         }
 
-        // generage meta data and prepare to flush to storage
-        let metadata_info = self
+        // generate meta data and prepare to flush to storage
+        let mut metadata_info = self
             .move_to_flushing_files()
             .await
             .generate_metadata(store_id)
             .await?;
+        metadata_info.min_resolved_ts = metadata_info
+            .min_resolved_ts
+            .max(Some(resolved_ts_provided.into_inner()));
         let rts = metadata_info.min_resolved_ts;
+
+        // There is no file to flush, don't write the meta file.
+        if metadata_info.files.is_empty() {
+            return Ok(rts);
+        }
 
         // flush log file to storage.
         self.flush_log().await?;
@@ -798,7 +814,7 @@ impl StreamTaskInfo {
 
         // clear flushing files
         self.clear_flushing_files().await;
-        Ok(Some(rts))
+        Ok(rts)
     }
 }
 
@@ -820,7 +836,7 @@ struct DataFile {
 #[derive(Debug)]
 pub struct MetadataInfo {
     pub files: Vec<DataFileInfo>,
-    pub min_resolved_ts: u64,
+    pub min_resolved_ts: Option<u64>,
     pub store_id: u64,
 }
 
@@ -828,7 +844,7 @@ impl MetadataInfo {
     fn with_capacity(cap: usize) -> Self {
         Self {
             files: Vec::with_capacity(cap),
-            min_resolved_ts: u64::MAX,
+            min_resolved_ts: None,
             store_id: 0,
         }
     }
@@ -839,7 +855,7 @@ impl MetadataInfo {
 
     fn push(&mut self, file: DataFileInfo) {
         let rts = file.resolved_ts;
-        self.min_resolved_ts = self.min_resolved_ts.min(rts);
+        self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
         self.files.push(file);
     }
 
@@ -847,7 +863,7 @@ impl MetadataInfo {
         let mut metadata = Metadata::new();
         metadata.set_files(self.files.into());
         metadata.set_store_id(self.store_id as _);
-        metadata.set_resolved_ts(self.min_resolved_ts as _);
+        metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default() as _);
 
         metadata
             .write_to_bytes()
@@ -858,7 +874,7 @@ impl MetadataInfo {
         format!(
             // "/v1/backupmeta/{:012}-{}.meta",
             "v1_backupmeta_{:012}-{}.meta",
-            self.min_resolved_ts,
+            self.min_resolved_ts.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
     }
@@ -996,7 +1012,7 @@ struct TaskRange {
 mod tests {
     use crate::utils;
 
-    use kvproto::brpb::{Local, StorageBackend, StreamBackupTaskInfo};
+    use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
 
     use std::time::Duration;
     use tikv_util::{
@@ -1120,6 +1136,13 @@ mod tests {
         sb
     }
 
+    fn create_noop_storage_backend() -> StorageBackend {
+        let nop = Noop::new();
+        let mut backend = StorageBackend::default();
+        backend.set_noop(nop);
+        backend
+    }
+
     #[tokio::test]
     async fn test_basic_file() -> Result<()> {
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
@@ -1219,5 +1242,25 @@ mod tests {
         assert_eq!(meta_count, 1);
         assert_eq!(log_count, 3);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_resolved_ts() {
+        let (tx, _rx) = dummy_scheduler();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let router = RouterInner::new(tmp.clone(), tx, 32);
+        let mut stream_task = StreamBackupTaskInfo::default();
+        stream_task.set_name("nothing".to_string());
+        stream_task.set_storage(create_noop_storage_backend());
+
+        router
+            .register_task(StreamTask { info: stream_task }, vec![])
+            .await
+            .unwrap();
+        let task = router.get_task_info("nothing").await.unwrap();
+        task.set_flushing_status_cas(false, true).unwrap();
+        let ts = TimeStamp::compose(TimeStamp::physical_now(), 42);
+        let rts = router.do_flush("nothing", 1, ts).await.unwrap();
+        assert_eq!(ts.into_inner(), rts);
     }
 }
