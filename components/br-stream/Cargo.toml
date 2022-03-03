@@ -52,5 +52,6 @@ online_config = { path = "../online_config" }
 resolved_ts = { path = "../resolved_ts"}
 
 [dev-dependencies]
+assert_matches = "1.5"
 rand = "0.8.0"
 engine_panic = {path = "../engine_panic"}
