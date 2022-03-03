@@ -2442,6 +2442,11 @@ where
                     {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
+                        info!("propose transfer leader command";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "to" => ?from,
+                        );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
                             self.fsm.peer.peer.clone(),
@@ -2525,6 +2530,7 @@ where
         cmd.mut_header()
             .set_region_epoch(self.region().get_region_epoch().clone());
         cmd.mut_header().set_peer(self.fsm.peer.peer.clone());
+        info!("propose {} locks before transferring leader", cmd.get_requests().len(); "region_id" => self.fsm.region_id());
         self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
         true
     }
@@ -2994,6 +3000,7 @@ where
         // to the old region will stay in the original map.
         let region_locks = {
             let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+            info!("moving {} locks to new regions", pessimistic_locks.len());
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived.get_region_epoch().get_version();
