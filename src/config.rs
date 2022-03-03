@@ -36,10 +36,7 @@ use engine_rocks::{
     RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
-use engine_traits::{
-    util::RaftDataStateMachine, CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait,
-    DBOptionsExt,
-};
+use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
@@ -53,7 +50,8 @@ use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+    self, LogFormat, OptionReadableSize, RaftDataStateMachine, ReadableDuration, ReadableSize,
+    TomlWriter, GIB, MIB,
 };
 use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;

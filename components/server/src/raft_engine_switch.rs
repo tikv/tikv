@@ -110,11 +110,9 @@ fn check_raft_engine_is_empty(engine: &RaftLogEngine) {
 }
 
 fn check_raft_db_is_empty(engine: &RocksEngine) {
-    let start_key = keys::raft_log_key(0, 0);
-    let end_key = keys::raft_log_key(u64::MAX, u64::MAX);
     let mut count = 0;
     engine
-        .scan(&start_key, &end_key, false, |_, _| {
+        .scan(b"", &[0xFF, 0xFF], false, |_, _| {
             count += 1;
             Ok(true)
         })

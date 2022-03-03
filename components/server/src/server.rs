@@ -30,9 +30,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, util::RaftDataStateMachine, CFOptionsExt,
-    ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines,
+    FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -90,7 +89,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, VersionTrack},
+    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
