@@ -135,6 +135,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeProjection => {
                     other_err!("Projection executor not implemented");
                 }
+                ExecType::TypePartitionTableScan => {
+                    other_err!("PartitionTableScan executor not implemented");
+                }
             }
         }
 
