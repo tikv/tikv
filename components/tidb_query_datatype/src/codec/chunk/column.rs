@@ -74,16 +74,12 @@ impl Column {
         match eval_type {
             EvalType::Int => {
                 if field_type.as_accessor().tp() == FieldTypeTp::Bit {
-                    //Because Mysql define Bit max 64 bits: https://dev.mysql.com/doc/refman/8.0/en/bit-type.html
-                    //And TiDB fix Bit's field_type 8 bytes: tidb/parser/types/field_type.go +352 StorageLength()
-                    //So here field_type.as_accessor().flen() max is 64;
-                    //If field_type flen() excceed 64 bits in the future, should fix it here;
+                    // The max supported bytes for type MysqlBit is 64 bit in TiDB now.
                     if field_type.as_accessor().flen() > 64 {
                         unimplemented!()
                     }
-                    let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
                     for &row_index in logical_rows {
-                        col.append_bit_datum(&raw_datums[row_index], &start_idx)?;
+                        col.append_bit_datum(&raw_datums[row_index], field_type)?;
                     }
                 } else if field_type.is_unsigned() {
                     for &row_index in logical_rows {
@@ -152,7 +148,7 @@ impl Column {
         match v {
             VectorValue::Int(vec) => {
                 if field_type.as_accessor().tp() == FieldTypeTp::Bit {
-                    //See comments "pub fn from_raw_datum()"
+                    // The max supported bytes for type MysqlBit is 64 bit in TiDB now.
                     if field_type.as_accessor().flen() > 64 {
                         unimplemented!()
                     }
@@ -308,7 +304,6 @@ impl Column {
                     Datum::I64(self.get_i64(idx)?)
                 }
             }
-            FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
             FieldTypeTp::Float => Datum::F64(f64::from(self.get_f32(idx)?)),
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
@@ -318,6 +313,7 @@ impl Column {
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
+            FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
@@ -554,19 +550,23 @@ impl Column {
     }
 
     /// Append bit datum to the column.
-    pub fn append_bit_datum(&mut self, src_datum: &[u8], start_idx: &usize) -> Result<()> {
+    pub fn append_bit_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
         if src_datum.is_empty() {
             return Err(Error::InvalidDataType(
                 "Failed to decode datum flag".to_owned(),
             ));
         }
         let flag = src_datum[0];
-        let raw_datum = &src_datum[1..];
+        let mut raw_datum = &src_datum[1..];
+        let start_idx: usize = ((64 - field_type.as_accessor().flen()) / 8) as usize;
         match flag {
             datum::NIL_FLAG => self.append_null(),
-            datum::UINT_FLAG | datum::VAR_UINT_FLAG => {
-                self.append_bytes(&raw_datum[*start_idx..])?
+            datum::UINT_FLAG => {
+                self.append_bytes(&raw_datum.read_datum_payload_u64()?.to_be_bytes()[start_idx..])?
             }
+            datum::VAR_UINT_FLAG => self.append_bytes(
+                &raw_datum.read_datum_payload_var_u64()?.to_be_bytes()[start_idx..],
+            )?,
             _ => {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Bit vector",
