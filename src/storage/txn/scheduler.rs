@@ -673,7 +673,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
         async {
             let tag = task.cmd.tag();
-            println!("start process cmd: {}", task.cmd);
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
