@@ -511,6 +511,16 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
 
         self.handle_response(ctx, sink, f, TAG);
     }
+
+    fn reset_to_version(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: ResetToVersionRequest,
+        sink: UnarySink<ResetToVersionResponse>,
+    ) {
+        self.debugger.reset_to_version(req.get_ts());
+        sink.success(ResetToVersionResponse::default());
+    }
 }
 
 fn region_detail<T: RaftStoreRouter<RocksEngine>>(
