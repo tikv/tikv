@@ -561,9 +561,15 @@ pub(crate) fn compact_l0(
     }
     let mut table_creates = vec![];
     let count = id_idx;
+    let mut errors = vec![];
     for _ in 0..count {
-        let tbl_create = rx.recv().unwrap()?;
-        table_creates.push(tbl_create);
+        match rx.recv().unwrap() {
+            Err(err) => errors.push(err),
+            Ok(tbl_create) => table_creates.push(tbl_create),
+        }
+    }
+    if errors.len() > 0 {
+        return Err(errors.pop().unwrap().into());
     }
     Ok(table_creates)
 }
@@ -840,9 +846,15 @@ pub(crate) fn compact_tables(
     }
     let cnt = id_idx;
     let mut tbl_creates = vec![];
+    let mut errors = vec![];
     for _ in 0..cnt {
-        let tbl_create = rx.recv().unwrap()?;
-        tbl_creates.push(tbl_create);
+        match rx.recv().unwrap() {
+            Err(err) => errors.push(err),
+            Ok(tbl_create) => tbl_creates.push(tbl_create),
+        }
+    }
+    if errors.len() > 0 {
+        return Err(errors.pop().unwrap().into());
     }
     Ok(tbl_creates)
 }

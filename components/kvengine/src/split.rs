@@ -141,8 +141,14 @@ impl Engine {
             };
             rt.spawn(future);
         }
+        let mut errors = vec![];
         for _ in 0..l0_creates.len() {
-            rx.recv().unwrap()?;
+            if let Err(err) = rx.recv().unwrap() {
+                errors.push(err);
+            }
+        }
+        if errors.len() > 0 {
+            return Err(errors.pop().unwrap().into());
         }
         Ok(l0_creates)
     }
@@ -237,8 +243,14 @@ impl Engine {
             }
             split_files.mut_table_deletes().push(tbl.id());
         }
+        let mut errors = vec![];
         for _ in 0..future_cnt {
-            rx.recv().unwrap()?
+            if let Err(err) = rx.recv().unwrap() {
+                errors.push(err);
+            }
+        }
+        if errors.len() > 0 {
+            return Err(errors.pop().unwrap().into());
         }
         Ok(())
     }
