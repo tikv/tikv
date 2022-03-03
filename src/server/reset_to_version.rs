@@ -243,7 +243,7 @@ impl ResetToVersionManager {
     }
 
     /// Wait until the process finished.
-    pub fn wait(&mut self) {
+    pub fn wait(&self) {
         self.worker_handle.take().unwrap().join().unwrap();
     }
 }
