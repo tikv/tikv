@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::num::IntErrorKind;
 
+use byteorder::{BigEndian, ByteOrder};
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
@@ -114,6 +115,8 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Int, EvalType::Bytes) => {
             if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
                 cast_year_as_string_fn_meta()
+            } else if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Bit {
+                cast_bit_as_string_fn_meta()
             } else if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
             } else {
@@ -640,6 +643,31 @@ fn cast_year_as_string(
         val.to_string().into_bytes()
     };
     cast_as_string_helper(ctx, extra, cast)
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_bit_as_string(
+    _ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let mut buf = [0; 8];
+            BigEndian::write_u64(&mut buf, *val as u64);
+            let flen = extra.ret_field_type.as_accessor().flen();
+            if flen > 0 && flen <= 8 {
+                let start_idx: usize = (8 - flen) as usize;
+                let buf = &buf[start_idx..8];
+                Ok(Some(buf.to_vec()))
+            } else {
+                // The length of casting bit to string should between 0 and 8.
+                Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))
+            }
+        }
+    }
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]

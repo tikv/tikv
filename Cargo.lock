@@ -644,6 +644,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "futures-timer",
+ "getset",
  "grpcio",
  "keys",
  "kvproto",
@@ -1538,6 +1539,8 @@ dependencies = [
  "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
+ "slog",
+ "slog-global",
  "strum",
  "tempfile",
  "thread_local",
@@ -2357,7 +2360,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/longfangsong/kvproto?rev=e416de06851b1a71b776ec3194bc96245b87d13a#e416de06851b1a71b776ec3194bc96245b87d13a"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#b90a82e7c1ebddaacbe6c133858a3f597a164242"
+>>>>>>> upstream/master
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5892,8 +5899,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.31",

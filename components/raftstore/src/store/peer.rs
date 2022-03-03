@@ -13,7 +13,7 @@ use bytes::Bytes;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::TrySendError;
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -22,8 +22,8 @@ use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-    RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
+    RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -31,6 +31,7 @@ use kvproto::raft_serverpb::{
 use kvproto::replication_modepb::{
     DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
 };
+use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType};
 use raft::{
@@ -53,6 +54,7 @@ use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
+use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
     HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress,
@@ -467,6 +469,8 @@ where
 
     /// The Raft state machine of this Peer.
     pub raft_group: RawNode<PeerStorage<EK, ER>>,
+    /// The online configurable Raft configurations
+    raft_max_inflight_msgs: usize,
     /// The cache of meta information for Region's other Peers.
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
@@ -526,6 +530,13 @@ where
     last_committed_split_idx: u64,
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
+
+    /// The write fence index.
+    /// If there are pessimistic locks, PrepareMerge can be proposed after applying to
+    /// this index. When a pending PrepareMerge exists, no more write commands should be proposed.
+    /// This avoids proposing pessimistic locks that are already deleted before PrepareMerge.
+    pub prepare_merge_fence: u64,
+    pub pending_prepare_merge: Option<RaftCmdRequest>,
 
     /// The index of the latest committed prepare merge command.
     last_committed_prepare_merge_idx: u64,
@@ -651,6 +662,7 @@ where
             peer,
             region_id: region.get_id(),
             raft_group,
+            raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
@@ -669,6 +681,8 @@ where
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
+            prepare_merge_fence: 0,
+            pending_prepare_merge: None,
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
@@ -2947,12 +2961,14 @@ where
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cb.invoke_with_response(err_resp);
+                self.post_propose_fail(req_admin_cmd_type);
                 false
             }
             Ok(Either::Right(idx)) => {
                 if !cb.is_none() {
                     self.cmd_epoch_checker.attach_to_conflict_cmd(idx, cb);
                 }
+                self.post_propose_fail(req_admin_cmd_type);
                 false
             }
             Ok(Either::Left(idx)) => {
@@ -2985,6 +3001,27 @@ where
                 }
                 self.post_propose(ctx, p);
                 true
+            }
+        }
+    }
+
+    fn post_propose_fail(&mut self, req_admin_cmd_type: Option<AdminCmdType>) {
+        if req_admin_cmd_type == Some(AdminCmdType::PrepareMerge) {
+            // If we just failed to propose PrepareMerge, the pessimistic locks status
+            // may become MergingRegion incorrectly. So, we have to revert it here.
+            // But we have to rule out the case when the region has successfully
+            // proposed PrepareMerge or has been in merging, which is decided by
+            // the boolean expression below.
+            let is_merging = self.is_merging()
+                || self
+                    .cmd_epoch_checker
+                    .last_cmd_index(AdminCmdType::PrepareMerge)
+                    .is_some();
+            if !is_merging {
+                let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+                if pessimistic_locks.status == LocksStatus::MergingRegion {
+                    pessimistic_locks.status = LocksStatus::Normal;
+                }
             }
         }
     }
@@ -3501,11 +3538,32 @@ where
         Ok((min_m, min_c))
     }
 
-    fn pre_propose_prepare_merge<T>(
-        &self,
+    fn pre_propose_prepare_merge<T: Transport>(
+        &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
+        // Check existing prepare_merge_fence.
+        let mut passed_merge_fence = false;
+        if self.prepare_merge_fence > 0 {
+            let applied_index = self.get_store().applied_index();
+            if applied_index >= self.prepare_merge_fence {
+                // Check passed, clear fence and start proposing pessimistic locks and PrepareMerge.
+                self.prepare_merge_fence = 0;
+                self.pending_prepare_merge = None;
+                passed_merge_fence = true;
+            } else {
+                self.pending_prepare_merge = Some(mem::take(req));
+                info!(
+                    "reject PrepareMerge because applied_index has not reached prepare_merge_fence";
+                    "region_id" => self.region_id,
+                    "applied_index" => applied_index,
+                    "prepare_merge_fence" => self.prepare_merge_fence
+                );
+                return Err(Error::PendingPrepareMerge);
+            }
+        }
+
         let last_index = self.raft_group.raft.raft_log.last_index();
         let (min_matched, min_committed) = self.get_min_progress()?;
         if min_matched == 0
@@ -3560,19 +3618,109 @@ where
                 cmd_type
             ));
         }
-        if entry_size as f64 > ctx.cfg.raft_entry_max_size.0 as f64 * 0.9 {
+        let entry_size_limit = ctx.cfg.raft_entry_max_size.0 as usize * 9 / 10;
+        if entry_size > entry_size_limit {
             return Err(box_err!(
                 "log gap size exceed entry size limit, skip merging."
             ));
+        };
+
+        // Record current proposed index. If there are some in-memory pessimistic locks, we should
+        // wait until applying to the proposed index before proposing pessimistic locks and
+        // PrepareMerge. Otherwise, if an already proposed command will remove a pessimistic lock,
+        // we will make some deleted locks appear again.
+        if !passed_merge_fence {
+            let pessimistic_locks = self.txn_ext.pessimistic_locks.read();
+            if !pessimistic_locks.is_empty() {
+                if pessimistic_locks.status != LocksStatus::Normal {
+                    // If `status` is not `Normal`, it means the in-memory pessimistic locks are
+                    // being transferred, probably triggered by transferring leader. In this case,
+                    // we abort merging to simplify the situation.
+                    return Err(box_err!(
+                        "pessimistic locks status is {:?}, skip merging.",
+                        pessimistic_locks.status
+                    ));
+                }
+                if self.get_store().applied_index() < last_index {
+                    self.prepare_merge_fence = last_index;
+                    self.pending_prepare_merge = Some(mem::take(req));
+                    info!(
+                        "start rejecting new proposals before prepare merge";
+                        "region_id" => self.region_id,
+                        "prepare_merge_fence" => last_index
+                    );
+                    return Err(Error::PendingPrepareMerge);
+                }
+            }
         }
+
+        fail_point!("before_propose_locks_on_region_merge");
+        self.propose_locks_before_prepare_merge(ctx, entry_size_limit - entry_size)?;
+
         req.mut_admin_request()
             .mut_prepare_merge()
             .set_min_index(min_matched + 1);
         Ok(())
     }
 
-    fn pre_propose<T>(
-        &self,
+    fn propose_locks_before_prepare_merge<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        size_limit: usize,
+    ) -> Result<()> {
+        let pessimistic_locks = self.txn_ext.pessimistic_locks.upgradable_read();
+        if pessimistic_locks.is_empty() {
+            let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
+            pessimistic_locks.status = LocksStatus::MergingRegion;
+            return Ok(());
+        }
+        // The proposed pessimistic locks here will also be carried in CommitMerge. Check the size
+        // to avoid CommitMerge exceeding the size limit of a raft entry. This check is a inaccurate
+        // check. We will check the size again accurately later using the protobuf encoding.
+        if pessimistic_locks.memory_size > size_limit {
+            return Err(box_err!(
+                "pessimistic locks size {} exceed size limit {}, skip merging.",
+                pessimistic_locks.memory_size,
+                size_limit
+            ));
+        }
+
+        let mut cmd = RaftCmdRequest::default();
+        for (key, (lock, _deleted)) in &*pessimistic_locks {
+            let mut put = PutRequest::default();
+            put.set_cf(CF_LOCK.to_string());
+            put.set_key(key.as_encoded().to_owned());
+            put.set_value(lock.to_lock().to_bytes());
+            let mut req = Request::default();
+            req.set_cmd_type(CmdType::Put);
+            req.set_put(put);
+            cmd.mut_requests().push(req);
+        }
+        cmd.mut_header().set_region_id(self.region_id);
+        cmd.mut_header()
+            .set_region_epoch(self.region().get_region_epoch().clone());
+        cmd.mut_header().set_peer(self.peer.clone());
+        let proposal_size = cmd.compute_size();
+        if proposal_size as usize > size_limit {
+            return Err(box_err!(
+                "pessimistic locks size {} exceed size limit {}, skip merging.",
+                proposal_size,
+                size_limit
+            ));
+        }
+
+        {
+            let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
+            pessimistic_locks.status = LocksStatus::MergingRegion;
+        }
+        debug!("propose {} pessimistic locks before prepare merge", cmd.get_requests().len();
+            "region_id" => self.region_id);
+        self.propose_normal(ctx, cmd)?;
+        Ok(())
+    }
+
+    fn pre_propose<T: Transport>(
+        &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
@@ -3604,13 +3752,15 @@ where
     /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
     /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
     /// the last conflict admin cmd.
-    fn propose_normal<T>(
+    fn propose_normal<T: Transport>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
-        if self.pending_merge_state.is_some()
-            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
+        if (self.pending_merge_state.is_some()
+            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)
+            || (self.prepare_merge_fence > 0
+                && req.get_admin_request().get_cmd_type() != AdminCmdType::PrepareMerge)
         {
             return Err(Error::ProposalInMergingMode(self.region_id));
         }
@@ -3641,13 +3791,16 @@ where
         let ctx = match self.pre_propose(poll_ctx, &mut req) {
             Ok(ctx) => ctx,
             Err(e) => {
-                warn!(
-                    "skip proposal";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "err" => ?e,
-                    "error_code" => %e.error_code(),
-                );
+                // Skipping PrepareMerge is logged when the PendingPrepareMerge error is generated.
+                if !matches!(e, Error::PendingPrepareMerge) {
+                    warn!(
+                        "skip proposal";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    );
+                }
                 return Err(e);
             }
         };
@@ -3670,6 +3823,7 @@ where
             });
         }
 
+        self.maybe_inject_propose_error(&req)?;
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
@@ -4186,6 +4340,7 @@ where
         !self.pending_remove
             && self.is_leader()
             && self.pending_merge_state.is_none()
+            && self.prepare_merge_fence == 0
             && self.raft_group.raft.lead_transferee.is_none()
             && self.has_applied_to_current_term()
             && self
@@ -4499,17 +4654,21 @@ where
 
     fn activate_in_memory_pessimistic_locks(&mut self) {
         let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.is_valid = true;
+        pessimistic_locks.status = LocksStatus::Normal;
         pessimistic_locks.term = self.term();
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     fn clear_in_memory_pessimistic_locks(&mut self) {
         let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.status = LocksStatus::NotLeader;
         pessimistic_locks.clear();
         pessimistic_locks.term = self.term();
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
+
+        // Also clear merge related states
+        self.prepare_merge_fence = 0;
+        self.pending_prepare_merge = None;
     }
 
     pub fn need_renew_lease_at<T>(
@@ -4535,6 +4694,55 @@ where
                 .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
+    }
+
+    pub fn adjust_cfg_if_changed<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        let raft_max_inflight_msgs = ctx.cfg.raft_max_inflight_msgs;
+        if self.is_leader() && (raft_max_inflight_msgs != self.raft_max_inflight_msgs) {
+            let peers: Vec<_> = self.region().get_peers().into();
+            for p in peers {
+                if p != self.peer {
+                    self.raft_group
+                        .raft
+                        .adjust_max_inflight_msgs(p.get_id(), raft_max_inflight_msgs);
+                }
+            }
+            self.raft_max_inflight_msgs = raft_max_inflight_msgs;
+        }
+    }
+
+    fn maybe_inject_propose_error(
+        &self,
+        #[allow(unused_variables)] req: &RaftCmdRequest,
+    ) -> Result<()> {
+        // The return value format is {req_type}:{store_id}
+        // Request matching the format will fail to be proposed.
+        // Empty `req_type` means matching all kinds of requests.
+        // ":{store_id}" can be omitted, meaning matching all stores.
+        fail_point!("raft_propose", |r| {
+            r.map_or(Ok(()), |s| {
+                let mut parts = s.splitn(2, ':');
+                let cmd_type = parts.next().unwrap();
+                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
+                if let Some(store_id) = store_id {
+                    if store_id != self.peer.get_store_id() {
+                        return Ok(());
+                    }
+                }
+                let admin_type = req.get_admin_request().get_cmd_type();
+                let match_type = cmd_type.is_empty()
+                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
+                    || (cmd_type == "transfer_leader"
+                        && admin_type == AdminCmdType::TransferLeader);
+                // More matching rules can be added here.
+                if match_type {
+                    Err(box_err!("injected error"))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        Ok(())
     }
 }
 
