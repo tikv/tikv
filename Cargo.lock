@@ -5704,6 +5704,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "raftstore",

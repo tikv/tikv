@@ -2,11 +2,13 @@
 
 use std::cell::RefCell;
 use std::mem;
+use std::sync::Arc;
 
 use crate::storage::{kv::PerfStatisticsDelta, FlowStatsReporter, Statistics};
 use collections::HashMap;
 use kvproto::metapb;
 use kvproto::pdpb::QueryKind;
+use pd_client::BucketMeta;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
 
@@ -403,11 +405,20 @@ pub fn tls_collect_scan_details(cmd: ReqTag, stats: &Statistics) {
     });
 }
 
-pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
+pub fn tls_collect_read_flow(
+    region_id: u64,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+    statistics: &Statistics,
+    buckets: Option<&Arc<BucketMeta>>,
+) {
     TLS_COP_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_read_stats.add_flow(
             region_id,
+            buckets,
+            start,
+            end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
         );
