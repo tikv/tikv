@@ -946,8 +946,7 @@ where
             CasualMessage::RegionApproximateKeys { keys } => {
                 self.on_approximate_region_keys(keys);
             }
-            CasualMessage::RefreshRegion
-          {
+            CasualMessage::RefreshRegionBuckets {
                 region_epoch,
                 bucket_keys,
             } => {
