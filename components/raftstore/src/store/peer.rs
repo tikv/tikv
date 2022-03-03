@@ -490,6 +490,11 @@ where
     /// 2. all read requests must be rejected.
     pub pending_remove: bool,
 
+    /// Force leader state is only used in online recovery when the majority of 
+    /// peers are missing. In this state, it forces one peer to become leader out
+    /// of accordance with Raft election rule.
+    /// With that, we can further propose remove failed-nodes conf-change, to make
+    /// the Raft group forms majority and works normally later on.
     pub force_leader: bool,
 
     /// Record the instants of peers being added into the configuration.
