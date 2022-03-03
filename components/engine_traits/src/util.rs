@@ -25,6 +25,17 @@ pub fn check_key_in_range(
     }
 }
 
+/// Helper for migrating Raft data safely. Such migration is defined as
+/// multiple states that can be uniquely distinguished. And the transtions
+/// between these states are atomic.
+///
+/// States:
+///   1. Init - Only source directory contains Raft data.
+///   2. Migrating - Source staging directory contains Raft data. Target
+///      staging directory does not contains Raft data.
+///   3. Completed - Only target directory contains Raft data.
+///   4. InvMigrating - Inverse of Migrating. Only occurs when an ongoing
+///      migration is interrupted and reopened in the reverse direction.
 pub struct RaftDataStateMachine {
     source: PathBuf,
     source_staging: PathBuf,
@@ -46,7 +57,7 @@ impl RaftDataStateMachine {
         }
     }
 
-    /// Verifies if invariants still hold.
+    /// Checks if the current condition is a valid state.
     pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
         if Self::data_exists(&self.source) && Self::data_exists(&self.target) {
             return Err(format!(
@@ -76,23 +87,43 @@ impl RaftDataStateMachine {
         Ok(())
     }
 
+    /// Enters the `Migrating` state and returns the source directory if a
+    /// migration is needed. Otherwise prepares the target directory for
+    /// opening.
     pub fn before_open_target(&mut self) -> Option<PathBuf> {
+        // Clean up trash directory if there is any.
+        for p in [
+            &self.source,
+            &self.source_staging,
+            &self.target,
+            &self.target_staging,
+        ] {
+            let trash = p.with_extension("REMOVE");
+            if trash.exists() {
+                fs::remove_dir_all(&trash).unwrap();
+            }
+        }
         if Self::data_exists(&self.target_staging) {
+            // InvMigrating -> Completed
             assert!(!Self::data_exists(&self.source_staging));
             Self::remove_dir_safe(&self.source);
             Self::rename_dir_safe(&self.target_staging, &self.target);
             return None;
         }
         if Self::data_exists(&self.source_staging) {
+            // Double-check.
             Self::remove_dir_safe(&self.source);
         } else if Self::data_exists(&self.source) {
+            // Init -> Migrating
             Self::rename_dir_safe(&self.source, &self.source_staging);
         } else {
+            // No source data.
             return None;
         }
         Some(self.source_staging.clone())
     }
 
+    /// Exits the `Migrating` state and enters the `Completed` state.
     pub fn after_dump_data(&mut self) {
         assert!(Self::data_exists(&self.target));
         assert!(!Self::data_exists(&self.source));
@@ -130,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_raft_data_state_machine() {
-        fn validate_restart(source: &Path, target: &Path, should_exist: bool) {
+        fn validate_state(source: &Path, target: &Path, should_exist: bool) {
             let state =
                 RaftDataStateMachine::new(source.to_str().unwrap(), target.to_str().unwrap());
             state.validate(should_exist).unwrap();
@@ -147,7 +178,7 @@ mod tests {
         target.push("target");
         fs::create_dir_all(&target).unwrap();
 
-        validate_restart(&source, &target, false);
+        validate_state(&source, &target, false);
 
         let mut state =
             RaftDataStateMachine::new(source.to_str().unwrap(), target.to_str().unwrap());
@@ -155,20 +186,20 @@ mod tests {
         let mut source_file = source.clone();
         source_file.push("file");
         File::create(&source_file).unwrap();
-        validate_restart(&source, &target, true);
+        validate_state(&source, &target, true);
 
         // Dump to target.
         let new_source = state.before_open_target().unwrap();
-        validate_restart(&source, &target, true);
+        validate_state(&source, &target, true);
         let mut new_source_file = new_source;
         new_source_file.push("file");
         let mut target_file = target.clone();
         target_file.push("file");
         fs::copy(&new_source_file, &target_file).unwrap();
-        validate_restart(&source, &target, true);
+        validate_state(&source, &target, true);
         fs::remove_file(&new_source_file).unwrap();
-        validate_restart(&source, &target, true);
+        validate_state(&source, &target, true);
         state.after_dump_data();
-        validate_restart(&source, &target, true);
+        validate_state(&source, &target, true);
     }
 }
