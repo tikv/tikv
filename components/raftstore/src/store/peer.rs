@@ -607,7 +607,7 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub region_buckets: metapb::Buckets,
+    pub region_buckets: Buckets,
 }
 
 impl<EK, ER> Peer<EK, ER>
