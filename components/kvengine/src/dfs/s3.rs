@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
 use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_smithy_http::result::SdkError;
+use aws_smithy_types::retry::ErrorKind;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
 use file_system::{DirectWriter, IORateLimiter, IOType};
@@ -16,6 +17,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
+
+const MAX_RETRY_COUNT: usize = 5;
 
 #[derive(Clone)]
 pub struct S3FS {
@@ -118,20 +121,51 @@ impl S3FSCore {
     fn file_key(&self, file_id: u64) -> String {
         format!("{:08x}/{:016x}.t1", self.tenant_id, file_id)
     }
+
+    fn is_err_retryable<T>(&self, sdk_err: &SdkError<T>) -> bool {
+        match sdk_err {
+            SdkError::ConstructionFailure(_) => false,
+            SdkError::TimeoutError(_) => true,
+            SdkError::DispatchFailure(conn_err) => {
+                if conn_err.is_io() || conn_err.is_timeout() {
+                    return true;
+                }
+                match conn_err.is_other() {
+                    None => false,
+                    Some(other_kind) => match other_kind {
+                        ErrorKind::TransientError => true,
+                        ErrorKind::ThrottlingError => true,
+                        ErrorKind::ServerError => true,
+                        ErrorKind::ClientError => false,
+                        _ => false,
+                    },
+                }
+            }
+            SdkError::ResponseError { .. } => false,
+            SdkError::ServiceError { .. } => false,
+        }
+    }
 }
 
 #[async_trait]
 impl DFS for S3FS {
     fn open(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<Arc<dyn File>> {
         let path = self.local_file_path(file_id);
-        let fd = Arc::new(std::fs::File::open(&path)?);
-        let meta = fd.metadata()?;
-        let local_file = LocalFile {
-            id: file_id,
-            fd,
-            size: meta.size(),
-        };
-        Ok(Arc::new(local_file))
+        match std::fs::File::open(&path) {
+            Ok(fd) => {
+                let meta = fd.metadata()?;
+                let local_file = LocalFile {
+                    id: file_id,
+                    fd: Arc::new(fd),
+                    size: meta.size(),
+                };
+                Ok(Arc::new(local_file))
+            }
+            Err(err) => {
+                error!("failed to open file {}, error {:?}", file_id, &err);
+                Err(err.into())
+            }
+        }
     }
 
     async fn prefetch(&self, file_id: u64, opts: Options) -> crate::dfs::Result<()> {
@@ -176,12 +210,17 @@ impl DFS for S3FS {
                 };
             }
             let err = result.unwrap_err();
-            if let SdkError::DispatchFailure(conn_err) = &err {
-                if conn_err.is_io() {
+            if self.is_err_retryable(&err) {
+                if retry_cnt < 5 {
                     retry_cnt += 1;
-                    if retry_cnt < 5 {
-                        continue;
-                    }
+                    continue;
+                } else {
+                    error!(
+                        "read file {}, takes {:?}, reach max retry count {}",
+                        file_id,
+                        start_time.saturating_elapsed(),
+                        MAX_RETRY_COUNT
+                    );
                 }
             }
             return Err(err.into());
@@ -214,12 +253,17 @@ impl DFS for S3FS {
                 return Ok(());
             }
             let err = result.unwrap_err();
-            if let SdkError::DispatchFailure(conn_err) = &err {
-                if conn_err.is_io() {
+            if self.is_err_retryable(&err) {
+                if retry_cnt < 5 {
                     retry_cnt += 1;
-                    if retry_cnt < 5 {
-                        continue;
-                    }
+                    continue;
+                } else {
+                    error!(
+                        "create file {}, takes {:?}, reach max retry count {}",
+                        file_id,
+                        start_time.saturating_elapsed(),
+                        MAX_RETRY_COUNT
+                    );
                 }
             }
             return Err(err.into());
