@@ -23,6 +23,6 @@ pub trait CausalTsProvider: Send + Sync {
     /// Get a new ts
     fn get_ts(&self) -> Result<TimeStamp>;
 
-    /// Advance to not less than ts, to make following event "happen-after" this ts.
+    /// Advance to not less than `ts`, to make following events "happen-after" this timestamp.
     fn advance(&self, ts: TimeStamp) -> Result<()>;
 }

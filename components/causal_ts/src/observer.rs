@@ -13,6 +13,7 @@ use raftstore::coprocessor::{
 };
 use std::cmp;
 use txn_types::{Key, TimeStamp};
+use tikv_util::HandyRwLock;
 
 use api_version::{APIVersion, KeyMode, APIV2};
 use std::sync::{Arc, RwLock};
@@ -45,7 +46,7 @@ impl RegionsCausalManager {
     }
 
     pub fn update_max_ts(&self, region_id: u64, new_ts: TimeStamp) {
-        let mut m = self.regions_map.write().unwrap();
+        let mut m = self.regions_map.wl();
         m.entry(region_id)
             .and_modify(|r| {
                 if new_ts > r.max_ts {
@@ -56,7 +57,7 @@ impl RegionsCausalManager {
     }
 
     pub fn max_ts(&self, region_id: u64) -> TimeStamp {
-        let m = self.regions_map.read().unwrap();
+        let m = self.regions_map.rl();
         m.get(&region_id).map_or_else(TimeStamp::zero, |r| r.max_ts)
     }
 
@@ -113,13 +114,14 @@ impl<E> CmdObserver<E> for CausalObserver {
     fn on_flush_applied_cmd_batch(&self, _: ObserveLevel, cmd_batches: &mut Vec<CmdBatch>, _: &E) {
         debug!("CausalObserver::on_flush_applied_cmd_batch");
         'outer: for batch in cmd_batches.iter() {
-            // Timestamp is always increasing in batches & cmds. So iterate reversely.
+            // Timestamp is always increasing in batches & commands. So iterate reversely.
             for cmd in batch.cmds.iter().rev() {
                 if cmd.response.get_header().has_error() || cmd.request.has_admin_request() {
                     continue;
                 }
                 for req in cmd.request.requests.iter().rev() {
                     let key_slice = req.get_put().get_key();
+                    // RawKV using raft "Put" requests for both put & delete.
                     if matches!(req.get_cmd_type(), CmdType::Put)
                         && matches!(APIV2::parse_key_mode(key_slice), KeyMode::Raw)
                     {
@@ -237,6 +239,7 @@ mod tests {
 
         (ob, manager, engines)
     }
+
     #[test]
     fn test_causal_observer() {
         let (ob, manager, engines) = init();

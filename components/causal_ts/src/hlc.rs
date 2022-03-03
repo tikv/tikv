@@ -17,7 +17,7 @@ use crate::{
     CausalTsProvider,
 };
 
-/// An implementation of Hybrid Logical Clock
+/// An implementation of Hybrid Logical Clock (HLC)
 /// See proposal for detail:
 /// https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
 #[derive(Debug)]
@@ -38,15 +38,15 @@ impl fmt::Display for Hlc {
 impl Hlc {
     #[inline]
     fn next(&self) -> TimeStamp {
-        let ts = self.0.fetch_add(1, Ordering::Relaxed).into();
-        debug!("Hlc::next: {:?}", ts);
+        let ts = self.0.fetch_add(1, Ordering::Release).into();
+        trace!("Hlc::next: {:?}", ts);
         ts
     }
 
     // self.next() == `to`
     #[inline]
     fn advance(&self, to: TimeStamp) {
-        let before = self.0.fetch_max(to.into_inner(), Ordering::Relaxed).into();
+        let before = self.0.fetch_max(to.into_inner(), Ordering::Acquire).into();
         debug!("Hlc::advance"; "before" => ?before, "after" => ?std::cmp::max(before, to));
     }
 }
@@ -109,6 +109,7 @@ impl HlcProvider {
             }
         };
 
+        // Duration::ZERO means never refresh from TSO. For test purpose ONLY.
         if self.tso_refresh_interval > Duration::ZERO {
             self.tso_worker
                 .spawn_interval_async_task(self.tso_refresh_interval, task);
