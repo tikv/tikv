@@ -3,9 +3,8 @@
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
-use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region, RetryConfig};
+use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_smithy_http::result::SdkError;
-use aws_smithy_types::retry::RetryMode;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
 use file_system::{DirectWriter, IORateLimiter, IOType};
@@ -15,6 +14,7 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]
@@ -90,10 +90,6 @@ impl S3FSCore {
             let endpoint = Endpoint::immutable(Uri::from_str(end_point.as_str()).unwrap());
             s3_conf_builder = s3_conf_builder.endpoint_resolver(endpoint);
         }
-        let retry_config = RetryConfig::new()
-            .with_max_attempts(10)
-            .with_retry_mode(RetryMode::Adaptive);
-        s3_conf_builder = s3_conf_builder.retry_config(retry_config);
         let cfg = s3_conf_builder.build();
         let s3c = Client::from_conf(cfg);
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -153,22 +149,49 @@ impl DFS for S3FS {
 
     async fn read_file(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<Bytes> {
         let key = self.file_key(file_id);
-        let res = self
-            .s3c
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&key)
-            .send()
-            .await?;
-        match res.body.collect().await {
-            Ok(data) => Ok(data.into_bytes()),
-            Err(err) => Err(crate::dfs::Error::S3(err.to_string())),
+        let mut retry_cnt = 0;
+        let start_time = Instant::now_coarse();
+        loop {
+            let result = self
+                .s3c
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await;
+            if result.is_ok() {
+                return match result.unwrap().body.collect().await {
+                    Ok(agg_data) => {
+                        let data = agg_data.into_bytes();
+                        info!(
+                            "read file {}, size {}, takes {:?}, retry {}",
+                            file_id,
+                            data.len(),
+                            start_time.saturating_elapsed(),
+                            retry_cnt
+                        );
+                        Ok(data)
+                    }
+                    Err(err) => Err(crate::dfs::Error::S3(err.to_string())),
+                };
+            }
+            let err = result.unwrap_err();
+            if let SdkError::DispatchFailure(conn_err) = &err {
+                if conn_err.is_io() {
+                    retry_cnt += 1;
+                    if retry_cnt < 5 {
+                        continue;
+                    }
+                }
+            }
+            return Err(err.into());
         }
     }
 
     async fn create(&self, file_id: u64, data: Bytes, _opts: Options) -> crate::dfs::Result<()> {
         let key = self.file_key(file_id);
         let mut retry_cnt = 0;
+        let start_time = Instant::now();
         loop {
             let hyper_body = hyper::Body::from(data.clone());
             let sdk_body = aws_smithy_http::body::SdkBody::from(hyper_body);
@@ -181,6 +204,13 @@ impl DFS for S3FS {
                 .send()
                 .await;
             if result.is_ok() {
+                info!(
+                    "create file {}, size {}, duration {:?}, retry {}",
+                    file_id,
+                    data.len(),
+                    start_time.saturating_elapsed(),
+                    retry_cnt
+                );
                 return Ok(());
             }
             let err = result.unwrap_err();
