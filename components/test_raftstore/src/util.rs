@@ -1205,3 +1205,12 @@ impl PeerClient {
         must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
     }
 }
+
+pub fn peer_on_store(region: &metapb::Region, store_id: u64) -> metapb::Peer {
+    region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .unwrap()
+        .clone()
+}
