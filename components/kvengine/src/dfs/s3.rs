@@ -4,6 +4,7 @@ use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
 use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region, RetryConfig};
+use aws_smithy_http::result::SdkError;
 use aws_smithy_types::retry::RetryMode;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
@@ -167,16 +168,32 @@ impl DFS for S3FS {
 
     async fn create(&self, file_id: u64, data: Bytes, _opts: Options) -> crate::dfs::Result<()> {
         let key = self.file_key(file_id);
-        let hyper_body = hyper::Body::from(data);
-        let sdk_body = aws_smithy_http::body::SdkBody::from(hyper_body);
-        self.s3c
-            .put_object()
-            .bucket(&self.bucket)
-            .key(&key)
-            .body(ByteStream::new(sdk_body))
-            .send()
-            .await?;
-        Ok(())
+        let mut retry_cnt = 0;
+        loop {
+            let hyper_body = hyper::Body::from(data.clone());
+            let sdk_body = aws_smithy_http::body::SdkBody::from(hyper_body);
+            let result = self
+                .s3c
+                .put_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .body(ByteStream::new(sdk_body))
+                .send()
+                .await;
+            if result.is_ok() {
+                return Ok(());
+            }
+            let err = result.unwrap_err();
+            if let SdkError::DispatchFailure(conn_err) = &err {
+                if conn_err.is_io() {
+                    retry_cnt += 1;
+                    if retry_cnt < 5 {
+                        continue;
+                    }
+                }
+            }
+            return Err(err.into());
+        }
     }
 
     async fn remove(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<()> {

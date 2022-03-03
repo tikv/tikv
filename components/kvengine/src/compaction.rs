@@ -589,7 +589,6 @@ pub(crate) fn load_table_files(
     }
     let mut errors = vec![];
     for id in tbl_ids {
-        let data = rx.recv().unwrap();
         match rx.recv().unwrap() {
             Err(err) => errors.push(err),
             Ok(data) => {
