@@ -114,7 +114,7 @@ fn check_raft_db_is_empty(engine: &RocksEngine) {
     engine
         .scan(b"", &[0xFF, 0xFF], false, |_, _| {
             count += 1;
-            Ok(true)
+            Ok(false)
         })
         .unwrap();
     assert_eq!(

@@ -1543,7 +1543,7 @@ impl RaftDataStateMachine {
 
     fn remove_dir_safe(path: &Path) {
         if path.exists() {
-            info!("Removing directory: {}", path.display());
+            info!("Removing directory"; "path" => %path.display());
             let trash = path.with_extension("REMOVE");
             Self::rename_dir_safe(path, &trash);
             fs::remove_dir_all(&trash).unwrap();

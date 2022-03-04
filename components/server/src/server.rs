@@ -1271,13 +1271,13 @@ impl TiKVServer<RocksEngine> {
         );
         let dump_source = raft_data_state_machine.before_open_target();
 
-        let raftdb_path = &self.config.raft_store.raftdb_path;
+        let raft_db_path = &self.config.raft_store.raftdb_path;
         let config_raftdb = &self.config.raftdb;
-        let mut raftdb_opts = config_raftdb.build_opt();
-        raftdb_opts.set_env(env.clone());
-        let raftdb_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+        let mut raft_db_opts = config_raftdb.build_opt();
+        raft_db_opts.set_env(env.clone());
+        let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raftdb =
-            engine_rocks::raw_util::new_engine_opt(raftdb_path, raftdb_opts, raftdb_cf_opts)
+            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
                 .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
         let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
         raftdb.set_shared_block_cache(shared_block_cache);
@@ -1372,13 +1372,13 @@ impl TiKVServer<RaftLogEngine> {
 
         if let Some(source) = dump_source {
             let config_raftdb = &self.config.raftdb;
-            let mut raftdb_opts = config_raftdb.build_opt();
-            raftdb_opts.set_env(env.clone());
-            let raftdb_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+            let mut raft_db_opts = config_raftdb.build_opt();
+            raft_db_opts.set_env(env.clone());
+            let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
             let raftdb = engine_rocks::raw_util::new_engine_opt(
                 source.to_str().unwrap(),
-                raftdb_opts,
-                raftdb_cf_opts,
+                raft_db_opts,
+                raft_cf_opts,
             )
             .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
             let raftdb = RocksEngine::from_db(Arc::new(raftdb));
