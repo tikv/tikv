@@ -81,6 +81,7 @@ use crate::storage::{
 };
 
 use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
+use causal_ts::{CausalTsProvider, HlcProvider, TsoSimpleProvider};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -152,6 +153,10 @@ pub struct Storage<E: Engine, L: LockManager> {
     resource_tag_factory: ResourceTagFactory,
 
     api_version: ApiVersion,
+
+    /// `causal_ts_provider` provides causal timestamp for RawKV interfaces in API V2.
+    /// See https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
+    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
 }
 
 impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
@@ -172,6 +177,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
             resource_tag_factory: self.resource_tag_factory.clone(),
+            causal_ts_provider: self.causal_ts_provider.clone(),
         }
     }
 }
@@ -220,6 +226,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -243,6 +250,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
             resource_tag_factory,
+            causal_ts_provider,
         })
     }
 
@@ -2638,6 +2646,9 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.engine.clone(),
         );
 
+        let pd_client = Arc::new(test_raftstore::TestPdClient::new(0, true));
+        let causal_ts_provider = TsoSimpleProvider::new(pd_client);
+
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -2651,6 +2662,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             self.resource_tag_factory,
+            Some(Arc::new(causal_ts_provider)),
         )
     }
 

@@ -665,6 +665,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pools.handle()
         };
 
+        // Create causal timestamp provider
+        let causal_ts_provider = if let ApiVersion::V2 = self.config.storage.api_version() {
+            let hlc = causal_ts::HlcProvider::new(self.pd_client.clone());
+            if let Err(e) = block_on(hlc.init()) {
+                panic!("HLC initialize failed: {:?}", e);
+            }
+            Some(Arc::new(hlc))
+        } else {
+            None
+        };
+
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
@@ -675,6 +686,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_controller,
             pd_sender.clone(),
             resource_tag_factory.clone(),
+            causal_ts_provider,
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

@@ -12,8 +12,8 @@ use raftstore::coprocessor::{
     ObserverContext, RegionChangeObserver, RoleObserver,
 };
 use std::cmp;
-use txn_types::{Key, TimeStamp};
 use tikv_util::HandyRwLock;
+use txn_types::{Key, TimeStamp};
 
 use api_version::{APIVersion, KeyMode, APIV2};
 use std::sync::{Arc, RwLock};

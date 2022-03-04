@@ -4602,6 +4602,7 @@ name = "server"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "causal_ts",
  "cdc",
  "chrono",
  "clap",
