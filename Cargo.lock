@@ -3423,6 +3423,7 @@ dependencies = [
  "once_cell",
  "parking_lot 0.12.0",
  "protobuf",
+ "protobuf-codegen-pure",
  "smallvec",
  "symbolic-demangle",
  "tempfile",
@@ -3574,6 +3575,16 @@ source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352
 dependencies = [
  "heck",
  "protobuf",
+]
+
+[[package]]
+name = "protobuf-codegen-pure"
+version = "2.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
+dependencies = [
+ "protobuf",
+ "protobuf-codegen",
 ]
 
 [[package]]
