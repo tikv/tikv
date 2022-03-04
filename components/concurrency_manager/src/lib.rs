@@ -10,6 +10,8 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
+#![feature(vec_into_raw_parts)]
+
 use fail::fail_point;
 
 mod key_handle;
@@ -19,7 +21,7 @@ pub use self::key_handle::{KeyHandle, KeyHandleGuard};
 pub use self::lock_table::LockTable;
 
 use std::{
-    mem::{self, MaybeUninit},
+    mem::MaybeUninit,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -78,11 +80,8 @@ impl ConcurrencyManager {
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
-        #[allow(clippy::unsound_collection_transmute)]
-        #[allow(clippy::transmute_undefined_repr)]
-        unsafe {
-            mem::transmute(result)
-        }
+        let (ptr, len, cap) = result.into_raw_parts();
+        unsafe { Vec::from_raw_parts(ptr as _, len, cap) }
     }
 
     /// Checks if there is a memory lock of the key which blocks the read.
