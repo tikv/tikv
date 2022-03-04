@@ -156,7 +156,6 @@ fn test_node_async_fetch_remove_peer() {
 // down to follower and is applying snapshot.
 #[test]
 fn test_node_async_fetch_leader_change() {
-    test_util::init_log_for_test();
     let count = 5;
     let mut cluster = new_node_cluster(0, count);
     cluster.pd_client.disable_default_operator();
