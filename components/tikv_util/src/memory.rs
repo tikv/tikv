@@ -8,6 +8,13 @@ use kvproto::{
 };
 use std::mem;
 
+// Transmute vec with types of same memory layout.
+pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
+    debug_assert!(mem::size_of::<F>() == mem::size_of::<T>());
+    let (ptr, len, cap) = from.into_raw_parts();
+    Vec::from_raw_parts(ptr as _, len, cap)
+}
+
 pub trait HeapSize {
     fn heap_size(&self) -> usize {
         0

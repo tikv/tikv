@@ -810,6 +810,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.3",
  "tikv_alloc",
+ "tikv_util",
  "tokio",
  "txn_types",
 ]

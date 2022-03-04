@@ -10,8 +10,6 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
-#![feature(vec_into_raw_parts)]
-
 use fail::fail_point;
 
 mod key_handle;
@@ -80,8 +78,7 @@ impl ConcurrencyManager {
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
-        let (ptr, len, cap) = result.into_raw_parts();
-        unsafe { Vec::from_raw_parts(ptr as _, len, cap) }
+        unsafe { tikv_util::memory::vec_transmute(result) }
     }
 
     /// Checks if there is a memory lock of the key which blocks the read.

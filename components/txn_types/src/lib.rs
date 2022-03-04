@@ -2,7 +2,6 @@
 
 #![feature(box_patterns)]
 #![feature(min_specialization)]
-#![feature(vec_into_raw_parts)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
