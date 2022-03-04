@@ -968,3 +968,23 @@ fn test_split_with_in_memory_pessimistic_locks() {
         Some(&(lock_c, false))
     );
 }
+
+#[test]
+fn test_refresh_region_bucket_keys() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    cluster.must_put(b"k11", b"v1");
+    let mut region = pd_client.get_region(b"v1").unwrap();
+
+    cluster.refresh_region_bucket_keys(&region, vec![b"k11".to_vec()]);
+    let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
+    region.mut_region_epoch().set_conf_ver(conf_ver);
+    cluster.refresh_region_bucket_keys(&region, vec![b"k11".to_vec()]);
+
+    let conf_ver = 0;
+    region.mut_region_epoch().set_conf_ver(conf_ver);
+    cluster.refresh_region_bucket_keys(&region, vec![b"k11".to_vec()]);
+}

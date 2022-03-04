@@ -71,7 +71,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask,
+    SplitCheckBucketRange, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -948,9 +949,10 @@ where
             }
             CasualMessage::RefreshRegionBuckets {
                 region_epoch,
-                bucket_keys,
+                buckets,
+                bucket_ranges,
             } => {
-                self.on_refresh_region_buckets(region_epoch, bucket_keys);
+                self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges);
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
@@ -4505,7 +4507,8 @@ where
             return;
         }
         self.fsm.skip_split_count = 0;
-        let task = SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan);
+        let task =
+            SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan, None);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
@@ -4641,9 +4644,15 @@ where
         self.register_pd_heartbeat_tick();
     }
 
-    fn on_refresh_region_buckets(&mut self, region_epoch: RegionEpoch, bucket_keys: Vec<Vec<u8>>) {
+    fn on_refresh_region_buckets(
+        &mut self,
+        region_epoch: RegionEpoch,
+        mut buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+    ) {
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+            println!("failed to check epoch stale");
             info!(
                 "receive a stale refresh region bucket message";
                 "region_id" => self.fsm.region_id(),
@@ -4653,15 +4662,58 @@ where
             );
             return;
         }
-        let mut region_buckets = Buckets::default();
-        region_buckets.version = timespec_to_ns(monotonic_raw_now());
-        region_buckets.set_keys(bucket_keys.into());
-        // add region's start/end key
-        region_buckets
-            .keys
-            .insert(0, region.get_start_key().to_vec());
-        region_buckets.keys.push(region.get_end_key().to_vec());
-        self.fsm.peer.region_buckets = region_buckets;
+
+        if let Some(bucket_ranges) = bucket_ranges {
+            assert_eq!(buckets.len(), bucket_ranges.len());
+            let mut region_buckets_keys = self.fsm.peer.region_buckets.keys.to_vec();
+            let mut region_buckets = Buckets::default();
+            region_buckets.version = timespec_to_ns(monotonic_raw_now());
+            let mut i = 0;
+            let mut j = 0;
+            let buckets = buckets.drain(..);
+            for mut bucket in buckets {
+                while i < region_buckets_keys.len() {
+                    if region_buckets_keys[i] == bucket_ranges[j].0 {
+                        if bucket.keys.is_empty()
+                            && bucket.size
+                                <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
+                        {
+                            region_buckets_keys.remove(i); // bucket is too small
+                        } else {
+                            for bucket_key in bucket.keys.drain(..) {
+                                region_buckets_keys.insert(i, bucket_key);
+                                i += 1;
+                            }
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                j += 1;
+            }
+
+            region_buckets.set_keys(region_buckets_keys.into());
+            if j == bucket_ranges.len() {
+                self.fsm.peer.region_buckets = region_buckets;
+            } else {
+                println!("on_refresh_region_buckets 123");
+            }
+        } else {
+            assert_eq!(buckets.len(), 1);
+            let bucket_keys = buckets.pop().unwrap().keys;
+            let mut region_buckets = Buckets::default();
+            let now = monotonic_raw_now();
+            const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+            region_buckets.version = (now.sec as u64) * NANOSECONDS_PER_SECOND + now.nsec as u64;
+            region_buckets.set_keys(bucket_keys.into());
+            // add region's start/end key
+            region_buckets
+                .keys
+                .insert(0, region.get_start_key().to_vec());
+            region_buckets.keys.push(region.get_end_key().to_vec());
+            self.fsm.peer.region_buckets = region_buckets;
+        }
+        println!("on_refresh_region_buckets done");
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
@@ -4705,7 +4757,7 @@ where
             return;
         }
 
-        let task = SplitCheckTask::split_check(region.clone(), false, policy);
+        let task = SplitCheckTask::split_check(region.clone(), false, policy, None);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";

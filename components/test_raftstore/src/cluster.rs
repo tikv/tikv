@@ -1620,6 +1620,28 @@ impl<T: Simulator> Cluster<T> {
         ctx.set_region_epoch(epoch);
         ctx
     }
+
+    pub fn refresh_region_bucket_keys(
+        &mut self,
+        region: &metapb::Region,
+        bucket_keys: Vec<Vec<u8>>,
+    ) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                buckets: vec![Bucket {
+                    keys: bucket_keys,
+                    size: 1024 * 1024 * 256,
+                }],
+                bucket_ranges: None,
+            },
+        )
+        .unwrap();
+    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {

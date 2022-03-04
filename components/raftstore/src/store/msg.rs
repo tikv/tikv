@@ -22,6 +22,7 @@ use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
+use crate::store::worker::{Bucket, SplitCheckBucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
@@ -381,7 +382,8 @@ pub enum CasualMessage<EK: KvEngine> {
     },
     RefreshRegionBuckets {
         region_epoch: RegionEpoch,
-        bucket_keys: Vec<Vec<u8>>,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
     },
 
     // Try renew leader lease

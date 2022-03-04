@@ -33,6 +33,9 @@ pub use self::refresh_config::{
     Runner as RefreshConfigRunner, Task as RefreshConfigTask, ThreadPool as RaftStoreThreadPool,
 };
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
-pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};
+pub use self::split_check::{
+    Bucket, BucketRange as SplitCheckBucketRange, KeyEntry, Runner as SplitCheckRunner,
+    Task as SplitCheckTask,
+};
 pub use self::split_config::{SplitConfig, SplitConfigManager};
 pub use self::split_controller::{AutoSplitController, ReadStats, WriteStats};

@@ -350,6 +350,7 @@ mod tests {
                     region.clone(),
                     true,
                     CheckPolicy::Scan,
+                    None,
                 ));
 
                 if let Some(id) = table_id {

@@ -49,6 +49,8 @@ pub struct Config {
     pub region_bucket_size: ReadableSize,
     // region size threshold for using approximate size instead of scan
     pub region_size_threshold_for_approximate: ReadableSize,
+    // bucket size threshold to merge with its left neighbor bucket
+    pub region_bucket_merge_size: ReadableSize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -69,8 +71,9 @@ pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(128);
 pub const DEFAULT_LARGE_REGION_SIZE_THRESHOLD: ReadableSize = ReadableSize::mb(500);
+pub const DEFAULT_BUCKET_MERGE_SIZE: ReadableSize = ReadableSize::mb(64);
 
 impl Default for Config {
     fn default() -> Config {
@@ -87,6 +90,7 @@ impl Default for Config {
             enable_region_bucket: false,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
             region_size_threshold_for_approximate: DEFAULT_LARGE_REGION_SIZE_THRESHOLD,
+            region_bucket_merge_size: DEFAULT_BUCKET_MERGE_SIZE,
         }
     }
 }
@@ -123,6 +127,16 @@ impl Config {
         }
         if self.region_bucket_size.0 == 0 {
             return Err(box_err!("region_bucket size cannot be 0."));
+        }
+        if self.region_bucket_merge_size.0 == 0 {
+            return Err(box_err!("region-bucket-merge-size cannot be 0."));
+        }
+        if self.region_bucket_merge_size.0 >= self.region_bucket_size.0 {
+            return Err(box_err!(
+                "region bucket size {} must > region bucket merge size {}",
+                self.region_bucket_size.0,
+                self.region_bucket_merge_size.0
+            ));
         }
         Ok(())
     }
