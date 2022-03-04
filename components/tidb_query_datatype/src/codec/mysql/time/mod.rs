@@ -2730,7 +2730,7 @@ mod tests {
 
             let now0 = c_datetime.timestamp_millis() as u64;
             let now1 = Utc::now().timestamp_millis() as u64;
-            assert_eq!(now1 - now0 < 1000, true);
+            assert!(now1 - now0 < 1000, "{:?} {:?}", now1, now0);
         }
         Ok(())
     }
