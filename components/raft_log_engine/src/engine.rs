@@ -13,13 +13,12 @@ use engine_traits::{
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+use raft_engine::env::{DefaultFileSystem, FileSystem, Handle, WriteExt};
 use raft_engine::{
-    env::FileSystem, Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch,
-    MessageExt,
+    Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 use tikv_util::Either;
 
-use raft_engine::env::{DefaultFileSystem, Handle, WriteExt};
 pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
 
 #[derive(Clone)]
@@ -179,9 +178,7 @@ impl FileSystem for ManagedFileSystem {
             .new_reader(handle.base.clone())?;
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
-                inner: Either::Right(
-                    key_manager.open_file_with_reader(handle.path.clone(), base_reader)?,
-                ),
+                inner: Either::Right(key_manager.open_file_with_reader(&handle.path, base_reader)?),
                 rate_limiter: self.rate_limiter.clone(),
             })
         } else {
@@ -200,7 +197,7 @@ impl FileSystem for ManagedFileSystem {
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedWriter {
                 inner: Either::Right(key_manager.open_file_with_writer(
-                    handle.path.clone(),
+                    &handle.path,
                     base_writer,
                     false,
                 )?),
