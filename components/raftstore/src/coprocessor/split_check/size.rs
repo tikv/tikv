@@ -164,7 +164,9 @@ where
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= host.cfg.region_max_size.0 {
+        if region_size >= host.cfg.region_max_size.0
+            || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
+        {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
@@ -172,7 +174,9 @@ where
                 "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit
+                || region_size >= host.cfg.region_size_threshold_for_approximate.0
+            {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
@@ -273,6 +277,7 @@ pub mod tests {
                     }
                     break;
                 }
+                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
                 others => panic!("expect split check result, but got {:?}", others),
             }
         }
@@ -284,6 +289,30 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    pub fn must_generate_buckets(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        exp_buckets_keys: Vec<Vec<u8>>,
+    ) {
+        loop {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    bucket_keys,
+                },
+            )) = rx.try_recv()
+            {
+                let mut i = 0;
+                assert_eq!(bucket_keys.len(), exp_buckets_keys.len());
+                while i < bucket_keys.len() {
+                    assert_eq!(bucket_keys[i], exp_buckets_keys[i]);
+                    i += 1
+                }
+                break;
+            }
+        }
     }
 
     fn test_split_check_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
@@ -402,12 +431,104 @@ pub mod tests {
         runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
     }
 
+    fn test_generate_bucket_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
+        let mut cf_opt = ColumnFamilyOptions::new();
+        cf_opt.set_no_range_properties(true);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                if cfs_with_range_prop.contains(cf) {
+                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
+                }
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: ReadableSize(50000),
+            region_split_size: ReadableSize(50000),
+            batch_split_limit: 5,
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(3000),
+            region_size_threshold_for_approximate: ReadableSize(50000),
+            ..Default::default()
+        };
+
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        for i in 0..2000 {
+            // kv size is (4+1)*2 = 10, given bucket size is 3000, expect each bucket has about 300 keys
+            let s = keys::data_key(format!("{:04}", i).as_bytes());
+            engine.put_cf(data_cf, &s, &s).unwrap();
+            if i % 10 == 0 && i > 0 {
+                engine.flush_cf(data_cf, true).unwrap();
+            }
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Approximate,
+        ));
+
+        loop {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    bucket_keys,
+                },
+            )) = rx.try_recv()
+            {
+                for i in 1..bucket_keys.len() - 2 {
+                    let start: i32 = std::str::from_utf8(&bucket_keys[i])
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let end: i32 = std::str::from_utf8(&bucket_keys[i + 1])
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    assert!(end - start >= 150 && end - start < 450);
+                }
+
+                break;
+            }
+        }
+        drop(rx);
+    }
+
     #[test]
     fn test_split_check() {
         test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
         test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
         for cf in LARGE_CFS {
             test_split_check_impl(LARGE_CFS, cf);
+        }
+    }
+
+    #[test]
+    fn test_generate_bucket_by_approximate() {
+        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
+        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
+        for cf in LARGE_CFS {
+            test_generate_bucket_impl(LARGE_CFS, cf);
         }
     }
 
