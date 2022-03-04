@@ -210,4 +210,3 @@ fn test_update_raftstore_config() {
 
     system.shutdown();
 }
-
