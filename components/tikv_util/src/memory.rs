@@ -8,7 +8,11 @@ use kvproto::{
 };
 use std::mem;
 
-// Transmute vec with types of same memory layout.
+// Transmute vec from one type to the other type.
+//
+// # Safety
+//
+// The two types should be with same memory layout.
 #[inline]
 pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
     debug_assert!(mem::size_of::<F>() == mem::size_of::<T>());
