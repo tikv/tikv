@@ -3,8 +3,8 @@
 // #[PerformanceCriticalPath]
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
@@ -19,21 +19,21 @@ use kvproto::raft_cmdpb::{
 use time::Timespec;
 
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use tikv_util::{debug, error};
 use tikv_util::codec::number::decode_u64;
 use tikv_util::lru::LruCache;
-use tikv_util::time::{Instant, ThreadReadId};
 use tikv_util::time::monotonic_raw_now;
+use tikv_util::time::{Instant, ThreadReadId};
+use tikv_util::{debug, error};
 
-use crate::Error;
 use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::Result;
-use crate::store::{
-    Callback, CasualMessage, CasualRouter, cmd_resp, Peer, ProposalRouter, RaftCommand,
-    ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
-};
 use crate::store::fsm::store::StoreMeta;
 use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
+use crate::store::{
+    cmd_resp, Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
+    ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+};
+use crate::Error;
+use crate::Result;
 
 use super::metrics::*;
 
@@ -403,9 +403,9 @@ impl Progress {
 }
 
 pub struct LocalReader<C, E>
-    where
-        C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
-        E: KvEngine,
+where
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
+    E: KvEngine,
 {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -421,9 +421,9 @@ pub struct LocalReader<C, E>
 }
 
 impl<C, E> ReadExecutor<E> for LocalReader<C, E>
-    where
-        C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
-        E: KvEngine,
+where
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
+    E: KvEngine,
 {
     fn get_engine(&self) -> &E {
         &self.kv_engine
@@ -448,9 +448,9 @@ impl<C, E> ReadExecutor<E> for LocalReader<C, E>
 }
 
 impl<C, E> LocalReader<C, E>
-    where
-        C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
-        E: KvEngine,
+where
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
+    E: KvEngine,
 {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -652,7 +652,7 @@ impl<C, E> LocalReader<C, E>
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
                         if let Err(resp) =
-                        delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
@@ -663,7 +663,7 @@ impl<C, E> LocalReader<C, E>
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) =
-                        delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
@@ -718,9 +718,9 @@ impl<C, E> LocalReader<C, E>
 }
 
 impl<C, E> Clone for LocalReader<C, E>
-    where
-        C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
-        E: KvEngine,
+where
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
+    E: KvEngine,
 {
     fn clone(&self) -> Self {
         LocalReader {
@@ -921,8 +921,8 @@ mod tests {
     use tikv_util::time::monotonic_raw_now;
     use txn_types::WriteBatchFlags;
 
-    use crate::store::Callback;
     use crate::store::util::Lease;
+    use crate::store::Callback;
 
     use super::*;
 
