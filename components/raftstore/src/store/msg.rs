@@ -379,6 +379,10 @@ pub enum CasualMessage<EK: KvEngine> {
     RejectRaftAppend {
         peer_id: u64,
     },
+    RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
+        bucket_keys: Vec<Vec<u8>>,
+    },
 
     // Try renew leader lease
     RenewLease,
@@ -437,6 +441,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
             }
+            CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
         }
     }
