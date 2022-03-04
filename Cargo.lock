@@ -97,9 +97,11 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "match_template",
+ "panic_hook",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
