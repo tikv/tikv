@@ -182,7 +182,9 @@ macro_rules! do_sleep {
         std::thread::sleep($duration);
     };
     ($duration:expr, async) => {
-        tokio::time::sleep($duration).await;
+        let wait =
+            tikv_util::timer::GLOBAL_TIMER_HANDLE.delay(std::time::Instant::now() + $duration);
+        let _ = futures::compat::Compat01As03::new(wait).await;
     };
     ($duration:expr, skewed_sync) => {
         use rand::Rng;
@@ -229,50 +231,6 @@ macro_rules! request_physical_imp {
                 }
             }
         }
-    }};
-}
-
-macro_rules! request_buffered_imp {
-    ($self:ident, $io_op:ident, $bytes:expr, $mode:tt) => {{
-        let mut ctx = io_stats::get_io_context();
-        let bytes = $bytes;
-        if $self.mode.contains($io_op) {
-            let priority = IOPriority::unsafe_from_u32(
-                $self.priority_map[ctx.io_type as usize].load(Ordering::Relaxed),
-            );
-            if $io_op == IOOp::Write || $self.batch_buffered_reads.is_none() {
-                request_physical_imp!($self, priority, bytes, $mode);
-            } else {
-                let batch = $self.batch_buffered_reads.unwrap();
-                if let Some((t, b)) = ctx.unprocessed_read_bytes.take() {
-                    let p = IOPriority::unsafe_from_u32(
-                        $self.priority_map[t as usize].load(Ordering::Relaxed),
-                    );
-                    request_physical_imp!($self, p, b, $mode);
-                }
-                ctx.outstanding_read_bytes += bytes;
-                if ctx.outstanding_read_bytes >= batch {
-                    let true_bytes = io_stats::fetch_thread_io_bytes().read;
-                    request_physical_imp!(
-                        $self,
-                        priority,
-                        std::cmp::min(
-                            true_bytes - ctx.total_read_bytes,
-                            // Just in case something went wrong with OS stats.
-                            ctx.outstanding_read_bytes * 2,
-                        ),
-                        sync
-                    );
-                    ctx.outstanding_read_bytes = 0;
-                    ctx.total_read_bytes = true_bytes;
-                }
-            }
-        }
-        io_stats::set_io_context(ctx);
-        if let Some(stats) = &$self.stats {
-            stats.record(ctx.io_type, $io_op, bytes);
-        }
-        bytes
     }};
 }
 
@@ -351,15 +309,59 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_op: IOOp, bytes: usize) -> usize {
-        request_buffered_imp!(self, io_op, bytes, sync)
+        let mut ctx = io_stats::get_io_context();
+        if self.mode.contains(io_op) {
+            let priority = IOPriority::unsafe_from_u32(
+                self.priority_map[ctx.io_type as usize].load(Ordering::Relaxed),
+            );
+            if io_op == IOOp::Write || self.batch_buffered_reads.is_none() {
+                request_physical_imp!(self, priority, bytes, sync);
+            } else {
+                let batch = self.batch_buffered_reads.unwrap();
+                if let Some((t, b)) = ctx.unprocessed_read_bytes.take() {
+                    let p = IOPriority::unsafe_from_u32(
+                        self.priority_map[t as usize].load(Ordering::Relaxed),
+                    );
+                    request_physical_imp!(self, p, b, sync);
+                }
+                ctx.outstanding_read_bytes += bytes;
+                if ctx.outstanding_read_bytes >= batch {
+                    let true_bytes = io_stats::fetch_thread_io_bytes().read;
+                    request_physical_imp!(
+                        self,
+                        priority,
+                        std::cmp::min(
+                            true_bytes - ctx.total_read_bytes,
+                            // Just in case something went wrong with OS stats.
+                            ctx.outstanding_read_bytes * 2,
+                        ),
+                        sync
+                    );
+                    ctx.outstanding_read_bytes = 0;
+                    ctx.total_read_bytes = true_bytes;
+                }
+            }
+            io_stats::set_io_context(ctx);
+        }
+        if let Some(stats) = &self.stats {
+            stats.record(ctx.io_type, io_op, bytes);
+        }
+        bytes
     }
 
     /// Asynchronously requests for token for bytes and potentially update
     /// statistics. If this request can not be satisfied, the call is blocked.
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
-    pub async fn async_request(&self, io_op: IOOp, bytes: usize) -> usize {
-        request_buffered_imp!(self, io_op, bytes, async)
+    /// The coroutine can potentially be scheduled away during the call. Thread
+    /// local I/O context will not be accessed in it. All requested bytes are
+    /// treated as physical I/Os without further scrutiny.
+    pub async fn async_request(&self, io_type: IOType, bytes: usize) -> usize {
+        let priority = IOPriority::unsafe_from_u32(
+            self.priority_map[io_type as usize].load(Ordering::Relaxed),
+        );
+        request_physical_imp!(self, priority, bytes, async);
+        bytes
     }
 
     #[cfg(test)]
