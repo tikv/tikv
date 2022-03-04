@@ -433,10 +433,10 @@ impl Config {
         }
 
         if self.raft_max_size_per_msg.0 == 0
-            || self.raft_max_size_per_msg.0 > ReadableSize::gb(32).0
+            || self.raft_max_size_per_msg.0 > ReadableSize::gb(3).0
         {
             return Err(box_err!(
-                "raft max size per message should be greater than 0 and less than or equal to 32GiB"
+                "raft max size per message should be greater than 0 and less than or equal to 3GiB"
             ));
         }
 
@@ -1019,7 +1019,7 @@ mod tests {
         assert!(cfg.validate().is_err());
         cfg.raft_max_size_per_msg = ReadableSize::gb(64);
         assert!(cfg.validate().is_err());
-        cfg.raft_max_size_per_msg = ReadableSize::gb(32);
+        cfg.raft_max_size_per_msg = ReadableSize::gb(3);
         assert!(cfg.validate().is_ok());
     }
 }
