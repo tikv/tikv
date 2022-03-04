@@ -161,4 +161,9 @@ lazy_static! {
         "Total number of renewing lease in advance from local reader."
     )
     .unwrap();
+    pub static ref LOCAL_READ_RENEW_LEASE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_rafstore_local_read_renew_duration_seconds",
+        "Bucketed histogram of renewing lease duration of local reader"
+    )
+    .unwrap();
 }

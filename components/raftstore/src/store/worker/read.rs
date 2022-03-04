@@ -18,7 +18,15 @@ use kvproto::raft_cmdpb::{
 };
 use time::Timespec;
 
+use engine_traits::{KvEngine, RaftEngine, Snapshot};
+use tikv_util::codec::number::decode_u64;
+use tikv_util::lru::LruCache;
+use tikv_util::time::monotonic_raw_now;
+use tikv_util::time::{Instant, ThreadReadId};
+use tikv_util::{debug, error};
+
 use crate::errors::RAFTSTORE_IS_BUSY;
+use crate::store::fsm::store::StoreMeta;
 use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
@@ -27,15 +35,7 @@ use crate::store::{
 use crate::Error;
 use crate::Result;
 
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use tikv_util::codec::number::decode_u64;
-use tikv_util::lru::LruCache;
-use tikv_util::time::monotonic_raw_now;
-use tikv_util::time::{Instant, ThreadReadId};
-use tikv_util::{debug, error};
-
 use super::metrics::*;
-use crate::store::fsm::store::StoreMeta;
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
@@ -467,7 +467,7 @@ where
     }
 
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
-        debug!("localreader redirects command"; "command" => ?cmd);
+        debug!("local reader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
         match ProposalRouter::send(&self.router, cmd) {
@@ -626,8 +626,16 @@ where
                             None => monotonic_raw_now(),
                         };
                         if !delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                            let start = Instant::now();
                             // Forward to raftstore.
-                            self.redirect(RaftCommand::new(req, cb));
+                            self.redirect(RaftCommand::new(
+                                req,
+                                Callback::Read(Box::new(move |resp| {
+                                    LOCAL_READ_RENEW_LEASE_DURATION_HISTOGRAM
+                                        .observe(start.saturating_elapsed_secs());
+                                    cb.invoke_read(resp);
+                                })),
+                            ));
                             return;
                         }
                         let response = self.execute(&req, &delegate.region, None, read_id);
@@ -907,13 +915,14 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use time::Duration;
 
-    use crate::store::util::Lease;
-    use crate::store::Callback;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::ALL_CFS;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::time::monotonic_raw_now;
     use txn_types::WriteBatchFlags;
+
+    use crate::store::util::Lease;
+    use crate::store::Callback;
 
     use super::*;
 
