@@ -261,7 +261,7 @@ pub enum HandleResult {
     KeepProcessing,
     /// The Fsm should stop at the progress.
     StopAt {
-        /// The count of messages that have been acknowleged by handler. The fsm should be
+        /// The count of messages that have been acknowledged by handler. The fsm should be
         /// released until new messages arrive.
         progress: usize,
         /// Whether the fsm should be released before `end`.

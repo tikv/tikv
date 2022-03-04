@@ -22,7 +22,7 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Region, RegionEpoch};
+use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
 use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
@@ -45,7 +45,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, timespec_to_ns, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -945,6 +945,12 @@ where
             }
             CasualMessage::RegionApproximateKeys { keys } => {
                 self.on_approximate_region_keys(keys);
+            }
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch,
+                bucket_keys,
+            } => {
+                self.on_refresh_region_buckets(region_epoch, bucket_keys);
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
@@ -3210,10 +3216,8 @@ where
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
-            if util::is_epoch_stale(
-                target_region.get_region_epoch(),
-                target_state.get_region().get_region_epoch(),
-            ) {
+            let state_epoch = target_state.get_region().get_region_epoch();
+            if util::is_epoch_stale(target_region.get_region_epoch(), state_epoch) {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
@@ -3238,6 +3242,10 @@ where
                         );
                     }
                     cmp::Ordering::Greater => {
+                        if state_epoch.get_version() == 0 && state_epoch.get_conf_ver() == 0 {
+                            // There is a new peer and it's destroyed without being initialised.
+                            return Ok(true);
+                        }
                         // The local target peer id is greater than the one in target region, but its epoch
                         // is staler than target_region's. That is contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
@@ -4633,6 +4641,29 @@ where
         self.fsm.peer.approximate_keys = Some(keys);
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
+    }
+
+    fn on_refresh_region_buckets(&mut self, region_epoch: RegionEpoch, bucket_keys: Vec<Vec<u8>>) {
+        let region = self.fsm.peer.region();
+        if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+            info!(
+                "receive a stale refresh region bucket message";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "epoch" => ?region_epoch,
+                "current_epoch" => ?region.get_region_epoch(),
+            );
+            return;
+        }
+        let mut region_buckets = Buckets::default();
+        region_buckets.version = timespec_to_ns(monotonic_raw_now());
+        region_buckets.set_keys(bucket_keys.into());
+        // add region's start/end key
+        region_buckets
+            .keys
+            .insert(0, region.get_start_key().to_vec());
+        region_buckets.keys.push(region.get_end_key().to_vec());
+        self.fsm.peer.region_buckets = region_buckets;
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

@@ -842,7 +842,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         self.resolved_region_count = resolved_regions.heap.len();
         self.unresolved_region_count = total_region_count - self.resolved_region_count;
 
-        // Separate broadcasing outlier regions and normal regions,
+        // Separate broadcasting outlier regions and normal regions,
         // so 1) downstreams know where they should send resolve lock requests,
         // and 2) resolved ts of normal regions does not fallback.
         //
@@ -1393,7 +1393,7 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         if let Some(barrier) = barrier {
-            // CDC needs to make sure resovled ts events can only be sent after
+            // CDC needs to make sure resolved ts events can only be sent after
             // incremental scan is finished.
             // Wait the barrier to ensure tikv sends out all scan events.
             let _ = barrier.await;

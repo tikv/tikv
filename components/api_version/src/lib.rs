@@ -83,7 +83,7 @@ macro_rules! match_template_api_version {
      }}
 }
 
-/// The key mode infered from the key prefix.
+/// The key mode inferred from the key prefix.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum KeyMode {
     /// Raw key.
@@ -442,23 +442,18 @@ mod tests {
 
     #[test]
     fn test_v2_key_decode_err() {
-        let cases: Vec<(Vec<u8>, bool, &str)> = vec![
+        let cases: Vec<(Vec<u8>, bool)> = vec![
             // Invalid prefix
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], false, "panic"),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], false),
             // Memcomparable-encoded padding: n * 9 + Optional 8
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], false, "panic"),
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], false, "panic"),
-            (
-                vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-                true,
-                "panic",
-            ),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], false),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], false),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], true),
             (
                 vec![
                     b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
                 ],
                 true,
-                "panic",
             ),
             (
                 vec![
@@ -466,44 +461,23 @@ mod tests {
                     0, 0, 1, 0,
                 ],
                 true,
-                "panic",
             ),
             // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
-            (
-                vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb],
-                false,
-                "Codec(KeyPadding)",
-            ),
-            (
-                vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6],
-                false,
-                "Codec(KeyPadding)",
-            ),
+            (vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb], false),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6], false),
         ];
 
-        for (idx, (bytes, with_ts, expected_err)) in cases.into_iter().enumerate() {
-            if expected_err == "panic" {
-                let res = vec![
-                    panic_hook::recover_safe(|| {
-                        let _ = APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
-                    }),
-                    panic_hook::recover_safe(|| {
-                        let _ = APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
-                    }),
-                ];
-                for r in res {
-                    assert!(r.is_err(), "case {}: {:?}", idx, r);
-                }
-            } else {
-                let res = vec![
-                    APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts),
-                    APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts),
-                ];
-                for r in res {
-                    assert!(r.is_err(), "case {}: {:?}", idx, r);
-                    let err_str = format!("{:?}", r.unwrap_err());
-                    assert!(err_str.contains(expected_err), "case {}: {}", idx, err_str);
-                }
+        for (idx, (bytes, with_ts)) in cases.into_iter().enumerate() {
+            let res = vec![
+                panic_hook::recover_safe(|| {
+                    let _ = APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
+                }),
+                panic_hook::recover_safe(|| {
+                    let _ = APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
+                }),
+            ];
+            for r in res {
+                assert!(r.is_err(), "case {}: {:?}", idx, r);
             }
         }
     }
