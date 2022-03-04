@@ -7,7 +7,7 @@ use super::{BytesSlice, Error, Result};
 use crate::codec::number::{self, NumberEncoder};
 use std::ptr;
 
-pub const ENC_GROUP_SIZE: usize = 8;
+const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
 const ENC_ASC_PADDING: [u8; ENC_GROUP_SIZE] = [0; ENC_GROUP_SIZE];
 const ENC_DESC_PADDING: [u8; ENC_GROUP_SIZE] = [!0; ENC_GROUP_SIZE];
