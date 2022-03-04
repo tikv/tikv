@@ -22,7 +22,7 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
+use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
@@ -34,7 +34,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
-use pd_client::merge_bucket_stats;
+use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
@@ -1570,7 +1570,7 @@ where
                 }
                 let applied_index = res.apply_state.applied_index;
                 if let Some(delta) = res.buckets {
-                    let buckets = self.fsm.peer.buckets.as_mut().unwrap();
+                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
                     merge_bucket_stats(
                         &buckets.meta.keys,
                         &mut buckets.stats,
@@ -4665,15 +4665,17 @@ where
             );
             return;
         }
-        let mut region_buckets = Buckets::default();
-        region_buckets.version = timespec_to_ns(monotonic_raw_now());
-        region_buckets.set_keys(bucket_keys.into());
-        // add region's start/end key
-        region_buckets
-            .keys
-            .insert(0, region.get_start_key().to_vec());
-        region_buckets.keys.push(region.get_end_key().to_vec());
-        self.fsm.peer.region_buckets = region_buckets;
+        let mut meta = BucketMeta {
+            region_id: self.fsm.region_id(),
+            region_epoch,
+            version: timespec_to_ns(monotonic_raw_now()),
+            keys: bucket_keys,
+        };
+        meta.keys.insert(0, region.get_start_key().to_vec());
+        meta.keys.push(region.get_end_key().to_vec());
+        let stats = new_bucket_stats(&meta);
+        let region_buckets = BucketStat::new(Arc::new(meta), stats);
+        self.fsm.peer.region_buckets = Some(region_buckets);
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

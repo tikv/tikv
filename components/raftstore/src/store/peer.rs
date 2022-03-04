@@ -19,7 +19,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, Buckets, PeerRole};
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
@@ -607,7 +607,7 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub buckets: Option<BucketStat>,
+    pub region_buckets: Option<BucketStat>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -732,7 +732,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
-            buckets: None,
+            region_buckets: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2372,7 +2372,7 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
-                self.buckets.as_ref().map(|b| b.meta.clone()),
+                self.region_buckets.as_ref().map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
