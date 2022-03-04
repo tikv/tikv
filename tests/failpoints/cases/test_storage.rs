@@ -331,6 +331,8 @@ fn test_scale_scheduler_pool() {
 
     // do prewrite again, as we scale another worker, this request should success
     do_prewrite(b"k2", b"v2").unwrap().unwrap();
+
+    fail::remove(snapshot_fp);
 }
 
 #[test]
