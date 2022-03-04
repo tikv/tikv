@@ -148,6 +148,7 @@ mod tests {
                 let v = RawValue {
                     user_value: &[0; 10][..],
                     expire_ts: Some(ts),
+                    is_delete: None,
                 };
                 collector.add(
                     k.as_bytes(),

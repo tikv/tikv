@@ -24,15 +24,16 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>>;
     /// This is equivalent to `decode_raw_value()` but returns the owned user value.
     fn decode_raw_value_owned(mut bytes: Vec<u8>) -> Result<RawValue<Vec<u8>>> {
-        let (len, expire_ts) = {
+        let (len, expire_ts, is_delete) = {
             let raw_value = Self::decode_raw_value(&bytes)?;
-            (raw_value.user_value.len(), raw_value.expire_ts)
+            (raw_value.user_value.len(), raw_value.expire_ts, raw_value.is_delete)
         };
         // The user value are always the first part in encoded bytes.
         bytes.truncate(len);
         Ok(RawValue {
             user_value: bytes,
             expire_ts,
+            is_delete,
         })
     }
     /// Encode the raw value and it's metadata into bytes.
@@ -149,6 +150,8 @@ pub struct RawValue<T: AsRef<[u8]>> {
     pub user_value: T,
     /// The unix timestamp in seconds indicating the point of time that this key will be deleted.
     pub expire_ts: Option<u64>,
+    /// Logical deletion flag in apiv2, should be None in APIV1 and APIV1ttl
+    pub is_delete: Option<bool>,
 }
 
 #[cfg(test)]
@@ -331,8 +334,8 @@ mod tests {
             (vec![1], ApiVersion::V2),
             (vec![1, 2, 3, 4, 5, 6, 7, 1], ApiVersion::V2),
             // Undefined flag.
-            (vec![2], ApiVersion::V2),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 2], ApiVersion::V2),
+            (vec![4], ApiVersion::V2),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 4], ApiVersion::V2),
         ];
 
         for (bytes, api_version) in cases {
@@ -354,6 +357,10 @@ mod tests {
         encoded_bytes: &[u8],
         api_version: ApiVersion,
     ) {
+        let is_delete = match api_version {
+            ApiVersion::V2 => Some(false),
+            _ => None,
+        };
         match_template_api_version!(
             API,
             match api_version {
@@ -361,6 +368,7 @@ mod tests {
                     let raw_value = RawValue {
                         user_value,
                         expire_ts,
+                        is_delete,
                     };
                     assert_eq!(&API::encode_raw_value(raw_value), encoded_bytes);
                     assert_eq!(API::decode_raw_value(encoded_bytes).unwrap(), raw_value);
@@ -368,6 +376,7 @@ mod tests {
                     let raw_value = RawValue {
                         user_value: user_value.to_vec(),
                         expire_ts,
+                        is_delete,
                     };
                     assert_eq!(
                         API::encode_raw_value_owned(raw_value.clone()),
@@ -515,5 +524,42 @@ mod tests {
                 }
             }
         )
+    }
+
+    #[test]
+    fn test_raw_value_encode_delete() {
+        let positive_cases = vec![
+            // only deletion flag.
+            (vec![2], ApiVersion::V2),
+            // deletion flag with value.
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 2], ApiVersion::V2),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 3], ApiVersion::V2),
+        ];
+
+        for (bytes, api_version) in positive_cases {
+            let raw_value =  match api_version {
+                ApiVersion::V2 => APIV2::decode_raw_value(&bytes),
+                ApiVersion::V1 => APIV1::decode_raw_value(&bytes),
+                ApiVersion::V1ttl => APIV1TTL::decode_raw_value(&bytes),
+            }.unwrap();
+            assert_eq!(raw_value.is_delete.map_or(false, |v| v), true);
+        }
+
+        let negative_cases = vec![
+            (vec![2], ApiVersion::V1),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 2], ApiVersion::V1ttl),
+            // deletion flag with value.
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 0], ApiVersion::V2),
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 1], ApiVersion::V2),
+        ];
+
+        for (bytes, api_version) in negative_cases {
+            let raw_value =  match api_version {
+                ApiVersion::V2 => APIV2::decode_raw_value(&bytes),
+                ApiVersion::V1 => APIV1::decode_raw_value(&bytes),
+                ApiVersion::V1ttl => APIV1TTL::decode_raw_value(&bytes),
+            }.unwrap();
+            assert_eq!(raw_value.is_delete.map_or(false, |v| v), false);
+        }
     }
 }
