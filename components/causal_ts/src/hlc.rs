@@ -132,3 +132,28 @@ impl CausalTsProvider for HlcProvider {
         Ok(())
     }
 }
+
+/// A causal timestamp provider by HLC for TEST.
+#[derive(Default)]
+pub struct TestHlcProvider {
+    hlc: Arc<Hlc>,
+}
+
+// impl TestHlcProvider {
+//     pub fn new() -> Self {
+//         Self {
+//             hlc: Arc::new(Hlc::default()),
+//         }
+//     }
+// }
+
+impl CausalTsProvider for TestHlcProvider {
+    fn get_ts(&self) -> Result<TimeStamp> {
+        Ok(self.hlc.next())
+    }
+
+    fn advance(&self, to: TimeStamp) -> Result<()> {
+        self.hlc.advance(to);
+        Ok(())
+    }
+}

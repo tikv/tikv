@@ -2646,8 +2646,11 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             self.engine.clone(),
         );
 
-        let pd_client = Arc::new(test_raftstore::TestPdClient::new(0, true));
-        let causal_ts_provider = TsoSimpleProvider::new(pd_client);
+        let causal_ts_provider = if let ApiVersion::APIV2 = self.config.api_version() {
+            Some(Arc::new(causal_ts::TestHlcProvider::default()))
+        } else {
+            None
+        };
 
         Storage::from_engine(
             self.engine,
@@ -2662,7 +2665,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             self.resource_tag_factory,
-            Some(Arc::new(causal_ts_provider)),
+            causal_ts_provider,
         )
     }
 
