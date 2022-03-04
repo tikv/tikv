@@ -1536,6 +1536,14 @@ fn test_stale_message_after_merge() {
     pd_client.must_add_peer(left.get_id(), new_peer(3, 1004));
     pd_client.must_merge(left.get_id(), right.get_id());
 
+    // Such stale message can be sent due to network error, consider the following example:
+    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send `RequestVote`
+    //    message to peer 1001, and fail due to network error, but this message is keep backoff-retry to send out
+    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004 on store 3, then the region is
+    //    merged into other region, the merge can success because peer 1002 can reach both peer 1001 and peer 1004
+    // 3. Network recover, so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
+    //
+    // the backoff-retry of a stale message is hard to simulated in test, so here just send this stale message directly
     let mut raft_msg = RaftMessage::default();
     raft_msg.set_region_id(left.get_id());
     raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());
