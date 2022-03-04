@@ -599,11 +599,12 @@ impl StoreMsgHandler {
     }
 
     fn on_update_safe_ts(&mut self) {
-        self.ctx
-            .global
-            .pd_scheduler
-            .schedule(PdTask::UpdateSafeTS)
-            .unwrap();
+        if let Err(e) = self.ctx.global.pd_scheduler.schedule(PdTask::UpdateSafeTS) {
+            error!("update safe ts failed";
+                "store_id" => self.store.id,
+                "err" => ?e
+            );
+        }
         self.store.ticker.schedule_store(STORE_TICK_UPDATE_SAFE_TS);
     }
 

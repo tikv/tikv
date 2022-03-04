@@ -157,6 +157,9 @@ impl kvengine::RecoverHandler for RecoverHandler {
                         }
                         if rejected || !meta.is_duplicated_change_set(&mut cs) {
                             // We don't have a background region worker now, should do it synchronously.
+                            if !rejected {
+                                engine.pre_load_files(&cs)?;
+                            }
                             engine.apply_change_set(cs)?;
                         }
                     } else {
