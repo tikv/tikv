@@ -25,6 +25,7 @@ use std::{
     u64,
 };
 
+use causal_ts::CausalTsProvider;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -43,7 +44,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    resource_usage_agent::create_resource_metering_pub_sub,
+    kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -666,15 +667,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
 
         // Create causal timestamp provider
-        let causal_ts_provider = if let ApiVersion::V2 = self.config.storage.api_version() {
-            let hlc = causal_ts::HlcProvider::new(self.pd_client.clone());
-            if let Err(e) = block_on(hlc.init()) {
-                panic!("HLC initialize failed: {:?}", e);
-            }
-            Some(Arc::new(hlc))
-        } else {
-            None
-        };
+        let causal_ts_provider: Option<Arc<dyn CausalTsProvider>> =
+            if let ApiVersion::V2 = self.config.storage.api_version() {
+                let hlc = causal_ts::HlcProvider::new(self.pd_client.clone());
+                if let Err(e) = block_on(hlc.init()) {
+                    panic!("Causal timestamp provider initialize failed: {:?}", e);
+                }
+                info!("Causal timestamp startup.");
+                Some(Arc::new(hlc))
+            } else {
+                None
+            };
 
         let storage = create_raft_storage(
             engines.engine.clone(),
@@ -686,7 +689,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_controller,
             pd_sender.clone(),
             resource_tag_factory.clone(),
-            causal_ts_provider,
+            causal_ts_provider.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -721,6 +724,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ));
             cop_read_pools.handle()
         };
+
+        // Register causal timestamp observer.
+        if let Some(causal_ts_provider) = causal_ts_provider {
+            let causal_manager = Arc::new(causal_ts::RegionsCausalManager::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_manager, causal_ts_provider);
+            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        }
 
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());

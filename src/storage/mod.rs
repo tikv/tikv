@@ -81,7 +81,7 @@ use crate::storage::{
 };
 
 use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
-use causal_ts::{CausalTsProvider, HlcProvider, TsoSimpleProvider};
+use causal_ts::{self, CausalTsProvider};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -91,6 +91,7 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -1642,7 +1643,40 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
+    /// Build `pre_propose_cb` for API V2 raw write requests.
+    /// `pre_propose_cb` ingests causal timestamp into key in Raft pre-propose phase in Raftstore.
+    /// For a key, Raft pre-propose phase is single-threaded,
+    /// which will ensure that order of timestamp is consistent with sequence of Raft commands,
+    /// and maintain the "causality consistency" of the timestamp.
+    /// See https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
+    fn _build_raw_write_pre_propose_cb(
+        &self,
+    ) -> Option<Box<dyn FnOnce(&mut [RaftRequest]) + Send>> {
+        if let ApiVersion::V2 = self.api_version {
+            let causal_ts_provider = self.causal_ts_provider.as_ref().unwrap().clone();
+            Some(Box::new(move |requests: &mut [RaftRequest]| {
+                for req in requests {
+                    debug_assert!(matches!(req.get_cmd_type(), CmdType::Put));
+                    let ts = causal_ts_provider.get_ts().unwrap(); // `get_ts()` must not fail.
+                    api_version::APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts);
+
+                    debug!(
+                        "raw_write::pre_propose_cb";
+                        "ts" => ts,
+                        "key" => &log_wrappers::Value::key(req.get_put().get_key()),
+                        // "value" => &log_wrappers::Value::value(req.get_put().get_value()),
+                    );
+                }
+            }))
+        } else {
+            None
+        }
+    }
+
     /// Write a raw key to the storage.
+    // RawKV API V2 TODO:
+    // 1. Invoke API::encode_raw_key_owned(key) to get encoded key
+    // 2. Build "pre_propose_cb" (= self.build_raw_write_pre_propose_cb()) and pass to "async_write_ext"
     pub fn raw_put(
         &self,
         ctx: Context,
@@ -1683,10 +1717,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
-        self.engine.async_write(
+        let pre_propose_cb = None;
+        self.engine.async_write_ext(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
+            pre_propose_cb,
+            None,
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -2639,18 +2677,21 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
+    fn new_causal_ts_provider(&self) -> Option<Arc<dyn CausalTsProvider>> {
+        if let ApiVersion::V2 = self.config.api_version() {
+            Some(Arc::new(causal_ts::TestHlcProvider::default()))
+        } else {
+            None
+        }
+    }
+
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
+        let causal_ts_provider = self.new_causal_ts_provider();
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-
-        let causal_ts_provider = if let ApiVersion::APIV2 = self.config.api_version() {
-            Some(Arc::new(causal_ts::TestHlcProvider::default()))
-        } else {
-            None
-        };
 
         Storage::from_engine(
             self.engine,
@@ -2670,6 +2711,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L>> {
+        let causal_ts_provider = self.new_causal_ts_provider();
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -2692,6 +2734,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            causal_ts_provider,
         )
     }
 }

@@ -282,7 +282,6 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::AssertionLevel;
-    use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
     use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
@@ -290,6 +289,7 @@ mod tests {
     use tikv::storage::txn::tests::*;
     use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
     use tikv::storage::Engine;
+    use tikv_kv::modifies_to_requests;
     use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 

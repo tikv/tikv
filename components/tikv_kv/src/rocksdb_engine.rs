@@ -21,11 +21,12 @@ use txn_types::{Key, Value};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
-    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
+    modifies_to_requests, write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
+    ExtCallback, Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
+use raftstore::store::msg::RaftRequestCallback;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -179,7 +180,7 @@ impl Engine for RocksEngine {
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None)
+        self.async_write_ext(ctx, batch, cb, None, None, None)
     }
 
     fn async_write_ext(
@@ -187,6 +188,7 @@ impl Engine for RocksEngine {
         _: &Context,
         batch: WriteData,
         cb: Callback<()>,
+        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -194,6 +196,10 @@ impl Engine for RocksEngine {
 
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
+        }
+        if let Some(cb) = pre_propose_cb {
+            let mut reqs = modifies_to_requests(batch.modifies.clone());
+            cb(&mut reqs);
         }
         if let Some(cb) = proposed_cb {
             cb();

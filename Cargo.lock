@@ -5145,6 +5145,7 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "backtrace",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",

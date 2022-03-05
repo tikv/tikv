@@ -63,7 +63,7 @@ use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::memory::*;
 use crate::store::metrics::*;
-use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
+use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage, RaftRequestCallback};
 use crate::store::peer::{
     ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
@@ -160,7 +160,7 @@ where
     has_proposed_cb: bool,
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<Callback<E::Snapshot>>,
+    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -422,6 +422,7 @@ where
     }
 
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
+        let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
             mut callback,
@@ -441,7 +442,7 @@ where
                 callback.invoke_proposed();
             }
         }
-        self.callbacks.push(callback);
+        self.callbacks.push((callback, req_num));
         self.batch_req_size += req_size as u64;
     }
 
@@ -459,6 +460,34 @@ where
         false
     }
 
+    fn build_pre_propose_cb(
+        cbs: &mut [(Callback<E::Snapshot>, usize)],
+    ) -> Option<RaftRequestCallback> {
+        let mut intervals: Vec<(usize, usize)> = Vec::new();
+        let mut pre_propose_cbs: Vec<RaftRequestCallback> = Vec::new();
+        let mut last_idx = 0;
+        for (cb, req_num) in cbs.iter_mut() {
+            if let Callback::Write { pre_propose_cb, .. } = cb {
+                if let Some(cb) = pre_propose_cb.take() {
+                    pre_propose_cbs.push(cb);
+                    intervals.push((last_idx, last_idx + *req_num));
+                }
+            }
+            last_idx += *req_num;
+        }
+
+        if pre_propose_cbs.is_empty() {
+            None
+        } else {
+            Some(Box::new(move |requests| {
+                for (i, cb) in pre_propose_cbs.into_iter().enumerate() {
+                    let (start, end) = intervals[i];
+                    cb(&mut requests[start..end]);
+                }
+            }))
+        }
+    }
+
     fn build(
         &mut self,
         metric: &mut RaftMetrics,
@@ -468,15 +497,16 @@ where
             self.has_proposed_cb = false;
             self.propose_checked = None;
             if self.callbacks.len() == 1 {
-                let cb = self.callbacks.pop().unwrap();
+                let (cb, _) = self.callbacks.pop().unwrap();
                 return Some((req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
+            let pre_propose_cb = Self::build_pre_propose_cb(&mut cbs);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { proposed_cb, .. } = cb {
+                    if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
                         proposed_cb.take()
                     } else {
                         None
@@ -495,7 +525,7 @@ where
             let committed_cbs: Vec<_> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { committed_cb, .. } = cb {
+                    if let Callback::Write { committed_cb, .. } = &mut cb.0 {
                         committed_cb.take()
                     } else {
                         None
@@ -515,7 +545,7 @@ where
             let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = cb {
+                    if let Callback::Write { request_times, .. } = &mut cb.0 {
                         Some(request_times[0])
                     } else {
                         None
@@ -525,12 +555,13 @@ where
 
             let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
-                    for cb in cbs {
+                    for (cb, _) in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
                         cb.invoke_with_response(cmd_resp);
                     }
                 }),
+                pre_propose_cb,
                 proposed_cb,
                 committed_cb,
             );
@@ -721,7 +752,7 @@ where
             if self.fsm.peer.will_likely_propose(&cmd) {
                 self.fsm.batch_req_builder.propose_checked = Some(true);
                 for cb in &mut self.fsm.batch_req_builder.callbacks {
-                    cb.invoke_proposed();
+                    cb.0.invoke_proposed();
                 }
             }
         }
@@ -5216,7 +5247,7 @@ mod memtrace {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     use crate::store::local_metrics::RaftMetrics;
@@ -5290,12 +5321,23 @@ mod tests {
         q.set_put(put);
         req.mut_requests().push(q);
         let mut cbs_flags = vec![];
+        let mut pre_propose_cbs_flags = vec![];
         let mut proposed_cbs_flags = vec![];
         let mut committed_cbs_flags = vec![];
         let mut response = RaftCmdResponse::default();
         for i in 0..10 {
             let flag = Arc::new(AtomicBool::new(false));
             cbs_flags.push(flag.clone());
+            // Some commands don't have pre_propose_cb.
+            let pre_propose_cb: Option<RaftRequestCallback> = if i % 2 == 0 || i % 3 == 0 {
+                let pre_propose_flag = Arc::new(AtomicBool::new(false));
+                pre_propose_cbs_flags.push(pre_propose_flag.clone());
+                Some(Box::new(move |_| {
+                    pre_propose_flag.store(true, Ordering::Release);
+                }))
+            } else {
+                None
+            };
             // Some commands don't have proposed_cb.
             let proposed_cb: Option<ExtCallback> = if i % 2 == 0 {
                 let proposed_flag = Arc::new(AtomicBool::new(false));
@@ -5319,6 +5361,7 @@ mod tests {
                 Box::new(move |_resp| {
                     flag.store(true, Ordering::Release);
                 }),
+                pre_propose_cb,
                 proposed_cb,
                 committed_cb,
             );
@@ -5326,7 +5369,11 @@ mod tests {
             let cmd = RaftCommand::new(req.clone(), cb);
             builder.add(cmd, 100);
         }
-        let (request, mut callback) = builder.build(&mut metric).unwrap();
+        let (mut request, mut callback) = builder.build(&mut metric).unwrap();
+        callback.invoke_pre_propose(request.mut_requests());
+        for flag in pre_propose_cbs_flags {
+            assert!(flag.load(Ordering::Acquire));
+        }
         callback.invoke_proposed();
         for flag in proposed_cbs_flags {
             assert!(flag.load(Ordering::Acquire));
@@ -5340,5 +5387,88 @@ mod tests {
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
+    }
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder_pre_propose_cb() {
+        let testcases: Vec<Vec<(&[u8], &[u8])>> = vec![
+            vec![(b"k1", b"v1")],
+            vec![(b"k22", b"v22"), (b"k333", b"v333"), (b"k4444", b"v4444")],
+            vec![],
+            vec![(b"k55555", b"v55555")],
+        ];
+        let invoke_count = Arc::new(AtomicU64::default());
+        let key_count = Arc::new(AtomicU64::default());
+        let value_total_size = Arc::new(AtomicU64::default());
+
+        let mut cfg = Config::default();
+        cfg.raft_entry_max_size = ReadableSize(1000);
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+        let mut q = Request::default();
+        let mut metric = RaftMetrics::new(true);
+
+        let mut expect_invoke_count: u64 = 0;
+        let mut expect_key_count: u64 = 0;
+        let mut expect_value_total_size: u64 = 0;
+        for reqs in &testcases {
+            if !reqs.is_empty() {
+                expect_invoke_count += 1;
+                for r in reqs {
+                    expect_key_count += 1;
+                    expect_value_total_size += r.1.len() as u64;
+                }
+            }
+        }
+
+        for reqs in testcases {
+            if !reqs.is_empty() {
+                let mut req = RaftCmdRequest::default();
+                for r in reqs {
+                    let mut put = PutRequest::default();
+                    put.set_key(r.0.to_vec());
+                    put.set_value(r.1.to_vec());
+                    q.set_cmd_type(CmdType::Put);
+                    q.set_put(put);
+                    req.mut_requests().push(q.clone());
+                    let _ = q.take_put();
+                }
+                let req_size = req.compute_size();
+
+                let invoke_count = invoke_count.clone();
+                let key_count = key_count.clone();
+                let value_total_size = value_total_size.clone();
+                let cb = Callback::write_ext(
+                    Box::new(move |_| {}),
+                    Some(Box::new(move |reqs| {
+                        let _ = invoke_count.fetch_add(1, Ordering::Release);
+                        for r in reqs {
+                            let _ = key_count.fetch_add(1, Ordering::Release);
+                            let _ = value_total_size
+                                .fetch_add(r.get_put().get_value().len() as u64, Ordering::Release);
+                        }
+                    })),
+                    None,
+                    None,
+                );
+                let cmd = RaftCommand::new(req, cb);
+                builder.add(cmd, req_size);
+            } else {
+                let mut req = RaftCmdRequest::default();
+                req.set_admin_request(AdminRequest::default());
+                let cb = Callback::write(Box::new(move |_| {}));
+                let cmd = RaftCommand::new(req, cb);
+                builder.add(cmd, 0);
+            }
+        }
+
+        let (mut request, mut callback) = builder.build(&mut metric).unwrap();
+        callback.invoke_pre_propose(request.mut_requests());
+
+        assert_eq!(expect_invoke_count, invoke_count.load(Ordering::Acquire));
+        assert_eq!(expect_key_count, key_count.load(Ordering::Acquire));
+        assert_eq!(
+            expect_value_total_size,
+            value_total_size.load(Ordering::Acquire)
+        );
     }
 }

@@ -16,16 +16,14 @@ use raft::eraftpb::{self, MessageType};
 use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_LOCK};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
     metapb,
-    raft_cmdpb::{
-        CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-        RaftRequestHeader, Request, Response,
-    },
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
+use raftstore::store::msg::RaftRequestCallback;
 use raftstore::{
     coprocessor::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
@@ -37,6 +35,7 @@ use raftstore::{
         RegionSnapshot, WriteResponse,
     },
 };
+use tikv_kv::modifies_to_requests;
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
@@ -229,6 +228,7 @@ where
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<CmdRes<E::Snapshot>>,
+        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -271,6 +271,7 @@ where
             Box::new(move |resp| {
                 write_cb(on_write_result(resp).map_err(Error::into));
             }),
+            pre_propose_cb,
             proposed_cb,
             committed_cb,
         );
@@ -367,7 +368,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
     ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None)
+        self.async_write_ext(ctx, batch, write_cb, None, None, None)
     }
 
     fn async_write_ext(
@@ -375,6 +376,7 @@ where
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<()>,
+        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> kv::Result<()> {
@@ -407,6 +409,7 @@ where
                     write_cb(Err(e))
                 }
             }),
+            pre_propose_cb,
             proposed_cb,
             committed_cb,
         )
@@ -555,54 +558,6 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
-}
-
-pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
-    let mut reqs = Vec::with_capacity(modifies.len());
-    for m in modifies {
-        let mut req = Request::default();
-        match m {
-            Modify::Delete(cf, k) => {
-                let mut delete = DeleteRequest::default();
-                delete.set_key(k.into_encoded());
-                if cf != CF_DEFAULT {
-                    delete.set_cf(cf.to_string());
-                }
-                req.set_cmd_type(CmdType::Delete);
-                req.set_delete(delete);
-            }
-            Modify::Put(cf, k, v) => {
-                let mut put = PutRequest::default();
-                put.set_key(k.into_encoded());
-                put.set_value(v);
-                if cf != CF_DEFAULT {
-                    put.set_cf(cf.to_string());
-                }
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-            }
-            Modify::PessimisticLock(k, lock) => {
-                let v = lock.into_lock().to_bytes();
-                let mut put = PutRequest::default();
-                put.set_key(k.into_encoded());
-                put.set_value(v);
-                put.set_cf(CF_LOCK.to_string());
-                req.set_cmd_type(CmdType::Put);
-                req.set_put(put);
-            }
-            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                let mut delete_range = DeleteRangeRequest::default();
-                delete_range.set_cf(cf.to_string());
-                delete_range.set_start_key(start_key.into_encoded());
-                delete_range.set_end_key(end_key.into_encoded());
-                delete_range.set_notify_only(notify_only);
-                req.set_cmd_type(CmdType::DeleteRange);
-                req.set_delete_range(delete_range);
-            }
-        }
-        reqs.push(req);
-    }
-    reqs
 }
 
 #[cfg(test)]

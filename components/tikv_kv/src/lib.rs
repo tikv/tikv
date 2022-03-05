@@ -39,6 +39,7 @@ use engine_traits::{
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
+use kvproto::raft_cmdpb;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
@@ -55,6 +56,7 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use raftstore::store::msg::RaftRequestCallback;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -90,6 +92,54 @@ impl Modify {
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
+}
+
+pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
+    let mut reqs = Vec::with_capacity(modifies.len());
+    for m in modifies {
+        let mut req = raft_cmdpb::Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = raft_cmdpb::DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                put.set_cf(CF_LOCK.to_string());
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = raft_cmdpb::DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        }
+        reqs.push(req);
+    }
+    reqs
 }
 
 impl PessimisticLockPair for Modify {
@@ -183,6 +233,7 @@ pub trait Engine: Send + Clone + 'static {
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<()>,
+        _pre_proposed_cb: Option<RaftRequestCallback>,
         _proposed_cb: Option<ExtCallback>,
         _committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
