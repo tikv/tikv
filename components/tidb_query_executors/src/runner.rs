@@ -430,9 +430,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
-            if time_slice_len > MAX_TIME_SLICE {
+            if need_reschedule(time_slice_start) {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
@@ -653,4 +652,10 @@ fn grow_batch_size(batch_size: &mut usize) {
             *batch_size = BATCH_MAX_SIZE
         }
     }
+}
+
+#[inline]
+fn need_reschedule(time_slice_start: Instant) -> bool {
+    fail_point!("copr_reschedule", |_| true);
+    time_slice_start.saturating_elapsed() > MAX_TIME_SLICE
 }
