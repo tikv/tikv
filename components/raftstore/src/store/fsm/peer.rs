@@ -1311,7 +1311,7 @@ where
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.has_ready = true;
     }
-    
+
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
         // if the peer is not the leader anymore or being destroyed, ignore the result.
