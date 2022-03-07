@@ -1312,6 +1312,7 @@ dependencies = [
  "protobuf",
  "raft",
  "rand 0.8.3",
+ "regex",
  "rocksdb",
  "serde",
  "serde_derive",
@@ -1323,6 +1324,20 @@ dependencies = [
  "time",
  "toml",
  "txn_types",
+]
+
+[[package]]
+name = "engine_rocks_helper"
+version = "0.1.0"
+dependencies = [
+ "engine_rocks",
+ "futures 0.3.15",
+ "keys",
+ "kvproto",
+ "pd_client",
+ "protobuf",
+ "raftstore",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2423,7 +2438,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1494bb51025947bbb4ddc0ce5ea2df7a0a1e8b33"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c7e6da5cb56d7d1ce3c5f09b6daaab27d009d4dc"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2442,7 +2457,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1494bb51025947bbb4ddc0ce5ea2df7a0a1e8b33"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c7e6da5cb56d7d1ce3c5f09b6daaab27d009d4dc"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4121,7 +4136,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1494bb51025947bbb4ddc0ce5ea2df7a0a1e8b33"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c7e6da5cb56d7d1ce3c5f09b6daaab27d009d4dc"
 dependencies = [
  "libc 0.2.106",
  "librocksdb_sys",
@@ -4571,6 +4586,7 @@ dependencies = [
  "encryption",
  "encryption_export",
  "engine_rocks",
+ "engine_rocks_helper",
  "engine_traits",
  "error_code",
  "file_system",
@@ -5109,6 +5125,7 @@ dependencies = [
  "crossbeam",
  "encryption_export",
  "engine_rocks",
+ "engine_rocks_helper",
  "engine_traits",
  "fail",
  "file_system",
@@ -5202,6 +5219,7 @@ dependencies = [
  "crossbeam",
  "encryption",
  "engine_rocks",
+ "engine_rocks_helper",
  "engine_traits",
  "error_code",
  "external_storage_export",

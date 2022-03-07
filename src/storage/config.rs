@@ -67,6 +67,7 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IORateLimitConfig,
+    pub enable_sst_recovery: bool,
 }
 
 impl Default for Config {
@@ -87,6 +88,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
+            enable_sst_recovery: false,
         }
     }
 }

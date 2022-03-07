@@ -14,7 +14,8 @@ use encryption_export::{
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
 use engine_rocks::{
-    get_env, CompactionListener, Compat, RocksCompactionJobInfo, RocksEngine, RocksSnapshot,
+    get_env, CompactionListener, Compat, ErrorListener, RocksCompactionJobInfo, RocksEngine,
+    RocksSnapshot,
 };
 use engine_traits::{Engines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use file_system::IORateLimiter;
@@ -45,6 +46,7 @@ use tikv::config::*;
 use tikv::storage::point_key_range;
 use tikv_util::config::*;
 use tikv_util::time::ThreadReadId;
+use tikv_util::worker::LazyWorker;
 use tikv_util::{escape, HandyRwLock};
 use txn_types::Key;
 
@@ -629,6 +631,7 @@ pub fn create_test_engine(
     Engines<RocksEngine, RocksEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
+    LazyWorker<String>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let key_manager =
@@ -645,6 +648,8 @@ pub fn create_test_engine(
     let mut kv_db_opt = cfg.rocksdb.build_opt();
     kv_db_opt.set_env(env.clone());
 
+    let sst_worker = LazyWorker::new("sst-recovery");
+
     if let Some(router) = router {
         let router = Mutex::new(router);
         let compacted_handler = Box::new(move |event| {
@@ -658,6 +663,9 @@ pub fn create_test_engine(
             compacted_handler,
             Some(dummpy_filter),
         ));
+
+        let scheduler = sst_worker.scheduler();
+        kv_db_opt.add_event_listener(ErrorListener::new("kv", Some(scheduler)));
     }
 
     let kv_cfs_opt = cfg
@@ -685,7 +693,8 @@ pub fn create_test_engine(
     engine.set_shared_block_cache(shared_block_cache);
     raft_engine.set_shared_block_cache(shared_block_cache);
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir)
+
+    (engines, key_manager, dir, sst_worker)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

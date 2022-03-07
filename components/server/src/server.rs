@@ -29,6 +29,7 @@ use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{from_rocks_compression_type, get_env, FlowInfo, RocksEngine};
+use engine_rocks_helper::sst_recovery::{RecoveryRunner, CHECK_DURATION};
 use engine_traits::{
     compaction_job::CompactionJobInfo, CFOptionsExt, ColumnFamilyOptions, Engines,
     FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -137,7 +138,8 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_encryption();
             let fetcher = tikv.init_io_utility();
             let listener = tikv.init_flow_receiver();
-            let (engines, engines_info) = tikv.init_raw_engines(listener);
+            let error_listener = tikv.init_sst_recovery_sender();
+            let (engines, engines_info) = tikv.init_raw_engines(listener, error_listener);
             tikv.init_engines(engines.clone());
             let server_config = tikv.init_servers();
             tikv.register_services();
@@ -189,6 +191,7 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    sst_worker: Option<Box<LazyWorker<String>>>,
 }
 
 struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
@@ -279,6 +282,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            sst_worker: None,
         }
     }
 
@@ -499,6 +503,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
     }
 
+    fn init_sst_recovery_sender(&mut self) -> engine_rocks::ErrorListener {
+        let sender = if self.config.storage.enable_sst_recovery {
+            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let scheduler = sst_worker.scheduler();
+            self.sst_worker = Some(sst_worker);
+            Some(scheduler)
+        } else {
+            None
+        };
+
+        engine_rocks::ErrorListener::new("kv", sender)
+    }
+
     fn init_flow_receiver(&mut self) -> engine_rocks::FlowListener {
         let (tx, rx) = mpsc::channel();
         self.flow_info_sender = Some(tx.clone());
@@ -599,6 +616,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
+
+        let sst_runner = RecoveryRunner::new(
+            engines.engines.kv.get_sync_db(),
+            engines.store_meta.clone(),
+            CHECK_DURATION,
+        );
+        if let Some(sst_worker) = &mut self.sst_worker {
+            sst_worker.start_with_timer(sst_runner);
+        }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
@@ -1249,6 +1275,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         servers.lock_mgr.stop();
 
+        if let Some(sst_worker) = self.sst_worker {
+            sst_worker.stop_worker();
+        }
+
         self.to_stop.into_iter().for_each(|s| s.stop());
     }
 }
@@ -1257,6 +1287,7 @@ impl TiKVServer<RocksEngine> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
+        error_listener: engine_rocks::ErrorListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
@@ -1282,6 +1313,7 @@ impl TiKVServer<RocksEngine> {
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
         kv_db_opts.add_event_listener(flow_listener);
+        kv_db_opts.add_event_listener(error_listener);
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
@@ -1342,6 +1374,7 @@ impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
+        error_listener: engine_rocks::ErrorListener,
     ) -> (
         Engines<RocksEngine, RaftLogEngine>,
         Arc<EnginesResourceInfo>,
@@ -1366,6 +1399,7 @@ impl TiKVServer<RaftLogEngine> {
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
         kv_db_opts.add_event_listener(flow_listener);
+        kv_db_opts.add_event_listener(error_listener);
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),

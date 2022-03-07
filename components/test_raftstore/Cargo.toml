@@ -21,6 +21,7 @@ backtrace = "0.3"
 crossbeam = "0.8"
 engine_traits = { path = "../engine_traits", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_rocks_helper = { path = "../engine_rocks_helper" }
 file_system = { path = "../file_system" }
 futures = "0.3"
 grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }

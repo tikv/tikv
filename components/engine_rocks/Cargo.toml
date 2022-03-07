@@ -48,6 +48,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 protobuf = "2"
 fail = "0.5"
+regex = "1"
 case_macros = { path = "../case_macros" }
 
 [dependencies.rocksdb]

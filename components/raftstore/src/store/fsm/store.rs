@@ -33,7 +33,7 @@ use protobuf::Message;
 use raft::StateRole;
 use time::{self, Timespec};
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch, WriteOptions};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -129,6 +129,8 @@ pub struct StoreMeta {
     pub destroyed_region_for_snap: HashMap<u64, bool>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
+    /// record which regions are damaged.
+    pub damaged_regions_id: HashSet<u64>,
 }
 
 impl StoreMeta {
@@ -145,6 +147,7 @@ impl StoreMeta {
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
+            damaged_regions_id: HashSet::default(),
         }
     }
 
@@ -2149,6 +2152,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
+
+            if !meta.damaged_regions_id.is_empty() {
+                let list = meta.damaged_regions_id.iter().cloned().collect();
+                stats.set_damaged_regions_id(list);
+            }
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();

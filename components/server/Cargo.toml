@@ -28,6 +28,7 @@ nortcheck = ["engine_rocks/nortcheck"]
 [dependencies]
 backup = { path = "../backup", default-features = false }
 cdc = { path = "../cdc", default-features = false }
+engine_rocks_helper = { path = "../engine_rocks_helper" }
 chrono = "0.4"
 tempfile = "3.0"
 clap = "2.32"
