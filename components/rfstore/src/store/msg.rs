@@ -6,7 +6,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::Instant;
 
-use crate::store::{ExecResult, Proposal, RegionSnapshot};
+use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
@@ -102,6 +102,7 @@ pub struct MsgApply {
 pub struct MsgApplyResult {
     pub(crate) results: VecDeque<ExecResult>,
     pub(crate) apply_state: RaftApplyState,
+    pub(crate) metrics: ApplyMetrics,
 }
 
 #[derive(Debug)]

@@ -213,6 +213,8 @@ pub(crate) struct Applier {
     pub(crate) snap: Option<Arc<SnapAccess>>,
 
     pub(crate) yield_state: Option<YieldState>,
+
+    pub(crate) metrics: ApplyMetrics,
 }
 
 impl Applier {
@@ -233,6 +235,7 @@ impl Applier {
             lock_cache: Default::default(),
             snap: None,
             yield_state: None,
+            metrics: ApplyMetrics::default(),
         }
     }
 
@@ -262,6 +265,7 @@ impl Applier {
             lock_cache: Default::default(),
             snap: Some(snap),
             yield_state: None,
+            metrics: ApplyMetrics::default(),
         }
     }
 
@@ -285,7 +289,12 @@ impl Applier {
         commit_ts: u64,
     ) {
         let lock_val = self.get_lock_for_commit(kv, key, commit_ts);
-        let lock = txn_types::Lock::parse(&lock_val).unwrap();
+        let lock = txn_types::Lock::parse(&lock_val).unwrap_or_else(|x| {
+            panic!(
+                "failed to parse lock value {:?}, local_val {:?}",
+                x, &lock_val
+            );
+        });
         let start_ts = lock.ts.into_inner();
         let user_meta = &mvcc::UserMeta::new(start_ts, commit_ts).to_array()[..];
         match lock.lock_type {
@@ -437,6 +446,8 @@ impl Applier {
         match cl.get_type() {
             TYPE_PREWRITE => cl.iterate_lock(|k, v| {
                 wb.put(mvcc::LOCK_CF, k, v, 0, &[], 0);
+                self.metrics.written_keys += 1;
+                self.metrics.written_bytes += (k.len() + v.len()) as u64;
                 self.lock_cache.insert(k.to_vec(), v.to_vec());
             }),
             TYPE_PESSIMISTIC_LOCK => cl.iterate_lock(|k, v| {
@@ -446,6 +457,8 @@ impl Applier {
                 self.commit_lock(engine, wb, k, commit_ts);
             }),
             TYPE_ONE_PC => cl.iterate_one_pc(|k, v, is_extra, del_lock, start_ts, commit_ts| {
+                self.metrics.written_keys += 1;
+                self.metrics.written_bytes += (k.len() + v.len()) as u64;
                 let user_meta = UserMeta::new(start_ts, commit_ts).to_array();
                 if is_extra {
                     let op_lock_key = mvcc::encode_extra_txn_status_key(k, start_ts);
@@ -1528,6 +1541,7 @@ impl ApplyContext {
             let apply_res = MsgApplyResult {
                 results,
                 apply_state: applier.apply_state,
+                metrics: applier.metrics.clone(),
             };
             let region_id = applier.region.get_id();
             let msg = PeerMsg::ApplyResult(apply_res);

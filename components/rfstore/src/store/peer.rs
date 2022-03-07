@@ -1463,7 +1463,8 @@ impl Peer {
         }
     }
 
-    pub(crate) fn post_apply(&mut self, ctx: &mut RaftContext, apply_state: RaftApplyState) {
+    pub(crate) fn post_apply(&mut self, ctx: &mut RaftContext, apply_result: &MsgApplyResult) {
+        let apply_state = apply_result.apply_state;
         if self.get_store().is_applying_snapshot() {
             panic!("{} should not applying snapshot.", self.tag());
         }
@@ -1480,6 +1481,8 @@ impl Peer {
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
+        self.peer_stat.written_keys += apply_result.metrics.written_keys;
+        self.peer_stat.written_bytes += apply_result.metrics.written_bytes;
         if !self.is_leader() {
             // TODO(x) post_pending_read_index_on_replica
         } else if self.ready_to_handle_read() {

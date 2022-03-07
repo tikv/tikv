@@ -80,9 +80,13 @@ impl CloudReader {
         })
     }
 
-    pub fn load_lock(&self, key: &Key) -> Result<Option<Lock>> {
+    pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         let raw_key = key.to_raw().unwrap();
         let item = self.snapshot.get(LOCK_CF, &raw_key, 0);
+        self.statistics.lock.get += 1;
+        self.statistics.lock.flow_stats.read_keys += 1;
+        self.statistics.lock.flow_stats.read_bytes += item.value_len();
+        self.statistics.lock.processed_keys += 1;
         if item.value_len() == 0 {
             return Ok(None);
         }
@@ -98,6 +102,11 @@ impl CloudReader {
     ) -> Result<Option<Value>> {
         let raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner());
+        self.statistics.write.get += 1;
+        self.statistics.write.flow_stats.read_bytes += raw_key.len() + item.value_len();
+        self.statistics.write.flow_stats.read_keys += 1;
+        self.statistics.write.processed_keys += 1;
+        self.statistics.processed_size += raw_key.len() + item.value_len();
         if item.value_len() > 0 {
             return Ok(Some(item.get_value().to_vec()));
         }
@@ -117,6 +126,11 @@ impl CloudReader {
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         let raw_key = key.to_raw()?;
         let item = self.snapshot.get(WRITE_CF, &raw_key, ts.into_inner());
+        self.statistics.write.seek += 1;
+        self.statistics.write.flow_stats.read_keys += 1;
+        self.statistics.write.flow_stats.read_bytes += raw_key.len() + item.value_len();
+        self.statistics.write.processed_keys += 1;
+        self.statistics.processed_size += raw_key.len() + item.value_len();
         if item.user_meta_len() > 0 {
             let user_meta = UserMeta::from_slice(item.user_meta());
             let write_type: WriteType;
@@ -173,6 +187,7 @@ impl CloudReader {
         } else {
             lock_iter.rewind();
         }
+        self.statistics.lock.seek += 1;
         while lock_iter.valid() {
             let key = Key::from_raw(lock_iter.key());
             if let Some(end) = end {
@@ -181,6 +196,10 @@ impl CloudReader {
                 }
             }
             let item = lock_iter.item();
+            self.statistics.lock.next += 1;
+            self.statistics.lock.flow_stats.read_keys += 1;
+            self.statistics.lock.flow_stats.read_bytes += item.value_len();
+            self.statistics.lock.processed_keys += 1;
             let lock = Lock::parse(item.get_value())?;
             if filter(&lock) {
                 locks.push((key, lock));

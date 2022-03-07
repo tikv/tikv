@@ -100,7 +100,7 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             allow_remove_leader: false,
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
-            split_region_check_tick_interval: ReadableDuration::secs(10),
+            split_region_check_tick_interval: ReadableDuration::secs(3),
             region_split_size: ReadableSize::gb(1),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),

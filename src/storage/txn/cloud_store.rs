@@ -127,8 +127,11 @@ impl<S: Snapshot> CloudStore<S> {
         statistics: &mut Statistics,
     ) -> mvcc::Result<Item<'a>> {
         let raw_key = user_key.to_raw()?;
-        statistics.lock.get += 1;
         let item = snap.get(LOCK_CF, &raw_key, 0);
+        statistics.lock.get += 1;
+        statistics.lock.flow_stats.read_keys += 1;
+        statistics.lock.flow_stats.read_bytes += raw_key.len() + item.value_len();
+        statistics.lock.processed_keys += 1;
         if item.value_len() > 0 {
             let lock = Lock::parse(item.get_value()).unwrap();
             Lock::check_ts_conflict(
@@ -138,7 +141,6 @@ impl<S: Snapshot> CloudStore<S> {
                 bypass_locks,
             )?;
         }
-        statistics.write.processed_keys += 1;
         if snap.get_start_key() > raw_key.as_slice() || snap.get_end_key() <= raw_key.as_slice() {
             panic!(
                 "get key {:?} out of snap range {:?}, {:?}, {}:{}",
@@ -150,8 +152,11 @@ impl<S: Snapshot> CloudStore<S> {
             );
         }
         let item = snap.get(WRITE_CF, &raw_key, start_ts);
-        statistics.processed_size += user_key.len();
-        statistics.processed_size += item.value_len();
+        statistics.write.get += 1;
+        statistics.write.flow_stats.read_keys += 1;
+        statistics.write.flow_stats.read_bytes += user_key.len() + item.value_len();
+        statistics.write.processed_keys += 1;
+        statistics.processed_size += user_key.len() + item.value_len();
         Ok(item)
     }
 
@@ -173,7 +178,12 @@ impl<S: Snapshot> CloudStore<S> {
         stats.lock.seek += 1;
         while lock_iter.valid() {
             let key = Key::from_raw(lock_iter.key());
-            let lock = Lock::parse(lock_iter.item().get_value())?;
+            let item = lock_iter.item();
+            stats.lock.next += 1;
+            stats.lock.flow_stats.read_keys += 1;
+            stats.lock.flow_stats.read_bytes += lock_iter.key().len() + item.value_len();
+            stats.lock.processed_keys += 1;
+            let lock = Lock::parse(item.get_value())?;
             Lock::check_ts_conflict(
                 Cow::Borrowed(&lock),
                 &key,
@@ -181,7 +191,6 @@ impl<S: Snapshot> CloudStore<S> {
                 &self.bypass_locks,
             )?;
             lock_iter.next();
-            stats.lock.next += 1;
         }
         return Ok(());
     }
@@ -199,6 +208,7 @@ pub struct CloudStoreScanner {
 
 impl CloudStoreScanner {
     fn init(&mut self) {
+        self.stats.write.seek += 1;
         if self.desc {
             if let Some(seek_key) = &self.upper_bound {
                 self.iter.seek(seek_key);
@@ -247,6 +257,11 @@ impl super::Scanner for CloudStoreScanner {
                 }
             };
             let item = self.iter.item();
+            self.stats.write.next += 1;
+            self.stats.write.flow_stats.read_keys += 1;
+            self.stats.write.flow_stats.read_bytes += iter_key.len() + item.value_len();
+            self.stats.write.processed_keys += 1;
+            self.stats.processed_size += iter_key.len() + item.value_len();
             let val = item.get_value();
             if val.len() > 0 {
                 let key = Key::from_raw(iter_key);

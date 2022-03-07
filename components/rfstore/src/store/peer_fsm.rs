@@ -301,7 +301,7 @@ impl<'a> PeerMsgHandler<'a> {
             "peer_id" => self.fsm.peer_id(),
             "res" => ?res,
         );
-        self.fsm.peer.post_apply(self.ctx, res.apply_state);
+        self.fsm.peer.post_apply(self.ctx, &res);
         self.on_ready_result(&mut res.results);
         if self.fsm.stopped {
             return;
@@ -1069,11 +1069,11 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_split_region_check_tick(&mut self) {
         self.ticker.schedule(PEER_TICK_SPLIT_CHECK);
-        if !self.fsm.peer.is_leader() {
-            return;
-        }
-
         if let Some(shard) = self.ctx.global.engines.kv.get_shard(self.region_id()) {
+            self.peer.peer_stat.approximate_size = shard.get_estimated_size();
+            if !self.fsm.peer.is_leader() {
+                return;
+            }
             if shard.get_split_stage() != kvenginepb::SplitStage::Initial {
                 return;
             }
