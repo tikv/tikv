@@ -641,10 +641,6 @@ where
         self.committed_count = 0;
         is_synced
     }
-
-    pub fn get_store_id(&self) -> u64 {
-        self.store_id
-    }
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
@@ -3265,11 +3261,7 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
-        fail_point!(
-            "on_handle_apply_store_1",
-            apply_ctx.get_store_id() == 1,
-            |_| {}
-        );
+        fail_point!("on_handle_apply_store_1", apply_ctx.store_id == 1, |_| {});
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
