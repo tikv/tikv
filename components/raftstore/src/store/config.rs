@@ -269,6 +269,8 @@ pub struct Config {
     pub reactive_memory_lock_tick_interval: ReadableDuration,
     /// Max tick count before reactivating in-memory pessimistic lock.
     pub reactive_memory_lock_timeout_tick: usize,
+    // Interval of scheduling a tick to report region buckets.
+    pub report_region_buckets_tick_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -357,6 +359,7 @@ impl Default for Config {
             inspect_interval: ReadableDuration::millis(500),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            report_region_buckets_tick_interval: ReadableDuration::secs(10),
         }
     }
 }
