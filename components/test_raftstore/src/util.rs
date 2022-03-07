@@ -147,6 +147,7 @@ lazy_static! {
 
 pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     let mut cfg = TEST_CONFIG.clone();
+    cfg.validate().unwrap();
     cfg.server.cluster_id = cluster_id;
     cfg
 }
