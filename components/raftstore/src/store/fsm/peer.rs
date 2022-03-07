@@ -4847,6 +4847,7 @@ where
                 >= self.ctx.cfg.reactive_memory_lock_timeout_tick
         {
             pessimistic_locks.status = LocksStatus::Normal;
+            self.fsm.reactivate_memory_lock_ticks = 0;
         } else {
             drop(pessimistic_locks);
             self.register_reactivate_memory_lock_tick();
