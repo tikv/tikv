@@ -483,38 +483,30 @@ fn truncate_real(x: Real, d: i32) -> Real {
         x
     } else {
         let hole_x = (*x).trunc();
-        let decimal = *x - hole_x;
         // 0 == trunc function
         if d == 0 {
             Real::new(hole_x).unwrap()
         }
-        // negative trunc hole number
+        // f64 max precition
+        else if d < -307 {
+            Real::new(0.0).unwrap()
+        } else if d > 307 {
+            x
+        }
+        // negative d trunc hole number
         else if d < 0 {
-            let d = d as i64;
-            let lg10 = hole_x.abs().log10();
-            if (-d) - 1 > lg10 as i64 {
-                return Real::new(0.0).unwrap();
-            }
             Real::new((hole_x / 10.0.pow(-d as f64)).trunc() * 10.0.pow(-d as f64)).unwrap()
         }
         // positive d trunc decimal
         else {
+            let decimal = *x - hole_x;
+            // do nothing
             if decimal == 0.0 {
-                // do nothing
-                return x;
+                x
+            } else {
+                let truncated_decimal = (decimal * 10.0.pow(d as f64)).trunc() / 10.0.pow(d as f64);
+                Real::new(hole_x + truncated_decimal).unwrap()
             }
-            let lg10 = decimal.abs().log10();
-            let lg_floor = lg10.floor();
-            let dd = (1i64 - d as i64) as f64;
-            let floor = 10.0.pow(lg_floor + dd);
-            if floor == 0.0 || floor == f64::INFINITY || floor == f64::NEG_INFINITY {
-                // overflow!
-                return x;
-            }
-            let scale = decimal / floor;
-            let scaletrunc = scale.trunc();
-            let trunced_decimal = scaletrunc * floor;
-            Real::new(hole_x + trunced_decimal).unwrap()
         }
     }
 }
@@ -526,13 +518,14 @@ fn test() {
         f64::NEG_INFINITY,
         f64::MAX,
         f64::MIN,
-        -8e307 + 2.0,
+        -8e307,
         3.141592653589793,
         2.0 / 3.0,
         1145141919.810,
         2.0 / 3.0 * 1e308,
+        1.23e-306,
     ];
-    let truncate_cases = [i32::MAX, i32::MIN, 5, 2, 0, -2, -5, -307];
+    let truncate_cases = [i32::MAX, i32::MIN, 5, 2, 0, -2, -5, -307, -308, 2, 307, 308];
     for i in 0..test_cases.len() {
         let x = Real::new(test_cases[i]).unwrap();
         for j in 0..truncate_cases.len() {
