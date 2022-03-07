@@ -3664,7 +3664,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/hicqu/raft-rs?branch=prev-lead-transferee#e4dab02bdb762cb16d8c125ac73367802fc5a7ed"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3708,7 +3708,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/hicqu/raft-rs?branch=prev-lead-transferee#e4dab02bdb762cb16d8c125ac73367802fc5a7ed"
 dependencies = [
  "bytes 1.0.1",
  "protobuf",

@@ -138,12 +138,23 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
 }
 
 impl RoleObserver for CdcObserver {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
-        if role != StateRole::Leader {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        if role_change.state != StateRole::Leader {
             let region_id = ctx.region().get_id();
             if let Some(observe_id) = self.is_subscribed(region_id) {
+                let leader_id = if role_change.leader_id != raft::INVALID_ID {
+                    Some(role_change.leader_id)
+                } else if role_change.prev_lead_transferee == role_change.vote {
+                    Some(role_change.prev_lead_transferee)
+                } else {
+                    None
+                };
+                let leader = leader_id
+                    .and_then(|x| ctx.region().get_peers().iter().find(|p| p.id == x))
+                    .cloned();
+
                 // Unregister all downstreams.
-                let store_err = RaftStoreError::NotLeader(region_id, None);
+                let store_err = RaftStoreError::NotLeader(region_id, leader);
                 let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,

@@ -20,6 +20,7 @@ use kvproto::deadlock::*;
 use kvproto::metapb::Region;
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
+use raftstore::coprocessor::RoleChange;
 use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
@@ -530,13 +531,13 @@ impl RoleChangeNotifier {
 impl Coprocessor for RoleChangeNotifier {}
 
 impl RoleObserver for RoleChangeNotifier {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         let region = ctx.region();
         // A region is created first, so the leader region id must be valid.
         if Self::is_leader_region(region)
             && *self.leader_region_id.lock().unwrap() == region.get_id()
         {
-            self.scheduler.change_role(role.into());
+            self.scheduler.change_role(role_change.state.into());
         }
     }
 }
