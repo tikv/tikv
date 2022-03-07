@@ -284,13 +284,13 @@ mod tests {
             ),
         ];
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.1, ApiVersion::V1, false);
+            assert_raw_value_encode_decode_identity(case.0, None, false, case.1, ApiVersion::V1);
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl, false);
+            assert_raw_value_encode_decode_identity(case.0, None, false, case.2, ApiVersion::V1ttl);
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.3, ApiVersion::V2, false);
+            assert_raw_value_encode_decode_identity(case.0, None, false, case.3, ApiVersion::V2);
         }
     }
 
@@ -316,48 +316,48 @@ mod tests {
             assert_raw_value_encode_decode_identity(
                 case.0,
                 Some(case.1),
+                false,
                 case.2,
                 ApiVersion::V1ttl,
-                false,
             );
         }
         for case in &cases {
             assert_raw_value_encode_decode_identity(
                 case.0,
                 Some(case.1),
+                false,
                 case.3,
                 ApiVersion::V2,
-                false,
             );
         }
     }
 
     #[test]
-    fn test_meta() {
-        // (user_value, expire_ts, ecoded_bytes_v2, is_delete)
+    fn test_meta_api_v2() {
+        // (user_value, expire_ts, is_delete, ecoded_bytes_v2)
         let cases = vec![
             // only deletion flag.
-            (&b""[..], None, &[2][..], true),
-            (&b""[..], None, &[0][..], false),
+            (&b""[..], None, true, &[2][..]),
+            (&b""[..], None, false, &[0][..]),
             // deletion flag with value.
-            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 3][..], true),
+            (&b""[..], Some(2), true, &[0, 0, 0, 0, 0, 0, 0, 2, 3][..]),
             (
                 &b"a"[..],
                 Some(2),
-                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..],
                 true,
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..],
             ),
-            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], false),
+            (&b""[..], Some(2), false, &[0, 0, 0, 0, 0, 0, 0, 2, 1][..]),
             (
                 &b"a"[..],
                 Some(2),
-                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..],
                 false,
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..],
             ),
         ];
 
         for case in cases {
-            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, ApiVersion::V2, case.3);
+            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, case.3, ApiVersion::V2);
         }
     }
 
@@ -394,9 +394,9 @@ mod tests {
     fn assert_raw_value_encode_decode_identity(
         user_value: &[u8],
         expire_ts: Option<u64>,
+        is_delete: bool,
         encoded_bytes: &[u8],
         api_version: ApiVersion,
-        is_delete: bool,
     ) {
         match_template_api_version!(
             API,
