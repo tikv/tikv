@@ -19,7 +19,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, PeerRole};
+use kvproto::metapb::{self, Buckets, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
@@ -613,6 +613,8 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+    /// region buckets.
+    pub region_buckets: Buckets,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -738,6 +740,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            region_buckets: Buckets::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
