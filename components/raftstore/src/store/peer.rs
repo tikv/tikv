@@ -1106,7 +1106,13 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
+<<<<<<< HEAD
             ctx.coprocessor_host.on_step_read_index(&mut m);
+=======
+            fail_point!("on_step_read_index_msg");
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
+>>>>>>> b1ea4158a... *: check memory locks for replica read only on the leader (#12115)
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.

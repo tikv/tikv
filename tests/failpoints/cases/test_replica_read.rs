@@ -1,8 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
+<<<<<<< HEAD
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
+=======
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
+use futures::executor::block_on;
+>>>>>>> b1ea4158a... *: check memory locks for replica read only on the leader (#12115)
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
@@ -11,7 +17,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
+use txn_types::{Key, Lock, LockType};
 
 #[test]
 fn test_wait_for_apply_index() {
@@ -564,3 +572,230 @@ fn test_read_index_after_transfer_leader() {
     cluster.sim.wl().clear_recv_filters(2);
     fail::remove(on_handle_apply_2);
 }
+<<<<<<< HEAD
+=======
+
+/// Test if the read index request can get a correct response when the commit index of leader
+/// if not up-to-date after transferring leader.
+#[test]
+fn test_batch_read_index_after_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    assert_eq!(r, 1);
+
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Delay the response raft messages to peer 2.
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let response_recv_filter_2 = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .msg_type(MessageType::MsgAppendResponse)
+            .msg_type(MessageType::MsgHeartbeatResponse),
+    );
+    cluster.sim.wl().add_recv_filter(2, response_recv_filter_2);
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    // Pause before collecting message to make the these message be handled in one loop
+    let on_peer_collect_message_2 = "on_peer_collect_message_2";
+    fail::cfg(on_peer_collect_message_2, "pause").unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
+        router.send_raft_message(raft_msg).unwrap();
+    }
+
+    let mut resps = Vec::with_capacity(2);
+    for _ in 0..2 {
+        let epoch = cluster.get_region(b"k1").take_region_epoch();
+        let mut req = new_request(1, epoch, vec![new_read_index_cmd()], true);
+        req.mut_header().set_peer(new_peer(2, 2));
+
+        let (cb, rx) = make_cb(&req);
+        cluster.sim.rl().async_command_on_node(2, req, cb).unwrap();
+        resps.push(rx);
+    }
+
+    fail::remove(on_peer_collect_message_2);
+
+    let resps = resps
+        .into_iter()
+        .map(|x| x.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect::<Vec<_>>();
+
+    // `term` in the header is `current_term`, not term of the entry at `read_index`.
+    let term = resps[0].get_header().get_current_term();
+    assert_eq!(term, resps[1].get_header().get_current_term());
+    assert_eq!(term, pd_client.get_region_last_report_term(1).unwrap());
+
+    for i in 0..2 {
+        let index = resps[i].responses[0].get_read_index().read_index;
+        let engine = RocksEngine::from_db(cluster.get_raft_engine(2));
+        let entry = engine.get_entry(1, index).unwrap().unwrap();
+        // According to Raft, a peer shouldn't be able to perform read index until it commits
+        // to the current term. So term of `read_index` must equal to the current one.
+        assert_eq!(entry.get_term(), term);
+    }
+}
+
+#[test]
+fn test_read_index_lock_checking_on_follower() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(rid, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(rid, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // Pause read_index before transferring leader to peer 3. Then, the read index
+    // message will still be sent to the old leader peer 1.
+    fail::cfg("before_propose_readindex", "1*pause").unwrap();
+    let r1 = cluster.get_region(b"k1");
+    let resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
+    assert!(resp.recv_timeout(Duration::from_millis(500)).is_err());
+
+    // Filter all other responses to peer 2, so the term of peer 2 will not change.
+    // Otherwise, a StaleCommand error will be returned instead.
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(rid, 2)
+            .direction(Direction::Recv)
+            .skip(MessageType::MsgReadIndexResp),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter);
+
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    // k1 has a memory lock
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(3);
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    // Now, the leader has been transferred to peer 3. The original read index request
+    // will be first sent to peer 1 and then redirected to peer 3.
+    // We must make sure the lock check is done on peer 3.
+
+    fail::remove("before_propose_readindex");
+    let resp = resp.recv_timeout(Duration::from_millis(2000)).unwrap();
+    assert_eq!(
+        &lock.into_lock_info(b"k1".to_vec()),
+        resp.get_responses()[0].get_read_index().get_locked(),
+        "{:?}",
+        resp
+    );
+}
+
+#[test]
+fn test_read_index_lock_checking_on_false_leader() {
+    let mut cluster = new_node_cluster(0, 5);
+    // Use long election timeout and short lease.
+    configure_for_lease_read(&mut cluster, Some(50), Some(200));
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(Duration::from_millis(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    for i in 2..=5 {
+        pd_client.must_add_peer(rid, new_peer(i, i));
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    let r1 = cluster.get_region(b"k1");
+
+    // Let peer 3 become leader, but do not make peer 1 and 2 aware of it.
+    cluster.add_send_filter(PartitionFilterFactory::new(vec![1, 2], vec![3, 4, 5]));
+    let mut raft_msg = RaftMessage::default();
+    raft_msg
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    raft_msg.set_region_id(r1.get_id());
+    raft_msg.set_to_peer(find_peer(&r1, 3).unwrap().to_owned());
+    raft_msg.set_region_epoch(r1.get_region_epoch().to_owned());
+    cluster.send_raft_msg(raft_msg).unwrap();
+
+    for i in 0..10 {
+        thread::sleep(Duration::from_millis(200));
+        cluster.reset_leader_of_region(rid);
+        let leader = cluster.leader_of_region(rid);
+        if let Some(leader) = leader {
+            if leader.get_store_id() == 3 {
+                break;
+            }
+        }
+        if i == 9 {
+            panic!("new leader should be elected");
+        }
+    }
+
+    // k1 has a memory lock on node 3
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(3);
+    let lock = Lock::new(
+        LockType::Put,
+        b"k1".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    )
+    .use_async_commit(vec![]);
+    let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    // Read index from peer 2, the read index message will be sent to the old leader peer 1.
+    // But the lease of peer 1 has expired and it cannot get majority of heartbeat.
+    // So, we cannot get the result here.
+    let resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
+    assert!(resp.recv_timeout(Duration::from_millis(300)).is_err());
+
+    // Now, restore the network partition. Peer 1 should now become follower and drop its
+    // pending read index request. Peer 2 cannot get the result now.
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(rid, 2)
+            .direction(Direction::Recv)
+            .skip(MessageType::MsgReadIndexResp),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter);
+    cluster.clear_send_filters();
+    assert!(resp.recv_timeout(Duration::from_millis(300)).is_err());
+
+    // After cleaning all filters, peer 2 will retry and will get error.
+    cluster.sim.wl().clear_recv_filters(2);
+    let resp = resp.recv_timeout(Duration::from_millis(2000)).unwrap();
+    assert!(resp.get_header().has_error());
+}
+>>>>>>> b1ea4158a... *: check memory locks for replica read only on the leader (#12115)
