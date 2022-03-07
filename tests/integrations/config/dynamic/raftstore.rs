@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::iter::FromIterator;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -147,11 +148,10 @@ fn test_update_raftstore_config() {
     let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
     let new_changes = |cfgs: Vec<(&str, &str)>| {
-        let mut m = std::collections::HashMap::with_capacity(cfgs.len());
-        for (key, val) in cfgs {
-            m.insert(key.to_owned(), val.to_owned());
-        }
-        m
+        std::collections::HashMap::from_iter(
+            cfgs.into_iter()
+                .map(|kv| (kv.0.to_owned(), kv.1.to_owned())),
+        )
     };
 
     // dispatch updated config
