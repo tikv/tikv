@@ -26,7 +26,11 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     fn decode_raw_value_owned(mut bytes: Vec<u8>) -> Result<RawValue<Vec<u8>>> {
         let (len, expire_ts, is_delete) = {
             let raw_value = Self::decode_raw_value(&bytes)?;
-            (raw_value.user_value.len(), raw_value.expire_ts, raw_value.is_delete)
+            (
+                raw_value.user_value.len(),
+                raw_value.expire_ts,
+                raw_value.is_delete,
+            )
         };
         // The user value are always the first part in encoded bytes.
         bytes.truncate(len);
@@ -318,7 +322,13 @@ mod tests {
             );
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2, false);
+            assert_raw_value_encode_decode_identity(
+                case.0,
+                Some(case.1),
+                case.3,
+                ApiVersion::V2,
+                false,
+            );
         }
     }
 
@@ -331,9 +341,19 @@ mod tests {
             (&b""[..], None, &[0][..], false),
             // deletion flag with value.
             (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 3][..], true),
-            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..], true),
+            (
+                &b"a"[..],
+                Some(2),
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..],
+                true,
+            ),
             (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], false),
-            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..], false),
+            (
+                &b"a"[..],
+                Some(2),
+                &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..],
+                false,
+            ),
         ];
 
         for case in cases {
