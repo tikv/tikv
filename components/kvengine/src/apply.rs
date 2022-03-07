@@ -55,7 +55,9 @@ impl Engine {
             shard.atomic_add_l0_table(l0_tbl);
             shard.atomic_remove_mem_table();
         }
-        shard.set_split_stage(cs.stage);
+        if shard.get_split_stage().value() < cs.stage.value() {
+            shard.set_split_stage(cs.stage);
+        }
         store_bool(&shard.initial_flushed, true);
         Ok(())
     }
