@@ -111,6 +111,8 @@ use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Val
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
+const API_V2_DELETE_TTL: u64 = 24 * 60 * 60; // 24h for logical delete key TTL.
+
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
 /// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
@@ -1832,10 +1834,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
-        let mut batch = WriteData::from_modifies(vec![Modify::Delete(
-            Self::rawkv_cf(&cf, self.api_version)?,
-            Key::from_encoded(key),
-        )]);
+        let mut batch = match self.api_version {
+            ApiVersion::V2 => {
+                let causal_ts: u64 = 100; // TODO: update this after CausalComponent is supported.
+                let raw_value = RawValue {
+                    user_value: vec![],
+                    expire_ts: ttl_to_expire_ts(API_V2_DELETE_TTL),
+                    is_delete: true,
+                };
+                WriteData::from_modifies(vec![Modify::Put(
+                    Self::rawkv_cf(&cf, self.api_version)?,
+                    APIV2::encode_raw_key(&key, Some(TimeStamp::from(causal_ts))),
+                    APIV2::encode_raw_value_owned(raw_value),
+                )])
+            }
+            _ => WriteData::from_modifies(vec![Modify::Delete(
+                Self::rawkv_cf(&cf, self.api_version)?,
+                Key::from_encoded(key),
+            )]),
+        };
         batch.set_allowed_on_disk_almost_full();
 
         self.engine.async_write(
@@ -1865,8 +1882,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let start_key = Key::from_encoded(start_key);
-        let end_key = Key::from_encoded(end_key);
+        let start_key = match ctx.api_version {
+            ApiVersion::V2 => APIV2::encode_raw_key(&start_key, Some(TimeStamp::max())),
+            _ => Key::from_encoded(start_key),
+        };
+        let end_key = match ctx.api_version {
+            ApiVersion::V2 => APIV2::encode_raw_key(&end_key, Some(TimeStamp::max())),
+            _ => Key::from_encoded(end_key),
+        };
 
         let mut batch =
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
@@ -1901,7 +1924,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let modifies = keys
             .into_iter()
-            .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
+            .map(|k| {
+                match self.api_version {
+                    ApiVersion::V2 => {
+                        let causal_ts: u64 = 100; // TODO: update this after CausalComponent is supported.
+                        let raw_value = RawValue {
+                            user_value: vec![],
+                            expire_ts: ttl_to_expire_ts(API_V2_DELETE_TTL),
+                            is_delete: true,
+                        };
+                        Modify::Put(
+                            cf,
+                            APIV2::encode_raw_key(&k, Some(TimeStamp::from(causal_ts))),
+                            APIV2::encode_raw_value_owned(raw_value),
+                        )
+                    }
+                    _ => Modify::Delete(cf, Key::from_encoded(k)),
+                }
+            })
             .collect();
 
         let mut batch = WriteData::from_modifies(modifies);
@@ -4509,6 +4549,94 @@ mod tests {
                 // TODO: raw_delete
             }
         }
+    }
+
+    #[test]
+    fn test_raw_delete() {
+        test_raw_delete_impl(ApiVersion::V1);
+        test_raw_delete_impl(ApiVersion::V1ttl);
+        test_raw_delete_impl(ApiVersion::V2);
+    }
+
+    fn test_raw_delete_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
+
+        let test_data = [
+            (b"r\0a", b"001"),
+            (b"r\0b", b"002"),
+            (b"r\0c", b"003"),
+            (b"r\0d", b"004"),
+            (b"r\0e", b"005"),
+        ];
+
+        // Write some key-value pairs to the db
+        for kv in &test_data {
+            storage
+                .raw_put(
+                    ctx.clone(),
+                    "".to_string(),
+                    kv.0.to_vec(),
+                    kv.1.to_vec(),
+                    if api_version == ApiVersion::V1 { 0 } else { 30 },
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+
+        expect_value(
+            b"004".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+        );
+
+        // Delete "a"
+        storage
+            .raw_delete(
+                ctx.clone(),
+                "".to_string(),
+                b"r\0a".to_vec(),
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert key "a" has gone
+        expect_none(
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
+        );
+
+        // Delete all
+        for kv in &test_data {
+            storage
+                .raw_delete(
+                    ctx.clone(),
+                    "".to_string(),
+                    kv.0.to_vec(),
+                    expect_ok_callback(tx.clone(), 1),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+        }
+
+        // Assert now no key remains
+        for kv in &test_data {
+            expect_none(
+                block_on(storage.raw_get(ctx.clone(), "".to_string(), kv.0.to_vec())).unwrap(),
+            );
+        }
+
+        rx.recv().unwrap();
     }
 
     #[test]

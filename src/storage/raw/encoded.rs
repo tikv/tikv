@@ -31,6 +31,9 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
         match value? {
             Some(v) => {
                 let raw_value = API::decode_raw_value_owned(v)?;
+                if raw_value.is_delete {
+                    return Ok(None);
+                }
                 if raw_value
                     .expire_ts
                     .map(|expire_ts| expire_ts <= self.current_ts)
@@ -152,6 +155,17 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
         }
     }
 
+    fn is_cur_value_valid(&mut self) -> Result<bool> {
+        let raw_value = API::decode_raw_value(self.inner.value())?;
+        if raw_value.is_delete {
+            return Ok(false);
+        }
+        Ok(raw_value
+            .expire_ts
+            .map(|expire_ts| expire_ts > self.current_ts)
+            .unwrap_or(true))
+    }
+
     fn find_valid_value(&mut self, mut res: Result<bool>, forward: bool) -> Result<bool> {
         loop {
             if res.is_err() {
@@ -159,12 +173,7 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
             }
 
             if *res.as_ref().unwrap() {
-                let raw_value = API::decode_raw_value(self.inner.value())?;
-                if raw_value
-                    .expire_ts
-                    .map(|expire_ts| expire_ts <= self.current_ts)
-                    .unwrap_or(false)
-                {
+                if !self.is_cur_value_valid()? {
                     self.skip_ttl += 1;
                     res = if forward {
                         self.inner.next()
