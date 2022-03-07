@@ -6,10 +6,10 @@ use crate::storage::Statistics;
 
 use api_version::APIVersion;
 use engine_traits::raw_ttl::ttl_current_ts;
-use engine_traits::CfName;
+use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
 use std::marker::PhantomData;
-use txn_types::{Key, Value};
+use txn_types::{Key, TimeStamp, Value};
 
 #[derive(Clone)]
 pub struct RawEncodeSnapshot<S: Snapshot, API: APIVersion> {
@@ -41,6 +41,28 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
                 Ok(Some(raw_value.user_value))
             }
             None => Ok(None),
+        }
+    }
+
+    pub fn seek_first_key_value_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_fill_cache(false);
+        iter_opt.use_prefix_seek();
+        iter_opt.set_prefix_same_as_start(true);
+        let end_key = key.clone().append_ts(TimeStamp::zero());
+        iter_opt.set_upper_bound(end_key.as_encoded(), DATA_KEY_PREFIX_LEN);
+        let mut iter = self.iter_cf(cf, iter_opt)?;
+        if !iter.seek(key)? {
+            Ok(None)
+        } else if iter.valid()? {
+            // Following line can be removed after mce padding in api v2.
+            if iter.key() == key.as_encoded() {
+                Ok(Some(iter.value_with_ttl().to_owned()))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
         }
     }
 
@@ -155,6 +177,10 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
             break;
         }
         res
+    }
+
+    fn value_with_ttl(&self) -> &[u8] {
+        self.inner.value()
     }
 }
 
