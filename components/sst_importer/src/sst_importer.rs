@@ -15,9 +15,9 @@ use kvproto::import_sstpb::*;
 use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    name_to_cf, CfName, EncryptionKeyManager, FileEncryptionInfo, Iterator, KvEngine, SSTMetaInfo,
-    SeekKey, SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
+    Iterator, KvEngine, SSTMetaInfo, SeekKey, SstCompressionType, SstExt, SstReader, SstWriter,
+    SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use kvproto::kvrpcpb::ApiVersion;
@@ -292,6 +292,8 @@ impl SSTImporter {
 
     pub fn do_apply_kv_file<P: AsRef<Path>>(
         &self,
+        start_key: &[u8],
+        end_key: &[u8],
         restore_ts: u64,
         file_path: P,
         rewrite_rule: &RewriteRule,
@@ -322,26 +324,14 @@ impl SSTImporter {
                 break;
             }
             event_iter.next()?;
-            let iter_key = event_iter.key().to_vec();
 
-            let ts = Key::decode_ts_from(&iter_key)?;
+            let ts = Key::decode_ts_from(event_iter.key())?;
             if ts > TimeStamp::new(restore_ts) {
                 // we assume the keys in file are sorted by ts.
                 // so if we met the key not satisfy the ts.
                 // we can easily filter the remain keys.
                 break;
             }
-
-            smallest_key = smallest_key.map_or_else(
-                || Some(iter_key.clone()),
-                |v: Vec<u8>| Some(v.min(iter_key.clone())),
-            );
-
-            largest_key = largest_key.map_or_else(
-                || Some(iter_key.clone()),
-                |v: Vec<u8>| Some(v.max(iter_key.clone())),
-            );
-
             if perform_rewrite {
                 let old_key = event_iter.key();
 
@@ -364,9 +354,29 @@ impl SSTImporter {
             } else {
                 key = event_iter.key().to_vec();
             }
+            if check_key_in_range(&key, 0, start_key, end_key).is_err() {
+                // key not in range, we can simply skip this key here.
+                // the client make sure the correct region will download and apply the same file.
+                INPORTER_APPLY_COUNT
+                    .with_label_values(&["key_not_in_region"])
+                    .inc();
+                continue;
+            }
             let value = event_iter.value().to_vec();
             build_fn(key.clone(), value);
+
+            let iter_key = key.clone();
+            smallest_key = smallest_key.map_or_else(
+                || Some(iter_key.clone()),
+                |v: Vec<u8>| Some(v.min(iter_key.clone())),
+            );
+
+            largest_key = largest_key.map_or_else(
+                || Some(iter_key.clone()),
+                |v: Vec<u8>| Some(v.max(iter_key.clone())),
+            );
         }
+
         let label = if perform_rewrite { "rewrite" } else { "normal" };
         IMPORTER_APPLY_DURATION
             .with_label_values(&[label])

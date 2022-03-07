@@ -91,4 +91,9 @@ lazy_static! {
         exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref INPORTER_APPLY_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_apply_count",
+        "Bucketed histogram of importer apply count",
+        &["type"]
+    ).unwrap();
 }

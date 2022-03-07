@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -33,6 +34,7 @@ use tikv_util::config::ReadableSize;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
+use txn_types::Key;
 
 use crate::import::duplicate_detect::DuplicateDetector;
 use sst_importer::metrics::*;
@@ -161,9 +163,12 @@ where
         None
     }
 
+    // we need to remove duplicate keys in here, since
+    // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
+    // will panic if found duplicated entry during Vec<PutRequest>.
     fn build_apply_request<'a, 'b>(
         &self,
-        reqs: &'a mut Vec<Request>,
+        reqs: &'a mut HashMap<Vec<u8>, Request>,
         cmd_reqs: &'a mut Vec<RaftCmdRequest>,
         is_delete: bool,
         cf: &'b str,
@@ -180,12 +185,14 @@ where
             Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
                 let mut req = Request::default();
                 let mut del = DeleteRequest::default();
+
+                let hk = Key::truncate_ts_for(&k).expect("key without ts").to_vec();
                 del.set_key(k);
                 del.set_cf(cf.to_string());
                 req.set_cmd_type(CmdType::Delete);
                 req.set_delete(del);
                 req_size += req.compute_size() as u64;
-                reqs.push(req);
+                reqs.insert(hk, req);
                 if req_size > raft_size / 2 {
                     req_size = 0;
                     let cmd = make_request(reqs, context.clone());
@@ -196,13 +203,14 @@ where
             Box::new(move |k: Vec<u8>, v: Vec<u8>| {
                 let mut req = Request::default();
                 let mut put = PutRequest::default();
+                let hk = Key::truncate_ts_for(&k).expect("key without ts").to_vec();
                 put.set_key(k);
                 put.set_value(v);
                 put.set_cf(cf.to_string());
                 req.set_cmd_type(CmdType::Put);
                 req.set_put(put);
                 req_size += req.compute_size() as u64;
-                reqs.push(req);
+                reqs.insert(hk, req);
                 if req_size > raft_size / 2 {
                     req_size = 0;
                     let cmd = make_request(reqs, context.clone());
@@ -452,16 +460,18 @@ where
         let result = (|| -> Result<()> {
             let temp_file =
                 importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
-            let mut reqs = vec![];
+            let mut reqs = HashMap::<Vec<u8>, Request>::default();
             let mut cmd_reqs = vec![];
             let mut build_req_fn = self.build_apply_request(
-                reqs.as_mut(),
+                &mut reqs,
                 cmd_reqs.as_mut(),
                 meta.get_is_delete(),
                 meta.get_cf(),
                 context.clone(),
             );
             let range = importer.do_apply_kv_file(
+                meta.get_start_key(),
+                meta.get_end_key(),
                 meta.get_restore_ts(),
                 temp_file,
                 req.get_rewrite_rule(),
@@ -469,7 +479,7 @@ where
             )?;
             drop(build_req_fn);
             if !reqs.is_empty() {
-                let cmd = make_request(reqs.as_mut(), context);
+                let cmd = make_request(&mut reqs, context);
                 cmd_reqs.push(cmd);
             }
             for cmd in cmd_reqs {
@@ -852,10 +862,15 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
     header
 }
 
-fn make_request(reqs: &mut Vec<Request>, context: Context) -> RaftCmdRequest {
+fn make_request(reqs: &mut HashMap<Vec<u8>, Request>, context: Context) -> RaftCmdRequest {
     let mut cmd = RaftCmdRequest::default();
     let header = make_request_header(context);
     cmd.set_header(header);
-    cmd.set_requests(std::mem::take(reqs).into());
+    cmd.set_requests(
+        std::mem::take(reqs)
+            .into_values()
+            .collect::<Vec<Request>>()
+            .into(),
+    );
     cmd
 }
