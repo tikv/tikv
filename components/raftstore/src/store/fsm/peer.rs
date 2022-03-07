@@ -74,6 +74,7 @@ use crate::store::worker::{
     ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::RaftlogFetchResult;
 use crate::store::{
     util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
@@ -1288,21 +1289,32 @@ where
                 self.on_raft_log_gc_flushed();
             }
             SignificantMsg::RaftlogFetched { context, res } => {
-                let low = res.low;
-                if self.fsm.peer.term() != res.term {
-                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
-                } else {
-                    self.fsm
-                        .peer
-                        .mut_store()
-                        .update_async_fetch_res(low, Some(res));
-                }
-                self.fsm.peer.raft_group.on_entries_fetched(context);
-                // clean the async fetch result immediately if not used to free memory
-                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-                self.fsm.has_ready = true;
+                self.on_raft_log_fetched(context, res);
             }
         }
+    }
+
+    fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
+        let low = res.low;
+        // if the peer is not the leader anymore or being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+            return;
+        }
+
+        if self.fsm.peer.term() != res.term {
+            // term has changed, the result may be not correct.
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+        } else {
+            self.fsm
+                .peer
+                .mut_store()
+                .update_async_fetch_res(low, Some(res));
+        }
+        self.fsm.peer.raft_group.on_entries_fetched(context);
+        // clean the async fetch result immediately if not used to free memory
+        self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+        self.fsm.has_ready = true;
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {

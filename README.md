@@ -179,16 +179,6 @@ appearance, race, religion, or sexual identity and orientation.
 
 Join the TiKV community on [Slack](https://slack.tidb.io/invite?team=tikv-wg&channel=general) - Sign up and join channels on TiKV topics that interest you.
 
-### WeChat
-
-The TiKV community is also available on WeChat. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
-
-- WeChat ID (**Required**)
-- A contribution you've made to TiKV, such as a PR (**Required**)
-- Other basic information
-
-We will invite you in right away.
-
 ## License
 
 TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for details.
