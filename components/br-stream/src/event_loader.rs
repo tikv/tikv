@@ -149,14 +149,31 @@ where
         // Registering the observer to the raftstore is necessary because we should only listen events from leader.
         // In CDC, the change observer is per-delegate(i.e. per-region), we can create the command per-region here too.
 
-        let (callback, fut) = tikv_util::future::paired_future_callback();
+        let (callback, fut) = tikv_util::future::paired_future_callback::<
+            std::result::Result<_, Box<dyn std::error::Error + Send + Sync>>,
+        >();
         self.router
             .significant_send(
                 region.id,
                 SignificantMsg::CaptureChange {
                     cmd,
                     region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::Read(Box::new(|snapshot| callback(snapshot.snapshot))),
+                    callback: Callback::Read(Box::new(|snapshot| {
+                        if snapshot.response.get_header().has_error() {
+                            callback(Err(box_err!(
+                                "failed to get snapshot: {:?}",
+                                snapshot.response.get_header().get_error()
+                            )));
+                            return;
+                        }
+                        if let Some(snap) = snapshot.snapshot {
+                            callback(Ok(snap));
+                            return;
+                        }
+                        callback(Err(box_err!(
+                            "PROBABLY BUG: the response contains neither error nor snapshot"
+                        )))
+                    })),
                 },
             )
             .map_err(|err| {
@@ -168,11 +185,12 @@ where
             })?;
         let snap = block_on(fut)
             .expect("BUG: channel of paired_future_callback canceled.")
-            .ok_or_else(|| {
-                Error::Other(box_err!(
-                    "failed to get initial snapshot: the channel is dropped (region_id = {})",
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
                     region.get_id()
-                ))
+                )
             })?;
         // Note: maybe warp the snapshot via `RegionSnapshot`?
         Ok(snap)
