@@ -17,7 +17,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::deadlock::*;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -530,7 +530,7 @@ impl RoleChangeNotifier {
 impl Coprocessor for RoleChangeNotifier {}
 
 impl RoleObserver for RoleChangeNotifier {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole, _: Option<&Peer>) {
         let region = ctx.region();
         // A region is created first, so the leader region id must be valid.
         if Self::is_leader_region(region)
@@ -1493,19 +1493,19 @@ pub mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         check_role(Role::Follower);
         for &follower_role in &follower_roles {
-            host.on_role_change(&region, follower_role);
+            host.on_role_change(&region, follower_role, None);
             check_role(Role::Follower);
-            host.on_role_change(&invalid, StateRole::Leader);
+            host.on_role_change(&invalid, StateRole::Leader, None);
             check_role(Role::Follower);
-            host.on_role_change(&other, StateRole::Leader);
+            host.on_role_change(&other, StateRole::Leader, None);
             check_role(Role::Follower);
-            host.on_role_change(&region, StateRole::Leader);
+            host.on_role_change(&region, StateRole::Leader, None);
             check_role(Role::Leader);
-            host.on_role_change(&invalid, follower_role);
+            host.on_role_change(&invalid, follower_role, None);
             check_role(Role::Leader);
-            host.on_role_change(&other, follower_role);
+            host.on_role_change(&other, follower_role, None);
             check_role(Role::Leader);
-            host.on_role_change(&region, follower_role);
+            host.on_role_change(&region, follower_role, None);
             check_role(Role::Follower);
         }
 

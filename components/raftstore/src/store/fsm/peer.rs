@@ -2461,6 +2461,9 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
+                        self.ctx
+                            .coprocessor_host
+                            .on_transfer_leader(self.region(), &from);
                     }
                 }
             }

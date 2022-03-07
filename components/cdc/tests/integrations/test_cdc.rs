@@ -239,12 +239,13 @@ fn test_cdc_not_leader() {
         .into_iter()
         .find(|p| *p != leader)
         .unwrap();
-    suite.cluster.must_transfer_leader(1, peer);
+    suite.cluster.must_transfer_leader(1, peer.clone());
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -278,6 +279,7 @@ fn test_cdc_not_leader() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }

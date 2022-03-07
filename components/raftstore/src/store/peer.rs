@@ -1692,8 +1692,14 @@ where
             self.on_leader_changed(ss.leader_id, self.term());
             // TODO: it may possible that only the `leader_id` change and the role
             // didn't change
-            ctx.coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
+            info!("debug on_role_change";
+                "leader" => ss.leader_id,
+                "lead" => ?self.get_peer_from_cache(ss.leader_id));
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                ss.raft_state,
+                self.get_peer_from_cache(ss.leader_id).as_ref(),
+            );
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {

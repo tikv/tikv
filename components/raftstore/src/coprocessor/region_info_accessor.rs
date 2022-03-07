@@ -13,7 +13,7 @@ use super::{
 };
 use collections::HashMap;
 use engine_traits::KvEngine;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
 use tikv_util::{box_err, debug, info, warn};
@@ -167,7 +167,7 @@ impl RegionChangeObserver for RegionEventListener {
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole, _: Option<&Peer>) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler

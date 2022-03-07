@@ -6,7 +6,7 @@ use std::mem;
 use std::ops::Deref;
 
 use engine_traits::{CfName, KvEngine};
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
 use protobuf::Message;
@@ -481,8 +481,23 @@ impl<E: KvEngine> CoprocessorHost<E> {
         Ok(hashes)
     }
 
-    pub fn on_role_change(&self, region: &Region, role: StateRole) {
-        loop_ob!(region, &self.registry.role_observers, on_role_change, role);
+    pub fn on_transfer_leader(&self, region: &Region, transferee: &Peer) {
+        loop_ob!(
+            region,
+            &self.registry.role_observers,
+            on_transfer_leader,
+            transferee
+        );
+    }
+
+    pub fn on_role_change(&self, region: &Region, role: StateRole, leader: Option<&Peer>) {
+        loop_ob!(
+            region,
+            &self.registry.role_observers,
+            on_role_change,
+            role,
+            leader
+        );
     }
 
     pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
@@ -551,7 +566,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::*;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use engine_panic::PanicEngine;
     use kvproto::metapb::Region;
@@ -564,6 +579,7 @@ mod tests {
     struct TestCoprocessor {
         bypass: Arc<AtomicBool>,
         called: Arc<AtomicUsize>,
+        leader: Arc<Mutex<Option<Peer>>>,
         return_err: Arc<AtomicBool>,
     }
 
@@ -620,8 +636,19 @@ mod tests {
     }
 
     impl RoleObserver for TestCoprocessor {
-        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole) {
+        fn on_transfer_leader(&self, ctx: &mut ObserverContext<'_>, transferee: &Peer) {
+            *self.leader.lock().unwrap() = Some(transferee.clone());
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn on_role_change(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: StateRole,
+            leader: Option<&Peer>,
+        ) {
             self.called.fetch_add(7, Ordering::SeqCst);
+            *self.leader.lock().unwrap() = leader.cloned();
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
@@ -721,8 +748,14 @@ mod tests {
         host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
         assert_all!([&ob.called], &[21]);
 
-        host.on_role_change(&region, StateRole::Leader);
+        let mut leader = Peer::default();
+        leader.id = 1;
+        host.on_role_change(&region, StateRole::Leader, Some(&leader));
         assert_all!([&ob.called], &[28]);
+        assert_eq!(*ob.leader.lock().unwrap(), Some(leader.clone()));
+        leader.id = 2;
+        host.on_transfer_leader(&region, &leader);
+        assert_eq!(*ob.leader.lock().unwrap(), Some(leader));
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!([&ob.called], &[36]);

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
 use raft::{eraftpb, StateRole};
@@ -142,12 +142,15 @@ pub trait SplitCheckObserver<E>: Coprocessor {
 }
 
 pub trait RoleObserver: Coprocessor {
+    /// Hook to call when a leader tries to transfer leadership.
+    fn on_transfer_leader(&self, _: &mut ObserverContext<'_>, _: &Peer) {}
+
     /// Hook to call when role of a peer changes.
     ///
     /// Please note that, this hook is not called at realtime. There maybe a
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
-    fn on_role_change(&self, _: &mut ObserverContext<'_>, _: StateRole) {}
+    fn on_role_change(&self, _: &mut ObserverContext<'_>, _: StateRole, _: Option<&Peer>) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

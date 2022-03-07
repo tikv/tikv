@@ -18,6 +18,14 @@ use crate::endpoint::{Deregister, Task};
 use crate::old_value::{self, OldValueCache};
 use crate::Error as CdcError;
 
+#[derive(Clone)]
+pub struct ObserveState {
+    observe_id: ObserveID,
+    // A candidate that is likly to be elected as a leader soon.
+    // Added by on_transfer_leader.
+    leader_transferee: Option<Peer>,
+}
+
 /// An Observer for CDC.
 ///
 /// It observes raftstore internal events, such as:
@@ -28,7 +36,7 @@ pub struct CdcObserver {
     sched: Scheduler<Task>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
-    observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
+    observe_regions: Arc<RwLock<HashMap<u64, ObserveState>>>,
 }
 
 impl CdcObserver {
@@ -65,7 +73,14 @@ impl CdcObserver {
         self.observe_regions
             .write()
             .unwrap()
-            .insert(region_id, observe_id)
+            .insert(
+                region_id,
+                ObserveState {
+                    observe_id,
+                    leader_transferee: None,
+                },
+            )
+            .map(|state| state.observe_id)
     }
 
     /// Stops observe the region.
@@ -74,21 +89,28 @@ impl CdcObserver {
     pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
         let mut regions = self.observe_regions.write().unwrap();
         // To avoid ABA problem, we must check the unique ObserveID.
-        if let Some(oid) = regions.get(&region_id) {
-            if *oid == observe_id {
-                return regions.remove(&region_id);
+        if let Some(state) = regions.get(&region_id) {
+            if state.observe_id == observe_id {
+                return regions.remove(&region_id).map(|state| state.observe_id);
             }
         }
         None
     }
 
     /// Check whether the region is subscribed or not.
-    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveID> {
+    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveState> {
         self.observe_regions
             .read()
             .unwrap()
             .get(&region_id)
             .cloned()
+    }
+
+    fn maybe_add_leader_transferee(&self, region_id: u64, leader: &Peer) {
+        let mut regions = self.observe_regions.write().unwrap();
+        if let Some(state) = regions.get_mut(&region_id) {
+            state.leader_transferee = Some(leader.to_owned());
+        }
     }
 }
 
@@ -138,12 +160,31 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
 }
 
 impl RoleObserver for CdcObserver {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_transfer_leader(&self, ctx: &mut ObserverContext<'_>, transferee: &Peer) {
+        self.maybe_add_leader_transferee(ctx.region().get_id(), transferee);
+    }
+
+    fn on_role_change(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        role: StateRole,
+        leader: Option<&Peer>,
+    ) {
         if role != StateRole::Leader {
             let region_id = ctx.region().get_id();
-            if let Some(observe_id) = self.is_subscribed(region_id) {
+            if let Some(ObserveState {
+                observe_id,
+                leader_transferee,
+            }) = self.is_subscribed(region_id)
+            {
                 // Unregister all downstreams.
-                let store_err = RaftStoreError::NotLeader(region_id, None);
+                let leader = if let Some(leader) = leader {
+                    Some(leader.to_owned())
+                } else {
+                    // Use leader transferee if leader is None.
+                    leader_transferee.clone()
+                };
+                let store_err = RaftStoreError::NotLeader(region_id, leader);
                 let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,
@@ -166,7 +207,7 @@ impl RegionChangeObserver for CdcObserver {
     ) {
         if let RegionChangeEvent::Destroy = event {
             let region_id = ctx.region().get_id();
-            if let Some(observe_id) = self.is_subscribed(region_id) {
+            if let Some(ObserveState { observe_id, .. }) = self.is_subscribed(region_id) {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::RegionNotFound(region_id);
                 let deregister = Deregister::Delegate {
@@ -232,27 +273,58 @@ mod tests {
         let mut region = Region::default();
         region.set_id(1);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, StateRole::Follower, None);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveID::new();
         observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        let mut peer = Peer::default();
+        peer.id = 2;
+        observer.on_role_change(&mut ctx, StateRole::Follower, Some(&peer));
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::Deregister(Deregister::Delegate {
                 region_id,
                 observe_id,
-                ..
+                err,
             }) => {
                 assert_eq!(region_id, 1);
                 assert_eq!(observe_id, oid);
+                let store_err = RaftStoreError::NotLeader(region_id, Some(peer.clone()));
+                match err {
+                    CdcError::Request(err) => {
+                        assert_eq!(*err, store_err.into());
+                    }
+                    _ => panic!("unexpected err"),
+                }
+            }
+            _ => panic!("unexpected task"),
+        };
+
+        // NotLeader error should includes leader transferee.
+        observer.on_transfer_leader(&mut ctx, &peer);
+        observer.on_role_change(&mut ctx, StateRole::Follower, None);
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::Deregister(Deregister::Delegate {
+                region_id,
+                observe_id,
+                err,
+            }) => {
+                assert_eq!(region_id, 1);
+                assert_eq!(observe_id, oid);
+                let store_err = RaftStoreError::NotLeader(region_id, Some(peer));
+                match err {
+                    CdcError::Request(err) => {
+                        assert_eq!(*err, store_err.into());
+                    }
+                    _ => panic!("unexpected err"),
+                }
             }
             _ => panic!("unexpected task"),
         };
 
         // No event if it changes to leader.
-        observer.on_role_change(&mut ctx, StateRole::Leader);
+        observer.on_role_change(&mut ctx, StateRole::Leader, None);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // unsubscribed fail if observer id is different.
@@ -261,13 +333,13 @@ mod tests {
         // No event if it is unsubscribed.
         let oid_ = observer.unsubscribe_region(1, oid).unwrap();
         assert_eq!(oid_, oid);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, StateRole::Follower, None);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // No event if it is unsubscribed.
         region.set_id(999);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, StateRole::Follower, None);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
 }

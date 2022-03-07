@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::KvEngine;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use tikv_util::worker::Scheduler;
@@ -84,7 +84,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
 }
 
 impl<E: KvEngine> RoleObserver for Observer<E> {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole, _: Option<&Peer>) {
         // Stop to advance resolved ts after peer steps down to follower or candidate.
         // Do not need to check observe id because we expect all role change events are scheduled in order.
         if role != StateRole::Leader {
