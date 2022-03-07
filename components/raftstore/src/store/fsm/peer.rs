@@ -1278,10 +1278,10 @@ where
         );
         self.fsm.peer.force_leader = true;
 
-        // become candidate first to increase term
         if !self.fsm.peer.is_leader() {
+            // become candidate first to increase term
             self.fsm.peer.raft_group.raft.become_candidate();
-            // trigger candididate twice to increase term by 2, to avoid there is
+            // trigger candidate twice to increase term by 2, to avoid there is
             // a existing leader by accident.
             self.fsm.peer.raft_group.raft.become_candidate();
             self.fsm.peer.raft_group.raft.become_leader();
@@ -1291,7 +1291,8 @@ where
 
         // forward commit index
         self.fsm.peer.raft_group.raft.raft_log.committed =
-            self.fsm.peer.raft_group.raft.raft_log.last_index();
+            self.fsm.peer.raft_group.raft.raft_log.persisted;
+
         self.fsm.has_ready = true;
     }
 

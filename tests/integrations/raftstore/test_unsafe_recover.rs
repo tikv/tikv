@@ -71,7 +71,7 @@ fn test_unsafe_recover_create_region() {
     }
     update.mut_region_epoch().set_version(1);
     update.mut_region_epoch().set_conf_ver(1);
-    // Removes the boostrap region, since it overlaps with any regions we create.
+    // Removes the bootstrap region, since it overlaps with any regions we create.
     cluster.must_update_region_for_unsafe_recover(nodes[0], &update);
     block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let mut create = metapb::Region::default();
@@ -120,10 +120,16 @@ fn test_force_leader() {
     let resp = cluster
         .call_command_on_leader(req, Duration::from_millis(10))
         .unwrap();
-    assert!(resp.get_header().has_error());
+    assert_eq!(
+        resp.get_header().get_error().get_recovery_in_progress(),
+        &kvproto::errorpb::RecoveryInProgress {
+            region_id: 1,
+            ..Default::default()
+        }
+    );
     cluster.exit_force_leader(1, 1);
 
-    // marjority is formed, can propose command successfully now
+    // majority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
@@ -176,7 +182,13 @@ fn test_force_leader_for_learner() {
     let resp = cluster
         .call_command_on_leader(req, Duration::from_millis(10))
         .unwrap();
-    assert!(resp.get_header().has_error());
+    assert_eq!(
+        resp.get_header().get_error().get_recovery_in_progress(),
+        &kvproto::errorpb::RecoveryInProgress {
+            region_id: 1,
+            ..Default::default()
+        }
+    );
     cluster.exit_force_leader(1, 1);
 
     // marjority is formed, can propose command successfully now

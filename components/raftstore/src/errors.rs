@@ -239,6 +239,11 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_region_not_initialized(e);
             }
+            Error::RecoveryInProgress(region_id) => {
+                let mut e = errorpb::RecoveryInProgress::default();
+                e.set_region_id(region_id);
+                errorpb.set_recovery_in_progress(e);
+            }
             _ => {}
         };
 

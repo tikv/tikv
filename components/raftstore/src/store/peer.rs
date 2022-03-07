@@ -2521,6 +2521,10 @@ where
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
+        if self.force_leader {
+            // forward commit index
+            self.raft_group.raft.raft_log.committed = persist_index;
+        }
         self.mut_store().update_cache_persisted(persist_index);
 
         self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
@@ -3765,6 +3769,9 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
+        // Should not propose normal in force leader state.
+        assert!(!self.force_leader);
+
         if (self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)
             || (self.prepare_merge_fence > 0
@@ -3838,9 +3845,6 @@ where
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
-        } else if self.force_leader {
-            // forward the commit index
-            self.raft_group.raft.raft_log.committed = self.raft_group.raft.raft_log.last_index();
         }
 
         // Prepare Merge need to be broadcast to as many as followers when disk full.
@@ -4069,9 +4073,6 @@ where
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id, None));
-        } else if self.force_leader {
-            // forward the commit index
-            self.raft_group.raft.raft_log.committed = self.raft_group.raft.raft_log.last_index();
         }
 
         Ok(propose_index)
