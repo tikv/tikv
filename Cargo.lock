@@ -96,9 +96,11 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "match_template",
+ "panic_hook",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -1632,6 +1634,8 @@ dependencies = [
  "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
+ "slog",
+ "slog-global",
  "strum",
  "tempfile",
  "thread_local",
@@ -2469,12 +2473,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#bc0822b00b1d0f3e52d5993ff28151a3d94839c3"
+source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#13a8f820a4e09e1fe471847ca9606e2f378c40a4"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.12.3",
  "raft-proto",
 ]
 
@@ -3767,6 +3771,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-build"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b2be70fa994657539e3c872cc54363c9bf28b0d7a7f774df70e9fd760df3bc4"
+dependencies = [
+ "bitflags",
+ "protobuf",
+ "protobuf-codegen",
+ "regex",
+]
+
+[[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
@@ -3796,7 +3812,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2a3d7b6602be1beb3014fb87bdcab345f5b03d3a"
+source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
  "bytes 1.1.0",
  "fxhash",
@@ -3840,11 +3856,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2a3d7b6602be1beb3014fb87bdcab345f5b03d3a"
+source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
  "bytes 1.1.0",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
 ]
 
 [[package]]
@@ -5630,7 +5646,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.4.0-alpha"
+version = "6.0.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5972,12 +5988,12 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#e9b045a0bdf83bd96827751ad7b3c82b1f1bb334"
+source = "git+https://github.com/pingcap/tipb.git#d12dec7a76095ac7c1db102948e7bf9ebaa970c1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.12.3",
 ]
 
 [[package]]
@@ -6076,8 +6092,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.31",
