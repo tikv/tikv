@@ -119,7 +119,7 @@ pub struct PeerPessimisticLocks {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LocksStatus {
     Normal,
-    TransferingLeader,
+    TransferringLeader,
     MergingRegion,
     NotLeader,
 }
