@@ -150,6 +150,17 @@ pub struct RoleChange {
     pub vote: u64,
 }
 
+impl RoleChange {
+    pub fn new(state: StateRole) -> Self {
+        RoleChange {
+            state,
+            leader_id: raft::INVALID_ID,
+            prev_lead_transferee: raft::INVALID_ID,
+            vote: raft::INVALID_ID,
+        }
+    }
+}
+
 pub trait RoleObserver: Coprocessor {
     /// Hook to call when role of a peer changes.
     ///

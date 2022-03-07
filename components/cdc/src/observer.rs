@@ -198,6 +198,7 @@ mod tests {
     use super::*;
     use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
+    use raftstore::coprocessor::RoleChange;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
 
@@ -243,13 +244,13 @@ mod tests {
         let mut region = Region::default();
         region.set_id(1);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveID::new();
         observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::Deregister(Deregister::Delegate {
                 region_id,
@@ -263,7 +264,7 @@ mod tests {
         };
 
         // No event if it changes to leader.
-        observer.on_role_change(&mut ctx, StateRole::Leader);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // unsubscribed fail if observer id is different.
@@ -272,13 +273,13 @@ mod tests {
         // No event if it is unsubscribed.
         let oid_ = observer.unsubscribe_region(1, oid).unwrap();
         assert_eq!(oid_, oid);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // No event if it is unsubscribed.
         region.set_id(999);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
 }
