@@ -2,15 +2,17 @@
 
 use crate::table::{memtable, sstable};
 use crate::*;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use kvenginepb as pb;
+use kvenginepb::SplitStage;
+use protobuf::RepeatedField;
 use slog_global::info;
 use tikv_util::mpsc;
 
 pub(crate) struct FlushTask {
     pub(crate) shard_id: u64,
     pub(crate) shard_ver: u64,
-    pub(crate) split_stage: pb::SplitStage,
+    pub(crate) split_keys: Vec<Bytes>,
     pub(crate) mem_tbl: memtable::CFTable,
     pub(crate) next_mem_tbl_size: u64,
 }
@@ -43,7 +45,13 @@ impl Engine {
 
     pub(crate) fn flush_mem_table(&self, task: FlushTask) -> FlushResultRx {
         let (res_tx, res_rx) = mpsc::bounded(1);
-        let mut cs = new_change_set(task.shard_id, task.shard_ver, task.split_stage);
+        let split_stage = if task.split_keys.len() > 0 {
+            kvenginepb::SplitStage::PreSplit
+        } else {
+            kvenginepb::SplitStage::Initial
+        };
+        let mut cs = new_change_set(task.shard_id, task.shard_ver, split_stage);
+
         let flush_version = task.mem_tbl.get_version();
         debug!(
             "{}:{} flush version {}",
@@ -52,6 +60,14 @@ impl Engine {
         cs.mut_flush().set_version(flush_version);
         if let Some(props) = task.mem_tbl.get_properties() {
             cs.mut_flush().set_properties(props);
+        }
+        if task.split_keys.len() > 0 {
+            let mut split_keys = vec![];
+            for x in task.split_keys.iter() {
+                split_keys.push(x.to_vec());
+            }
+            cs.mut_flush()
+                .set_split_keys(RepeatedField::from_vec(split_keys))
         }
         let mut result = FlushResult {
             change_set: cs,
@@ -148,7 +164,7 @@ impl Engine {
                 let task = result.task;
                 if task.next_mem_tbl_size > 0 {
                     let mut change_size =
-                        new_change_set(task.shard_id, task.shard_ver, task.split_stage);
+                        new_change_set(task.shard_id, task.shard_ver, SplitStage::Initial);
                     change_size.set_next_mem_table_size(task.next_mem_tbl_size);
                     self.meta_change_listener.on_change_set(change_size);
                 }

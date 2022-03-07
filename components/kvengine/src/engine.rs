@@ -157,6 +157,7 @@ impl EngineCore {
             let scf_builder = ShardCFBuilder::new(cf);
             scf_builders.push(scf_builder);
         }
+        pre_load_files_by_ids(self.fs.clone(), meta.id, meta.ver, meta.all_files())?;
         for (fid, fm) in &meta.files {
             let file = self.fs.open(*fid, dfs_opts)?;
             if fm.cf == -1 {
@@ -215,8 +216,8 @@ impl EngineCore {
             if mem_tbl.is_applying() {
                 continue;
             }
-            if i == 1 && shard.get_split_stage() == kvenginepb::SplitStage::PreSplit {
-                mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplitFlushDone);
+            if i == 1 && shard.is_splitting() {
+                mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplit);
             }
             let mem_tbl = mem_tbl.clone();
             mem_tbl.set_version(shard.load_mem_table_version());
@@ -231,11 +232,42 @@ impl EngineCore {
                 .send(FlushTask {
                     shard_id: shard.id,
                     shard_ver: shard.ver,
-                    split_stage: shard.get_split_stage(),
+                    split_keys: shard.get_split_keys().into(),
                     mem_tbl,
                     next_mem_tbl_size: 0,
                 })
                 .unwrap();
         }
     }
+}
+
+pub(crate) fn pre_load_files_by_ids(
+    fs: Arc<dyn dfs::DFS>,
+    shard_id: u64,
+    shard_ver: u64,
+    ids: Vec<u64>,
+) -> Result<()> {
+    let length = ids.len();
+    let (result_tx, result_rx) = tikv_util::mpsc::bounded(length);
+    let runtime = fs.get_runtime();
+    for id in ids {
+        let fs = fs.clone();
+        let opts = dfs::Options::new(shard_id, shard_ver);
+        let tx = result_tx.clone();
+        runtime.spawn(async move {
+            let res = fs.prefetch(id, opts).await;
+            tx.send(res).unwrap();
+        });
+    }
+    let mut errors = vec![];
+    for _ in 0..length {
+        if let Err(err) = result_rx.recv().unwrap() {
+            error!("prefetch failed {:?}", &err);
+            errors.push(err);
+        }
+    }
+    if errors.len() > 0 {
+        return Err(errors.pop().unwrap().into());
+    }
+    Ok(())
 }

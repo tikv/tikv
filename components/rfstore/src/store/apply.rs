@@ -7,7 +7,6 @@ use crate::{mvcc, RaftRouter, UserMeta};
 use bytes::Buf;
 use fail::fail_point;
 use kvengine::SnapAccess;
-use kvenginepb::SplitStage;
 use kvproto::metapb;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_cmdpb::{
@@ -467,9 +466,14 @@ impl Applier {
                 });
             }
             TYPE_PRE_SPLIT => {
-                let mut cs = cl.get_change_set().unwrap();
-                cs.sequence = ctx.exec_log_index;
-                ctx.engine.pre_split(cs)?;
+                ctx.engine.pre_split(
+                    self.region_id(),
+                    self.region.get_region_epoch().get_version(),
+                    &cl.get_split_keys(),
+                    ctx.exec_log_index,
+                )?;
+                // After pre_split, the snap become obsolete.
+                self.snap.take();
             }
             TYPE_FLUSH | TYPE_COMPACTION | TYPE_SPLIT_FILES => {
                 let mut cs = cl.get_change_set().unwrap();

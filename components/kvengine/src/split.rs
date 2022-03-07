@@ -25,12 +25,18 @@ impl Engine {
     }
 
     // Sets the split keys, then all new entries are written to separated mem-tables.
-    pub fn pre_split(&self, cs: pb::ChangeSet) -> Result<()> {
-        let shard = self.get_shard_with_ver(cs.shard_id, cs.shard_ver)?;
-        if !shard.set_split_keys(cs.get_pre_split().get_keys()) {
-            return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
+    pub fn pre_split(
+        &self,
+        shard_id: u64,
+        shard_ver: u64,
+        keys: &[Vec<u8>],
+        sequence: u64,
+    ) -> Result<()> {
+        let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
+        if !shard.set_split_keys(keys) {
+            return Err(Error::AlreadySplitting);
         }
-        let version = shard.base_version + cs.sequence;
+        let version = shard.base_version + sequence;
         let mem_tbl = self.switch_mem_table(&shard, version);
         self.schedule_flush_task(&shard, mem_tbl);
         Ok(())
@@ -44,7 +50,7 @@ impl Engine {
         let mut cs = new_change_set(shard_id, shard_ver, pb::SplitStage::SplitFileDone);
 
         let _guard = shard.compact_lock.lock().unwrap();
-        self.wait_for_pre_split_flush_state(&shard);
+        self.wait_for_pre_split_stage(&shard);
         self.split_shard_l0_files(&shard, cs.mut_split_files())?;
 
         let dfs_opts = dfs::Options::new(shard_id, shard_ver);
@@ -58,7 +64,7 @@ impl Engine {
         Ok(cs)
     }
 
-    fn wait_for_pre_split_flush_state(&self, shard: &Shard) {
+    fn wait_for_pre_split_stage(&self, shard: &Shard) {
         loop {
             info!(
                 "shard {}:{} split stage {:?}",
@@ -67,7 +73,7 @@ impl Engine {
                 shard.get_split_stage()
             );
             match shard.get_split_stage() {
-                pb::SplitStage::PreSplitFlushDone | pb::SplitStage::SplitFileDone => {
+                pb::SplitStage::PreSplit | pb::SplitStage::SplitFileDone => {
                     return;
                 }
                 // _ => time::sleep(time::Duration::from_millis(100)).await,

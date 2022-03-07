@@ -3,11 +3,10 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::time::Instant;
 
 use crate::store::{ExecResult, Proposal, RegionSnapshot};
-use bytes::Bytes;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;

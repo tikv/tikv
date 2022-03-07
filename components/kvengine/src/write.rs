@@ -121,13 +121,10 @@ impl Engine {
         let version = shard.base_version + wb.sequence;
         self.update_write_batch_version(wb, version);
         if shard.is_splitting() {
-            if shard.ingest_pre_split_seq == 0 || wb.sequence > shard.ingest_pre_split_seq {
-                let split_ctx = shard.get_split_ctx();
-                self.write_splitting(wb, &shard, &split_ctx);
-                store_u64(&shard.write_sequence, wb.sequence);
-                return;
-            }
-            // Recover the shard to the pre-split stage when this shard is ingested.
+            let split_ctx = shard.get_split_ctx();
+            self.write_splitting(wb, &shard, &split_ctx);
+            store_u64(&shard.write_sequence, wb.sequence);
+            return;
         }
         let mem_tbl = shard.get_writable_mem_table();
         for cf in 0..NUM_CFS {
@@ -179,10 +176,6 @@ impl Engine {
         *guard = Instant::now();
         let props = shard.properties.to_pb(shard.id);
         mem_tbl.set_properties(props);
-        let mut stage = shard.get_split_stage();
-        if stage == kvenginepb::SplitStage::PreSplit {
-            stage = kvenginepb::SplitStage::PreSplitFlushDone;
-        }
         if shard.is_active() {
             let mut next_mem_tbl_size = 0;
             if !mem_tbl.is_empty()
@@ -195,7 +188,7 @@ impl Engine {
             let task = FlushTask {
                 shard_id: shard.id,
                 shard_ver: shard.ver,
-                split_stage: stage,
+                split_keys: shard.get_split_keys(),
                 next_mem_tbl_size,
                 mem_tbl,
             };

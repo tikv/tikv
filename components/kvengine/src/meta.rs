@@ -6,7 +6,7 @@ use bytes::{Buf, Bytes};
 use kvenginepb as pb;
 
 use super::*;
-use protobuf::{Message, RepeatedField};
+use protobuf::{Message, ProtobufEnum, RepeatedField};
 use slog_global::*;
 
 #[derive(Default, Clone)]
@@ -19,8 +19,7 @@ pub struct ShardMeta {
     pub(crate) files: HashMap<u64, FileMeta>,
 
     pub(crate) properties: Properties,
-    pub pre_split: Option<pb::PreSplit>,
-    split: Option<pb::Split>,
+    pub split_keys: Vec<Vec<u8>>,
     pub split_stage: pb::SplitStage,
     pub base_version: u64,
     pub write_sequence: u64,
@@ -43,9 +42,7 @@ impl ShardMeta {
             ..Default::default()
         };
         if snap.get_split_keys().len() > 0 {
-            let mut pre_split = pb::PreSplit::new();
-            pre_split.keys = snap.take_split_keys();
-            meta.pre_split = Some(pre_split);
+            meta.split_keys = snap.get_split_keys().to_vec();
         }
         for l0 in snap.get_l0_creates() {
             meta.add_file(l0.id, -1, 0, l0.get_smallest(), l0.get_biggest());
@@ -124,10 +121,6 @@ impl ShardMeta {
             self.apply_flush(cs);
             return;
         }
-        if cs.has_pre_split() {
-            self.apply_pre_split(cs.get_pre_split());
-            return;
-        }
         if cs.has_compaction() {
             self.apply_compaction(cs.get_compaction());
             return;
@@ -143,13 +136,6 @@ impl ShardMeta {
         if cs.sequence > 0 && self.seq >= cs.sequence {
             info!("{}:{} skip duplicated change {:?}", self.id, self.ver, cs);
             return true;
-        }
-        if cs.has_pre_split() {
-            let dup = self.pre_split.is_some();
-            if dup {
-                info!("{}:{} is already pre_split", self.id, self.ver);
-            }
-            return dup;
         }
         if cs.has_flush() {
             return false;
@@ -220,8 +206,11 @@ impl ShardMeta {
             let val = &props.get_values()[i];
             self.properties.set(key, val.as_slice());
         }
-        if cs.stage == pb::SplitStage::PreSplitFlushDone {
-            self.split_stage = pb::SplitStage::PreSplitFlushDone;
+        if flush.split_keys.len() > 0 {
+            self.split_keys = flush.get_split_keys().to_vec();
+        }
+        if self.split_stage.value() < cs.stage.value() {
+            self.split_stage = cs.stage;
         }
         if flush.has_l0_create() {
             let l0 = flush.get_l0_create();
@@ -238,11 +227,6 @@ impl ShardMeta {
             self.base_version
         );
         self.write_sequence = new_seq;
-    }
-
-    fn apply_pre_split(&mut self, pre_split: &pb::PreSplit) {
-        self.pre_split = Some(pre_split.clone());
-        self.split_stage = pb::SplitStage::PreSplit;
     }
 
     fn apply_compaction(&mut self, comp: &pb::Compaction) {
@@ -308,7 +292,6 @@ impl ShardMeta {
                 Box::new(old.clone()),
             );
             if id == old.id {
-                old.split = Some(split.clone());
                 meta.base_version = old.base_version;
                 meta.write_sequence = old.write_sequence;
                 meta.seq = old.seq;
@@ -337,8 +320,8 @@ impl ShardMeta {
         snap.set_start(self.start.clone());
         snap.set_end(self.end.clone());
         snap.set_properties(self.properties.to_pb(self.id));
-        if let Some(pre_split) = &self.pre_split {
-            snap.set_split_keys(RepeatedField::from_slice(pre_split.get_keys()));
+        if self.split_keys.len() > 0 {
+            snap.set_split_keys(RepeatedField::from_slice(&self.split_keys));
         }
         snap.set_base_version(self.base_version);
         snap.set_write_sequence(self.write_sequence);

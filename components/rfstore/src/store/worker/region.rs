@@ -123,9 +123,6 @@ pub fn get_change_set_type(change_set: &kvenginepb::ChangeSet) -> &'static str {
     if change_set.has_snapshot() {
         return "snapshot";
     }
-    if change_set.has_pre_split() {
-        return "pre_split";
-    }
     if change_set.has_split() {
         return "split";
     }

@@ -139,8 +139,6 @@ pub struct Shard {
     pub(crate) meta_seq: AtomicU64,
     pub(crate) write_sequence: AtomicU64,
 
-    pub(crate) ingest_pre_split_seq: u64,
-
     pub(crate) compact_lock: Mutex<()>,
 }
 
@@ -180,7 +178,6 @@ impl Shard {
             estimated_size: Default::default(),
             meta_seq: Default::default(),
             write_sequence: Default::default(),
-            ingest_pre_split_seq: Default::default(),
             compact_lock: Mutex::new(()),
         };
         if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {
@@ -197,14 +194,10 @@ impl Shard {
             meta.end.as_slice(),
             opt,
         );
-        if meta.pre_split.is_some()
-            && meta.split_stage.value() >= pb::SplitStage::PreSplitFlushDone.value()
-        {
-            // We don't set split keys if the split stage has not reached enginepb.SplitStage_PRE_SPLIT_FLUSH_DONE
-            // because some the recover data should be executed before split key is set.
-            shard.set_split_keys(meta.pre_split.as_ref().unwrap().get_keys());
+        if meta.split_stage.value() > 0 {
+            shard.set_split_keys(&meta.split_keys);
+            shard.set_split_stage(meta.split_stage);
         }
-        shard.set_split_stage(meta.split_stage);
         store_bool(&shard.initial_flushed, true);
         shard.base_version = meta.base_version;
         shard.meta_seq.store(meta.seq, Release);
@@ -221,22 +214,10 @@ impl Shard {
             snap.end.as_slice(),
             opt,
         );
-        if snap.get_split_keys().len() > 0 {
-            info!(
-                "shard {}:{} set pre-split keys by ingest",
-                cs.get_shard_id(),
-                cs.get_shard_ver()
-            );
+        if cs.get_stage().value() > 0 {
             shard.set_split_keys(snap.get_split_keys());
-            if cs.stage == pb::SplitStage::PreSplit {
-                shard.ingest_pre_split_seq = cs.sequence;
-                info!(
-                    "shard {}:{} set pre-split seuqence {} by ingest",
-                    shard.id, shard.ver, shard.ingest_pre_split_seq
-                );
-            }
+            shard.set_split_stage(cs.get_stage());
         }
-        shard.set_split_stage(cs.get_stage());
         store_bool(&shard.initial_flushed, true);
         shard.base_version = snap.base_version;
         shard.meta_seq.store(cs.sequence, Release);
@@ -260,7 +241,7 @@ impl Shard {
     }
 
     pub fn is_splitting(&self) -> bool {
-        self.split_stage.load(Acquire) >= pb::SplitStage::PreSplit.value()
+        self.split_ctx.read().unwrap().split_keys.len() > 0
     }
 
     pub(crate) fn refresh_estimated_size(&self) {

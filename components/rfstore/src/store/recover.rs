@@ -144,7 +144,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
                 Self::execute_admin_request(&mut applier, &mut ctx, req)?;
             } else {
                 if let Some(custom) = rlog::get_custom_log(&req) {
-                    if rlog::is_background_change_set(custom.data.chunk()) {
+                    if rlog::is_engine_meta_log(custom.data.chunk()) {
                         let mut cs = custom.get_change_set().unwrap();
                         cs.sequence = e.get_index();
                         let mut rejected = false;

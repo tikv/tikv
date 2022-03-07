@@ -98,16 +98,8 @@ impl SplitRunner {
             return;
         }
         let mut request = new_request(&region, &peer);
-        let mut change_set = kvenginepb::ChangeSet::default();
-        change_set.set_shard_id(region.get_id());
-        change_set.set_shard_ver(region.get_region_epoch().get_version());
-        change_set.set_stage(kvenginepb::SplitStage::PreSplit);
-        let pre_split = change_set.mut_pre_split();
-        for key in &keys {
-            pre_split.mut_keys().push(key.to_vec());
-        }
         let mut custom_builder = CustomBuilder::new();
-        custom_builder.set_change_set(change_set);
+        custom_builder.set_pre_split(&keys);
         request.set_custom_request(custom_builder.build());
         debug!(
             "split runner send pre-split command for {:?}, keys: {:?}",

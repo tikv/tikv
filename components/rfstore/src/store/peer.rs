@@ -2647,7 +2647,7 @@ impl Peer {
     pub(crate) fn maybe_recover_split(&mut self, ctx: &mut RaftContext) {
         if self.is_leader() {
             match self.get_store().split_stage {
-                SplitStage::PreSplitFlushDone => {
+                SplitStage::PreSplit => {
                     self.maybe_schedule_split_file(ctx);
                 }
                 SplitStage::SplitFileDone => {

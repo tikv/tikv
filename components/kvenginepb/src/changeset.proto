@@ -23,7 +23,6 @@ message ChangeSet {
   Flush flush = 5;
   Snapshot snapshot = 6;
   SplitStage stage = 7;
-  PreSplit preSplit = 8;
   SplitFiles splitFiles = 9;
   Split split = 10;
   bool shardDelete = 11;
@@ -37,8 +36,7 @@ message ChangeSet {
 enum SplitStage {
   INITIAL = 0;
   PRE_SPLIT = 1;
-  PRE_SPLIT_FLUSH_DONE = 2;
-  SPLIT_FILE_DONE = 3;
+  SPLIT_FILE_DONE = 2;
 }
 
 message Compaction {
@@ -54,6 +52,7 @@ message Flush {
   L0Create l0Create = 1;
   Properties properties = 2;
   uint64 version = 3;
+  repeated bytes splitKeys = 4;
 }
 
 message Snapshot {
@@ -85,10 +84,6 @@ message TableCreate {
   int32 CF = 3;
   bytes smallest = 4;
   bytes biggest = 5;
-}
-
-message PreSplit {
-  repeated bytes Keys = 1;
 }
 
 message Split {

@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::BufMut;
+use bytes::{Buf, BufMut, Bytes};
 use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest};
 use protobuf::Message;
 use std::mem;
@@ -160,6 +160,19 @@ impl CustomRaftLog<'a> {
         let end_key = &self.data[i + start_key_len..];
         (start_key, end_key)
     }
+
+    pub(crate) fn get_split_keys(&self) -> Vec<Vec<u8>> {
+        let mut i = HEADER_SIZE;
+        let mut keys = vec![];
+        while i < self.data.len() {
+            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
+            i += 2;
+            let key = &self.data[i..i + key_len];
+            i += key_len;
+            keys.push(key.to_vec());
+        }
+        keys
+    }
 }
 
 pub struct CustomBuilder {
@@ -231,8 +244,6 @@ impl CustomBuilder {
             tp = TYPE_FLUSH;
         } else if cs.has_compaction() {
             tp = TYPE_COMPACTION;
-        } else if cs.has_pre_split() {
-            tp = TYPE_PRE_SPLIT;
         } else if cs.has_split_files() {
             tp = TYPE_SPLIT_FILES;
         } else if cs.get_next_mem_table_size() > 0 {
@@ -242,6 +253,14 @@ impl CustomBuilder {
         let data = cs.write_to_bytes().unwrap();
         self.buf.extend_from_slice(&data);
         self.set_type(tp);
+    }
+
+    pub fn set_pre_split(&mut self, keys: &[Bytes]) {
+        for key in keys {
+            self.buf.put_u16_le(key.len() as u16);
+            self.buf.extend_from_slice(key.chunk());
+        }
+        self.set_type(TYPE_PRE_SPLIT)
     }
 
     pub fn set_type(&mut self, tp: CustomRaftlogType) {
@@ -266,20 +285,9 @@ impl CustomBuilder {
 
 pub fn is_engine_meta_log(data: &[u8]) -> bool {
     match data[0] as CustomRaftlogType {
-        TYPE_FLUSH | TYPE_COMPACTION | TYPE_PRE_SPLIT | TYPE_SPLIT_FILES => true,
-        _ => false,
-    }
-}
-
-pub fn is_background_change_set(data: &[u8]) -> bool {
-    match data[0] as CustomRaftlogType {
         TYPE_FLUSH | TYPE_COMPACTION | TYPE_SPLIT_FILES => true,
         _ => false,
     }
-}
-
-pub fn is_pre_split_log(data: &[u8]) -> bool {
-    data[0] == TYPE_PRE_SPLIT as u8
 }
 
 #[test]

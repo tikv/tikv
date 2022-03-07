@@ -3,7 +3,7 @@
 use crate::errors::*;
 use byteorder::{ByteOrder, LittleEndian};
 use kvproto::*;
-use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

@@ -26,7 +26,7 @@ use tikv_util::{box_err, debug, error, info, trace, warn};
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::Callback;
 use crate::store::peer::Peer;
-use crate::store::{notify_req_region_removed, CustomBuilder, PdTask, PeerStorage, PersistReady};
+use crate::store::{notify_req_region_removed, CustomBuilder, PdTask, PersistReady};
 use crate::store::{
     raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
     PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,

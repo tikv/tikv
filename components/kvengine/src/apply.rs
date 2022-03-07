@@ -207,7 +207,7 @@ impl Engine {
     }
 
     fn apply_split_files(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
-        if shard.get_split_stage() != pb::SplitStage::PreSplitFlushDone {
+        if shard.get_split_stage() != pb::SplitStage::PreSplit {
             error!(
                 "wrong split stage for apply split files {:?}",
                 shard.get_split_stage()
@@ -298,29 +298,7 @@ impl Engine {
                 ids.push(ln.id);
             }
         }
-        let length = ids.len();
-        let (result_tx, result_rx) = tikv_util::mpsc::bounded(length);
-        for id in ids {
-            let fs = self.fs.clone();
-            let opts = dfs::Options::new(cs.shard_id, cs.shard_ver);
-            let tx = result_tx.clone();
-            let runtime = self.fs.get_runtime();
-            runtime.spawn(async move {
-                let res = fs.prefetch(id, opts).await;
-                tx.send(res).unwrap();
-            });
-        }
-        let mut errors = vec![];
-        for _ in 0..length {
-            if let Err(err) = result_rx.recv().unwrap() {
-                error!("prefetch failed {:?}", &err);
-                errors.push(err);
-            }
-        }
-        if errors.len() > 0 {
-            return Err(errors.pop().unwrap().into());
-        }
-        Ok(())
+        pre_load_files_by_ids(self.fs.clone(), cs.shard_id, cs.shard_ver, ids)
     }
 }
 
