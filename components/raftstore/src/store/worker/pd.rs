@@ -42,11 +42,11 @@ use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{merge_bucket_stats, BucketStat, Error, PdClient, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant as TiInstant, UnixSecs};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -176,6 +176,7 @@ where
         store_id: u64,
         min_resolved_ts: u64,
     },
+    ReportBuckets(BucketStat),
 }
 
 pub struct StoreStat {
@@ -352,6 +353,9 @@ where
                     "report min resolved ts: store {}, resolved ts {}",
                     store_id, min_resolved_ts
                 )
+            }
+            Task::ReportBuckets(ref buckets) => {
+                write!(f, "report buckets: {:?}", buckets)
             }
         }
     }
@@ -748,6 +752,7 @@ where
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
     region_peers: HashMap<u64, PeerStat>,
+    region_buckets: HashMap<u64, BucketStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Records the boot time.
@@ -808,6 +813,7 @@ where
             router,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
+            region_buckets: HashMap::default(),
             store_stat: StoreStat::default(),
             start_ts: UnixSecs::now(),
             scheduler,
@@ -1601,6 +1607,52 @@ where
         };
         self.remote.spawn(f);
     }
+
+    fn handle_region_buckets(&mut self, mut buckets: BucketStat) {
+        use std::cmp::Ordering;
+
+        let region_id = buckets.meta.region_id;
+        let current = self
+            .region_buckets
+            .entry(region_id)
+            .or_insert_with(BucketStat::default);
+        let now = TiInstant::now();
+        let period = now.duration_since(current.last_report_time);
+        match current.meta.cmp(&buckets.meta) {
+            Ordering::Equal | Ordering::Greater => {
+                merge_bucket_stats(
+                    &current.meta.keys,
+                    &mut current.stats,
+                    &buckets.meta.keys,
+                    &buckets.stats,
+                );
+            }
+            Ordering::Less => {
+                merge_bucket_stats(
+                    &buckets.meta.keys,
+                    &mut buckets.stats,
+                    &current.meta.keys,
+                    &current.stats,
+                );
+                *current = buckets;
+            }
+        }
+        current.last_report_time = now;
+        let meta = current.meta.clone();
+        let resp = self.pd_client.region_buckets(current, period);
+        let f = async move {
+            if let Err(e) = resp.await {
+                debug!(
+                    "failed to send buckets";
+                    "region_id" => region_id,
+                    "version" => meta.version,
+                    "region_epoch" => ?meta.region_epoch,
+                    "err" => ?e
+                );
+            }
+        };
+        self.remote.spawn(f);
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -1827,6 +1879,9 @@ where
                 store_id,
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+            Task::ReportBuckets(buckets) => {
+                self.handle_region_buckets(buckets);
+            }
         };
     }
 
@@ -1878,7 +1933,7 @@ where
             }),
         );
         let msg = StoreMsg::LatencyInspect {
-            send_time: tikv_util::time::Instant::now(),
+            send_time: TiInstant::now(),
             inspector,
         };
         if let Err(e) = self.router.send_control(msg) {

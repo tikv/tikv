@@ -18,18 +18,20 @@ use futures::task::Poll;
 use futures::task::Waker;
 
 use super::{
-    metrics::*, tso::TimestampOracle, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT,
+    metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
+    REQUEST_TIMEOUT,
 };
 use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
+    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
+    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
 use kvproto::metapb::BucketStats;
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest, ReportBucketsResponse,
+    ResponseHeader,
 };
 use security::SecurityManager;
 use tikv_util::time::Instant;
@@ -37,8 +39,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
-
-use crate::BucketMeta;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
@@ -88,12 +88,18 @@ pub struct Inner {
         UnboundedSender<RegionHeartbeatRequest>,
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
+    pub buckets_sender: Either<
+        Option<ClientDuplexSender<ReportBucketsRequest>>,
+        UnboundedSender<ReportBucketsRequest>,
+    >,
+    pub buckets_resp: Option<ClientCStreamReceiver<ReportBucketsResponse>>,
     pub client_stub: PdClientStub,
     target: TargetInfo,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     pub pending_heartbeat: Arc<AtomicU64>,
+    pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
 
     last_try_reconnect: Instant,
@@ -166,21 +172,27 @@ impl Client {
                 .with_label_values(&[&target.via])
                 .set(1);
         }
-        let (tx, rx) = client_stub
+        let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+        let (buckets_tx, buckets_resp) = client_stub
+            .report_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
                 env,
-                hb_sender: Either::Left(Some(tx)),
-                hb_receiver: Either::Left(Some(rx)),
+                hb_sender: Either::Left(Some(hb_tx)),
+                hb_receiver: Either::Left(Some(hb_rx)),
+                buckets_sender: Either::Left(Some(buckets_tx)),
+                buckets_resp: Some(buckets_resp),
                 client_stub,
                 members,
                 target,
                 security_mgr,
                 on_reconnect: None,
                 pending_heartbeat: Arc::default(),
+                pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
                 tso,
             }),
@@ -199,7 +211,7 @@ impl Client {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
 
-        let (tx, rx) = client_stub
+        let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         info!("heartbeat sender and receiver are stale, refreshing ...");
@@ -208,9 +220,21 @@ impl Client {
         if let Either::Left(Some(ref mut r)) = inner.hb_sender {
             r.cancel();
         }
-        inner.hb_sender = Either::Left(Some(tx));
-        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+        inner.hb_sender = Either::Left(Some(hb_tx));
+        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(hb_rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
+
+        let (buckets_tx, buckets_resp) = client_stub
+            .report_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_buckets", e));
+        info!("buckets sender and receiver are stale, refreshing ...");
+        // Try to cancel an unused buckets sender.
+        if let Either::Left(Some(ref mut r)) = inner.buckets_sender {
+            r.cancel();
+        }
+        inner.buckets_sender = Either::Left(Some(buckets_tx));
+        inner.buckets_resp = Some(buckets_resp);
+
         inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
