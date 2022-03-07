@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
+#![feature(vec_into_raw_parts)]
 
 #[cfg(test)]
 extern crate test;
