@@ -489,12 +489,12 @@ impl<'a, S: Snapshot> RawStoreV2Inner<S> {
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
         let statistics = statistics.mut_cf_statistics(cf);
-        for r in ranges {
+        for mut r in ranges {
             let mut opts = IterOptions::new(None, None, false);
             opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
             let mut cursor =
                 Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
-            cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), statistics)?;
+            cursor.seek(&Key::from_encoded(r.take_start_key()), statistics)?;
             while cursor.valid()? {
                 row_count += 1;
                 if row_count >= MAX_BATCH_SIZE {

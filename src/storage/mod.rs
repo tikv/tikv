@@ -1627,9 +1627,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     })
                                     .map(|(k, v)| match v {
                                         Ok(v) => {
-                                            let (user_key, _) = API::decode_raw_key_owned(k, true).unwrap();
+                                            let (user_key, _) =
+                                                API::decode_raw_key_owned(k, false).unwrap();
                                             Ok((user_key, v.unwrap()))
-                                        },
+                                        }
                                         Err(v) => Err(v),
                                     })
                                     .collect()
@@ -1977,41 +1978,58 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let store = RawStore::new(snapshot, api_version);
                     let begin_instant = Instant::now_coarse();
-
-                    let start_key = Key::from_encoded(start_key);
-                    let end_key = end_key.map(Key::from_encoded);
-
                     let mut statistics = Statistics::default();
-                    let result = if reverse_scan {
-                        store
-                            .reverse_raw_scan(
-                                cf,
-                                &start_key,
-                                end_key.as_ref(),
-                                limit,
-                                &mut statistics,
-                                key_only,
-                            )
-                            .await
-                    } else {
-                        store
-                            .forward_raw_scan(
-                                cf,
-                                &start_key,
-                                end_key.as_ref(),
-                                limit,
-                                &mut statistics,
-                                key_only,
-                            )
-                            .await
-                    }
-                    .map(|pairs| {
-                        pairs
-                            .into_iter()
-                            .map(|pair| pair.map_err(Error::from))
-                            .collect()
-                    })
-                    .map_err(Error::from);
+
+                    let result = match_template_api_version!(
+                        API,
+                        match api_version {
+                            ApiVersion::API => {
+                                let start_key = API::encode_raw_key_owned(start_key, None);
+                                let end_key = end_key.map(|k| API::encode_raw_key_owned(k, None));
+
+                                if reverse_scan {
+                                    store
+                                        .reverse_raw_scan(
+                                            cf,
+                                            &start_key,
+                                            end_key.as_ref(),
+                                            limit,
+                                            &mut statistics,
+                                            key_only,
+                                        )
+                                        .await
+                                } else {
+                                    store
+                                        .forward_raw_scan(
+                                            cf,
+                                            &start_key,
+                                            end_key.as_ref(),
+                                            limit,
+                                            &mut statistics,
+                                            key_only,
+                                        )
+                                        .await
+                                }
+                                .map(|pairs| {
+                                    pairs
+                                        .into_iter()
+                                        .map(|pair| {
+                                            pair.map(|(k, v)| {
+                                                let (user_key, _) = API::decode_raw_key_owned(
+                                                    Key::from_encoded(k),
+                                                    false,
+                                                )
+                                                .unwrap();
+                                                (user_key, v)
+                                            })
+                                            .map_err(Error::from)
+                                        })
+                                        .collect()
+                                })
+                                .map_err(Error::from)
+                            }
+                        }
+                    );
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -2092,7 +2110,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     if !Self::check_key_ranges(&ranges, reverse_scan) {
                         return Err(box_err!("Invalid KeyRanges"));
                     };
-                    let mut result = Vec::new();
+                    let mut result: Vec<Result<KvPair>> = Vec::new();
                     let mut key_ranges = vec![];
                     for range in &ranges {
                         key_ranges.push(build_key_range(
@@ -2102,44 +2120,78 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ));
                     }
                     let ranges_len = ranges.len();
-                    for i in 0..ranges_len {
-                        let start_key = Key::from_encoded(ranges[i].take_start_key());
-                        let end_key = ranges[i].take_end_key();
-                        let end_key = if end_key.is_empty() {
-                            if i + 1 == ranges_len {
-                                None
-                            } else {
-                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+
+                    match_template_api_version!(
+                        API,
+                        match api_version {
+                            ApiVersion::API => {
+                                for i in 0..ranges_len {
+                                    // let start_key = Key::from_encoded(ranges[i].take_start_key());
+                                    let start_key =
+                                        API::encode_raw_key_owned(ranges[i].take_start_key(), None);
+                                    let end_key = ranges[i].take_end_key();
+                                    let end_key = if end_key.is_empty() {
+                                        if i + 1 == ranges_len {
+                                            None
+                                        } else {
+                                            // Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+                                            Some(API::encode_raw_key(
+                                                ranges[i + 1].get_start_key(),
+                                                None,
+                                            ))
+                                        }
+                                    } else {
+                                        // Some(Key::from_encoded(end_key))
+                                        Some(API::encode_raw_key_owned(end_key, None))
+                                    };
+                                    let pairs: Vec<Result<KvPair>> = if reverse_scan {
+                                        store
+                                            .reverse_raw_scan(
+                                                cf,
+                                                &start_key,
+                                                end_key.as_ref(),
+                                                each_limit,
+                                                &mut statistics,
+                                                key_only,
+                                            )
+                                            .await
+                                    } else {
+                                        store
+                                            .forward_raw_scan(
+                                                cf,
+                                                &start_key,
+                                                end_key.as_ref(),
+                                                each_limit,
+                                                &mut statistics,
+                                                key_only,
+                                            )
+                                            .await
+                                    }
+                                    .map(|pairs| {
+                                        pairs
+                                            .into_iter()
+                                            .map(|pair| {
+                                                pair.map(|(k, v)| {
+                                                    let (user_key, _) = API::decode_raw_key_owned(
+                                                        Key::from_encoded(k),
+                                                        false,
+                                                    )
+                                                    .unwrap();
+                                                    (user_key, v)
+                                                })
+                                                .map_err(Error::from)
+                                            })
+                                            .collect()
+                                    })
+                                    .map_err(Error::from)?;
+                                    result.extend(
+                                        pairs.into_iter().map(|res| res.map_err(Error::from)),
+                                    );
+                                }
                             }
-                        } else {
-                            Some(Key::from_encoded(end_key))
-                        };
-                        let pairs = if reverse_scan {
-                            store
-                                .reverse_raw_scan(
-                                    cf,
-                                    &start_key,
-                                    end_key.as_ref(),
-                                    each_limit,
-                                    &mut statistics,
-                                    key_only,
-                                )
-                                .await
-                        } else {
-                            store
-                                .forward_raw_scan(
-                                    cf,
-                                    &start_key,
-                                    end_key.as_ref(),
-                                    each_limit,
-                                    &mut statistics,
-                                    key_only,
-                                )
-                                .await
                         }
-                        .map_err(Error::from)?;
-                        result.extend(pairs.into_iter().map(|res| res.map_err(Error::from)));
-                    }
+                    );
+
                     tls_collect_query_batch(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -2213,11 +2265,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
+                let key: Key = match_template_api_version!(
+                    API,
+                    match api_version {
+                        ApiVersion::API => API::encode_raw_key_owned(key, None),
+                    }
+                );
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
                     let r = store
-                        .raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats)
+                        .raw_get_key_ttl(cf, &key, &mut stats)
                         .map_err(Error::from);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
