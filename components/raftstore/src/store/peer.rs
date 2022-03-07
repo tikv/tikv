@@ -478,7 +478,7 @@ where
 
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
-    leader_lease: Lease,
+    pub leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
 
     /// If it fails to send messages to leader.
@@ -1689,13 +1689,12 @@ where
                         );
                     }
                 }
-                StateRole::Follower => {
+                StateRole::Follower | StateRole::Candidate | StateRole::PreCandidate => {
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
                 }
-                _ => {}
             }
             self.on_leader_changed(ss.leader_id, self.term());
             // TODO: it may possible that only the `leader_id` change and the role

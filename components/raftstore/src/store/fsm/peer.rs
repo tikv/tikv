@@ -1308,6 +1308,9 @@ where
             .raft_group
             .raft
             .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+        // expire leader lease immediately, because the campaign may choose to be leader at once.
+        // term changes while the old leader lease still holds may cause panic.
+        self.fsm.peer.leader_lease.expire();
         // let it trigger election immediately.
         let _ = self.fsm.peer.raft_group.campaign();
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
