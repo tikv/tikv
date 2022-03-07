@@ -1111,7 +1111,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
     let _guard = lock_key(b"a", 90);
     // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resovled_ts because the first several resolved ts received
+    // Retry until receiving an unchanged resolved_ts because the first several resolved ts received
     // might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;
@@ -2083,4 +2083,32 @@ fn test_resolved_ts_cluster_upgrading() {
 
     event_feed_wrap.replace(None);
     suite.stop();
+}
+
+#[test]
+fn test_resolved_ts_with_learners() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new()
+        .cluster(cluster)
+        .build_with_cluster_runner(|cluster| {
+            let r = cluster.run_conf_change();
+            cluster.pd_client.must_add_peer(r, new_learner_peer(2, 2));
+        });
+
+    let rid = suite.cluster.get_region(&[]).id;
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    for _ in 0..10 {
+        let event = receive_event(true);
+        if event.has_resolved_ts() {
+            assert!(event.get_resolved_ts().regions == vec![rid]);
+            drop(receive_event);
+            suite.stop();
+            return;
+        }
+    }
+    panic!("resolved timestamp should be advanced correctly");
 }

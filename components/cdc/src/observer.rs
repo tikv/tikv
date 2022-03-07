@@ -60,7 +60,7 @@ impl CdcObserver {
     /// Subscribe an region, the observer will sink events of the region into
     /// its scheduler.
     ///
-    /// Return pervious ObserveID if there is one.
+    /// Return previous ObserveID if there is one.
     pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
         self.observe_regions
             .write()

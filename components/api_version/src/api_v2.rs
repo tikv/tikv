@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use codec::byte::MemComparableByteCodec;
 use engine_traits::Result;
 use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::Error;
+use tikv_util::codec::{bytes, Error};
 
 use super::*;
 
@@ -107,4 +108,65 @@ impl APIVersion for APIV2 {
         value.user_value.push(flags.bits());
         value.user_value
     }
+
+    fn decode_raw_key(encoded_key: &Key, with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
+        debug_assert!(verify_encoded_key(encoded_key, with_ts));
+        let ts = decode_raw_key_timestamp(encoded_key, with_ts)?;
+        Ok((encoded_key.to_raw()?, ts))
+    }
+
+    fn decode_raw_key_owned(
+        encoded_key: Key,
+        with_ts: bool,
+    ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
+        debug_assert!(verify_encoded_key(&encoded_key, with_ts));
+        let ts = decode_raw_key_timestamp(&encoded_key, with_ts)?;
+        Ok((encoded_key.into_raw()?, ts))
+    }
+
+    fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
+        debug_assert_eq!(Self::parse_key_mode(user_key), KeyMode::Raw);
+        let encoded_key = Key::from_raw(user_key);
+        if let Some(ts) = ts {
+            encoded_key.append_ts(ts)
+        } else {
+            encoded_key
+        }
+    }
+
+    fn encode_raw_key_owned(mut user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {
+        debug_assert_eq!(Self::parse_key_mode(&user_key), KeyMode::Raw);
+        let src_len = user_key.len();
+        let encoded_len = MemComparableByteCodec::encoded_len(src_len);
+        user_key.reserve(encoded_len - src_len + number::U64_SIZE * (ts.is_some() as usize));
+        user_key.resize(encoded_len, 0u8);
+        MemComparableByteCodec::encode_all_in_place(&mut user_key, src_len);
+
+        let encoded_key = Key::from_encoded(user_key);
+        if let Some(ts) = ts {
+            encoded_key.append_ts(ts)
+        } else {
+            encoded_key
+        }
+    }
+}
+
+#[inline]
+fn verify_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
+    let mut encoded_bytes = &encoded_key.as_encoded()[..];
+    if !matches!(APIV2::parse_key_mode(encoded_bytes), KeyMode::Raw) {
+        return false;
+    }
+    bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
+        && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
+}
+
+#[inline]
+fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<TimeStamp>> {
+    let ts = if with_ts {
+        Some(encoded_key.decode_ts()?)
+    } else {
+        None
+    };
+    Ok(ts)
 }
