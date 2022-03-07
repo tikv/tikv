@@ -150,8 +150,8 @@ pub struct RawValue<T: AsRef<[u8]>> {
     pub user_value: T,
     /// The unix timestamp in seconds indicating the point of time that this key will be deleted.
     pub expire_ts: Option<u64>,
-    /// Logical deletion flag in apiv2, should be None in APIV1 and APIV1ttl
-    pub is_delete: Option<bool>,
+    /// Logical deletion flag in APIV2, should be None in APIV1 and APIV1TTL
+    pub is_delete: bool,
 }
 
 #[cfg(test)]
@@ -269,42 +269,45 @@ mod tests {
 
     #[test]
     fn test_no_ttl() {
-        // (user_value, encoded_bytes_V1, encoded_bytes_V1ttl, encoded_bytes_V2)
+        // (user_value, encoded_bytes_V1, encoded_bytes_V1ttl, encoded_bytes_V2, is_delete)
         let cases = vec![
-            (&b""[..], &b""[..], &[0, 0, 0, 0, 0, 0, 0, 0][..], &[0][..]),
+            (&b""[..], &b""[..], &[0, 0, 0, 0, 0, 0, 0, 0][..], &[0][..], false),
             (
                 &b"a"[..],
                 &b"a"[..],
                 &[b'a', 0, 0, 0, 0, 0, 0, 0, 0][..],
                 &[b'a', 0][..],
+                false,
             ),
         ];
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.1, ApiVersion::V1);
+            assert_raw_value_encode_decode_identity(case.0, None, case.1, ApiVersion::V1, case.4);
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl);
+            assert_raw_value_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl, case.4);
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.3, ApiVersion::V2);
+            assert_raw_value_encode_decode_identity(case.0, None, case.3, ApiVersion::V2, case.4);
         }
     }
 
     #[test]
     fn test_ttl() {
-        // (user_value, expire_ts, encoded_bytes_V1ttl, encoded_bytes_V2)
+        // (user_value, expire_ts, encoded_bytes_V1ttl, encoded_bytes_V2, is_delete)
         let cases = vec![
             (
                 &b""[..],
                 2,
                 &[0, 0, 0, 0, 0, 0, 0, 2][..],
                 &[0, 0, 0, 0, 0, 0, 0, 2, 1][..],
+                false,
             ),
             (
                 &b"a"[..],
                 2,
                 &[b'a', 0, 0, 0, 0, 0, 0, 0, 2][..],
                 &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..],
+                false,
             ),
         ];
 
@@ -314,10 +317,37 @@ mod tests {
                 Some(case.1),
                 case.2,
                 ApiVersion::V1ttl,
+                case.4
             );
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2);
+            assert_raw_value_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2, case.4);
+        }
+
+        // (user_value, expire_ts, ecoded_bytes_v2, api_version, is_delete)
+        let positive_cases = vec![
+            // only deletion flag.
+            (&b""[..], None, &[2][..], ApiVersion::V2, true),
+            // deletion flag with value.
+            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 3][..], ApiVersion::V2, true),
+            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..], ApiVersion::V2, true),
+        ];
+
+        for case in positive_cases {
+            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, case.3, case.4);
+        }
+
+        let negative_cases = vec![
+            // only deletion flag.
+            (&b""[..], None, &[0][..], ApiVersion::V2, false),
+            // deletion flag with value.
+            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V1ttl, false),
+            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V2, false),
+            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V2, false),
+        ];
+
+        for case in negative_cases {
+            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, case.3, case.4);
         }
     }
 
@@ -356,11 +386,8 @@ mod tests {
         expire_ts: Option<u64>,
         encoded_bytes: &[u8],
         api_version: ApiVersion,
+        is_delete: bool,
     ) {
-        let is_delete = match api_version {
-            ApiVersion::V2 => Some(false),
-            _ => None,
-        };
         match_template_api_version!(
             API,
             match api_version {
@@ -524,42 +551,5 @@ mod tests {
                 }
             }
         )
-    }
-
-    #[test]
-    fn test_raw_value_encode_delete() {
-        let positive_cases = vec![
-            // only deletion flag.
-            (vec![2], ApiVersion::V2),
-            // deletion flag with value.
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 2], ApiVersion::V2),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 3], ApiVersion::V2),
-        ];
-
-        for (bytes, api_version) in positive_cases {
-            let raw_value =  match api_version {
-                ApiVersion::V2 => APIV2::decode_raw_value(&bytes),
-                ApiVersion::V1 => APIV1::decode_raw_value(&bytes),
-                ApiVersion::V1ttl => APIV1TTL::decode_raw_value(&bytes),
-            }.unwrap();
-            assert_eq!(raw_value.is_delete.map_or(false, |v| v), true);
-        }
-
-        let negative_cases = vec![
-            (vec![2], ApiVersion::V1),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 2], ApiVersion::V1ttl),
-            // deletion flag with value.
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 0], ApiVersion::V2),
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 1], ApiVersion::V2),
-        ];
-
-        for (bytes, api_version) in negative_cases {
-            let raw_value =  match api_version {
-                ApiVersion::V2 => APIV2::decode_raw_value(&bytes),
-                ApiVersion::V1 => APIV1::decode_raw_value(&bytes),
-                ApiVersion::V1ttl => APIV1TTL::decode_raw_value(&bytes),
-            }.unwrap();
-            assert_eq!(raw_value.is_delete.map_or(false, |v| v), false);
-        }
     }
 }
