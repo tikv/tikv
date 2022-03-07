@@ -324,20 +324,20 @@ mod tests {
 
     #[test]
     fn test_meta() {
-        // (user_value, expire_ts, ecoded_bytes_v2, api_version, is_delete)
-        let positive_cases = vec![
+        // (user_value, expire_ts, ecoded_bytes_v2, is_delete)
+        let cases = vec![
             // only deletion flag.
-            (&b""[..], None, &[2][..], ApiVersion::V2, true),
-            (&b""[..], None, &[0][..], ApiVersion::V2, false),
+            (&b""[..], None, &[2][..], true),
+            (&b""[..], None, &[0][..], false),
             // deletion flag with value.
-            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 3][..], ApiVersion::V2, true),
-            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..], ApiVersion::V2, true),
-            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V2, false),
-            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V2, false),
+            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 3][..], true),
+            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..], true),
+            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], false),
+            (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..], false),
         ];
 
-        for case in positive_cases {
-            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, case.3, case.4);
+        for case in cases {
+            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, ApiVersion::V2, case.3);
         }
     }
 
