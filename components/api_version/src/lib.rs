@@ -150,7 +150,7 @@ pub struct RawValue<T: AsRef<[u8]>> {
     pub user_value: T,
     /// The unix timestamp in seconds indicating the point of time that this key will be deleted.
     pub expire_ts: Option<u64>,
-    /// Logical deletion flag in APIV2, should be None in APIV1 and APIV1TTL
+    /// Logical deletion flag in APIV2, should be `false` in APIV1 and APIV1TTL
     pub is_delete: bool,
 }
 
@@ -268,46 +268,43 @@ mod tests {
     }
 
     #[test]
-    fn test_no_ttl() {
-        // (user_value, encoded_bytes_V1, encoded_bytes_V1ttl, encoded_bytes_V2, is_delete)
+    fn test_no_meta() {
+        // (user_value, encoded_bytes_V1, encoded_bytes_V1ttl, encoded_bytes_V2)
         let cases = vec![
-            (&b""[..], &b""[..], &[0, 0, 0, 0, 0, 0, 0, 0][..], &[0][..], false),
+            (&b""[..], &b""[..], &[0, 0, 0, 0, 0, 0, 0, 0][..], &[0][..]),
             (
                 &b"a"[..],
                 &b"a"[..],
                 &[b'a', 0, 0, 0, 0, 0, 0, 0, 0][..],
                 &[b'a', 0][..],
-                false,
             ),
         ];
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.1, ApiVersion::V1, case.4);
+            assert_raw_value_encode_decode_identity(case.0, None, case.1, ApiVersion::V1, false);
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl, case.4);
+            assert_raw_value_encode_decode_identity(case.0, None, case.2, ApiVersion::V1ttl, false);
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, None, case.3, ApiVersion::V2, case.4);
+            assert_raw_value_encode_decode_identity(case.0, None, case.3, ApiVersion::V2, false);
         }
     }
 
     #[test]
     fn test_ttl() {
-        // (user_value, expire_ts, encoded_bytes_V1ttl, encoded_bytes_V2, is_delete)
+        // (user_value, expire_ts, encoded_bytes_V1ttl, encoded_bytes_V2)
         let cases = vec![
             (
                 &b""[..],
                 2,
                 &[0, 0, 0, 0, 0, 0, 0, 2][..],
                 &[0, 0, 0, 0, 0, 0, 0, 2, 1][..],
-                false,
             ),
             (
                 &b"a"[..],
                 2,
                 &[b'a', 0, 0, 0, 0, 0, 0, 0, 2][..],
                 &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..],
-                false,
             ),
         ];
 
@@ -317,36 +314,29 @@ mod tests {
                 Some(case.1),
                 case.2,
                 ApiVersion::V1ttl,
-                case.4
+                false,
             );
         }
         for case in &cases {
-            assert_raw_value_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2, case.4);
+            assert_raw_value_encode_decode_identity(case.0, Some(case.1), case.3, ApiVersion::V2, false);
         }
+    }
 
+    #[test]
+    fn test_meta() {
         // (user_value, expire_ts, ecoded_bytes_v2, api_version, is_delete)
         let positive_cases = vec![
             // only deletion flag.
             (&b""[..], None, &[2][..], ApiVersion::V2, true),
+            (&b""[..], None, &[0][..], ApiVersion::V2, false),
             // deletion flag with value.
             (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 3][..], ApiVersion::V2, true),
             (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 3][..], ApiVersion::V2, true),
-        ];
-
-        for case in positive_cases {
-            assert_raw_value_encode_decode_identity(case.0, case.1, case.2, case.3, case.4);
-        }
-
-        let negative_cases = vec![
-            // only deletion flag.
-            (&b""[..], None, &[0][..], ApiVersion::V2, false),
-            // deletion flag with value.
-            (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V1ttl, false),
             (&b""[..], Some(2), &[0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V2, false),
             (&b"a"[..], Some(2), &[b'a', 0, 0, 0, 0, 0, 0, 0, 2, 1][..], ApiVersion::V2, false),
         ];
 
-        for case in negative_cases {
+        for case in positive_cases {
             assert_raw_value_encode_decode_identity(case.0, case.1, case.2, case.3, case.4);
         }
     }
