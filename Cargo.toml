@@ -148,7 +148,7 @@ collections = { path = "components/collections" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-tokio = { version = "1.12", features = ["full"] }
+tokio = { version = "1.17", features = ["full"] }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-openssl = "0.6"
 toml = "0.5"
@@ -169,7 +169,7 @@ panic_hook = { path = "components/panic_hook" }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { path = "components/test_sst_importer", default-features = false }
 test_util = { path = "components/test_util", default-features = false }
-tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
 hyper-openssl = "0.9"
 
