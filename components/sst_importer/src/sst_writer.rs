@@ -203,6 +203,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
                                 let value = RawValue {
                                     user_value: m.get_value(),
                                     expire_ts,
+                                    is_delete: false,
                                 };
                                 self.put(m.get_key(), &API::encode_raw_value(value), PairOp::Put)?;
                             }
