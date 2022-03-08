@@ -281,8 +281,8 @@ macro_rules! cf_config {
             pub compaction_style: DBCompactionStyle,
             pub disable_auto_compactions: bool,
             pub disable_write_stall: bool,
-            pub soft_pending_compaction_bytes_limit: ReadableSize,
-            pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub soft_pending_compaction_bytes_limit: OptionReadableSize,
+            pub hard_pending_compaction_bytes_limit: OptionReadableSize,
             #[online_config(skip)]
             pub force_consistency_checks: bool,
             #[online_config(skip)]
@@ -408,10 +408,10 @@ macro_rules! write_into_metrics {
             .set(($cf.disable_write_stall as i32).into());
         $metrics
             .with_label_values(&[$tag, "soft_pending_compaction_bytes_limit"])
-            .set($cf.soft_pending_compaction_bytes_limit.0 as f64);
+            .set($cf.soft_pending_compaction_bytes_limit.0.unwrap().0 as f64);
         $metrics
             .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
-            .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
+            .set($cf.hard_pending_compaction_bytes_limit.0.unwrap().0 as f64);
         $metrics
             .with_label_values(&[$tag, "force_consistency_checks"])
             .set(($cf.force_consistency_checks as i32).into());
@@ -496,8 +496,12 @@ macro_rules! build_cf_opt {
         cf_opts.set_compaction_style($opt.compaction_style);
         cf_opts.set_disable_auto_compactions($opt.disable_auto_compactions);
         cf_opts.set_disable_write_stall($opt.disable_write_stall);
-        cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
-        cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
+        cf_opts.set_soft_pending_compaction_bytes_limit(
+            $opt.soft_pending_compaction_bytes_limit.0.unwrap().0,
+        );
+        cf_opts.set_hard_pending_compaction_bytes_limit(
+            $opt.hard_pending_compaction_bytes_limit.0.unwrap().0,
+        );
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
         cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
         if $opt.enable_doubly_skiplist {
@@ -554,8 +558,8 @@ impl Default for DefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: 0,
+            level0_stop_writes_trigger: 0,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
@@ -564,8 +568,8 @@ impl Default for DefaultCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: OptionReadableSize(None),
+            hard_pending_compaction_bytes_limit: OptionReadableSize(None),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -657,8 +661,8 @@ impl Default for WriteCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: 0,
+            level0_stop_writes_trigger: 0,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::MinOverlappingRatio,
             dynamic_level_bytes: true,
@@ -667,8 +671,8 @@ impl Default for WriteCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: OptionReadableSize(None),
+            hard_pending_compaction_bytes_limit: OptionReadableSize(None),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -752,8 +756,8 @@ impl Default for LockCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: 0,
+            level0_stop_writes_trigger: 0,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
@@ -762,8 +766,8 @@ impl Default for LockCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: OptionReadableSize(None),
+            hard_pending_compaction_bytes_limit: OptionReadableSize(None),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -825,8 +829,8 @@ impl Default for RaftCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(128),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 1,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: 0,
+            level0_stop_writes_trigger: 0,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
@@ -835,8 +839,8 @@ impl Default for RaftCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: OptionReadableSize(None),
+            hard_pending_compaction_bytes_limit: OptionReadableSize(None),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -1190,8 +1194,8 @@ impl Default for RaftDefaultCfConfig {
             max_bytes_for_level_base: ReadableSize::mb(512),
             target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
-            level0_slowdown_writes_trigger: 20,
-            level0_stop_writes_trigger: 36,
+            level0_slowdown_writes_trigger: 0,
+            level0_stop_writes_trigger: 0,
             max_compaction_bytes: ReadableSize::gb(2),
             compaction_pri: CompactionPriority::ByCompensatedSize,
             dynamic_level_bytes: true,
@@ -1200,8 +1204,8 @@ impl Default for RaftDefaultCfConfig {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             disable_write_stall: false,
-            soft_pending_compaction_bytes_limit: ReadableSize::gb(192),
-            hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            soft_pending_compaction_bytes_limit: OptionReadableSize(None),
+            hard_pending_compaction_bytes_limit: OptionReadableSize(None),
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -2727,57 +2731,196 @@ impl TiKvConfig {
         self.resource_metering.validate()?;
 
         if self.storage.flow_control.enable {
-            // using raftdb write stall to control memtables as a safety net
-            self.raftdb.defaultcf.level0_slowdown_writes_trigger = 10000;
-            self.raftdb.defaultcf.level0_stop_writes_trigger = 10000;
-            self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = ReadableSize(0);
-            self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = ReadableSize(0);
-
-            // disable kvdb write stall, and override related configs
             self.rocksdb.defaultcf.disable_write_stall = true;
+            self.rocksdb.writecf.disable_write_stall = true;
+            self.rocksdb.lockcf.disable_write_stall = true;
+            self.rocksdb.raftcf.disable_write_stall = true;
+        }
+        // Fill in values for missing write stall configurations.
+        // raftdb
+        if self.raftdb.defaultcf.level0_slowdown_writes_trigger == 0 {
+            self.raftdb.defaultcf.level0_slowdown_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+        }
+        if self.raftdb.defaultcf.level0_stop_writes_trigger == 0 {
+            self.raftdb.defaultcf.level0_stop_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+        }
+        if self
+            .raftdb
+            .defaultcf
+            .soft_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.raftdb.defaultcf.soft_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .soft_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        if self
+            .raftdb
+            .defaultcf
+            .hard_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.raftdb.defaultcf.hard_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .hard_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        // rocksdb.defaultcf
+        if self.rocksdb.defaultcf.level0_slowdown_writes_trigger == 0 {
             self.rocksdb.defaultcf.level0_slowdown_writes_trigger =
                 self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
-            self.rocksdb.writecf.disable_write_stall = true;
+        }
+        if self.rocksdb.defaultcf.level0_stop_writes_trigger == 0 {
+            self.rocksdb.defaultcf.level0_stop_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+        }
+        if self
+            .rocksdb
+            .defaultcf
+            .soft_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .soft_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        if self
+            .rocksdb
+            .defaultcf
+            .hard_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.defaultcf.hard_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .hard_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        // rocksdb.writecf
+        if self.rocksdb.writecf.level0_slowdown_writes_trigger == 0 {
             self.rocksdb.writecf.level0_slowdown_writes_trigger =
                 self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
-            self.rocksdb.lockcf.disable_write_stall = true;
+        }
+        if self.rocksdb.writecf.level0_stop_writes_trigger == 0 {
+            self.rocksdb.writecf.level0_stop_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+        }
+        if self
+            .rocksdb
+            .writecf
+            .soft_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .soft_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        if self
+            .rocksdb
+            .writecf
+            .hard_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.writecf.hard_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .hard_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        // rocksdb.lockcf
+        if self.rocksdb.lockcf.level0_slowdown_writes_trigger == 0 {
             self.rocksdb.lockcf.level0_slowdown_writes_trigger =
                 self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
-            self.rocksdb.raftcf.disable_write_stall = true;
+        }
+        if self.rocksdb.lockcf.level0_stop_writes_trigger == 0 {
+            self.rocksdb.lockcf.level0_stop_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+        }
+        if self
+            .rocksdb
+            .lockcf
+            .soft_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .soft_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        if self
+            .rocksdb
+            .lockcf
+            .hard_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.lockcf.hard_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .hard_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        // rocksdb.raftcf
+        if self.rocksdb.raftcf.level0_slowdown_writes_trigger == 0 {
             self.rocksdb.raftcf.level0_slowdown_writes_trigger =
                 self.storage.flow_control.l0_files_threshold as i32;
-            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .soft_pending_compaction_bytes_limit;
-            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = self
-                .storage
-                .flow_control
-                .hard_pending_compaction_bytes_limit;
+        }
+        if self.rocksdb.raftcf.level0_stop_writes_trigger == 0 {
+            self.rocksdb.raftcf.level0_stop_writes_trigger =
+                self.storage.flow_control.l0_files_threshold as i32;
+        }
+        if self
+            .rocksdb
+            .raftcf
+            .soft_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.raftcf.soft_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .soft_pending_compaction_bytes_limit,
+            )
+            .into();
+        }
+        if self
+            .rocksdb
+            .raftcf
+            .hard_pending_compaction_bytes_limit
+            .0
+            .is_none()
+        {
+            self.rocksdb.raftcf.hard_pending_compaction_bytes_limit = Some(
+                self.storage
+                    .flow_control
+                    .hard_pending_compaction_bytes_limit,
+            )
+            .into();
         }
 
         if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
