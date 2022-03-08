@@ -2064,14 +2064,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     pairs
                                         .into_iter()
                                         .map(|pair| {
-                                            pair.map(|(k, v)| {
-                                                let (user_key, _) = API::decode_raw_key_owned(
-                                                    Key::from_encoded(k),
-                                                    true,
-                                                )
-                                                .unwrap();
-                                                (user_key, v)
-                                            })
+                                            pair
+                                            // .map(|(k, v)| {
+                                            //     let (user_key, _) = API::decode_raw_key_owned(
+                                            //         Key::from_encoded(k),
+                                            //         true,
+                                            //     )
+                                            //     .unwrap();
+                                            //     (user_key, v)
+                                            // })
                                             .map_err(Error::from)
                                         })
                                         .collect()
@@ -4514,6 +4515,18 @@ mod tests {
         }
         rx.recv().unwrap();
 
+        // DEBUG(rawkv)
+        let res = block_on(storage.raw_scan(
+            ctx.clone(),
+            "".to_string(),
+            b"r".to_vec(),
+            Some(b"rz".to_vec()),
+            1000,
+            false,
+            false,
+        ));
+        println!("scan: {:?}", res);
+
         for (k, v) in test_data {
             expect_value(
                 v,
@@ -4705,6 +4718,7 @@ mod tests {
         }
         rx.recv().unwrap();
 
+        // DEBUG(rawkv)
         let res = block_on(storage.raw_scan(
             ctx.clone(),
             "".to_string(),
