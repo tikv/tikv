@@ -1,6 +1,5 @@
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]
 use crate::storage::kv::{Iterator, Result, Snapshot};
 
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
@@ -34,12 +33,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
             None => self.iter(iter_opt)?,
         };
         if iter.seek(key)? {
-            // Following line can be removed after mce padding in api v2.
-            if iter.key() == key.as_encoded() {
-                Ok(Some(iter.value().to_owned()))
-            } else {
-                Ok(None)
-            }
+            Ok(Some(iter.value().to_owned()))
         } else {
             Ok(None)
         }
