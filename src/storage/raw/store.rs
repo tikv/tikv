@@ -33,7 +33,9 @@ impl<'a, S: Snapshot> RawStore<S> {
             ApiVersion::V1ttl => RawStore::V1TTL(RawStoreInner::new(
                 RawEncodeSnapshot::from_snapshot(snapshot),
             )),
-            ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(snapshot))),
+            ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
+                snapshot,
+            ))),
             /*ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 RawMvccSnapshot::from_snapshot(snapshot),
             ))),*/
