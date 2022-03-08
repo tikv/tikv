@@ -111,8 +111,6 @@ use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Val
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
-const API_V2_DELETE_TTL: u64 = 24 * 60 * 60; // 24h for logical delete key TTL.
-
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
 /// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
@@ -1836,31 +1834,35 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
-        let mut batch = match self.api_version {
+        let m = match self.api_version {
             ApiVersion::V2 => {
-                let causal_ts: u64 = 100; // TODO: update this after CausalComponent is supported.
                 let raw_value = RawValue {
                     user_value: vec![],
-                    expire_ts: ttl_to_expire_ts(API_V2_DELETE_TTL),
+                    expire_ts: None,
                     is_delete: true,
                 };
-                WriteData::from_modifies(vec![Modify::Put(
+                Modify::Put(
                     Self::rawkv_cf(&cf, self.api_version)?,
-                    APIV2::encode_raw_key(&key, Some(TimeStamp::from(causal_ts))),
+                    APIV2::encode_raw_key_owned(key, None),
                     APIV2::encode_raw_value_owned(raw_value),
-                )])
+                )
             }
-            _ => WriteData::from_modifies(vec![Modify::Delete(
+            _ => Modify::Delete(
                 Self::rawkv_cf(&cf, self.api_version)?,
                 Key::from_encoded(key),
-            )]),
+            ),
         };
+        let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
-        self.engine.async_write(
+        let pre_propose_cb = self.build_raw_write_pre_propose_cb();
+        self.engine.async_write_ext(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
+            pre_propose_cb,
+            None,
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -1884,18 +1886,23 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let start_key = match ctx.api_version {
-            ApiVersion::V2 => APIV2::encode_raw_key(&start_key, Some(TimeStamp::max())),
-            _ => Key::from_encoded(start_key),
-        };
-        let end_key = match ctx.api_version {
-            ApiVersion::V2 => APIV2::encode_raw_key(&end_key, Some(TimeStamp::max())),
-            _ => Key::from_encoded(end_key),
-        };
+        let (start_key, end_key) = match_template_api_version!(
+            API,
+            match self.api_version {
+                ApiVersion::API => {
+                    (
+                        API::encode_raw_key_owned(start_key, Some(TimeStamp::max())),
+                        API::encode_raw_key_owned(end_key, Some(TimeStamp::zero())),
+                    )
+                }
+            }
+        );
 
         let mut batch =
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
         batch.set_allowed_on_disk_almost_full();
+
+        // TODO: specially notification channel for API V2.
 
         self.engine.async_write(
             &ctx,
@@ -1926,33 +1933,34 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let modifies = keys
             .into_iter()
-            .map(|k| {
-                match self.api_version {
-                    ApiVersion::V2 => {
-                        let causal_ts: u64 = 100; // TODO: update this after CausalComponent is supported.
-                        let raw_value = RawValue {
-                            user_value: vec![],
-                            expire_ts: ttl_to_expire_ts(API_V2_DELETE_TTL),
-                            is_delete: true,
-                        };
-                        Modify::Put(
-                            cf,
-                            APIV2::encode_raw_key(&k, Some(TimeStamp::from(causal_ts))),
-                            APIV2::encode_raw_value_owned(raw_value),
-                        )
-                    }
-                    _ => Modify::Delete(cf, Key::from_encoded(k)),
+            .map(|k| match self.api_version {
+                ApiVersion::V2 => {
+                    let raw_value = RawValue {
+                        user_value: vec![],
+                        expire_ts: None,
+                        is_delete: true,
+                    };
+                    Modify::Put(
+                        cf,
+                        APIV2::encode_raw_key_owned(k, None),
+                        APIV2::encode_raw_value_owned(raw_value),
+                    )
                 }
+                _ => Modify::Delete(cf, Key::from_encoded(k)),
             })
             .collect();
 
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
-        self.engine.async_write(
+        let pre_propose_cb = self.build_raw_write_pre_propose_cb();
+        self.engine.async_write_ext(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
+            pre_propose_cb,
+            None,
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
@@ -4548,7 +4556,19 @@ mod tests {
                     block_on(storage.raw_get(ctx.clone(), "".to_string(), k.clone())).unwrap(),
                 );
             } else {
-                // TODO: raw_delete
+                storage
+                    .raw_delete(
+                        ctx.clone(),
+                        "".to_string(),
+                        k.clone(),
+                        expect_ok_callback(tx.clone(), 1),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+
+                expect_none(
+                    block_on(storage.raw_get(ctx.clone(), "".to_string(), k.clone())).unwrap(),
+                );
             }
         }
     }
