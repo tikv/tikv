@@ -22,12 +22,10 @@ pub fn init_ctl_logger(level: &str) {
 pub fn warning_prompt(message: &str) -> bool {
     const EXPECTED: &str = "I consent";
     println!("{}", message);
-    let input: String = promptly::prompt(format!(
-        "Type \"{}\" to continue, anything else to exit",
-        EXPECTED
-    ))
-    .unwrap();
-    if input == EXPECTED {
+    println!("Type \"{}\" to continue, anything else to exit", EXPECTED);
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).unwrap();
+    if answer.trim_end_matches('\n') == EXPECTED {
         true
     } else {
         println!("exit.");

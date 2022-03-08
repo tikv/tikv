@@ -223,7 +223,7 @@ where
                 .pprof()
                 .map_err(|e| format!("generate pprof from report fail: {}", e))?;
             profile
-                .encode(&mut body)
+                .write_to_vec(&mut body)
                 .map_err(|e| format!("encode pprof into bytes fail: {}", e))?;
         } else {
             report
