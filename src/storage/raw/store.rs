@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use super::encoded::RawEncodeSnapshot;
-use super::raw_mvcc::RawMvccSnapshot;
+// use super::raw_mvcc::RawMvccSnapshot;
 
 use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
@@ -22,7 +22,8 @@ const MAX_BATCH_SIZE: usize = 1024;
 pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S>),
     V1TTL(RawStoreInner<RawEncodeSnapshot<S, APIV1TTL>>),
-    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, APIV2>>),
+    V2(RawStoreInner<RawEncodeSnapshot<S, APIV2>>),
+    // V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, APIV2>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
@@ -32,9 +33,10 @@ impl<'a, S: Snapshot> RawStore<S> {
             ApiVersion::V1ttl => RawStore::V1TTL(RawStoreInner::new(
                 RawEncodeSnapshot::from_snapshot(snapshot),
             )),
-            ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
+            ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(snapshot))),
+            /*ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 RawMvccSnapshot::from_snapshot(snapshot),
-            ))),
+            ))),*/
         }
     }
 

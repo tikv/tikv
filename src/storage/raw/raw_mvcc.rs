@@ -2,8 +2,10 @@
 
 use crate::storage::kv::{Iterator, Result, Snapshot};
 
+use api_version::{APIVersion, APIV2};
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
+use tikv_util::codec::number::U64_SIZE;
 use txn_types::{Key, TimeStamp, Value};
 
 #[derive(Clone)]
@@ -89,6 +91,14 @@ pub struct RawMvccIterator<I: Iterator> {
     is_valid: Option<bool>,
 }
 
+fn is_user_key_eq(left: &[u8], right: &[u8]) -> bool {
+    let len = left.len();
+    if len != right.len() {
+        return false;
+    }
+    Key::is_user_key_eq(left, &right[..len - U64_SIZE])
+}
+
 impl<I: Iterator> RawMvccIterator<I> {
     fn new(inner: I) -> Self {
         RawMvccIterator {
@@ -97,6 +107,12 @@ impl<I: Iterator> RawMvccIterator<I> {
             cur_value: None,
             is_valid: None,
         }
+    }
+
+    fn map_key<'a>(&self, iter_key: &'a [u8]) -> &'a [u8] {
+        let (key, _) =
+            APIV2::decode_raw_key_owned(Key::from_encoded_slice(iter_key), true).unwrap();
+        return &iter_key[0..key.len()];
     }
 
     fn update_cur_kv(&mut self, key: Vec<u8>, val: Vec<u8>) {
@@ -120,7 +136,7 @@ impl<I: Iterator> RawMvccIterator<I> {
             return Ok(false);
         }
         while *res.as_ref().unwrap() && self.inner.valid()? {
-            if self.cur_key.as_ref().unwrap() == self.inner.key() {
+            if is_user_key_eq(self.cur_key.as_ref().unwrap(), self.inner.key()) {
                 self.update_cur_kv(self.inner.key().to_vec(), self.inner.value().to_vec());
                 self.inner.prev()?;
             } else {
@@ -135,7 +151,10 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         let cur_key = self.inner.key().to_owned();
         let mut res = self.inner.next();
-        while *res.as_ref().unwrap() && self.inner.valid()? && cur_key == self.inner.key() {
+        while *res.as_ref().unwrap()
+            && self.inner.valid()?
+            && is_user_key_eq(&cur_key, self.inner.key())
+        {
             res = self.inner.next();
         }
         self.clear_cur_kv();
@@ -176,10 +195,10 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn key(&self) -> &[u8] {
-        match self.cur_key.as_ref() {
+        self.map_key(match self.cur_key.as_ref() {
             Some(k) => k,
             None => self.inner.key(),
-        }
+        })
     }
 
     fn value(&self) -> &[u8] {
