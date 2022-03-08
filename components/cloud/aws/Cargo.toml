@@ -17,7 +17,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 # This is only a dependency to vendor openssl for rusoto. It's not clear exactly
 # how openssl is built for tikv, but it seems to be controlled by grpcio. This
 # makes `cargo test -p aws` link correctly.
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
