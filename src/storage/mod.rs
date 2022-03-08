@@ -8746,7 +8746,6 @@ mod tests {
         ];
 
         let test_data: Vec<(Vec<u8>, Vec<u8>, u64)> = raw_test_data
-            .clone()
             .into_iter()
             .map(|(key, val, ts)| {
                 (
@@ -8806,7 +8805,6 @@ mod tests {
             iter.prev().unwrap();
         }
         let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
-            .clone()
             .into_iter()
             .skip(6)
             .rev()

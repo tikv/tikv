@@ -165,10 +165,7 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn valid(&self) -> Result<bool> {
-        match self.is_valid {
-            Some(v) => Ok(v),
-            None => self.inner.valid(),
-        }
+        self.is_valid.map_or_else(|| self.inner.valid(), |v| Ok(v))
     }
 
     fn validate_key(&self, key: &Key) -> Result<()> {
@@ -176,16 +173,15 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn key(&self) -> &[u8] {
-        match self.cur_key.as_ref() {
-            Some(k) => k,
-            None => self.inner.key(),
-        }
+        // need map_or_else to lazy evaluate the default func, as it will abort when invalid.
+        self.cur_key
+            .as_ref()
+            .map_or_else(|| self.inner.key(), |k| k)
     }
 
     fn value(&self) -> &[u8] {
-        match self.cur_value.as_ref() {
-            Some(v) => v,
-            None => self.inner.value(),
-        }
+        self.cur_value
+            .as_ref()
+            .map_or_else(|| self.inner.value(), |v| v)
     }
 }
