@@ -2345,6 +2345,7 @@ where
             }
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
