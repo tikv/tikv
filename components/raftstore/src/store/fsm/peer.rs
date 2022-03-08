@@ -1029,6 +1029,9 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
+            CasualMessage::SnapshotApplied => {
+                self.fsm.has_ready = true;
+            }
         }
     }
 
