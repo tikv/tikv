@@ -55,9 +55,22 @@ fn test_increase_pool() {
 
         // Update config, expand from 1 to 2
         cfg_controller.update(change).unwrap();
-        cluster.cfg.raft_store.store_batch_system.pool_size = 2;
-        cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-        assert_eq!(cfg_controller.get_current(), cluster.cfg.tikv);
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .apply_batch_system
+                .pool_size,
+            2
+        );
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .raft_store
+                .store_batch_system
+                .pool_size,
+            2
+        );
     }
 
     // Request can be handled as usual
