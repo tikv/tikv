@@ -440,9 +440,7 @@ where
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
-        let _ = self
-            .router
-            .send(region_id, CasualMessage::SnapshotApplied);
+        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
     }
 
     /// Cleans up the data within the range.
