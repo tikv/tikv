@@ -2,7 +2,6 @@
 
 use crate::storage::kv::{Iterator, Result, Snapshot};
 
-use api_version::{APIVersion, APIV2};
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
 use tikv_util::codec::number::U64_SIZE;
@@ -109,12 +108,6 @@ impl<I: Iterator> RawMvccIterator<I> {
         }
     }
 
-    fn map_key<'a>(&self, iter_key: &'a [u8]) -> &'a [u8] {
-        let (key, _) =
-            APIV2::decode_raw_key_owned(Key::from_encoded_slice(iter_key), true).unwrap();
-        return &iter_key[0..key.len()];
-    }
-
     fn update_cur_kv(&mut self, key: Vec<u8>, val: Vec<u8>) {
         self.cur_key = Some(key);
         self.cur_value = Some(val);
@@ -195,10 +188,10 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn key(&self) -> &[u8] {
-        self.map_key(match self.cur_key.as_ref() {
+        match self.cur_key.as_ref() {
             Some(k) => k,
             None => self.inner.key(),
-        })
+        }
     }
 
     fn value(&self) -> &[u8] {

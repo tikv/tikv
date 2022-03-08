@@ -8388,7 +8388,7 @@ mod tests {
             .collect();
         let ttl = 30;
         // Write key-value pairs one by one
-        for (key, value, _) in test_data {
+        for (key, value, _) in test_data.clone() {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -8406,7 +8406,7 @@ mod tests {
         let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snapshot);
         let encode_snapshot: RawEncodeSnapshot<_, APIV2> =
             RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
-        for &(ref key, ref value, _) in &raw_test_data[6..12] {
+        for &(ref key, ref value, _) in &test_data[6..12] {
             let res = encode_snapshot.get_cf(CF_DEFAULT, &Key::from_encoded_slice(key));
             assert_eq!(res.unwrap().unwrap(), value.to_owned());
         }
@@ -8420,7 +8420,7 @@ mod tests {
             iter.next().unwrap();
         }
 
-        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = raw_test_data
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
             .clone()
             .into_iter()
             .skip(6)
@@ -8435,7 +8435,7 @@ mod tests {
             pairs.push((iter.key().to_owned(), iter.value().to_owned()));
             iter.prev().unwrap();
         }
-        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = raw_test_data
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
             .clone()
             .into_iter()
             .skip(6)
