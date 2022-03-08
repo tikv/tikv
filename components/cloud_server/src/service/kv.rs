@@ -712,7 +712,17 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
         mut request: StoreSafeTsRequest,
         sink: UnarySink<StoreSafeTsResponse>,
     ) {
-        unimplemented!()
+        // TODO(x) implement it.
+        let task = async move {
+            let mut response = StoreSafeTsResponse::default();
+            sink.success(response).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("call get_store_safe_ts failed"; "err" => ?e);
+        })
+        .map(|_| ());
+        ctx.spawn(task);
     }
 
     fn get_lock_wait_info(
