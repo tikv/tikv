@@ -326,8 +326,8 @@ fn test_serde_custom_tikv_config() {
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
             disable_write_stall: true,
-            soft_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
-            hard_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
@@ -377,8 +377,8 @@ fn test_serde_custom_tikv_config() {
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
             disable_write_stall: true,
-            soft_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
-            hard_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
@@ -442,8 +442,8 @@ fn test_serde_custom_tikv_config() {
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
             disable_write_stall: true,
-            soft_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
-            hard_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
@@ -507,8 +507,8 @@ fn test_serde_custom_tikv_config() {
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
             disable_write_stall: true,
-            soft_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
-            hard_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
@@ -601,8 +601,8 @@ fn test_serde_custom_tikv_config() {
             compaction_style: DBCompactionStyle::Universal,
             disable_auto_compactions: true,
             disable_write_stall: true,
-            soft_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
-            hard_pending_compaction_bytes_limit: OptionReadableSize(Some(ReadableSize::gb(12))),
+            soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
+            hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: true,
             titan: titan_cf_config,
             prop_size_index_distance: 4000000,
