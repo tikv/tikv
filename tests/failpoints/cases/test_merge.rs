@@ -1569,12 +1569,17 @@ fn test_retry_pending_prepare_merge_fail() {
 
     // Pause apply and write some data to the left region
     fail::cfg("on_handle_apply", "pause").unwrap();
+    let (propose_tx, propose_rx) = mpsc::sync_channel(10);
+    fail::cfg_callback("after_propose", move || propose_tx.send(()).unwrap()).unwrap();
+
     let rx = cluster.async_put(b"k1", b"v11").unwrap();
+    propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
 
     // Then, start merging. PrepareMerge should become pending because applied_index is smaller
     // than proposed_index.
     cluster.merge_region(left.id, right.id, Callback::None);
+    propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     thread::sleep(Duration::from_millis(200));
     assert!(txn_ext.pessimistic_locks.read().is_writable());
 
@@ -1585,19 +1590,16 @@ fn test_retry_pending_prepare_merge_fail() {
     let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(!res.get_header().has_error(), "{:?}", res);
 
-    thread::sleep(Duration::from_millis(300));
+    propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     fail::remove("disk_already_full_peer_1");
     fail::remove("disk_already_full_peer_2");
 
     // Merge should not succeed because the disk is full.
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(300));
+    cluster.reset_leader_of_region(left.id);
     assert_eq!(cluster.get_region(b"k1"), left);
-    assert_eq!(cluster.leader_of_region(left.id).unwrap().get_store_id(), 1);
 
-    // cluster.must_put(b"k1", b"v12");
-    let rx = cluster.async_put(b"k1", b"v12").unwrap();
-    let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(!res.get_header().has_error(), "{:?}", res);
+    cluster.must_put(b"k1", b"v12");
 }
 
 #[test]

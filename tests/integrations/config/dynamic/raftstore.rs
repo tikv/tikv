@@ -20,7 +20,7 @@ use engine_traits::{Engines, ALL_CFS};
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
-use tikv_util::config::VersionTrack;
+use tikv_util::config::{ReadableSize, VersionTrack};
 use tikv_util::worker::{dummy_scheduler, LazyWorker, Worker};
 
 #[derive(Clone)]
@@ -158,6 +158,7 @@ fn test_update_raftstore_config() {
     let change = new_changes(vec![
         ("raftstore.messages-per-tick", "12345"),
         ("raftstore.raft-log-gc-threshold", "54321"),
+        ("raftstore.raft-max-size-per-msg", 128MiB""),
         ("raftstore.apply-max-batch-size", "1234"),
         ("raftstore.store-max-batch-size", "4321"),
     ]);
@@ -170,6 +171,7 @@ fn test_update_raftstore_config() {
     raft_store.raft_log_gc_threshold = 54321;
     raft_store.apply_batch_system.max_batch_size = 1234;
     raft_store.store_batch_system.max_batch_size = 4321;
+    raft_store.raft_max_size_per_msg = ReadableSize::mb(128);
     let validate_store_cfg = |raft_cfg: &Config| {
         let raftstore_cfg = raft_cfg.clone();
         validate_store(&router, move |cfg: &Config| {
