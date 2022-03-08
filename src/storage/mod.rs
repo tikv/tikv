@@ -1818,6 +1818,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Delete a raw key from the storage.
+    /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_delete(
         &self,
         ctx: Context,
@@ -1869,6 +1870,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Delete all raw keys in [`start_key`, `end_key`).
+    /// Note that in API V2, data is still "physical" deleted, as "logical" delete for a range will be quite expensive.
+    /// Notification of range delete operations will be through a special channel (unimplemented yet).
     pub fn raw_delete_range(
         &self,
         ctx: Context,
@@ -1902,7 +1905,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
         batch.set_allowed_on_disk_almost_full();
 
-        // TODO: specially notification channel for API V2.
+        // TODO: special notification channel for API V2.
 
         self.engine.async_write(
             &ctx,
@@ -1914,6 +1917,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     }
 
     /// Delete some raw keys in a batch.
+    /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_batch_delete(
         &self,
         ctx: Context,
@@ -2176,7 +2180,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         match api_version {
                             ApiVersion::API => {
                                 for i in 0..ranges_len {
-                                    // let start_key = Key::from_encoded(ranges[i].take_start_key());
                                     let start_key =
                                         API::encode_raw_key_owned(ranges[i].take_start_key(), None);
                                     let end_key = ranges[i].take_end_key();
@@ -2184,16 +2187,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                         if i + 1 == ranges_len {
                                             None
                                         } else {
-                                            // Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
                                             Some(API::encode_raw_key(
                                                 ranges[i + 1].get_start_key(),
                                                 None,
                                             ))
                                         }
                                     } else {
-                                        // Some(Key::from_encoded(end_key))
                                         Some(API::encode_raw_key_owned(end_key, None))
                                     };
+
                                     let pairs: Vec<Result<KvPair>> = if reverse_scan {
                                         store
                                             .reverse_raw_scan(
@@ -4511,8 +4513,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
 
         for (k, v) in test_data {
             expect_value(
@@ -4615,8 +4617,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
 
         expect_value(
             b"004".to_vec(),
@@ -4649,8 +4651,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 1),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
 
         // Assert now no key remains
         for kv in &test_data {
@@ -4704,6 +4706,11 @@ mod tests {
                 .unwrap();
             rx.recv().unwrap();
         }
+
+        expect_value(
+            b"004".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+        );
 
         // Delete ["d", "e")
         storage
@@ -4879,8 +4886,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
 
         // Verify pairs in a batch
         let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
@@ -4933,8 +4940,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
 
         // Verify pairs in a batch
         let mut ids = vec![];
@@ -5761,8 +5768,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
 
         for &(ref key, _, ttl) in &test_data {
             let res = block_on(storage.raw_get_key_ttl(ctx.clone(), "".to_string(), key.clone()))

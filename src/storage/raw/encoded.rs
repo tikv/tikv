@@ -28,15 +28,12 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
     }
 
     fn map_value(&self, value: Result<Option<Value>>) -> Result<Option<Value>> {
-        match value? {
-            Some(v) => {
-                let raw_value = API::decode_raw_value_owned(v)?;
-                if raw_value.is_valid(self.current_ts) {
-                    return Ok(Some(raw_value.user_value));
-                }
+        if let Some(v) = value? {
+            let raw_value = API::decode_raw_value_owned(v)?;
+            if raw_value.is_valid(self.current_ts) {
+                return Ok(Some(raw_value.user_value));
             }
-            _ => {}
-        };
+        }
         Ok(None)
     }
 
