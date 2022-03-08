@@ -4714,6 +4714,7 @@ where
             }
             self.raft_max_inflight_msgs = raft_max_inflight_msgs;
         }
+        self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
     }
 
     fn maybe_inject_propose_error(
