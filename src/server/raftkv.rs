@@ -8,14 +8,11 @@ use std::{
 };
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
-<<<<<<< HEAD
 use bitflags::bitflags;
-=======
 use raft::eraftpb::{self, MessageType};
 use raft::StateRole;
 use thiserror::Error;
 
->>>>>>> b1ea4158a... *: check memory locks for replica read only on the leader (#12115)
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
