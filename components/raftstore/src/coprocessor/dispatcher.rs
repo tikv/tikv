@@ -526,9 +526,9 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message) {
+    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message, role: StateRole) {
         for step_ob in &self.registry.read_index_observers {
-            step_ob.observer.inner().on_step(msg);
+            step_ob.observer.inner().on_step(msg, role);
         }
     }
 

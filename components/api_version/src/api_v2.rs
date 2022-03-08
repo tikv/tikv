@@ -24,7 +24,8 @@ pub const TIDB_RANGES_COMPLEMENT: &[(&[u8], &[u8])] = &[
 
 bitflags::bitflags! {
     struct ValueMeta: u8 {
-        const EXPIRE_TS = 0b00000001;
+        const EXPIRE_TS = 0b0000_0001;
+        const DELETE_FLAG = 0b0000_0010;
     }
 }
 
@@ -63,6 +64,7 @@ impl APIVersion for APIV2 {
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>> {
         let mut rest_len = bytes.len().checked_sub(1).ok_or(Error::ValueLength)?;
         let flags = ValueMeta::from_bits(bytes[rest_len]).ok_or(Error::ValueMeta)?;
+        let is_delete = flags.contains(ValueMeta::DELETE_FLAG);
         let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
             rest_len = rest_len
                 .checked_sub(number::U64_SIZE)
@@ -75,6 +77,7 @@ impl APIVersion for APIV2 {
         Ok(RawValue {
             user_value: &bytes[..rest_len],
             expire_ts,
+            is_delete,
         })
     }
 
@@ -85,6 +88,9 @@ impl APIVersion for APIV2 {
             flags.insert(ValueMeta::EXPIRE_TS);
             meta_size += number::U64_SIZE;
         }
+        if value.is_delete {
+            flags.insert(ValueMeta::DELETE_FLAG);
+        };
         let mut buf = Vec::with_capacity(value.user_value.len() + meta_size);
         buf.extend_from_slice(value.user_value);
         if let Some(expire_ts) = value.expire_ts {
@@ -101,6 +107,9 @@ impl APIVersion for APIV2 {
             flags.insert(ValueMeta::EXPIRE_TS);
             meta_size += number::U64_SIZE;
         }
+        if value.is_delete {
+            flags.insert(ValueMeta::DELETE_FLAG);
+        };
         value.user_value.reserve(meta_size);
         if let Some(expire_ts) = value.expire_ts {
             value.user_value.encode_u64(expire_ts).unwrap();
