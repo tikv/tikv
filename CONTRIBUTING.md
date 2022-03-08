@@ -19,9 +19,9 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
-* C++ compiler - gcc 4.9+ (required for gRPC)
+* C++ compiler - gcc 5+ (required for gRPC)
 
-If you are targeting platforms other than x86_64/aarch64 linux, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 linux or MacOS, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 
