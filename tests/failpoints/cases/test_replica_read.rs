@@ -657,14 +657,24 @@ fn test_read_index_lock_checking_on_follower() {
     pd_client.must_add_peer(rid, new_peer(3, 3));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
+    let r1 = cluster.get_region(b"k1");
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Pause read_index before transferring leader to peer 3. Then, the read index
     // message will still be sent to the old leader peer 1.
     fail::cfg("before_propose_readindex", "1*pause").unwrap();
-    let r1 = cluster.get_region(b"k1");
-    let resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
-    assert!(resp.recv_timeout(Duration::from_millis(500)).is_err());
+    let mut resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
+    for i in 0..=20 {
+        let res = resp.recv_timeout(Duration::from_millis(500));
+        if res.is_err() {
+            break;
+        }
+        if i == 20 {
+            panic!("read index not blocked by failpoint: {:?}", res);
+        }
+        thread::sleep(Duration::from_millis(200));
+        resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
+    }
 
     // Filter all other responses to peer 2, so the term of peer 2 will not change.
     // Otherwise, a StaleCommand error will be returned instead.
@@ -738,22 +748,24 @@ fn test_read_index_lock_checking_on_false_leader() {
     raft_msg.set_region_epoch(r1.get_region_epoch().to_owned());
     cluster.send_raft_msg(raft_msg).unwrap();
 
-    for i in 0..10 {
+    let mut leader_id = 1;
+    for i in 1..=20 {
         thread::sleep(Duration::from_millis(200));
         cluster.reset_leader_of_region(rid);
         let leader = cluster.leader_of_region(rid);
         if let Some(leader) = leader {
-            if leader.get_store_id() == 3 {
+            leader_id = leader.get_store_id();
+            if leader_id != 1 {
                 break;
             }
         }
-        if i == 9 {
+        if i == 20 {
             panic!("new leader should be elected");
         }
     }
 
-    // k1 has a memory lock on node 3
-    let leader_cm = cluster.sim.rl().get_concurrency_manager(3);
+    // k1 has a memory lock on the new leader
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(leader_id);
     let lock = Lock::new(
         LockType::Put,
         b"k1".to_vec(),
