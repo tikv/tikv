@@ -266,17 +266,11 @@ impl Shard {
     }
 
     pub(crate) fn set_split_keys(&self, keys: &[Vec<u8>]) -> bool {
-        if self.get_split_stage() == pb::SplitStage::Initial {
+        if !self.is_splitting() {
             *self.split_ctx.write().unwrap() = Arc::new(SplitContext::new(keys));
-            self.set_split_stage(pb::SplitStage::PreSplit);
             return true;
         }
-        warn!(
-            "shard {}:{} failed to set split key got stage {}",
-            self.id,
-            self.ver,
-            self.get_split_stage().value()
-        );
+        warn!("shard {}:{} is already splitting", self.id, self.ver);
         false
     }
 
@@ -295,11 +289,11 @@ impl Shard {
     }
 
     pub fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
-        let mut keys = Vec::new();
         let estimated_size = load_u64(&self.estimated_size);
-        if estimated_size < target_size {
-            return keys;
+        if estimated_size < target_size || self.is_splitting() {
+            return vec![];
         }
+        let mut keys = Vec::new();
         let l0s = self.get_l0_tbls();
         if l0s.tbls.len() > 0 && l0s.total_size() > (estimated_size * 3 / 10) {
             if let Some(tbl) = l0s.tbls[0].get_cf(0) {

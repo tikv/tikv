@@ -26,10 +26,8 @@ impl Ticker {
         let base_interval = config.raft_base_tick_interval.as_millis();
         let schedules = vec![
             TickSchedule::new(1),
-            TickSchedule::new(config.raft_log_gc_tick_interval.as_millis() / base_interval),
             TickSchedule::new(config.split_region_check_tick_interval.as_millis() / base_interval),
             TickSchedule::new(config.pd_heartbeat_tick_interval.as_millis() / base_interval),
-            TickSchedule::new(config.peer_stale_state_check_interval.as_millis() / base_interval),
         ];
         Self { tick: 1, schedules }
     }

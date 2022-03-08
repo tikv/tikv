@@ -234,6 +234,9 @@ impl<'a> PeerMsgHandler<'a> {
         if self.ticker.is_on_tick(PEER_TICK_PD_HEARTBEAT) {
             self.on_pd_heartbeat_tick();
         }
+        if self.ticker.is_on_tick(PEER_TICK_SPLIT_CHECK) {
+            self.on_split_region_check_tick();
+        }
     }
 
     fn start(&mut self) {
@@ -280,17 +283,16 @@ impl<'a> PeerMsgHandler<'a> {
             self.peer.mut_store().flush_cache_metrics();
             return;
         }
+        self.ticker.schedule(PEER_TICK_RAFT);
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
         if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
             // need to check if snapshot is applied.
-            self.ticker.schedule(PEER_TICK_RAFT);
             return;
         }
         self.fsm.peer.raft_group.tick();
         self.fsm.peer.mut_store().flush_cache_metrics();
-        self.ticker.schedule(PEER_TICK_RAFT)
     }
 
     fn on_apply_result(&mut self, mut res: MsgApplyResult) {
@@ -305,12 +307,6 @@ impl<'a> PeerMsgHandler<'a> {
         self.on_ready_result(&mut res.results);
         if self.fsm.stopped {
             return;
-        }
-        // After applying, several metrics are updated, report it to pd to
-        // get fair schedule.
-        if self.fsm.peer.is_leader() {
-            self.ticker.schedule(PEER_TICK_PD_HEARTBEAT);
-            self.ticker.schedule(PEER_TICK_SPLIT_CHECK);
         }
     }
 
@@ -879,7 +875,6 @@ impl<'a> PeerMsgHandler<'a> {
         }
         drop(meta);
         if is_leader {
-            self.on_split_region_check_tick();
             let store = self.peer.mut_store();
             if let Some(cs) = store.pending_flush.take() {
                 self.propose_change_set(cs);
@@ -1074,7 +1069,7 @@ impl<'a> PeerMsgHandler<'a> {
             if !self.fsm.peer.is_leader() {
                 return;
             }
-            if shard.get_split_stage() != kvenginepb::SplitStage::Initial {
+            if shard.is_splitting() {
                 return;
             }
             let cfg_split_size = self.ctx.cfg.region_split_size.0;
@@ -1082,6 +1077,12 @@ impl<'a> PeerMsgHandler<'a> {
             if estimated_size < cfg_split_size {
                 return;
             }
+            info!(
+                "region {} estimated size {} is greater than cfg split size {}",
+                self.peer.tag(),
+                estimated_size,
+                cfg_split_size
+            );
             let task = SplitTask::new(
                 self.region().clone(),
                 self.peer.peer.clone(),

@@ -44,7 +44,7 @@ impl Engine {
 
     pub fn split_shard_files(&self, shard_id: u64, shard_ver: u64) -> Result<pb::ChangeSet> {
         let shard = self.get_shard_with_ver(shard_id, shard_ver)?;
-        if !shard.is_splitting() {
+        if shard.get_split_stage() != pb::SplitStage::PreSplit {
             return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
         }
         let mut cs = new_change_set(shard_id, shard_ver, pb::SplitStage::SplitFileDone);

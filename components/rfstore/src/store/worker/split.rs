@@ -93,8 +93,8 @@ impl SplitRunner {
             info!("wait for initial flush"; "region" => tag);
         }
         let shard = shard_opt.unwrap();
-        if shard.get_split_stage() != kvenginepb::SplitStage::Initial {
-            warn!("wrong split stage"; "region" => tag, "stage" => shard.get_split_stage().value());
+        if shard.is_splitting() {
+            warn!("shard is already splitting"; "region" => tag, "stage" => shard.get_split_stage().value());
             return;
         }
         let mut request = new_request(&region, &peer);
