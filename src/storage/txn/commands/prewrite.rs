@@ -2138,7 +2138,7 @@ mod tests {
             t1_start_ts,
             t2_start_ts,
         );
-        let err = prewrite_command(&engine, cm.clone(), &mut stat, cmd).unwrap_err();
+        let err = prewrite_command(&engine, cm, &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
             Error(box ErrorInner::Mvcc(MvccError(
