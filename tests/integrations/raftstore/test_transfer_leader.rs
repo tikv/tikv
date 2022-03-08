@@ -8,6 +8,7 @@ use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
 
+use raftstore::store::LocksStatus;
 use test_raftstore::*;
 use tikv::storage::kv::{SnapContext, SnapshotExt};
 use tikv::storage::{Engine, Snapshot};
@@ -316,4 +317,54 @@ fn test_propose_in_memory_pessimistic_locks() {
         .unwrap()
         .unwrap();
     assert_eq!(value, lock.into_lock().to_bytes());
+}
+
+#[test]
+fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    cluster.cfg.raft_store.reactive_memory_lock_tick_interval = ReadableDuration::millis(200);
+    cluster.cfg.raft_store.reactive_memory_lock_timeout_tick = 3;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let snapshot = cluster.must_get_snapshot_of_region(1);
+    let txn_ext = snapshot.txn_ext.unwrap();
+    let lock = PessimisticLock {
+        primary: b"key".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: 20.into(),
+        min_commit_ts: 30.into(),
+    };
+    // Write a pessimistic lock to the in-memory pessimistic lock table.
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"key"), lock)])
+            .is_ok()
+    );
+
+    // Make it fail to transfer leader
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .msg_type(MessageType::MsgTimeoutNow)
+            .direction(Direction::Recv),
+    ));
+    cluster.transfer_leader(1, new_peer(2, 2));
+
+    thread::sleep(Duration::from_millis(200));
+    // At first, the locks status will become invalid.
+    assert_eq!(
+        txn_ext.pessimistic_locks.read().status,
+        LocksStatus::TransferringLeader
+    );
+
+    // After several ticks, in-memory pessimistic locks should become available again.
+    thread::sleep(Duration::from_secs(1));
+    assert_eq!(txn_ext.pessimistic_locks.read().status, LocksStatus::Normal);
+    cluster.reset_leader_of_region(1);
+    assert_eq!(cluster.leader_of_region(1).unwrap().get_store_id(), 1);
 }

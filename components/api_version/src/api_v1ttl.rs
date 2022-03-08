@@ -36,6 +36,7 @@ impl APIVersion for APIV1TTL {
         Ok(RawValue {
             user_value: &bytes[..rest_len],
             expire_ts,
+            is_delete: false,
         })
     }
 

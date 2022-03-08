@@ -20,6 +20,7 @@ impl APIVersion for APIV1 {
         Ok(RawValue {
             user_value: bytes,
             expire_ts: None,
+            is_delete: false,
         })
     }
 
