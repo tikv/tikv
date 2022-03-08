@@ -199,6 +199,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
     use raftstore::coprocessor::RoleChange;
+    use raftstore::store::util::new_peer;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
 
@@ -243,6 +244,9 @@ mod tests {
         // Does not send unsubscribed region events.
         let mut region = Region::default();
         region.set_id(1);
+        region.mut_peers().push(new_peer(2, 2));
+        region.mut_peers().push(new_peer(3, 3));
+
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
@@ -250,15 +254,57 @@ mod tests {
         let oid = ObserveID::new();
         observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+
+        // NotLeader error should contains the new leader.
+        observer.on_role_change(
+            &mut ctx,
+            &RoleChange {
+                state: StateRole::Follower,
+                leader_id: 2,
+                prev_lead_transferee: raft::INVALID_ID,
+                vote: raft::INVALID_ID,
+            },
+        );
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::Deregister(Deregister::Delegate {
                 region_id,
                 observe_id,
-                ..
+                err,
             }) => {
                 assert_eq!(region_id, 1);
                 assert_eq!(observe_id, oid);
+                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(2, 2)));
+                match err {
+                    CdcError::Request(err) => assert_eq!(*err, store_err.into()),
+                    _ => panic!("unexpected err"),
+                }
+            }
+            _ => panic!("unexpected task"),
+        };
+
+        // NotLeader error should includes leader transferee.
+        observer.on_role_change(
+            &mut ctx,
+            &RoleChange {
+                state: StateRole::Follower,
+                leader_id: raft::INVALID_ID,
+                prev_lead_transferee: 3,
+                vote: 3,
+            },
+        );
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::Deregister(Deregister::Delegate {
+                region_id,
+                observe_id,
+                err,
+            }) => {
+                assert_eq!(region_id, 1);
+                assert_eq!(observe_id, oid);
+                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(3, 3)));
+                match err {
+                    CdcError::Request(err) => assert_eq!(*err, store_err.into()),
+                    _ => panic!("unexpected err"),
+                }
             }
             _ => panic!("unexpected task"),
         };

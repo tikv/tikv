@@ -608,6 +608,9 @@ where
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
     pub region_buckets: Buckets,
+
+    /// lead_transferee if the peer is in a leadership transferring.
+    pub lead_transferee: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -733,6 +736,7 @@ where
             persisted_number: 0,
             apply_snap_ctx: None,
             region_buckets: Buckets::default(),
+            lead_transferee: raft::INVALID_ID,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1698,7 +1702,7 @@ where
                 RoleChange {
                     state: ss.raft_state,
                     leader_id: ss.leader_id,
-                    prev_lead_transferee: ready.prev_lead_transferee(),
+                    prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
                 },
             );
@@ -1708,6 +1712,7 @@ where
                 self.on_leader_changed(self.leader_id(), hs.get_term());
             }
         }
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
     /// Correctness depends on the order between calling this function and notifying other peers
@@ -4751,6 +4756,11 @@ where
             })
         });
         Ok(())
+    }
+
+    /// Update states of the peer which can be changed in the previous raft tick.
+    pub fn post_raft_group_tick(&mut self) {
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 }
 
