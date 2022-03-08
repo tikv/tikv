@@ -1891,8 +1891,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             match self.api_version {
                 ApiVersion::API => {
                     (
-                        API::encode_raw_key_owned(start_key, Some(TimeStamp::max())),
-                        API::encode_raw_key_owned(end_key, Some(TimeStamp::max())),
+                        API::encode_raw_key_owned(start_key, None),
+                        API::encode_raw_key_owned(end_key, None),
                     )
                 }
             }
@@ -2064,15 +2064,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     pairs
                                         .into_iter()
                                         .map(|pair| {
-                                            pair
-                                            // .map(|(k, v)| {
-                                            //     let (user_key, _) = API::decode_raw_key_owned(
-                                            //         Key::from_encoded(k),
-                                            //         true,
-                                            //     )
-                                            //     .unwrap();
-                                            //     (user_key, v)
-                                            // })
+                                            pair.map(|(k, v)| {
+                                                let (user_key, _) = API::decode_raw_key_owned(
+                                                    Key::from_encoded(k),
+                                                    true,
+                                                )
+                                                .unwrap();
+                                                (user_key, v)
+                                            })
                                             .map_err(Error::from)
                                         })
                                         .collect()
@@ -4515,18 +4514,6 @@ mod tests {
         }
         rx.recv().unwrap();
 
-        // DEBUG(rawkv)
-        let res = block_on(storage.raw_scan(
-            ctx.clone(),
-            "".to_string(),
-            b"r".to_vec(),
-            Some(b"rz".to_vec()),
-            1000,
-            false,
-            false,
-        ));
-        println!("scan: {:?}", res);
-
         for (k, v) in test_data {
             expect_value(
                 v,
@@ -4715,25 +4702,8 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
+            rx.recv().unwrap();
         }
-        rx.recv().unwrap();
-
-        // DEBUG(rawkv)
-        let res = block_on(storage.raw_scan(
-            ctx.clone(),
-            "".to_string(),
-            b"r".to_vec(),
-            Some(b"rz".to_vec()),
-            1000,
-            false,
-            false,
-        ));
-        println!("scan: {:?}", res);
-
-        expect_value(
-            b"004".to_vec(),
-            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
-        );
 
         // Delete ["d", "e")
         storage
@@ -4748,60 +4718,58 @@ mod tests {
         rx.recv().unwrap();
 
         // Assert key "d" has gone
-        // expect_value(
-        //     b"003".to_vec(),
-        //     block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0c".to_vec())).unwrap(),
-        // );
-        // expect_none(
-        //     block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
-        // );
-        // expect_value(
-        //     b"005".to_vec(),
-        //     block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0e".to_vec())).unwrap(),
-        // );
-        //
-        // // Delete ["aa", "ab")
-        // storage
-        //     .raw_delete_range(
-        //         ctx.clone(),
-        //         "".to_string(),
-        //         b"r\0aa".to_vec(),
-        //         b"r\0ab".to_vec(),
-        //         expect_ok_callback(tx.clone(), 2),
-        //     )
-        //     .unwrap();
-        // rx.recv().unwrap();
-        //
-        // // Assert nothing happened
-        // expect_value(
-        //     b"001".to_vec(),
-        //     block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
-        // );
-        // expect_value(
-        //     b"002".to_vec(),
-        //     block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0b".to_vec())).unwrap(),
-        // );
-        //
-        // // Delete all
-        // storage
-        //     .raw_delete_range(
-        //         ctx.clone(),
-        //         "".to_string(),
-        //         b"r\0a".to_vec(),
-        //         b"r\0z".to_vec(),
-        //         expect_ok_callback(tx, 3),
-        //     )
-        //     .unwrap();
-        // rx.recv().unwrap();
-        //
-        // // Assert now no key remains
-        // for kv in &test_data {
-        //     expect_none(
-        //         block_on(storage.raw_get(ctx.clone(), "".to_string(), kv.0.to_vec())).unwrap(),
-        //     );
-        // }
-        //
-        // rx.recv().unwrap();
+        expect_value(
+            b"003".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0c".to_vec())).unwrap(),
+        );
+        expect_none(
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0d".to_vec())).unwrap(),
+        );
+        expect_value(
+            b"005".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0e".to_vec())).unwrap(),
+        );
+
+        // Delete ["aa", "ab")
+        storage
+            .raw_delete_range(
+                ctx.clone(),
+                "".to_string(),
+                b"r\0aa".to_vec(),
+                b"r\0ab".to_vec(),
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert nothing happened
+        expect_value(
+            b"001".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0a".to_vec())).unwrap(),
+        );
+        expect_value(
+            b"002".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), b"r\0b".to_vec())).unwrap(),
+        );
+
+        // Delete all
+        storage
+            .raw_delete_range(
+                ctx.clone(),
+                "".to_string(),
+                b"r\0a".to_vec(),
+                b"r\0z".to_vec(),
+                expect_ok_callback(tx, 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Assert now no key remains
+        for kv in &test_data {
+            expect_none(
+                block_on(storage.raw_get(ctx.clone(), "".to_string(), kv.0.to_vec())).unwrap(),
+            );
+        }
     }
 
     #[test]

@@ -52,7 +52,7 @@ pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-    StatisticsSummary, TTL_TOMBSTONE,
+    StatisticsSummary, RAW_VALUE_TOMBSTONE,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;

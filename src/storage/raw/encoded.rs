@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::{Iterator, Result, Snapshot, TTL_TOMBSTONE};
+use crate::storage::kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE};
 use crate::storage::Statistics;
 
 use api_version::APIVersion;
@@ -31,17 +31,13 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
         match value? {
             Some(v) => {
                 let raw_value = API::decode_raw_value_owned(v)?;
-                if raw_value
-                    .expire_ts
-                    .map(|expire_ts| expire_ts <= self.current_ts)
-                    .unwrap_or(false)
-                {
-                    return Ok(None);
+                if raw_value.is_valid(self.current_ts) {
+                    return Ok(Some(raw_value.user_value));
                 }
-                Ok(Some(raw_value.user_value))
             }
-            None => Ok(None),
-        }
+            _ => {}
+        };
+        Ok(None)
     }
 
     pub fn get_key_ttl_cf(
@@ -116,7 +112,7 @@ impl<S: Snapshot, API: APIVersion> Snapshot for RawEncodeSnapshot<S, API> {
 pub struct RawEncodeIterator<I: Iterator, API: APIVersion> {
     inner: I,
     current_ts: u64,
-    skip_ttl: usize,
+    skip_invalid: usize,
     _phantom: PhantomData<API>,
 }
 
@@ -125,7 +121,7 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
         RawEncodeIterator {
             inner,
             current_ts,
-            skip_ttl: 0,
+            skip_invalid: 0,
             _phantom: PhantomData,
         }
     }
@@ -138,12 +134,8 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
 
             if *res.as_ref().unwrap() {
                 let raw_value = API::decode_raw_value(self.inner.value())?;
-                if raw_value
-                    .expire_ts
-                    .map(|expire_ts| expire_ts <= self.current_ts)
-                    .unwrap_or(false)
-                {
-                    self.skip_ttl += 1;
+                if !raw_value.is_valid(self.current_ts) {
+                    self.skip_invalid += 1;
                     res = if forward {
                         self.inner.next()
                     } else {
@@ -160,8 +152,8 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
 
 impl<I: Iterator, API: APIVersion> Drop for RawEncodeIterator<I, API> {
     fn drop(&mut self) {
-        TTL_TOMBSTONE.with(|m| {
-            *m.borrow_mut() += self.skip_ttl;
+        RAW_VALUE_TOMBSTONE.with(|m| {
+            *m.borrow_mut() += self.skip_invalid;
         });
     }
 }

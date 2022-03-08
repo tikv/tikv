@@ -25,7 +25,8 @@ struct Hlc(AtomicU64);
 
 impl Default for Hlc {
     fn default() -> Self {
-        Self(AtomicU64::new(0))
+        // Should be non-zero. Otherwise it's difficult to build upper bound of iterators.
+        Self(AtomicU64::new(1))
     }
 }
 
