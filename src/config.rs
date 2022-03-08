@@ -2363,6 +2363,9 @@ pub struct DFSConfig {
 
     #[online_config(skip)]
     pub s3_region: String,
+
+    #[online_config(skip)]
+    pub remote_compactor_addr: String,
 }
 
 impl DFSConfig {

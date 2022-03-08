@@ -69,7 +69,7 @@ impl Engine {
             flush_tx,
             fs: fs.clone(),
             cache,
-            comp_client: CompactionClient::new(fs.clone(), opts.remote_compaction_addr.clone()),
+            comp_client: CompactionClient::new(fs.clone(), opts.remote_compactor_addr.clone()),
             id_allocator,
             managed_safe_ts: AtomicU64::new(0),
         };

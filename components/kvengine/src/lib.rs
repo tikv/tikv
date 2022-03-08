@@ -12,6 +12,7 @@ pub mod ingest;
 pub mod meta;
 pub mod options;
 pub mod read;
+pub mod remote;
 pub mod shard;
 pub mod split;
 pub mod stats;

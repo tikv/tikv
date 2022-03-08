@@ -207,6 +207,7 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
+  "cmd/tikv-compactor",
   "cmd/tikv-server",
   "cmd/tikv-ctl",
   "components/test_backup",
@@ -262,7 +263,7 @@ members = [
   "components/rfstore",
   "components/cloud_server",
 ]
-default-members = ["cmd/tikv-server"]
+default-members = ["cmd/tikv-server", "cmd/tikv-compactor"]
 
 [profile.dev]
 opt-level = 0

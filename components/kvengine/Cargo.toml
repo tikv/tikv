@@ -28,6 +28,7 @@ futures = { version = "0.3", features = ["thread-pool"] }
 dashmap = "4.0"
 dyn-clone = "1.0"
 fslock = "0.1.7"
+hex = "0.4"
 http = "0.2"
 hyper = "0.14"
 moka = "0.5.1"
@@ -36,6 +37,7 @@ crc32c = "0.6"
 kvenginepb = { path = "../kvenginepb", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
+serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 slog-term = "2.4"

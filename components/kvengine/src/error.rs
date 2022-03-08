@@ -26,6 +26,8 @@ pub enum Error {
     DFSError(dfs::Error),
     #[error("IO error {0}")]
     Io(std::io::Error),
+    #[error("remote compaction {0}")]
+    RemoteCompaction(String),
 }
 
 impl From<table::Error> for Error {
@@ -43,5 +45,17 @@ impl From<dfs::Error> for Error {
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+impl From<hyper::Error> for Error {
+    fn from(e: hyper::Error) -> Self {
+        Error::RemoteCompaction(e.to_string())
+    }
+}
+
+impl From<http::Error> for Error {
+    fn from(e: http::Error) -> Self {
+        Error::RemoteCompaction(e.to_string())
     }
 }

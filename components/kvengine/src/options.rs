@@ -26,7 +26,7 @@ pub struct Options {
 
     pub table_builder_options: sstable::TableBuilderOptions,
 
-    pub remote_compaction_addr: String,
+    pub remote_compactor_addr: String,
 
     pub recovery_concurrency: usize,
 
@@ -48,7 +48,7 @@ impl Default for Options {
             max_block_cache_size: 0,
             num_compactors: 3,
             table_builder_options: Default::default(),
-            remote_compaction_addr: Default::default(),
+            remote_compactor_addr: Default::default(),
             recovery_concurrency: Default::default(),
             preparation_concurrency: Default::default(),
             max_mem_table_size_factor: 256,

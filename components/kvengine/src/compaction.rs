@@ -5,8 +5,8 @@ use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Bytes, BytesMut};
-use protobuf::RepeatedField;
+use bytes::{Buf, Bytes, BytesMut};
+use protobuf::{Message, RepeatedField};
 use slog_global::error;
 
 use crate::dfs;
@@ -14,6 +14,7 @@ use crate::table::{
     search,
     sstable::{self, SSTable},
 };
+use crate::Error::RemoteCompaction;
 use crate::*;
 use kvenginepb as pb;
 
@@ -21,61 +22,81 @@ use kvenginepb as pb;
 pub(crate) struct CompactionClient {
     dfs: Arc<dyn dfs::DFS>,
     remote_url: String,
+    client: Option<hyper::Client<hyper::client::HttpConnector>>,
 }
 
 impl CompactionClient {
     pub(crate) fn new(dfs: Arc<dyn dfs::DFS>, remote_url: String) -> Self {
-        Self { dfs, remote_url }
+        let client = if remote_url.is_empty() {
+            None
+        } else {
+            Some(hyper::Client::new())
+        };
+        Self {
+            dfs,
+            remote_url,
+            client,
+        }
     }
 
     pub(crate) fn compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
-        let mut comp = pb::Compaction::new();
-        comp.set_top_deletes(req.tops.clone());
-        comp.set_cf(req.cf as i32);
-        comp.set_level(req.level as u32);
-        if req.level == 0 {
-            let tbls = compact_l0(&req, self.dfs.clone())?;
-            comp.set_table_creates(RepeatedField::from_vec(tbls));
-            let mut bot_dels = vec![];
-            for cf_bot_dels in &req.multi_cf_bottoms {
-                bot_dels.extend_from_slice(cf_bot_dels.as_slice());
-            }
-            comp.set_bottom_deletes(bot_dels);
-            info!("finish compact L0 for {}:{}", req.shard_id, req.shard_ver);
-            return Ok(comp);
+        if self.client.is_none() {
+            return local_compact(self.dfs.clone(), req);
+        } else {
+            let client = self.clone();
+            let (tx, rx) = tikv_util::mpsc::bounded(1);
+            self.dfs.get_runtime().spawn(async move {
+                tx.send(client.remote_compact(req).await).unwrap();
+            });
+            return rx.recv().unwrap();
         }
-        let tbls = compact_tables(&req, self.dfs.clone())?;
-        comp.set_table_creates(RepeatedField::from_vec(tbls));
-        comp.set_bottom_deletes(req.bottoms.clone());
-        info!(
-            "finish compact L{} CF{} for {}:{}",
-            req.level, req.cf, req.shard_id, req.shard_ver
-        );
-        return Ok(comp);
+    }
+
+    async fn remote_compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
+        let body_str = serde_json::to_string(&req).unwrap();
+        let req = hyper::Request::builder()
+            .method(hyper::Method::POST)
+            .uri(self.remote_url.clone())
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body_str))?;
+        let response = self.client.as_ref().unwrap().request(req).await?;
+        let success = response.status().is_success();
+        let body = hyper::body::to_bytes(response.into_body()).await?;
+        if !success {
+            return Err(RemoteCompaction(
+                String::from_utf8_lossy(body.chunk()).to_string(),
+            ));
+        }
+        let mut compaction = pb::Compaction::new();
+        if let Err(err) = compaction.merge_from_bytes(&body) {
+            return Err(RemoteCompaction(err.to_string()));
+        }
+        Ok(compaction)
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct CompactionRequest {
-    pub(crate) cf: isize,
-    pub(crate) level: usize,
-    pub(crate) tops: Vec<u64>,
+#[derive(Default, Debug, Serialize, Deserialize)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CompactionRequest {
+    pub cf: isize,
+    pub level: usize,
+    pub tops: Vec<u64>,
 
-    pub(crate) shard_id: u64,
-    pub(crate) shard_ver: u64,
+    pub shard_id: u64,
+    pub shard_ver: u64,
 
     // Used for L1+ compaction.
-    pub(crate) bottoms: Vec<u64>,
+    pub bottoms: Vec<u64>,
 
     // Used for L0 compaction.
-    pub(crate) multi_cf_bottoms: Vec<Vec<u64>>,
+    pub multi_cf_bottoms: Vec<Vec<u64>>,
 
-    pub(crate) overlap: bool,
-    pub(crate) safe_ts: u64,
-    pub(crate) block_size: usize,
-    pub(crate) max_table_size: usize,
-    pub(crate) bloom_fpr: f64,
-    pub(crate) file_ids: Vec<u64>,
+    pub overlap: bool,
+    pub safe_ts: u64,
+    pub block_size: usize,
+    pub max_table_size: usize,
+    pub file_ids: Vec<u64>,
 }
 
 impl CompactionRequest {
@@ -83,7 +104,6 @@ impl CompactionRequest {
         sstable::TableBuilderOptions {
             block_size: self.block_size,
             max_table_size: self.max_table_size as usize,
-            bloom_fpr: self.bloom_fpr,
         }
     }
 }
@@ -437,7 +457,6 @@ impl Engine {
             safe_ts: load_u64(&self.managed_safe_ts),
             block_size: self.opts.table_builder_options.block_size,
             max_table_size: self.opts.table_builder_options.max_table_size,
-            bloom_fpr: self.opts.table_builder_options.bloom_fpr,
             overlap: level == 0,
             tops: vec![],
             bottoms: vec![],
@@ -894,4 +913,64 @@ fn filter(safe_ts: u64, cf: usize, val: table::Value) -> Decision {
     }
     // Older version are discarded automatically, we need to keep the first valid version.
     return Decision::Keep;
+}
+
+pub async fn handle_remote_compaction(
+    dfs: Arc<dyn dfs::DFS>,
+    req: hyper::Request<hyper::Body>,
+) -> hyper::Result<hyper::Response<hyper::Body>> {
+    let req_body = hyper::body::to_bytes(req.into_body()).await?;
+    let result = serde_json::from_slice(req_body.chunk());
+    if result.is_err() {
+        let err_str = result.unwrap_err().to_string();
+        return Ok(hyper::Response::builder()
+            .status(400)
+            .body(err_str.into())
+            .unwrap());
+    }
+    let comp_req: CompactionRequest = result.unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let result = local_compact(dfs, comp_req);
+        tx.send(result).unwrap();
+    });
+    let result = rx.await.unwrap();
+    if result.is_err() {
+        let err_str = format!("{:?}", result.unwrap_err());
+        let body = hyper::Body::from(err_str);
+        Ok(hyper::Response::builder().status(500).body(body).unwrap())
+    } else {
+        let compaction = result.unwrap();
+        let data = compaction.write_to_bytes().unwrap();
+        Ok(hyper::Response::builder()
+            .status(200)
+            .body(data.into())
+            .unwrap())
+    }
+}
+
+fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::Compaction> {
+    let mut comp = pb::Compaction::new();
+    comp.set_top_deletes(req.tops.clone());
+    comp.set_cf(req.cf as i32);
+    comp.set_level(req.level as u32);
+    if req.level == 0 {
+        let tbls = compact_l0(&req, dfs.clone())?;
+        comp.set_table_creates(RepeatedField::from_vec(tbls));
+        let mut bot_dels = vec![];
+        for cf_bot_dels in &req.multi_cf_bottoms {
+            bot_dels.extend_from_slice(cf_bot_dels.as_slice());
+        }
+        comp.set_bottom_deletes(bot_dels);
+        info!("finish compact L0 for {}:{}", req.shard_id, req.shard_ver);
+        return Ok(comp);
+    }
+    let tbls = compact_tables(&req, dfs.clone())?;
+    comp.set_table_creates(RepeatedField::from_vec(tbls));
+    comp.set_bottom_deletes(req.bottoms.clone());
+    info!(
+        "finish compact L{} CF{} for {}:{}",
+        req.level, req.cf, req.shard_id, req.shard_ver
+    );
+    return Ok(comp);
 }

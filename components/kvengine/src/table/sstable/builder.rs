@@ -25,7 +25,6 @@ pub const BLOCK_ADDR_SIZE: usize = mem::size_of::<BlockAddress>();
 #[derive(Clone, Copy)]
 pub struct TableBuilderOptions {
     pub block_size: usize,
-    pub bloom_fpr: f64,
     pub max_table_size: usize,
 }
 
@@ -33,7 +32,6 @@ impl Default for TableBuilderOptions {
     fn default() -> Self {
         Self {
             block_size: 64 * 1024,
-            bloom_fpr: 0.01,
             max_table_size: 16 * 1024 * 1024,
         }
     }
@@ -105,7 +103,6 @@ pub struct Builder {
     block_builder: BlockBuilder,
     old_builder: BlockBuilder,
     block_size: usize,
-    bloom_fpr: f64,
     checksum_tp: u8,
     key_hashes: Vec<u64>,
     smallest: Vec<u8>,
@@ -116,7 +113,6 @@ impl Builder {
     pub fn new(fid: u64, opt: TableBuilderOptions) -> Self {
         let mut x = Self::default();
         x.fid = fid;
-        x.bloom_fpr = opt.bloom_fpr;
         x.checksum_tp = CRC32_CASTAGNOLI;
         x.block_size = opt.block_size;
         x
