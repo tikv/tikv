@@ -7,6 +7,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::tikvpb::TikvClient;
 use raftstore::store::util::new_peer;
+use raftstore::store::LocksStatus;
 use std::sync::Arc;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
@@ -523,8 +524,9 @@ fn test_pessimistic_lock_check_valid() {
 
     let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(300));
-    // Set `is_valid` to false, but the region remains available to serve.
-    txn_ext.pessimistic_locks.write().is_valid = false;
+    // Set `status` to `TransferringLeader` to make the locks table not writable,
+    // but the region remains available to serve.
+    txn_ext.pessimistic_locks.write().status = LocksStatus::TransferringLeader;
     fail::remove("acquire_pessimistic_lock");
 
     let resp = lock_resp.join().unwrap();

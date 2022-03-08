@@ -97,9 +97,11 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "match_template",
+ "panic_hook",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -746,9 +748,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.1.2"
+version = "3.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5177fac1ab67102d8989464efd043c6ff44191b1557ec1ddd489b4f7e1447e77"
+checksum = "d8c93436c21e4698bacadf42917db28b23017027a4deccb35dbe47a7e7840123"
 dependencies = [
  "atty",
  "bitflags",
@@ -758,14 +760,14 @@ dependencies = [
  "os_str_bytes",
  "strsim 0.10.0",
  "termcolor",
- "textwrap 0.14.2",
+ "textwrap 0.15.0",
 ]
 
 [[package]]
 name = "clap_derive"
-version = "3.1.2"
+version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01d42c94ce7c2252681b5fed4d3627cc807b13dfc033246bd05d5b252399000e"
+checksum = "da95d038ede1a964ce99f49cbe27a7fb538d1da595e4b4f70b8c8f338d17bf16"
 dependencies = [
  "heck 0.4.0",
  "proc-macro-error",
@@ -835,9 +837,10 @@ dependencies = [
  "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.0",
  "rand 0.8.3",
  "tikv_alloc",
+ "tikv_util",
  "tokio",
  "txn_types",
 ]
@@ -1564,11 +1567,13 @@ dependencies = [
  "nix 0.19.0",
  "online_config",
  "openssl",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.0",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
  "serde",
+ "slog",
+ "slog-global",
  "strum",
  "tempfile",
  "thread_local",
@@ -2394,12 +2399,12 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a3c198c11ad44bf57b72f6d6fd542603714aeda3"
+source = "git+https://github.com/pingcap/kvproto.git#d5eb908517b2f2d8a82f928a641a6e15213a8ea6"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.12.3",
  "raft-proto",
 ]
 
@@ -3663,6 +3668,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf-build"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b2be70fa994657539e3c872cc54363c9bf28b0d7a7f774df70e9fd760df3bc4"
+dependencies = [
+ "bitflags",
+ "protobuf",
+ "protobuf-codegen",
+ "regex",
+]
+
+[[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
@@ -3692,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2a3d7b6602be1beb3014fb87bdcab345f5b03d3a"
+source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
  "bytes 1.0.1",
  "fxhash",
@@ -3707,7 +3724,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#1ce767e60cc1e478e3c8e5873ed68c81e3663c6f"
+source = "git+https://github.com/tikv/raft-engine?branch=master#68ecbc9c1d5b682437e634fb445526b7794ead8c"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3737,20 +3754,20 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=master#1ce767e60cc1e478e3c8e5873ed68c81e3663c6f"
+source = "git+https://github.com/tikv/raft-engine?branch=master#68ecbc9c1d5b682437e634fb445526b7794ead8c"
 dependencies = [
- "clap 3.1.2",
+ "clap 3.1.6",
  "raft-engine",
 ]
 
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2a3d7b6602be1beb3014fb87bdcab345f5b03d3a"
+source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
 dependencies = [
  "bytes 1.0.1",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.13.0",
 ]
 
 [[package]]
@@ -3812,7 +3829,7 @@ dependencies = [
  "openssl",
  "ordered-float 2.7.0",
  "panic_hook",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -5158,9 +5175,9 @@ dependencies = [
 
 [[package]]
 name = "termcolor"
-version = "1.1.2"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dfed899f0eb03f32ee8c6a0aabdb8a7949659e3466561fc0adf54e26d88c5f4"
+checksum = "bab24d30b911b2376f3a13cc2cd443142f0c81dda04c118693e35b3835757755"
 dependencies = [
  "winapi-util",
 ]
@@ -5397,9 +5414,9 @@ dependencies = [
 
 [[package]]
 name = "textwrap"
-version = "0.14.2"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0066c8d12af8b5acd21e00547c3797fde4e8677254a7ee429176ccebbe93dd80"
+checksum = "b1141d4d61095b28419e22cb0bbf02755f5e54e0526f97f1e3d1d160e60885fb"
 
 [[package]]
 name = "thiserror"
@@ -5590,7 +5607,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.4.0-alpha"
+version = "6.0.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5650,7 +5667,7 @@ dependencies = [
  "online_config",
  "openssl",
  "panic_hook",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.0",
  "paste 1.0.4",
  "pd_client",
  "pin-project",
@@ -5938,7 +5955,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "protobuf",
- "protobuf-build",
+ "protobuf-build 0.12.3",
 ]
 
 [[package]]
@@ -6027,8 +6044,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.31",
