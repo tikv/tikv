@@ -37,7 +37,6 @@ For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#fo
 ### Related changes
 
 - PR to update `pingcap/docs`/`pingcap/docs-cn`:
-- PR to update `pingcap/tidb-ansible`:
 - Need to cherry-pick to the release branch
 
 ### Check List <!--REMOVE the items that are not applicable-->

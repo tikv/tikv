@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
 use std::error::Error;
-use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
@@ -170,7 +170,7 @@ impl Default for FlowControlConfig {
 pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub shared: bool,
-    pub capacity: OptionReadableSize,
+    pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
     #[online_config(skip)]
@@ -185,7 +185,7 @@ impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
             shared: true,
-            capacity: OptionReadableSize(None),
+            capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.8,
@@ -199,7 +199,7 @@ impl BlockCacheConfig {
         if !self.shared {
             return None;
         }
-        let capacity = match self.capacity.0 {
+        let capacity = match self.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * BLOCK_CACHE_RATE) as usize

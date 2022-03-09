@@ -13,7 +13,7 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResul
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 use tikv_kv::Engine;
-use tikv_util::config::{OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
@@ -46,34 +46,34 @@ impl<E: Engine, L: LockManager> StorageConfigManger<E, L> {
     }
 }
 
-impl<E: Engine, L: LockManager> ConfigManager for StorageConfigManger<E, L> {
-    fn dispatch(&mut self, change: ConfigChange) -> CfgResult<()> {
-        if let Some(ConfigValue::Module(block_cache)) = change.get("block_cache") {
+impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
+    fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
+        if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
             if !self.shared_block_cache {
                 return Err("shared block cache is disabled".into());
             }
-            if let Some(size) = block_cache.get("capacity") {
-                let s: OptionReadableSize = size.clone().into();
-                if let Some(size) = s.0 {
+            if let Some(size) = block_cache.remove("capacity") {
+                if size != ConfigValue::None {
+                    let s: ReadableSize = size.into();
                     // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
                     // the size through any of them. Here we change it through default CF in kvdb.
                     // A better way to do it is to hold the cache reference somewhere, and use it to
                     // change cache size.
                     let opt = self.kvdb.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                    opt.set_block_cache_capacity(size.0)?;
+                    opt.set_block_cache_capacity(s.0)?;
                     // Write config to metric
                     CONFIG_ROCKSDB_GAUGE
                         .with_label_values(&[CF_DEFAULT, "block_cache_size"])
-                        .set(size.0 as f64);
+                        .set(s.0 as f64);
                 }
             }
-        } else if let Some(v) = change.get("ttl_check_poll_interval") {
-            let interval: ReadableDuration = v.clone().into();
+        } else if let Some(v) = change.remove("ttl_check_poll_interval") {
+            let interval: ReadableDuration = v.into();
             self.ttl_checker_scheduler
                 .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
                 .unwrap();
-        } else if let Some(ConfigValue::Module(flow_control)) = change.get("flow_control") {
-            if let Some(v) = flow_control.get("enable") {
+        } else if let Some(ConfigValue::Module(mut flow_control)) = change.remove("flow_control") {
+            if let Some(v) = flow_control.remove("enable") {
                 let enable: bool = v.into();
                 if enable {
                     for cf in self.kvdb.cf_names() {
@@ -103,24 +103,24 @@ impl<E: Engine, L: LockManager> ConfigManager for StorageConfigManger<E, L> {
             }
             self.scheduler.scale_pool_size(pool_size);
         }
-        if let Some(ConfigValue::Module(io_rate_limit)) = change.get("io_rate_limit") {
+        if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = match get_io_rate_limiter() {
                 None => return Err("IO rate limiter is not present".into()),
                 Some(limiter) => limiter,
             };
-            if let Some(limit) = io_rate_limit.get("max_bytes_per_sec") {
-                let limit: ReadableSize = limit.clone().into();
+            if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
+                let limit: ReadableSize = limit.into();
                 limiter.set_io_rate_limit(limit.0 as usize);
             }
 
             for t in IOType::iter() {
-                if let Some(priority) = io_rate_limit.get(&(t.as_str().to_owned() + "_priority")) {
-                    let priority: IOPriority = priority.clone().into();
+                if let Some(priority) = io_rate_limit.remove(&(t.as_str().to_owned() + "_priority"))
+                {
+                    let priority: IOPriority = priority.into();
                     limiter.set_io_priority(t, priority);
                 }
             }
         }
-        info!("storage config changed"; "change" => ?change);
         Ok(())
     }
 }
