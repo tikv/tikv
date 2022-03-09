@@ -20,9 +20,9 @@ pub enum ConfigValue {
     String(String),
     BlobRunMode(String),
     IOPriority(String),
-    OptionSize(Option<u64>),
     Module(ConfigChange),
     Skip,
+    None,
 }
 
 impl Display for ConfigValue {
@@ -30,8 +30,6 @@ impl Display for ConfigValue {
         match self {
             ConfigValue::Duration(v) => write!(f, "{}ms", v),
             ConfigValue::Size(v) => write!(f, "{}b", v),
-            ConfigValue::OptionSize(Some(v)) => write!(f, "{}b", v),
-            ConfigValue::OptionSize(None) => write!(f, ""),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::I32(v) => write!(f, "{}", v),
@@ -43,6 +41,7 @@ impl Display for ConfigValue {
             ConfigValue::IOPriority(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
+            ConfigValue::None => write!(f, ""),
         }
     }
 }
