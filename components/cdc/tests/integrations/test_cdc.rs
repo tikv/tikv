@@ -239,12 +239,13 @@ fn test_cdc_not_leader() {
         .into_iter()
         .find(|p| *p != leader)
         .unwrap();
-    suite.cluster.must_transfer_leader(1, peer);
+    suite.cluster.must_transfer_leader(1, peer.clone());
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -278,6 +279,7 @@ fn test_cdc_not_leader() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -1111,7 +1113,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
     let _guard = lock_key(b"a", 90);
     // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resovled_ts because the first several resolved ts received
+    // Retry until receiving an unchanged resolved_ts because the first several resolved ts received
     // might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;
