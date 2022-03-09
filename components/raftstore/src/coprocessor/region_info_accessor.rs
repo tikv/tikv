@@ -9,7 +9,7 @@ use std::time::Duration;
 use super::metrics::*;
 use super::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
+    RegionChangeEvent, RegionChangeObserver, Result, RoleChange, RoleObserver,
 };
 use collections::HashMap;
 use engine_traits::KvEngine;
@@ -167,8 +167,9 @@ impl RegionChangeObserver for RegionEventListener {
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, role_change: &RoleChange) {
         let region = context.region().clone();
+        let role = role_change.state;
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler
             .schedule(RegionInfoQuery::RaftStoreEvent(event))
