@@ -409,7 +409,6 @@ fn put(
 ) {
     // Prewrite
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
-    println!("start_ts {}", start_ts);
     {
         let mut mutation = Mutation::default();
         mutation.set_op(Op::Put);
