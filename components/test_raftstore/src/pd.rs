@@ -25,7 +25,9 @@ use raft::eraftpb::ConfChangeType;
 use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{
+    BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::QueryStats;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -300,6 +302,7 @@ struct PdCluster {
     region_last_report_ts: HashMap<u64, UnixSecs>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
+    buckets: HashMap<u64, BucketStat>,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
     store_hotspots: HashMap<u64, HashMap<u64, pdpb::PeerStat>>,
@@ -361,6 +364,7 @@ impl PdCluster {
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
             unsafe_recovery_store_reported: HashMap::default(),
+            buckets: HashMap::default(),
         }
     }
 
@@ -1311,6 +1315,10 @@ impl TestPdClient {
     pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
         self.cluster.rl().get_store_reported(store_id)
     }
+
+    pub fn get_buckets(&self, region_id: u64) -> Option<BucketStat> {
+        self.cluster.rl().buckets.get(&region_id).cloned()
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1679,5 +1687,16 @@ impl PdClient for TestPdClient {
         }
         self.cluster.wl().set_min_resolved_ts(min_resolved_ts);
         Box::pin(ok(()))
+    }
+
+    fn region_buckets(&self, bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        self.cluster
+            .wl()
+            .buckets
+            .insert(bucket_stat.meta.region_id, bucket_stat.clone());
+        ready(Ok(())).boxed()
     }
 }

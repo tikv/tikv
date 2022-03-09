@@ -1059,7 +1059,7 @@ where
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
-            PeerTick::ReportBuckets => self.on_report_buckets_tick(),
+            PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
         }
     }
 
@@ -1382,6 +1382,7 @@ where
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
                 self.register_check_leader_lease_tick();
+                self.register_report_region_buckets_tick();
             }
         }
     }
@@ -1977,6 +1978,7 @@ where
         self.register_raft_base_tick();
         if self.fsm.peer.is_leader() {
             self.register_check_leader_lease_tick();
+            self.register_report_region_buckets_tick();
         }
     }
 
@@ -4722,7 +4724,7 @@ where
         let meta = Arc::new(meta);
         let region_buckets = BucketStat::new(meta.clone(), stats);
         if self.fsm.peer.region_buckets.is_none() {
-            self.register_report_buckets_tick();
+            self.register_report_region_buckets_tick();
         }
         self.fsm.peer.region_buckets = Some(region_buckets);
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
@@ -4932,14 +4934,14 @@ where
         }
     }
 
-    fn on_report_buckets_tick(&mut self) {
-        if !self.ctx.cfg.hibernate_regions && self.fsm.peer.region_buckets.is_some() {
-            self.register_report_buckets_tick();
-        }
-
-        if !self.fsm.peer.is_leader() {
+    fn on_report_region_buckets_tick(&mut self) {
+        if !self.fsm.peer.is_leader()
+            || self.fsm.peer.region_buckets.is_none()
+            || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
             return;
         }
+
         let region_buckets = self.fsm.peer.region_buckets.as_ref().unwrap().clone();
         if let Err(e) = self
             .ctx
@@ -4953,9 +4955,11 @@ where
                 "err" => ?e,
             );
         }
+
+        self.register_report_region_buckets_tick();
     }
 
-    fn register_report_buckets_tick(&mut self) {
+    fn register_report_region_buckets_tick(&mut self) {
         self.schedule_tick(PeerTick::ReportBuckets)
     }
 }

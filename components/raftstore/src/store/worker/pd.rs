@@ -1612,34 +1612,39 @@ where
         use std::cmp::Ordering;
 
         let region_id = buckets.meta.region_id;
-        let current = self
-            .region_buckets
-            .entry(region_id)
-            .or_insert_with(BucketStat::default);
+        let buckets = match self.region_buckets.get_mut(&region_id) {
+            Some(current) => {
+                match current.meta.cmp(&buckets.meta) {
+                    Ordering::Equal | Ordering::Greater => {
+                        merge_bucket_stats(
+                            &current.meta.keys,
+                            &mut current.stats,
+                            &buckets.meta.keys,
+                            &buckets.stats,
+                        );
+                    }
+                    Ordering::Less => {
+                        merge_bucket_stats(
+                            &buckets.meta.keys,
+                            &mut buckets.stats,
+                            &current.meta.keys,
+                            &current.stats,
+                        );
+                        *current = buckets;
+                    }
+                }
+                current
+            }
+            None => {
+                self.region_buckets.insert(region_id, buckets);
+                self.region_buckets.get_mut(&region_id).unwrap()
+            }
+        };
         let now = TiInstant::now();
-        let period = now.duration_since(current.last_report_time);
-        match current.meta.cmp(&buckets.meta) {
-            Ordering::Equal | Ordering::Greater => {
-                merge_bucket_stats(
-                    &current.meta.keys,
-                    &mut current.stats,
-                    &buckets.meta.keys,
-                    &buckets.stats,
-                );
-            }
-            Ordering::Less => {
-                merge_bucket_stats(
-                    &buckets.meta.keys,
-                    &mut buckets.stats,
-                    &current.meta.keys,
-                    &current.stats,
-                );
-                *current = buckets;
-            }
-        }
-        current.last_report_time = now;
-        let meta = current.meta.clone();
-        let resp = self.pd_client.region_buckets(current, period);
+        let period = now.duration_since(buckets.last_report_time);
+        buckets.last_report_time = now;
+        let meta = buckets.meta.clone();
+        let resp = self.pd_client.region_buckets(buckets, period);
         let f = async move {
             if let Err(e) = resp.await {
                 debug!(
