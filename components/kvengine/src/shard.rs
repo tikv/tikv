@@ -223,11 +223,12 @@ impl Shard {
         shard.meta_seq.store(cs.sequence, Release);
         shard.write_sequence.store(cs.sequence, Release);
         info!(
-            "ingest shard {}:{} max_table_size {}, mem_table_version {}",
+            "ingest shard {}:{} max_table_size {}, mem_table_version {}, change {:?}",
             cs.shard_id,
             cs.shard_ver,
             shard.get_max_mem_table_size(),
-            shard.load_mem_table_version()
+            shard.load_mem_table_version(),
+            &cs,
         );
         shard
     }
