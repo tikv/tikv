@@ -1065,11 +1065,11 @@ mod tests {
 
         let wait_apply_finish = |ids: &[u64]| {
             for id in ids {
-                match receiver.recv_timeout(Duration::from_secs(3)) {
+                match receiver.recv_timeout(Duration::from_secs(5)) {
                     Ok((region_id, CasualMessage::SnapshotApplied)) => {
                         assert_eq!(region_id, *id);
                     }
-                    msg => panic!("expected SnapshotApplied, but got {:?}", msg),
+                    msg => panic!("expected {} SnapshotApplied, but got {:?}", id, msg),
                 }
                 let region_key = keys::region_state_key(*id);
                 assert_eq!(
