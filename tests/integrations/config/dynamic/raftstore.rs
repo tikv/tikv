@@ -204,8 +204,8 @@ fn test_update_raftstore_config() {
     validate_store_cfg(&raft_store);
 
     let min_cfg = vec![
-        ("raftstore.apply-max-batch-size", "10240"),
-        ("raftstore.store-max-batch-size", "10240"),
+        ("raftstore.apply-max-batch-size", "1"),
+        ("raftstore.store-max-batch-size", "1"),
     ];
     cfg_controller.update(new_changes(min_cfg)).unwrap();
     raft_store.apply_batch_system.max_batch_size = Some(1);
