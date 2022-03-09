@@ -142,6 +142,8 @@ mod tests {
     pub struct TestConfig {
         field1: usize,
         field2: String,
+        optional_field1: Option<usize>,
+        optional_field2: Option<String>,
         #[online_config(skip)]
         skip_field: u64,
         #[online_config(submodule)]
@@ -158,21 +160,30 @@ mod tests {
 
     #[test]
     fn test_update_fields() {
-        let mut cfg = TestConfig::default();
+        let mut cfg = TestConfig {
+            optional_field1: Some(1),
+            ..Default::default()
+        };
         let mut updated_cfg = cfg.clone();
         {
-            // update fields
             updated_cfg.field1 = 100;
             updated_cfg.field2 = "1".to_owned();
+            updated_cfg.optional_field1 = None;
+            updated_cfg.optional_field2 = Some("1".to_owned());
             updated_cfg.submodule_field.field1 = 1000;
             updated_cfg.submodule_field.field2 = true;
         }
         let diff = cfg.diff(&updated_cfg);
         {
             let mut diff = diff.clone();
-            assert_eq!(diff.len(), 3);
+            assert_eq!(diff.len(), 5);
             assert_eq!(diff.remove("field1").map(Into::into), Some(100usize));
             assert_eq!(diff.remove("field2").map(Into::into), Some("1".to_owned()));
+            assert_eq!(diff.remove("optional_field1"), Some(ConfigValue::None));
+            assert_eq!(
+                diff.remove("optional_field2").map(Into::into),
+                Some("1".to_owned())
+            );
             // submodule should also be updated
             let sub_m = diff.remove("submodule_field").map(Into::into);
             assert!(sub_m.is_some());

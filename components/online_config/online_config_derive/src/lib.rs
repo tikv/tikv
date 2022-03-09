@@ -224,7 +224,7 @@ fn diff(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<TokenSt
         } else if is_option_type(&field.ty) {
             quote! {
                 if self.#name != #incoming.#name {
-                    if let Some(v) = #incoming.#name {
+                    if let Some(ref v) = #incoming.#name {
                         #diff_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(v.clone()));
                     } else {
                         #diff_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::None);
