@@ -607,7 +607,7 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub region_buckets: Buckets,
+    pub region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
 }

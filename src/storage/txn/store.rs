@@ -342,9 +342,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut values = Vec::with_capacity(keys.len());
         for key in keys {
             let value = point_getter.get(key).map_err(Error::from);
-            values.push(value)
+            values.push(value);
+            statistics.push(point_getter.take_statistics());
         }
-        statistics.push(point_getter.take_statistics());
         Ok(values)
     }
 

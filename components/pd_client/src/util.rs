@@ -796,6 +796,32 @@ pub fn new_bucket_stats(meta: &BucketMeta) -> BucketStats {
     stats
 }
 
+pub fn find_bucket_index<S: AsRef<[u8]>>(key: &[u8], bucket_keys: &[S]) -> Option<usize> {
+    let is_empty_end_key = bucket_keys[bucket_keys.len() - 1].as_ref().is_empty();
+    let search_keys = if is_empty_end_key {
+        &bucket_keys[..bucket_keys.len() - 1]
+    } else {
+        bucket_keys
+    };
+
+    match search_keys.binary_search_by(|k| k.as_ref().cmp(key)) {
+        Ok(idx) => {
+            if !is_empty_end_key && idx == search_keys.len() - 1 {
+                Some(idx - 1)
+            } else {
+                Some(idx)
+            }
+        }
+        Err(idx) => {
+            if idx == 0 || (idx == search_keys.len() && !is_empty_end_key) {
+                None
+            } else {
+                Some(idx - 1)
+            }
+        }
+    }
+}
+
 /// Merge incoming bucket stats. If a range in new buckets overlaps with multiple ranges in
 /// current buckets, stats of the new range will be added to all stats of current ranges.
 pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
@@ -804,18 +830,43 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
     incoming: &[I],
     delta_stats: &BucketStats,
 ) {
-    // Return the range [start, end) of indices of buckets
-    fn find_overlay_ranges<S: AsRef<[u8]>>(range: (&[u8], &[u8]), keys: &[S]) -> (usize, usize) {
-        let start = keys
-            .binary_search_by(|p| p.as_ref().cmp(range.0))
-            .unwrap_or_else(|i| if i != 0 { i - 1 } else { 0 });
-        let end = if range.1.is_empty() {
-            keys.len() - 1
-        } else {
-            keys.binary_search_by(|p| p.as_ref().cmp(range.1))
-                .unwrap_or_else(|i| if i == keys.len() { i - 1 } else { i })
+    // Return [start, end] of indices of buckets
+    fn find_overlay_ranges<S: AsRef<[u8]>>(
+        range: (&[u8], &[u8]),
+        keys: &[S],
+    ) -> Option<(usize, usize)> {
+        let bucket_cnt = keys.len() - 1;
+        let last_bucket_idx = bucket_cnt - 1;
+        let start = match find_bucket_index(range.0, keys) {
+            Some(idx) => idx,
+            None => {
+                if range.0 < keys[0].as_ref() {
+                    0
+                } else {
+                    // Not in the bucket range.
+                    return None;
+                }
+            }
         };
-        (start, end)
+        let end = match find_bucket_index(range.1, keys) {
+            Some(idx) => {
+                // If end key is the start key of a bucket, this bucket should not be included.
+                if range.1 == keys[idx].as_ref() {
+                    idx - 1
+                } else {
+                    idx
+                }
+            }
+            None => {
+                if range.1 > keys[keys.len() - 1].as_ref() {
+                    last_bucket_idx
+                } else {
+                    // Not in the bucket range.
+                    return None;
+                }
+            }
+        };
+        Some((start, end))
     }
 
     macro_rules! stats_add {
@@ -829,23 +880,25 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
     for new_idx in 0..(incoming.len() - 1) {
         let start = &incoming[new_idx];
         let end = &incoming[new_idx + 1];
-        let (start_idx, end_idx) = find_overlay_ranges((start.as_ref(), end.as_ref()), cur);
-        for cur_idx in start_idx..end_idx {
-            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_bytes);
-            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_bytes);
+        if let Some((start_idx, end_idx)) = find_overlay_ranges((start.as_ref(), end.as_ref()), cur)
+        {
+            for cur_idx in start_idx..=end_idx {
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_bytes);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_bytes);
 
-            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_qps);
-            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_qps);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_qps);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_qps);
 
-            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_keys);
-            stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_keys);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_keys);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_keys);
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::merge_bucket_stats;
+    use crate::{merge_bucket_stats, util::find_bucket_index};
     use kvproto::metapb::BucketStats;
 
     #[test]
@@ -869,18 +922,52 @@ mod test {
                 ),
                 vec![4, 3],
             ),
+            (
+                (vec![b"k4", b"k6", b"kb"], vec![1, 1]),
+                (
+                    vec![b"k1", b"k3", b"k5", b"k7", b"k9", b"ka"],
+                    vec![1, 1, 1, 1, 1],
+                ),
+                vec![3, 4],
+            ),
         ];
         for (current, incoming, expected) in cases {
-            let cur_keys =
-                unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(current.0.as_slice()) };
-            let incoming_keys =
-                unsafe { ::std::mem::transmute::<&[&[u8; 2]], &[&[u8]]>(incoming.0.as_slice()) };
+            let cur_keys = current.0;
+            let incoming_keys = incoming.0;
             let mut cur_stats = BucketStats::default();
             cur_stats.set_read_qps(current.1);
             let mut incoming_stats = BucketStats::default();
             incoming_stats.set_read_qps(incoming.1);
-            merge_bucket_stats(cur_keys, &mut cur_stats, incoming_keys, &incoming_stats);
+            merge_bucket_stats(&cur_keys, &mut cur_stats, &incoming_keys, &incoming_stats);
             assert_eq!(cur_stats.get_read_qps(), expected);
         }
+    }
+
+    #[test]
+    fn test_find_bucket_index() {
+        let keys = vec![
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+        ];
+        assert_eq!(find_bucket_index(b"k1", &keys), Some(0));
+        assert_eq!(find_bucket_index(b"k5", &keys), Some(2));
+        assert_eq!(find_bucket_index(b"k2", &keys), Some(0));
+        assert_eq!(find_bucket_index(b"k6", &keys), Some(2));
+        assert_eq!(find_bucket_index(b"k7", &keys), Some(2));
+        assert_eq!(find_bucket_index(b"k0", &keys), None);
+        assert_eq!(find_bucket_index(b"k8", &keys), None);
+        let keys = vec![
+            b"".to_vec(),
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+            b"".to_vec(),
+        ];
+        assert_eq!(find_bucket_index(b"k0", &keys), Some(0));
+        assert_eq!(find_bucket_index(b"k7", &keys), Some(4));
+        assert_eq!(find_bucket_index(b"k8", &keys), Some(4));
     }
 }
