@@ -81,6 +81,34 @@ pub struct BucketMeta {
     pub keys: Vec<Vec<u8>>,
 }
 
+impl BucketMeta {
+    fn bucket_idx(&self, key: &[u8]) -> Option<usize> {
+        let is_empty_end_key = self.keys[self.keys.len() - 1].is_empty();
+        let search_keys = if is_empty_end_key {
+            &self.keys[..self.keys.len() - 1]
+        } else {
+            &self.keys
+        };
+
+        match search_keys.binary_search_by(|k| k.as_slice().cmp(key)) {
+            Ok(idx) => {
+                if !is_empty_end_key && idx == search_keys.len() - 1 {
+                    Some(idx - 1)
+                } else {
+                    Some(idx)
+                }
+            }
+            Err(idx) => {
+                if idx == 0 || (idx == search_keys.len() && !is_empty_end_key) {
+                    None
+                } else {
+                    Some(idx - 1)
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BucketStat {
     pub meta: Arc<BucketMeta>,
@@ -108,19 +136,15 @@ impl BucketStat {
     }
 
     pub fn write_key(&mut self, key: &[u8], value: Option<&[u8]>) {
-        let idx = self
-            .meta
-            .keys
-            .binary_search_by(|b| b.as_slice().cmp(key))
-            .unwrap_or_else(|x| x);
-        if idx == 0 || idx == self.meta.keys.len() {
-            return;
-        }
+        let idx = match self.meta.bucket_idx(key) {
+            Some(idx) => idx,
+            None => return,
+        };
         let size = key.len() + value.map_or(0, |v| v.len());
-        if let Some(keys) = self.stats.mut_write_keys().get_mut(idx - 1) {
+        if let Some(keys) = self.stats.mut_write_keys().get_mut(idx) {
             *keys += 1;
         }
-        if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx - 1) {
+        if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
             *bytes += size as u64;
         }
     }
@@ -353,5 +377,39 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::BucketMeta;
+
+    #[test]
+    fn test_bucket_idx() {
+        let mut meta = BucketMeta::default();
+        meta.keys = vec![
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+        ];
+        assert_eq!(meta.bucket_idx(b"k1"), Some(0));
+        assert_eq!(meta.bucket_idx(b"k5"), Some(2));
+        assert_eq!(meta.bucket_idx(b"k2"), Some(0));
+        assert_eq!(meta.bucket_idx(b"k6"), Some(2));
+        assert_eq!(meta.bucket_idx(b"k7"), Some(2));
+        assert_eq!(meta.bucket_idx(b"k0"), None);
+        assert_eq!(meta.bucket_idx(b"k8"), None);
+        meta.keys = vec![
+            b"".to_vec(),
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+            b"".to_vec(),
+        ];
+        assert_eq!(meta.bucket_idx(b"k0"), Some(0));
+        assert_eq!(meta.bucket_idx(b"k7"), Some(4));
+        assert_eq!(meta.bucket_idx(b"k8"), Some(4));
     }
 }

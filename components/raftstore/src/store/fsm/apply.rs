@@ -584,7 +584,7 @@ where
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
-            buckets: delegate.buckets.clone().map(|v| Box::new(v)),
+            buckets: delegate.buckets.clone().map(Box::new),
         });
     }
 
