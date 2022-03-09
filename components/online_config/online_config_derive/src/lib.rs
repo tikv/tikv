@@ -321,6 +321,7 @@ fn is_attr(name: &str, attr: &Attribute) -> bool {
     false
 }
 
+// Copied from https://stackoverflow.com/questions/55271857/how-can-i-get-the-t-from-an-optiont-when-using-syn.
 fn is_option_type(ty: &Type) -> bool {
     fn extract_type_path(ty: &syn::Type) -> Option<&Path> {
         match *ty {
