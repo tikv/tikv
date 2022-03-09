@@ -9,9 +9,6 @@ use std::{
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
 use bitflags::bitflags;
-use raft::eraftpb::{self, MessageType};
-use raft::StateRole;
-use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
@@ -28,6 +25,7 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::{errorpb, metapb};
 use raft::eraftpb::{self, MessageType};
+use raft::StateRole;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
