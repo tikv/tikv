@@ -38,7 +38,7 @@ impl fmt::Display for Hlc {
 impl Hlc {
     #[inline]
     fn next(&self) -> TimeStamp {
-        let ts = self.0.fetch_add(1, Ordering::Release).into();
+        let ts = self.0.fetch_add(1, Ordering::Relaxed).into();
         trace!("Hlc::next: {:?}", ts);
         ts
     }
@@ -46,7 +46,7 @@ impl Hlc {
     // self.next() == `to`
     #[inline]
     fn advance(&self, to: TimeStamp) {
-        let before = self.0.fetch_max(to.into_inner(), Ordering::Acquire).into();
+        let before = self.0.fetch_max(to.into_inner(), Ordering::Relaxed).into();
         debug!("Hlc::advance"; "before" => ?before, "after" => ?std::cmp::max(before, to));
     }
 }
@@ -68,21 +68,26 @@ pub struct HlcProvider {
 }
 
 impl HlcProvider {
-    pub fn new(pd_client: Arc<dyn PdClient>) -> Self {
-        Self::new_opt(pd_client, TSO_REFRESH_INTERVAL)
+    pub async fn new(pd_client: Arc<dyn PdClient>) -> Result<Self> {
+        Self::new_opt(pd_client, TSO_REFRESH_INTERVAL).await
     }
 
-    pub fn new_opt(pd_client: Arc<dyn PdClient>, tso_refresh_interval: Duration) -> Self {
-        Self {
+    pub async fn new_opt(
+        pd_client: Arc<dyn PdClient>,
+        tso_refresh_interval: Duration,
+    ) -> Result<Self> {
+        let s = Self {
             hlc: Arc::new(Hlc::default()),
             pd_client,
             tso_worker: WorkerBuilder::new("hlc_tso_worker").create(),
             tso_refresh_interval,
             initialized: AtomicBool::new(false),
-        }
+        };
+        s.init().await?;
+        Ok(s)
     }
 
-    pub async fn init(&self) -> Result<()> {
+    async fn init(&self) -> Result<()> {
         let tso = self.pd_client.get_tso().await?;
         self.hlc.advance(tso);
         self.initialized.store(true, Ordering::Release);
@@ -138,14 +143,6 @@ impl CausalTsProvider for HlcProvider {
 pub struct TestHlcProvider {
     hlc: Arc<Hlc>,
 }
-
-// impl TestHlcProvider {
-//     pub fn new() -> Self {
-//         Self {
-//             hlc: Arc::new(Hlc::default()),
-//         }
-//     }
-// }
 
 impl CausalTsProvider for TestHlcProvider {
     fn get_ts(&self) -> Result<TimeStamp> {

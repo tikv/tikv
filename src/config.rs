@@ -2299,6 +2299,10 @@ pub struct CdcConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
+    /// `causal_ts_refresh_interval` is used for causal timestamp of RawKV CDC, to balance metrics precision & PD load.
+    /// TODO: make doc visible when RawKV CDC feature enabled.
+    #[doc(hidden)]
+    pub causal_ts_refresh_interval: ReadableDuration,
 }
 
 impl Default for CdcConfig {
@@ -2320,6 +2324,7 @@ impl Default for CdcConfig {
             old_value_cache_memory_quota: ReadableSize::mb(512),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
+            causal_ts_refresh_interval: ReadableDuration::millis(500),
         }
     }
 }

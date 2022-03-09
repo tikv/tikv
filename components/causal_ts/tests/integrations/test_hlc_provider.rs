@@ -12,8 +12,7 @@ fn test_hlc_provider() {
     let pd_cli = Arc::new(TestPdClient::new(1, false));
 
     pd_cli.set_tso(100.into());
-    let provider = HlcProvider::new(pd_cli);
-    block_on(provider.init()).unwrap();
+    let provider = block_on(HlcProvider::new(pd_cli)).unwrap();
 
     let ts = provider.get_ts().unwrap();
     assert_eq!(ts, 100.into(), "ts: {:?}", ts);
@@ -31,11 +30,11 @@ fn test_hlc_provider_on_failure() {
     let tso_refresh_interval = 200;
 
     pd_cli.set_tso(200.into());
-    let provider =
-        HlcProvider::new_opt(pd_cli.clone(), Duration::from_millis(tso_refresh_interval));
-    assert!(provider.get_ts().is_err());
-
-    block_on(provider.init()).unwrap();
+    let provider = block_on(HlcProvider::new_opt(
+        pd_cli.clone(),
+        Duration::from_millis(tso_refresh_interval),
+    ))
+    .unwrap();
 
     let ts = provider.get_ts().unwrap();
     assert_eq!(ts, 200.into(), "ts: {:?}", ts);

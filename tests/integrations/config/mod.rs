@@ -746,6 +746,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_ts_filter_ratio: 0.7,
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
+        causal_ts_refresh_interval: ReadableDuration::millis(500),
     };
     value.resolved_ts = ResolvedTsConfig {
         enable: true,

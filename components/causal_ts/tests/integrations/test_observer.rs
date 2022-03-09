@@ -37,8 +37,8 @@ fn init() -> TestSuite {
         let mut sim = cluster.sim.wl();
 
         // Disable physical refresh of HLC. Then causal timestamp can be logically advanced only.
-        let ts_provider = Arc::new(HlcProvider::new_opt(pd_client.clone(), Duration::ZERO));
-        block_on(ts_provider.init()).unwrap();
+        let ts_provider =
+            Arc::new(block_on(HlcProvider::new_opt(pd_client.clone(), Duration::ZERO)).unwrap());
         let manager = Arc::new(RegionsCausalManager::default());
         let ob = CausalObserver::new(manager.clone(), ts_provider.clone());
 
