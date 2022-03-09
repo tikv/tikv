@@ -548,7 +548,6 @@ impl Config {
                 limit
             ));
         }
-
         if let Some(size) = self.apply_batch_system.max_batch_size {
             if size == 0 || size > 10240 {
                 return Err(box_err!(
@@ -558,14 +557,12 @@ impl Config {
         } else {
             self.apply_batch_system.max_batch_size = Some(256);
         }
-
         if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > limit {
             return Err(box_err!(
                 "store-pool-size should be greater than 0 and less than or equal to: {}",
                 limit
             ));
         }
-
         if self.store_batch_system.low_priority_pool_size > 0 {
             // The store thread pool doesn't need a low-priority thread currently.
             self.store_batch_system.low_priority_pool_size = 0;
@@ -581,7 +578,6 @@ impl Config {
         } else {
             self.store_batch_system.max_batch_size = Some(1024);
         }
-
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
                 "store-io-notify-capacity should be greater than 0"

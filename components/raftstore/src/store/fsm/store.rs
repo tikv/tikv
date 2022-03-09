@@ -716,7 +716,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.raft_metrics.waterfall_metrics = self.poll_ctx.cfg.waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
-            update_cfg(&incoming.apply_batch_system);
+            update_cfg(&incoming.store_batch_system);
         }
     }
 
