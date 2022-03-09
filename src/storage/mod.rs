@@ -3094,7 +3094,9 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{
+        raw_ttl::ttl_current_ts, IterOptions, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE,
+    };
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -3108,8 +3110,10 @@ mod tests {
         time::Duration,
     };
 
+    use crate::storage::raw::raw_mvcc::RawMvccSnapshot;
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, PessimisticLock, WriteType};
+    use crate::storage::raw::encoded::RawEncodeSnapshot;
 
     #[test]
     fn test_prewrite_blocks_read() {
