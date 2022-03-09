@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
+use std::ops::Range;
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
@@ -74,7 +75,6 @@ use crate::store::worker::{
     ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
-use crate::store::RaftlogFetchResult;
 use crate::store::{
     util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
@@ -133,7 +133,6 @@ where
     /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
     /// `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
-    reactivate_memory_lock_ticks: usize,
 
     /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
@@ -162,7 +161,10 @@ where
     has_proposed_cb: bool,
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<Callback<E::Snapshot>>,
+    /// The ranges of request index added into batch that remembers the relation
+    /// between every request and its original callback.
+    origin_request_ranges: Vec<Range<usize>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -265,7 +267,6 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -321,7 +322,6 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
-                reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -396,6 +396,7 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
+            origin_request_ranges: vec![],
         }
     }
 
@@ -426,19 +427,24 @@ where
     }
 
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
-        let req_num = cmd.request.get_requests().len();
         let RaftCommand {
             mut request,
             mut callback,
             ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
+            let origin_req_count = batch_req.get_requests().len();
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
                 batch_req.mut_requests().push(q);
             }
+            let new_req_count = batch_req.get_requests().len();
+            self.origin_request_ranges
+                .push(origin_req_count..new_req_count);
         } else {
+            let req_count = request.get_requests().len();
             self.request = Some(request);
+            self.origin_request_ranges.push(0..req_count);
         };
         if callback.has_proposed_cb() {
             self.has_proposed_cb = true;
@@ -446,7 +452,7 @@ where
                 callback.invoke_proposed();
             }
         }
-        self.callbacks.push((callback, req_num));
+        self.callbacks.push(callback);
         self.batch_req_size += req_size as u64;
     }
 
@@ -464,29 +470,28 @@ where
         false
     }
 
-    fn build_pre_propose_cb(
-        cbs: &mut [(Callback<E::Snapshot>, usize)],
+    fn merge_pre_propose_cbs(
+        cbs: &mut [Callback<E::Snapshot>],
+        req_ranges: &[Range<usize>],
     ) -> Option<RaftRequestCallback> {
-        let mut intervals: Vec<(usize, usize)> = Vec::new();
-        let mut pre_propose_cbs: Vec<RaftRequestCallback> = Vec::new();
-        let mut last_idx = 0;
-        for (cb, req_num) in cbs.iter_mut() {
-            if let Callback::Write { pre_propose_cb, .. } = cb {
-                if let Some(cb) = pre_propose_cb.take() {
-                    pre_propose_cbs.push(cb);
-                    intervals.push((last_idx, last_idx + *req_num));
+        let pre_propose_cbs: Vec<(RaftRequestCallback, Range<usize>)> = cbs
+            .iter_mut()
+            .zip(req_ranges)
+            .filter_map(|(cb, req_range)| {
+                if let Callback::Write { pre_propose_cb, .. } = cb {
+                    Some((pre_propose_cb.take()?, req_range.clone()))
+                } else {
+                    None
                 }
-            }
-            last_idx += *req_num;
-        }
+            })
+            .collect();
 
         if pre_propose_cbs.is_empty() {
             None
         } else {
             Some(Box::new(move |requests| {
-                for (i, cb) in pre_propose_cbs.into_iter().enumerate() {
-                    let (start, end) = intervals[i];
-                    cb(&mut requests[start..end]);
+                for (cb, req_range) in pre_propose_cbs.into_iter() {
+                    cb(&mut requests[req_range]);
                 }
             }))
         }
@@ -501,16 +506,17 @@ where
             self.has_proposed_cb = false;
             self.propose_checked = None;
             if self.callbacks.len() == 1 {
-                let (cb, _) = self.callbacks.pop().unwrap();
+                let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
             }
             metric.propose.batch += self.callbacks.len() - 1;
             let mut cbs = std::mem::take(&mut self.callbacks);
-            let pre_propose_cb = Self::build_pre_propose_cb(&mut cbs);
+            let req_ranges = std::mem::take(&mut self.origin_request_ranges);
+            let pre_propose_cb = Self::merge_pre_propose_cbs(&mut cbs, &req_ranges);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { proposed_cb, .. } = &mut cb.0 {
+                    if let Callback::Write { proposed_cb, .. } = cb {
                         proposed_cb.take()
                     } else {
                         None
@@ -529,7 +535,7 @@ where
             let committed_cbs: Vec<_> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { committed_cb, .. } = &mut cb.0 {
+                    if let Callback::Write { committed_cb, .. } = cb {
                         committed_cb.take()
                     } else {
                         None
@@ -549,7 +555,7 @@ where
             let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = &mut cb.0 {
+                    if let Callback::Write { request_times, .. } = cb {
                         Some(request_times[0])
                     } else {
                         None
@@ -559,7 +565,7 @@ where
 
             let mut cb = Callback::write_ext(
                 Box::new(move |resp| {
-                    for (cb, _) in cbs {
+                    for cb in cbs {
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
                         cb.invoke_with_response(cmd_resp);
@@ -756,7 +762,7 @@ where
             if self.fsm.peer.will_likely_propose(&cmd) {
                 self.fsm.batch_req_builder.propose_checked = Some(true);
                 for cb in &mut self.fsm.batch_req_builder.callbacks {
-                    cb.0.invoke_proposed();
+                    cb.invoke_proposed();
                 }
             }
         }
@@ -1084,7 +1090,6 @@ where
             PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
-            PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
         }
     }
 
@@ -1293,32 +1298,21 @@ where
                 self.on_raft_log_gc_flushed();
             }
             SignificantMsg::RaftlogFetched { context, res } => {
-                self.on_raft_log_fetched(context, res);
+                let low = res.low;
+                if self.fsm.peer.term() != res.term {
+                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
+                } else {
+                    self.fsm
+                        .peer
+                        .mut_store()
+                        .update_async_fetch_res(low, Some(res));
+                }
+                self.fsm.peer.raft_group.on_entries_fetched(context);
+                // clean the async fetch result immediately if not used to free memory
+                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+                self.fsm.has_ready = true;
             }
         }
-    }
-
-    fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
-        let low = res.low;
-        // if the peer is not the leader anymore or being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().clean_async_fetch_res(low);
-            return;
-        }
-
-        if self.fsm.peer.term() != res.term {
-            // term has changed, the result may be not correct.
-            self.fsm.peer.mut_store().clean_async_fetch_res(low);
-        } else {
-            self.fsm
-                .peer
-                .mut_store()
-                .update_async_fetch_res(low, Some(res));
-        }
-        self.fsm.peer.raft_group.on_entries_fetched(context);
-        // clean the async fetch result immediately if not used to free memory
-        self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-        self.fsm.has_ready = true;
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
@@ -2487,7 +2481,12 @@ where
                     if self.fsm.batch_req_builder.request.is_some() {
                         self.propose_batch_raft_command(true);
                     }
-                    if self.propose_locks_before_transfer_leader(msg) {
+                    // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
+                    // is a reply to a transfer leader command before. Then, we can initiate
+                    // transferring leader.
+                    if msg.get_context() != TRANSFER_LEADER_COMMAND_REPLY_CTX
+                        && self.propose_locks_before_transfer_leader()
+                    {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
                         let mut cmd = new_admin_request(
@@ -2524,26 +2523,9 @@ where
     // unavailable time caused by waiting for the transferree catching up logs.
     // 2. Make transferring leader strictly after write commands that executes
     // before proposing the locks, preventing unexpected lock loss.
-    fn propose_locks_before_transfer_leader(&mut self, msg: &eraftpb::Message) -> bool {
+    fn propose_locks_before_transfer_leader(&mut self) -> bool {
         // 1. Disable in-memory pessimistic locks.
-
-        // Clone to make borrow checker happy when registering ticks.
-        let txn_ext = self.fsm.peer.txn_ext.clone();
-        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-
-        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
-        // is a reply to a transfer leader command before. If the locks status remain
-        // in the TransferringLeader status, we can safely initiate transferring leader
-        // now.
-        // If it's not in TransferringLeader status now, it is probably because several
-        // ticks have passed after proposing the locks in the last time and we reactivate
-        // the memory locks. Then, we should propose the locks again.
-        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
-            && pessimistic_locks.status == LocksStatus::TransferringLeader
-        {
-            return false;
-        }
-
+        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
         // If it is not writable, it's probably because it's a retried TransferLeader and the locks
         // have been proposed. But we still need to return true to propose another TransferLeader
         // command. Otherwise, some write requests that have marked some locks as deleted will fail
@@ -2553,9 +2535,7 @@ where
         if !pessimistic_locks.is_writable() {
             return true;
         }
-        pessimistic_locks.status = LocksStatus::TransferringLeader;
-        self.fsm.reactivate_memory_lock_ticks = 0;
-        self.register_reactivate_memory_lock_tick();
+        pessimistic_locks.status = LocksStatus::TransferingLeader;
 
         // 2. Propose pessimistic locks
         if pessimistic_locks.is_empty() {
@@ -4895,37 +4875,6 @@ where
 
     fn register_check_peer_stale_state_tick(&mut self) {
         self.schedule_tick(PeerTick::CheckPeerStaleState)
-    }
-
-    fn register_reactivate_memory_lock_tick(&mut self) {
-        self.schedule_tick(PeerTick::ReactivateMemoryLock)
-    }
-
-    fn on_reactivate_memory_lock_tick(&mut self) {
-        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
-
-        // If it is not leader, we needn't reactivate by tick. In-memory pessimistic lock will
-        // be enabled when this region becomes leader again.
-        // And this tick is currently only used for the leader transfer failure case.
-        if !self.fsm.peer.is_leader() || pessimistic_locks.status != LocksStatus::TransferringLeader
-        {
-            return;
-        }
-
-        self.fsm.reactivate_memory_lock_ticks += 1;
-        let transferring_leader = self.fsm.peer.raft_group.raft.lead_transferee.is_some();
-        // `lead_transferee` is not set immediately after the lock status changes. So, we need
-        // the tick count condition to avoid reactivating too early.
-        if !transferring_leader
-            && self.fsm.reactivate_memory_lock_ticks
-                >= self.ctx.cfg.reactive_memory_lock_timeout_tick
-        {
-            pessimistic_locks.status = LocksStatus::Normal;
-            self.fsm.reactivate_memory_lock_ticks = 0;
-        } else {
-            drop(pessimistic_locks);
-            self.register_reactivate_memory_lock_tick();
-        }
     }
 }
 
