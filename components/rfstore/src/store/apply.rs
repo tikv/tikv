@@ -289,6 +289,9 @@ impl Applier {
         commit_ts: u64,
     ) {
         let lock_val = self.get_lock_for_commit(kv, key, commit_ts);
+        if lock_val.len() == 0 {
+            return;
+        }
         let lock = txn_types::Lock::parse(&lock_val).unwrap_or_else(|x| {
             panic!(
                 "failed to parse lock value {:?}, local_val {:?}",
@@ -364,7 +367,7 @@ impl Applier {
             self.region.get_region_epoch().version,
             snap.get_version()
         );
-        return item.get_value().to_vec();
+        vec![]
     }
 
     pub(crate) fn rollback(

@@ -185,10 +185,14 @@ impl Engine {
                 next_mem_tbl_size =
                     shard.next_mem_table_size(mem_tbl.size() as u64, last_switch_instant);
             }
+            let mut split_keys = vec![];
+            if mem_tbl.get_split_stage() == kvenginepb::SplitStage::PreSplit {
+                split_keys = shard.get_split_keys();
+            }
             let task = FlushTask {
                 shard_id: shard.id,
                 shard_ver: shard.ver,
-                split_keys: shard.get_split_keys(),
+                split_keys,
                 next_mem_tbl_size,
                 mem_tbl,
             };

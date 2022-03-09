@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use dashmap::DashMap;
 use fslock;
+use kvenginepb::SplitStage::PreSplit;
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::collections::{HashMap, HashSet};
@@ -16,6 +17,7 @@ use std::thread;
 use tikv_util::mpsc;
 
 use crate::meta::ShardMeta;
+use crate::table::memtable;
 use crate::table::sstable::{BlockCacheKey, L0Table, SSTable};
 use crate::*;
 
@@ -211,16 +213,28 @@ impl EngineCore {
 
     pub fn trigger_flush(&self, shard: &Arc<Shard>) {
         let mem_tbls = shard.get_mem_tbls();
-        for i in (0..mem_tbls.tbls.len()).rev() {
+        if mem_tbls.tbls.len() == 1 && mem_tbls.tbls[0].is_empty() && !shard.get_initial_flushed() {
+            let mem_tbl = memtable::CFTable::new();
+            mem_tbl.set_version(shard.load_mem_table_version());
+            let task = FlushTask {
+                shard_id: shard.id,
+                shard_ver: shard.ver,
+                split_keys: vec![],
+                next_mem_tbl_size: 0,
+                mem_tbl,
+            };
+            self.flush_tx.send(task).unwrap();
+            return;
+        }
+        for i in (1..mem_tbls.tbls.len()).rev() {
             let mem_tbl = &mem_tbls.tbls.as_slice()[i];
             if mem_tbl.is_applying() {
                 continue;
             }
-            if i == 1 && shard.is_splitting() {
-                mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplit);
+            let mut split_keys = vec![];
+            if mem_tbl.get_split_stage() == PreSplit {
+                split_keys = shard.get_split_keys();
             }
-            let mem_tbl = mem_tbl.clone();
-            mem_tbl.set_version(shard.load_mem_table_version());
             info!(
                 "shard {}:{} trigger flush mem-table ts {}, size {}",
                 shard.id,
@@ -232,8 +246,8 @@ impl EngineCore {
                 .send(FlushTask {
                     shard_id: shard.id,
                     shard_ver: shard.ver,
-                    split_keys: shard.get_split_keys().into(),
-                    mem_tbl,
+                    split_keys,
+                    mem_tbl: mem_tbl.clone(),
                     next_mem_tbl_size: 0,
                 })
                 .unwrap();

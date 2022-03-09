@@ -38,6 +38,7 @@ impl Engine {
         }
         let version = shard.base_version + sequence;
         let mem_tbl = self.switch_mem_table(&shard, version);
+        mem_tbl.set_split_stage(kvenginepb::SplitStage::PreSplit);
         self.schedule_flush_task(&shard, mem_tbl);
         Ok(())
     }
