@@ -109,9 +109,6 @@ fn test_report_min_resolved_ts() {
     mutation.value = v.to_vec();
     suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
 
-    // resolved-ts should be less than all unapplied commit ts
-    let ts2 = suite.cluster.pd_client.get_min_resolved_ts();
-
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
