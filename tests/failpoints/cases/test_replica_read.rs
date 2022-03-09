@@ -2,7 +2,7 @@
 
 use crossbeam::channel;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
+use engine_traits::{Peekable, RaftEngine, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
