@@ -133,6 +133,7 @@ fn test_analyze_column_with_lock() {
                 assert!(hist.get_buckets().is_empty());
                 assert_eq!(hist.get_ndv(), 0);
             }
+            IsolationLevel::RcCheckTs => unimplemented!(),
         }
     }
 }
@@ -224,6 +225,7 @@ fn test_analyze_index_with_lock() {
                 assert!(hist.get_buckets().is_empty());
                 assert_eq!(hist.get_ndv(), 0);
             }
+            IsolationLevel::RcCheckTs => unimplemented!(),
         }
     }
 }
