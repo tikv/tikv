@@ -675,6 +675,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_controller,
             pd_sender.clone(),
             resource_tag_factory.clone(),
+            self.pd_client.feature_gate().clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
