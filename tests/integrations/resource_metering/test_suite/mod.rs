@@ -17,7 +17,7 @@ use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::resource_usage_agent::{
     ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
 };
-use resource_metering::Config;
+use resource_metering::{Config, ResourceTagFactory};
 use tempfile::TempDir;
 use test_util::alloc_port;
 use tikv::config::{ConfigController, TiKvConfig};
@@ -32,6 +32,7 @@ pub struct TestSuite {
 
     storage: Storage<RocksEngine, DummyLockManager>,
     cfg_controller: ConfigController,
+    resource_tag_factory: ResourceTagFactory,
 
     tx: Sender<Vec<ResourceUsageRecord>>,
     rx: Receiver<Vec<ResourceUsageRecord>>,
@@ -86,7 +87,7 @@ impl TestSuite {
             DummyLockManager {},
             ApiVersion::V1,
         )
-        .set_resource_tag_factory(resource_tag_factory)
+        .set_resource_tag_factory(resource_tag_factory.clone())
         .build()
         .unwrap();
 
@@ -102,6 +103,7 @@ impl TestSuite {
             receiver_server: None,
             storage,
             cfg_controller,
+            resource_tag_factory,
             tx,
             rx,
             env,
@@ -116,6 +118,14 @@ impl TestSuite {
                 recorder_worker.stop_worker();
             })),
         }
+    }
+
+    pub fn get_storage(&self) -> Storage<RocksEngine, DummyLockManager> {
+        self.storage.clone()
+    }
+
+    pub fn get_tag_factory(&self) -> ResourceTagFactory {
+        self.resource_tag_factory.clone()
     }
 
     pub fn subscribe(

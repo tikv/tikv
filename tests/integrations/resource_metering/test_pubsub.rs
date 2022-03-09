@@ -2,7 +2,9 @@
 
 use crate::resource_metering::test_suite::TestSuite;
 
-use collections::hash_set_with_capacity;
+use std::collections::HashSet;
+
+use futures::executor::block_on;
 use futures::StreamExt;
 use tikv_util::config::ReadableDuration;
 
@@ -18,21 +20,11 @@ pub fn test_basic() {
     // [req-1, req-2]
     test_suite.setup_workload(vec!["req-1", "req-2"]);
 
-    let (client, stream) = test_suite.subscribe();
-    let res = test_suite.rt.block_on(async move {
-        let _client = client;
-        let mut res = hash_set_with_capacity(4);
-
-        let stream = stream.take(4);
-        let records = stream.collect::<Vec<_>>().await;
-        for r in records {
-            let r = r.unwrap();
-            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
-            res.insert(tag);
-        }
-
-        res
+    let (_client, stream) = test_suite.subscribe();
+    let tags = stream.take(4).map(|record| {
+        String::from_utf8_lossy(record.unwrap().get_record().get_resource_group_tag()).into_owned()
     });
+    let res = block_on(tags.collect::<HashSet<_>>());
 
     assert!(res.contains("req-1"));
     assert!(res.contains("req-2"));
@@ -54,18 +46,11 @@ pub fn test_multiple_subscribers() {
             let (client, stream) = test_suite.subscribe();
             test_suite.rt.spawn(async move {
                 let _client = client;
-                let mut res = hash_set_with_capacity(4);
-
-                let stream = stream.take(4);
-                let records = stream.collect::<Vec<_>>().await;
-                for r in records {
-                    let r = r.unwrap();
-                    let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag())
-                        .into_owned();
-                    res.insert(tag);
-                }
-
-                res
+                let tags = stream.take(4).map(|record| {
+                    String::from_utf8_lossy(record.unwrap().get_record().get_resource_group_tag())
+                        .into_owned()
+                });
+                tags.collect::<HashSet<_>>().await
             })
         })
         .collect();
