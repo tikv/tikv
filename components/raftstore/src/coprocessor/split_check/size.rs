@@ -237,7 +237,7 @@ pub mod tests {
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_LOCK;
     use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use engine_traits::{MiscExt, SyncMutable, CompactExt};
+    use engine_traits::{MiscExt, SyncMutable};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
@@ -324,6 +324,8 @@ pub mod tests {
     pub fn must_generate_buckets_approximate(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
         bucket_range: Option<SplitCheckBucketRange>,
+        min_leap: i32,
+        max_leap: i32,
     ) {
         loop {
             if let Ok((
@@ -338,27 +340,11 @@ pub mod tests {
                 let bucket_keys = buckets.pop().unwrap().keys;
                 if let Some(bucket_range) = bucket_range {
                     assert!(!bucket_keys.is_empty());
-                    let start: i32 = std::str::from_utf8(&bucket_range.0)
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    let end: i32 = std::str::from_utf8(&bucket_range.1)
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    
-                        println!("bucket_key len {}", bucket_keys.len());
                     for i in 0..bucket_keys.len() {
-                        let key: i32 = std::str::from_utf8(&bucket_keys[i])
-                            .unwrap()
-                            .parse()
-                            .unwrap();
-                        println!("key {} {} -- {}", key, start, end);
                         assert!(bucket_keys[i] < bucket_range.1);
                         assert!(bucket_keys[i] >= bucket_range.0);
                     }
                 }
-                println!("bucket_keys {}", bucket_keys.len());
                 if bucket_keys.len() >= 2 {
                     for i in 0..bucket_keys.len() - 1 {
                         let start: i32 = std::str::from_utf8(&bucket_keys[i])
@@ -369,7 +355,7 @@ pub mod tests {
                             .unwrap()
                             .parse()
                             .unwrap();
-                        assert!(end - start >= 150 && end - start < 450);
+                        assert!(end - start >= min_leap && end - start < max_leap);
                     }
                 }
 
@@ -510,12 +496,15 @@ pub mod tests {
         let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
+        cf_opt.set_disable_auto_compactions(true);
 
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
                 if cfs_with_range_prop.contains(cf) {
-                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                    let mut opt = ColumnFamilyOptions::new();
+                    opt.set_disable_auto_compactions(true);
+                    CFOptions::new(cf, opt)
                 } else {
                     CFOptions::new(cf, cf_opt.clone())
                 }
@@ -545,21 +534,13 @@ pub mod tests {
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
         for i in 0..2000 {
-            // kv size is (4+1)*2 = 10, given bucket size is 3000, expect each bucket has about 300 keys
-            let s = keys::data_key(format!("{:04}", i).as_bytes());
+            // kv size is (6+1)*2 = 10, given bucket size is 3000, expect each bucket has about 210 keys
+            let s = keys::data_key(format!("{:04}00", i).as_bytes());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 && i > 0 {
                 engine.flush_cf(data_cf, true).unwrap();
             }
         }
-
-        /*engine.compact_range(
-            data_cf,
-            Some(keys::data_key(&start).as_slice()),
-            Some(keys::data_key(&end).as_slice()),
-            false,
-            2
-        ).unwrap();*/
 
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
@@ -568,29 +549,21 @@ pub mod tests {
             None,
         ));
 
-        must_generate_buckets_approximate(&rx, None);
+        must_generate_buckets_approximate(&rx, None, 15000, 45000);
         
         let start = format!("{:04}", 0).into_bytes();
         let end = format!("{:04}", 20).into_bytes();
-
-        println!("inserting more keys");
 
         // insert keys into 0000 ~ 0020 with 000000 ~ 002000
         for i in 0..2000 {
             // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
             let s = keys::data_key(format!("{:06}", i).as_bytes());
             engine.put_cf(data_cf, &s, &s).unwrap();
-            if i % 10 == 0 && i > 0 {
+            if i % 10 == 0 {
                 engine.flush_cf(data_cf, true).unwrap();
             }
         }
-        /*engine.compact_range(
-            data_cf,
-            Some(keys::data_key(&start).as_slice()),
-            Some(keys::data_key(&end).as_slice()),
-            false,
-            2
-        ).unwrap();*/
+
         runnable.run(SplitCheckTask::split_check(
             region.clone(),
             true,
@@ -598,7 +571,7 @@ pub mod tests {
             Some(vec![SplitCheckBucketRange(start.clone(), end.clone())]),
         )); 
 
-        must_generate_buckets_approximate(&rx, Some(SplitCheckBucketRange(start, end)));
+        must_generate_buckets_approximate(&rx, Some(SplitCheckBucketRange(start, end)), 150, 450);
         drop(rx);
     }
 

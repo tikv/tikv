@@ -77,7 +77,7 @@ use crate::store::worker::{
 use crate::store::PdTask;
 use crate::store::{
     util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
-    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
+    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg, PeerInternalStat,
 };
 use crate::{Error, Result};
 
@@ -951,8 +951,9 @@ where
                 region_epoch,
                 buckets,
                 bucket_ranges,
+                cb,
             } => {
-                self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges);
+                self.on_refresh_region_buckets(region_epoch, buckets, bucket_ranges, cb);
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
@@ -4651,10 +4652,10 @@ where
         region_epoch: RegionEpoch,
         mut buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        cb: Callback<EK::Snapshot>,
     ) {
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
-            println!("failed to check epoch stale");
             info!(
                 "receive a stale refresh region bucket message";
                 "region_id" => self.fsm.region_id(),
@@ -4662,6 +4663,16 @@ where
                 "epoch" => ?region_epoch,
                 "current_epoch" => ?region.get_region_epoch(),
             );
+            // test purpose
+            match cb {
+                Callback::Test{ cb } => {
+                    let peer_stat = PeerInternalStat  {
+                        buckets: self.fsm.peer.region_buckets.clone(),
+                    };
+                    cb(peer_stat);
+                }
+                _ => {}
+            }
             return;
         }
 
@@ -4676,30 +4687,34 @@ where
             for mut bucket in buckets {
                 while i < region_buckets_keys.len() {
                     if region_buckets_keys[i] == bucket_ranges[j].0 {
+                        // the bucket size is small and does not have split keys, 
+                        // then it should be merged with its left neighbor
                         if bucket.keys.is_empty()
                             && bucket.size
-                                <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
+                                <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0 
                         {
-                            region_buckets_keys.remove(i); // bucket is too small
+                            // i is not the last entry (which is end key)
+                            if  region_buckets_keys.len() > 2{ 
+                                region_buckets_keys.remove(i); // bucket is too small
+                                // the key is removed, to compensate the += 1 below.
+                                i -= 1;
+                            }
                         } else {
+                            // insert new bucket keys (split the original bucket)
                             for bucket_key in bucket.keys.drain(..) {
-                                region_buckets_keys.insert(i, bucket_key);
                                 i += 1;
+                                region_buckets_keys.insert(i, bucket_key);
                             }
                         }
-                    } else {
-                        i += 1;
                     }
+                    i += 1;
                 }
                 j += 1;
             }
 
             region_buckets.set_keys(region_buckets_keys.into());
-            if j == bucket_ranges.len() {
-                self.fsm.peer.region_buckets = region_buckets;
-            } else {
-                println!("on_refresh_region_buckets 123");
-            }
+            assert_eq!(j, bucket_ranges.len());
+            self.fsm.peer.region_buckets = region_buckets;
         } else {
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
@@ -4715,7 +4730,15 @@ where
             region_buckets.keys.push(region.get_end_key().to_vec());
             self.fsm.peer.region_buckets = region_buckets;
         }
-        println!("on_refresh_region_buckets done");
+        match cb {
+            Callback::Test{ cb } => {
+                let peer_stat = PeerInternalStat  {
+                    buckets: self.fsm.peer.region_buckets.clone(),
+                };
+                cb(peer_stat);
+            }
+            _ => {}
+        }
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

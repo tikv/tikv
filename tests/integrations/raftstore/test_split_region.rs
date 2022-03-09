@@ -15,7 +15,7 @@ use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
-use raftstore::store::{Callback, WriteResponse};
+use raftstore::store::{Bucket, Callback, SplitCheckBucketRange, WriteResponse};
 use raftstore::Result;
 use test_raftstore::*;
 use tikv::storage::kv::SnapshotExt;
@@ -979,12 +979,108 @@ fn test_refresh_region_bucket_keys() {
     cluster.must_put(b"k11", b"v1");
     let mut region = pd_client.get_region(b"v1").unwrap();
 
-    cluster.refresh_region_bucket_keys(&region, vec![b"k11".to_vec()]);
+    let bucket = Bucket {
+        keys: vec![b"k11".to_vec()],
+        size: 1024 * 1024 * 200,
+    };
+
+    let mut expected_buckets = metapb::Buckets::default();
+    expected_buckets.set_keys(bucket.clone().keys.into());
+    expected_buckets
+        .keys
+        .insert(0, region.get_start_key().to_vec());
+    expected_buckets.keys.push(region.get_end_key().to_vec());
+    let buckets = vec![bucket];
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Option::None,
+        expected_buckets.clone(),
+    );
     let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
     region.mut_region_epoch().set_conf_ver(conf_ver);
-    cluster.refresh_region_bucket_keys(&region, vec![b"k11".to_vec()]);
+
+    let bucket = Bucket {
+        keys: vec![b"k12".to_vec()],
+        size: 1024 * 1024 * 200,
+    };
+    expected_buckets.set_keys(bucket.clone().keys.into());
+    expected_buckets
+        .keys
+        .insert(0, region.get_start_key().to_vec());
+    expected_buckets.keys.push(region.get_end_key().to_vec());
+    let buckets = vec![bucket];
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Option::None,
+        expected_buckets.clone(),
+    );
 
     let conf_ver = 0;
     region.mut_region_epoch().set_conf_ver(conf_ver);
-    cluster.refresh_region_bucket_keys(&region, vec![b"k11".to_vec()]);
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Option::None,
+        expected_buckets.clone(),
+    );
+
+    // further split k12 bucket into more buckets
+    let region = pd_client.get_region(b"v1").unwrap();
+    let bucket_ranges = vec![SplitCheckBucketRange(vec![], b"k12".to_vec())];
+    let buckets = vec![Bucket {
+        keys: vec![b"k0".to_vec(), b"k10".to_vec(), b"k11".to_vec()],
+        size: 1024 * 1024 * 200,
+    }];
+    expected_buckets.set_keys(
+        vec![
+            vec![],
+            b"k0".to_vec(),
+            b"k10".to_vec(),
+            b"k11".to_vec(),
+            b"k12".to_vec(),
+            vec![],
+        ]
+        .into(),
+    );
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Some(bucket_ranges),
+        expected_buckets.clone(),
+    );
+
+    // remove k11~k12 and k12~[] bucket
+    let buckets = vec![
+        Bucket {
+            keys: vec![],
+            size: 1, // small enough to merge with left bucket
+        },
+        Bucket {
+            keys: vec![],
+            size: 1, // small enough to merge with left bucket
+        },
+    ];
+
+    let bucket_ranges = vec![
+        SplitCheckBucketRange(b"k11".to_vec(), b"k12".to_vec()),
+        SplitCheckBucketRange(b"k12".to_vec(), vec![]),
+    ];
+    expected_buckets.set_keys(
+        vec![
+            vec![],
+            b"k0".to_vec(),
+            b"k10".to_vec(),
+            b"k12".to_vec(), // k11-k12 are merged into k11 ~ []
+            vec![],
+        ]
+        .into(),
+    );
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Some(bucket_ranges),
+        expected_buckets.clone(),
+    );
 }

@@ -92,7 +92,7 @@ impl<'a, E> Host<'a, E> {
     ) -> Result<Bucket> {
         let region_size = get_region_approximate_size(engine, region, 0)?;
         const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
-        //if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
+        if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
             let mut bucket_checker = size::Checker::new(
                 self.cfg.region_bucket_size.0, /* not used */
                 self.cfg.region_bucket_size.0, /* not used */
@@ -108,11 +108,11 @@ impl<'a, E> Host<'a, E> {
             } else {
                 return Err(result.unwrap_err());
             }
-        //}
-        /*Ok(Bucket {
+        }
+        Ok(Bucket {
             keys: vec![],
             size: region_size,
-        })*/
+        })
     }
 
     #[inline]

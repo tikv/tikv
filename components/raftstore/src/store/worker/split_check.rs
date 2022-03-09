@@ -124,9 +124,10 @@ where
     }
 }
 
+#[derive(Default, Clone)]
 pub struct BucketRange(pub Vec<u8>, pub Vec<u8>);
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Bucket {
     pub keys: Vec<Vec<u8>>,
     pub size: u64,
@@ -206,25 +207,14 @@ where
         host: &mut SplitCheckerHost<'_, E>,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
-        println!("is called");
         let mut buckets: Vec<Bucket> = Vec::default();
         let mut skip = false;
         if let Some(ref bucket_ranges) = bucket_ranges {
             skip = bucket_ranges.is_empty();
-            println!("is skipped {}", skip);
             for bucket_range in bucket_ranges {
                 let mut bucket = region.clone();
                 bucket.set_start_key(bucket_range.0.clone());
                 bucket.set_end_key(bucket_range.1.clone());
-                let start: i32 = std::str::from_utf8(&bucket_range.0)
-                .unwrap()
-                .parse()
-                .unwrap();
-                let end: i32 = std::str::from_utf8(&bucket_range.1)
-                .unwrap()
-                .parse()
-                .unwrap();
-                println!("start {} end {}", start, end);
                 let bucket_entry = match host.approximate_bucket_keys(&bucket, &self.engine) {
                     Ok(entry) => {
                         let keys = entry
@@ -245,10 +235,8 @@ where
                         Bucket::default()
                     }
                 };
-                println!("bucket_entry size {} keys {}", bucket_entry.size, bucket_entry.keys.len());
-                if bucket_entry.size != 0 {
-                    buckets.push(bucket_entry);
-                }
+                debug!("bucket_entry size {} keys count {}", bucket_entry.size, bucket_entry.keys.len());
+                buckets.push(bucket_entry);
             }
         } else {
             let bucket_entry = match host.approximate_bucket_keys(region, &self.engine) {
@@ -271,13 +259,10 @@ where
                     Bucket::default()
                 }
             };
-            println!("bucket_entry.size {}, keys is empty {}", bucket_entry.size, bucket_entry.keys.is_empty());
-            if bucket_entry.size != 0 {
-                buckets.push(bucket_entry);
-            }
+            debug!("bucket_entry size {} keys count {}", bucket_entry.size, bucket_entry.keys.len());
+            buckets.push(bucket_entry);
         }
 
-        info!("starting approximate_bucket_keys {}", buckets.len(),);
         if !skip {
             let _ = self.router.send(
                 region.get_id(),
@@ -285,6 +270,7 @@ where
                     region_epoch: region.get_region_epoch().clone(),
                     buckets,
                     bucket_ranges,
+                    cb: Callback::None,
                 },
             );
         }
@@ -484,6 +470,7 @@ where
                     region_epoch: region.get_region_epoch().clone(),
                     buckets,
                     bucket_ranges,
+                    cb: Callback::None,
                 },
             );
         }

@@ -10,7 +10,7 @@ use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::kvrpcpb::Context;
-use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
+use kvproto::metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
@@ -1645,20 +1645,25 @@ impl<T: Simulator> Cluster<T> {
     pub fn refresh_region_bucket_keys(
         &mut self,
         region: &metapb::Region,
-        bucket_keys: Vec<Vec<u8>>,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        expect_buckets: Buckets,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let cb = Callback::Test{
+            cb: Box::new(move |stat: PeerInternalStat| {
+            assert_eq!(expect_buckets.get_keys(), stat.buckets.get_keys());
+            }),
+        };
         CasualRouter::send(
             &router,
             region.get_id(),
             CasualMessage::RefreshRegionBuckets {
                 region_epoch: region.get_region_epoch().clone(),
-                buckets: vec![Bucket {
-                    keys: bucket_keys,
-                    size: 1024 * 1024 * 256,
-                }],
-                bucket_ranges: None,
+                buckets,
+                bucket_ranges,
+                cb,
             },
         )
         .unwrap();

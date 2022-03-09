@@ -25,6 +25,7 @@ use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, SplitCheckBucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+use kvproto::metapb::Buckets;
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -38,6 +39,12 @@ pub struct ReadResponse<S: Snapshot> {
 #[derive(Debug)]
 pub struct WriteResponse {
     pub response: RaftCmdResponse,
+}
+
+// Peer's internal stat, for test purpose only
+#[derive(Debug)]
+pub struct PeerInternalStat {
+    pub buckets: Buckets, 
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -59,6 +66,7 @@ where
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
+pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -81,6 +89,10 @@ pub enum Callback<S: Snapshot> {
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
         request_times: SmallVec<[Instant; 4]>,
+    },
+    /// Test purpose callback
+    Test {
+        cb: TestCallback, 
     },
 }
 
@@ -129,6 +141,7 @@ where
                 let resp = WriteResponse { response: resp };
                 cb(resp);
             }
+            Callback::Test { .. } => (),
         }
     }
 
@@ -166,6 +179,17 @@ where
     pub fn is_none(&self) -> bool {
         matches!(self, Callback::None)
     }
+
+    pub fn invoke_with_peer_stat(self, stat: PeerInternalStat) {
+        match self {
+            Callback::None => (),
+            Callback::Read(_) => (),
+            Callback::Write { .. } => (),
+            Callback::Test{ cb } => {
+                cb(stat)
+            }
+        }
+    }
 }
 
 impl<S> fmt::Debug for Callback<S>
@@ -177,6 +201,7 @@ where
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
+            Callback::Test{ .. } => write!(fmt, "Callback::Test(..)"),
         }
     }
 }
@@ -384,6 +409,7 @@ pub enum CasualMessage<EK: KvEngine> {
         region_epoch: RegionEpoch,
         buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        cb: Callback<EK::Snapshot>,
     },
 
     // Try renew leader lease

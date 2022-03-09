@@ -38,7 +38,7 @@ pub use self::metrics::RAFT_ENTRY_FETCHES_VEC;
 pub use self::msg::{
     Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick,
-    WriteCallback, WriteResponse,
+    WriteCallback, WriteResponse, PeerInternalStat,
 };
 pub use self::peer::{
     AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
