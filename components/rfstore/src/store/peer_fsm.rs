@@ -736,11 +736,6 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_ready_split_region(&mut self, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
-
-        for region in &regions {
-            write_peer_state(&mut self.ctx.raft_wb, region);
-        }
-
         let derived = regions.last().unwrap().clone();
         let region_id = derived.get_id();
         let mut meta = self.ctx.global.store_meta.lock().unwrap();
@@ -874,6 +869,7 @@ impl<'a> PeerMsgHandler<'a> {
             }
         }
         drop(meta);
+        self.peer.mut_store().reset_meta();
         if is_leader {
             let store = self.peer.mut_store();
             if let Some(cs) = store.pending_flush.take() {
@@ -1281,7 +1277,7 @@ impl<'a> PeerMsgHandler<'a> {
         req
     }
 
-    fn on_apply_change_set_result(&mut self, mut msg: MsgApplyChangeSetResult) {
+    fn on_apply_change_set_result(&mut self, msg: MsgApplyChangeSetResult) {
         let tag = self.peer.tag();
         if msg.result.is_err() {
             let err = msg.result.unwrap_err();
@@ -1297,6 +1293,10 @@ impl<'a> PeerMsgHandler<'a> {
         }
         info!("on apply change set result"; "region" => tag);
         let change = msg.result.unwrap();
+        if change.shard_ver != self.region().get_region_epoch().get_version() {
+            error!("change set version not match change {:?}", &change; "region" => tag);
+            return;
+        }
         if change.has_snapshot() {
             let store = self.peer.mut_store();
             store.initial_flushed = true;
@@ -1310,8 +1310,7 @@ impl<'a> PeerMsgHandler<'a> {
             })
         }
         let split_stage = self.peer.get_store().split_stage;
-        if change.get_stage().value() > split_stage.value() && self.peer.get_store().initial_flushed
-        {
+        if change.get_stage().value() > split_stage.value() {
             info!("peer storage split stage changed";
                 "region" => tag,
                 "from" => split_stage.value(),

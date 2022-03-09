@@ -1436,15 +1436,13 @@ impl Peer {
         let change_set = build_split_change_set(self.region(), &regions, entry.index, entry.term);
         let shard_meta = self.mut_store().mut_engine_meta();
         let new_metas = shard_meta.apply_split(change_set, RAFT_INIT_LOG_INDEX);
-        for new_meta in new_metas {
+        for (i, new_meta) in new_metas.iter().enumerate() {
+            let new_region = &regions[i];
+            write_peer_state(&mut ctx.raft_wb, new_region);
             if new_meta.id == self.region_id {
                 ctx.raft_wb
                     .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
                 let store = self.mut_store();
-                store.shard_meta = Some(new_meta);
-                store.split_stage = kvenginepb::SplitStage::Initial;
-                store.initial_flushed = false;
-                store.split_job_states.reset();
                 // The raft state key changed when region version change, we need to set it here.
                 store.write_raft_state(ctx);
             } else {

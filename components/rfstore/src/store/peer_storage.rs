@@ -457,6 +457,20 @@ impl PeerStorage {
     pub(crate) fn mut_engine_meta(&mut self) -> &mut ShardMeta {
         self.shard_meta.as_mut().unwrap()
     }
+
+    pub(crate) fn reset_meta(&mut self) {
+        let meta_bin = self
+            .engines
+            .raft
+            .get_state(self.region.get_id(), KV_ENGINE_META_KEY)
+            .unwrap();
+        let mut change = kvenginepb::ChangeSet::new();
+        change.merge_from_bytes(&meta_bin).unwrap();
+        self.shard_meta = Some(ShardMeta::new(change));
+        self.split_stage = kvenginepb::SplitStage::Initial;
+        self.initial_flushed = false;
+        self.split_job_states.reset();
+    }
 }
 
 fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) -> Result<RaftState> {
