@@ -143,14 +143,14 @@ fn hijack_unary<F, R, C: PdMocker>(
             #[allow(clippy::redundant_closure_call)]
             (|| {
                 fail_point!("connect_leader", |_| {
-                    let key = ctx.request_headers().get(0).unwrap();
-                    // The default option has a metadata named "user-agent" so we check the key here.
-                    let v = if key.0 == "pd-forwarded-host" {
-                        std::str::from_utf8(key.1).unwrap()
-                    } else {
-                        ""
-                    };
-                    status = RpcStatus::with_message(RpcStatusCode::UNAVAILABLE, v.to_string());
+                    let details = ctx
+                        .request_headers()
+                        .iter()
+                        .find(|(k, _)| *k == "pd-forwarded-host")
+                        .map(|(_, v)| std::str::from_utf8(v).unwrap())
+                        .unwrap_or("");
+                    status =
+                        RpcStatus::with_message(RpcStatusCode::UNAVAILABLE, details.to_string());
                 })
             })();
             ctx.spawn(
