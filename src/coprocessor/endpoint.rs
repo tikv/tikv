@@ -112,35 +112,35 @@ impl<E: Engine> Endpoint<E> {
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager.update_max_ts(start_ts);
         }
-        match req_ctx.context.get_isolation_level() {
-            IsolationLevel::Si | IsolationLevel::RcCheckTs => {
-                let begin_instant = Instant::now();
-                for range in &req_ctx.ranges {
-                    let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
-                    let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
-                    self.concurrency_manager
-                        .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                            Lock::check_ts_conflict(
-                                Cow::Borrowed(lock),
-                                key,
-                                start_ts,
-                                &req_ctx.bypass_locks,
-                                IsolationLevel::Si,
-                            )
-                        })
-                        .map_err(|e| {
-                            MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
-                                .locked
-                                .observe(begin_instant.saturating_elapsed().as_secs_f64());
-                            MvccError::from(e)
-                        })?;
-                }
-                MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
-                    .unlocked
-                    .observe(begin_instant.saturating_elapsed().as_secs_f64());
+        if matches!(
+            req_ctx.context.get_isolation_level(),
+            IsolationLevel::Si | IsolationLevel::RcCheckTs
+        ) {
+            let begin_instant = Instant::now();
+            for range in &req_ctx.ranges {
+                let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
+                let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
+                self.concurrency_manager
+                    .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
+                        Lock::check_ts_conflict(
+                            Cow::Borrowed(lock),
+                            key,
+                            start_ts,
+                            &req_ctx.bypass_locks,
+                            req_ctx.context.get_isolation_level(),
+                        )
+                    })
+                    .map_err(|e| {
+                        MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                            .locked
+                            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                        MvccError::from(e)
+                    })?;
             }
-            IsolationLevel::Rc => {}
-        };
+            MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                .unlocked
+                .observe(begin_instant.saturating_elapsed().as_secs_f64());
+        }
         Ok(())
     }
 
