@@ -75,9 +75,10 @@ use crate::store::worker::{
     SplitCheckBucketRange, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::RaftlogFetchResult;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
-    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg, PeerInternalStat,
+    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerInternalStat,
+    PeerMsg, PeerTick, RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 
@@ -133,6 +134,7 @@ where
     /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
     /// `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
+    reactivate_memory_lock_ticks: usize,
 
     /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
@@ -264,6 +266,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
+                reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -319,6 +322,7 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
+                reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
@@ -1052,6 +1056,7 @@ where
             PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
+            PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
         }
     }
 
@@ -1260,21 +1265,32 @@ where
                 self.on_raft_log_gc_flushed();
             }
             SignificantMsg::RaftlogFetched { context, res } => {
-                let low = res.low;
-                if self.fsm.peer.term() != res.term {
-                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
-                } else {
-                    self.fsm
-                        .peer
-                        .mut_store()
-                        .update_async_fetch_res(low, Some(res));
-                }
-                self.fsm.peer.raft_group.on_entries_fetched(context);
-                // clean the async fetch result immediately if not used to free memory
-                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-                self.fsm.has_ready = true;
+                self.on_raft_log_fetched(context, res);
             }
         }
+    }
+
+    fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
+        let low = res.low;
+        // if the peer is not the leader anymore or being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+            return;
+        }
+
+        if self.fsm.peer.term() != res.term {
+            // term has changed, the result may be not correct.
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+        } else {
+            self.fsm
+                .peer
+                .mut_store()
+                .update_async_fetch_res(low, Some(res));
+        }
+        self.fsm.peer.raft_group.on_entries_fetched(context);
+        // clean the async fetch result immediately if not used to free memory
+        self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+        self.fsm.has_ready = true;
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
@@ -2443,12 +2459,7 @@ where
                     if self.fsm.batch_req_builder.request.is_some() {
                         self.propose_batch_raft_command(true);
                     }
-                    // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
-                    // is a reply to a transfer leader command before. Then, we can initiate
-                    // transferring leader.
-                    if msg.get_context() != TRANSFER_LEADER_COMMAND_REPLY_CTX
-                        && self.propose_locks_before_transfer_leader()
-                    {
+                    if self.propose_locks_before_transfer_leader(msg) {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
                         let mut cmd = new_admin_request(
@@ -2485,9 +2496,26 @@ where
     // unavailable time caused by waiting for the transferree catching up logs.
     // 2. Make transferring leader strictly after write commands that executes
     // before proposing the locks, preventing unexpected lock loss.
-    fn propose_locks_before_transfer_leader(&mut self) -> bool {
+    fn propose_locks_before_transfer_leader(&mut self, msg: &eraftpb::Message) -> bool {
         // 1. Disable in-memory pessimistic locks.
-        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+
+        // Clone to make borrow checker happy when registering ticks.
+        let txn_ext = self.fsm.peer.txn_ext.clone();
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+
+        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
+        // is a reply to a transfer leader command before. If the locks status remain
+        // in the TransferringLeader status, we can safely initiate transferring leader
+        // now.
+        // If it's not in TransferringLeader status now, it is probably because several
+        // ticks have passed after proposing the locks in the last time and we reactivate
+        // the memory locks. Then, we should propose the locks again.
+        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
+            && pessimistic_locks.status == LocksStatus::TransferringLeader
+        {
+            return false;
+        }
+
         // If it is not writable, it's probably because it's a retried TransferLeader and the locks
         // have been proposed. But we still need to return true to propose another TransferLeader
         // command. Otherwise, some write requests that have marked some locks as deleted will fail
@@ -2497,7 +2525,9 @@ where
         if !pessimistic_locks.is_writable() {
             return true;
         }
-        pessimistic_locks.status = LocksStatus::TransferingLeader;
+        pessimistic_locks.status = LocksStatus::TransferringLeader;
+        self.fsm.reactivate_memory_lock_ticks = 0;
+        self.register_reactivate_memory_lock_tick();
 
         // 2. Propose pessimistic locks
         if pessimistic_locks.is_empty() {
@@ -4664,14 +4694,11 @@ where
                 "current_epoch" => ?region.get_region_epoch(),
             );
             // test purpose
-            match cb {
-                Callback::Test{ cb } => {
-                    let peer_stat = PeerInternalStat  {
-                        buckets: self.fsm.peer.region_buckets.clone(),
-                    };
-                    cb(peer_stat);
-                }
-                _ => {}
+            if let Callback::Test { cb } = cb {
+                let peer_stat = PeerInternalStat {
+                    buckets: self.fsm.peer.region_buckets.clone(),
+                };
+                cb(peer_stat);
             }
             return;
         }
@@ -4687,14 +4714,14 @@ where
             for mut bucket in buckets {
                 while i < region_buckets_keys.len() {
                     if region_buckets_keys[i] == bucket_ranges[j].0 {
-                        // the bucket size is small and does not have split keys, 
+                        // the bucket size is small and does not have split keys,
                         // then it should be merged with its left neighbor
                         if bucket.keys.is_empty()
                             && bucket.size
-                                <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0 
+                                <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
                         {
                             // i is not the last entry (which is end key)
-                            if  region_buckets_keys.len() > 2{ 
+                            if region_buckets_keys.len() > 2 {
                                 region_buckets_keys.remove(i); // bucket is too small
                                 // the key is removed, to compensate the += 1 below.
                                 i -= 1;
@@ -4730,14 +4757,11 @@ where
             region_buckets.keys.push(region.get_end_key().to_vec());
             self.fsm.peer.region_buckets = region_buckets;
         }
-        match cb {
-            Callback::Test{ cb } => {
-                let peer_stat = PeerInternalStat  {
-                    buckets: self.fsm.peer.region_buckets.clone(),
-                };
-                cb(peer_stat);
-            }
-            _ => {}
+        if let Callback::Test { cb } = cb {
+            let peer_stat = PeerInternalStat {
+                buckets: self.fsm.peer.region_buckets.clone(),
+            };
+            cb(peer_stat);
         }
     }
 
@@ -4909,6 +4933,37 @@ where
 
     fn register_check_peer_stale_state_tick(&mut self) {
         self.schedule_tick(PeerTick::CheckPeerStaleState)
+    }
+
+    fn register_reactivate_memory_lock_tick(&mut self) {
+        self.schedule_tick(PeerTick::ReactivateMemoryLock)
+    }
+
+    fn on_reactivate_memory_lock_tick(&mut self) {
+        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+
+        // If it is not leader, we needn't reactivate by tick. In-memory pessimistic lock will
+        // be enabled when this region becomes leader again.
+        // And this tick is currently only used for the leader transfer failure case.
+        if !self.fsm.peer.is_leader() || pessimistic_locks.status != LocksStatus::TransferringLeader
+        {
+            return;
+        }
+
+        self.fsm.reactivate_memory_lock_ticks += 1;
+        let transferring_leader = self.fsm.peer.raft_group.raft.lead_transferee.is_some();
+        // `lead_transferee` is not set immediately after the lock status changes. So, we need
+        // the tick count condition to avoid reactivating too early.
+        if !transferring_leader
+            && self.fsm.reactivate_memory_lock_ticks
+                >= self.ctx.cfg.reactive_memory_lock_timeout_tick
+        {
+            pessimistic_locks.status = LocksStatus::Normal;
+            self.fsm.reactivate_memory_lock_ticks = 0;
+        } else {
+            drop(pessimistic_locks);
+            self.register_reactivate_memory_lock_tick();
+        }
     }
 }
 

@@ -231,7 +231,9 @@ fn get_approximate_split_keys(
 pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask, SplitCheckBucketRange};
+    use crate::store::{
+        CasualMessage, KeyEntry, SplitCheckBucketRange, SplitCheckRunner, SplitCheckTask,
+    };
     use collections::HashSet;
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
@@ -302,6 +304,7 @@ pub mod tests {
                     region_epoch: _,
                     mut buckets,
                     bucket_ranges: _,
+                    ..
                 },
             )) = rx.try_recv()
             {
@@ -334,6 +337,7 @@ pub mod tests {
                     region_epoch: _,
                     mut buckets,
                     bucket_ranges: _,
+                    ..
                 },
             )) = rx.try_recv()
             {
@@ -550,7 +554,7 @@ pub mod tests {
         ));
 
         must_generate_buckets_approximate(&rx, None, 15000, 45000);
-        
+
         let start = format!("{:04}", 0).into_bytes();
         let end = format!("{:04}", 20).into_bytes();
 
@@ -569,7 +573,7 @@ pub mod tests {
             true,
             CheckPolicy::Approximate,
             Some(vec![SplitCheckBucketRange(start.clone(), end.clone())]),
-        )); 
+        ));
 
         must_generate_buckets_approximate(&rx, Some(SplitCheckBucketRange(start, end)), 150, 450);
         drop(rx);

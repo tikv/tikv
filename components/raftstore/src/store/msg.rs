@@ -24,8 +24,8 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, SplitCheckBucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use kvproto::metapb::Buckets;
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
 
@@ -44,7 +44,7 @@ pub struct WriteResponse {
 // Peer's internal stat, for test purpose only
 #[derive(Debug)]
 pub struct PeerInternalStat {
-    pub buckets: Buckets, 
+    pub buckets: Buckets,
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -91,9 +91,7 @@ pub enum Callback<S: Snapshot> {
         request_times: SmallVec<[Instant; 4]>,
     },
     /// Test purpose callback
-    Test {
-        cb: TestCallback, 
-    },
+    Test { cb: TestCallback },
 }
 
 impl<S: Snapshot> HeapSize for Callback<S> {}
@@ -185,9 +183,7 @@ where
             Callback::None => (),
             Callback::Read(_) => (),
             Callback::Write { .. } => (),
-            Callback::Test{ cb } => {
-                cb(stat)
-            }
+            Callback::Test { cb } => cb(stat),
         }
     }
 }
@@ -201,7 +197,7 @@ where
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
-            Callback::Test{ .. } => write!(fmt, "Callback::Test(..)"),
+            Callback::Test { .. } => write!(fmt, "Callback::Test(..)"),
         }
     }
 }
@@ -217,6 +213,7 @@ pub enum PeerTick {
     CheckPeerStaleState = 5,
     EntryCacheEvict = 6,
     CheckLeaderLease = 7,
+    ReactivateMemoryLock = 8,
 }
 
 impl PeerTick {
@@ -233,6 +230,7 @@ impl PeerTick {
             PeerTick::CheckPeerStaleState => "check_peer_stale_state",
             PeerTick::EntryCacheEvict => "entry_cache_evict",
             PeerTick::CheckLeaderLease => "check_leader_lease",
+            PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
         }
     }
 
@@ -246,6 +244,7 @@ impl PeerTick {
             PeerTick::CheckPeerStaleState,
             PeerTick::EntryCacheEvict,
             PeerTick::CheckLeaderLease,
+            PeerTick::ReactivateMemoryLock,
         ];
         TICKS
     }

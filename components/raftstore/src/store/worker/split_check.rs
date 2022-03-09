@@ -235,7 +235,11 @@ where
                         Bucket::default()
                     }
                 };
-                debug!("bucket_entry size {} keys count {}", bucket_entry.size, bucket_entry.keys.len());
+                debug!(
+                    "bucket_entry size {} keys count {}",
+                    bucket_entry.size,
+                    bucket_entry.keys.len()
+                );
                 buckets.push(bucket_entry);
             }
         } else {
@@ -259,7 +263,11 @@ where
                     Bucket::default()
                 }
             };
-            debug!("bucket_entry size {} keys count {}", bucket_entry.size, bucket_entry.keys.len());
+            debug!(
+                "bucket_entry size {} keys count {}",
+                bucket_entry.size,
+                bucket_entry.keys.len()
+            );
             buckets.push(bucket_entry);
         }
 
@@ -403,17 +411,18 @@ where
                 size += e.entry_size() as u64;
                 keys += 1;
                 if host.enable_region_bucket() && !skip {
+                    let origin_key = keys::origin_key(e.key());
                     if bucket_range_list.is_empty() {
                         bucket_size += e.entry_size() as u64;
                         if bucket_size >= host.region_bucket_size() {
-                            bucket.keys.push(keys::origin_key(e.key()).to_vec());
+                            bucket.keys.push(origin_key.to_vec());
                             bucket.size += bucket_size;
                             bucket_size = 0;
                         }
                     } else {
+                        // find proper bucket range that covers e.key
                         while bucket_range_idx < bucket_range_list.len()
-                            && keys::origin_key(e.key())
-                                >= bucket_range_list[bucket_range_idx].1.as_slice()
+                            && origin_key >= bucket_range_list[bucket_range_idx].1.as_slice()
                         {
                             bucket_range_idx += 1;
                             bucket_size = 0;
@@ -424,12 +433,11 @@ where
                         }
                         if bucket_range_idx == bucket_range_list.len() {
                             skip = true;
-                        } else if keys::origin_key(e.key())
-                            >= bucket_range_list[bucket_range_idx].0.as_slice()
-                        {
+                        } else if origin_key >= bucket_range_list[bucket_range_idx].0.as_slice() {
+                            // e.key() is between bucket_range_list[bucket_range_idx].0, bucket_range_list[bucket_range_idx].1
                             bucket_size += e.entry_size() as u64;
                             if bucket_size >= host.region_bucket_size() {
-                                bucket.keys.push(keys::origin_key(e.key()).to_vec());
+                                bucket.keys.push(origin_key.to_vec());
                                 bucket.size += bucket_size;
                                 bucket_size = 0;
                             }

@@ -37,6 +37,47 @@ impl VectorValue {
         }
     }
 
+    /// Creates a `VectorValue` of length `len` with the given value `scalar`.
+    #[inline]
+    pub fn from_scalar(scalar: &ScalarValue, len: usize) -> Self {
+        macro_rules! expand_convertion {
+            ($val:tt, $( $tp:tt : $chktp:ty ),* ) => {
+                match &$val {
+                    $(
+                        &ScalarValue::$tp(val) => {
+                            let mut v: $chktp = ChunkedVec::with_capacity(len);
+                            match val {
+                                None => {
+                                    for _ in 0..len {
+                                        v.push_null();
+                                    }
+                                },
+                                Some(val) => {
+                                    for _ in 0..len {
+                                        v.push_data(val.clone());
+                                    }
+                                }
+                            }
+                            VectorValue::$tp(v)
+                        }
+                    )*
+                }
+            }
+        }
+        expand_convertion!(
+            scalar,
+            Int: ChunkedVecSized<Int>,
+            Real: ChunkedVecSized<Real>,
+            Decimal: ChunkedVecSized<Decimal>,
+            DateTime: ChunkedVecSized<DateTime>,
+            Duration: ChunkedVecSized<Duration>,
+            Set: ChunkedVecSet,
+            Json: ChunkedVecJson,
+            Enum: ChunkedVecEnum,
+            Bytes: ChunkedVecBytes
+        )
+    }
+
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
     #[must_use]

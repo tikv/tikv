@@ -133,7 +133,7 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::store::{SplitCheckRunner, SplitCheckTask, SplitCheckBucketRange};
+    use crate::store::{SplitCheckBucketRange, SplitCheckRunner, SplitCheckTask};
     use engine_traits::{MiscExt, SyncMutable};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
@@ -249,16 +249,19 @@ mod tests {
 
         // now insert a few keys to grow the bucket 0001
         let start = format!("{:04}", 1).into_bytes();
-        let end = format!("{:04}", 2).into_bytes(); 
+        let end = format!("{:04}", 2).into_bytes();
         exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
-        let bucket_range = SplitCheckBucketRange(Key::from_raw(&start).as_encoded().clone(), Key::from_raw(&end).as_encoded().clone());
+        let bucket_range = SplitCheckBucketRange(
+            Key::from_raw(&start).as_encoded().clone(),
+            Key::from_raw(&end).as_encoded().clone(),
+        );
         for i in 10..20 {
             let k = format!("{:05}", i).into_bytes();
             exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
             let k = keys::data_key(Key::from_raw(&k).as_encoded());
             engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
             // Flush for every key so that we can know the exact middle key.
-            engine.flush_cf(CF_DEFAULT, true).unwrap(); 
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
         }
 
         runnable.run(SplitCheckTask::split_check(
@@ -269,7 +272,6 @@ mod tests {
         ));
 
         must_generate_buckets(&rx, &exp_bucket_keys);
-
 
         exp_bucket_keys.clear();
         runnable.run(SplitCheckTask::split_check(

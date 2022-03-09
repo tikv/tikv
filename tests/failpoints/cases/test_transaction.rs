@@ -524,9 +524,9 @@ fn test_pessimistic_lock_check_valid() {
 
     let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(300));
-    // Set `status` to `TransferingLeader` to make the locks table not writable,
+    // Set `status` to `TransferringLeader` to make the locks table not writable,
     // but the region remains available to serve.
-    txn_ext.pessimistic_locks.write().status = LocksStatus::TransferingLeader;
+    txn_ext.pessimistic_locks.write().status = LocksStatus::TransferringLeader;
     fail::remove("acquire_pessimistic_lock");
 
     let resp = lock_resp.join().unwrap();

@@ -56,10 +56,10 @@ pub struct Config {
     pub raft_min_election_timeout_ticks: usize,
     #[online_config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
-    #[online_config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
+    #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
@@ -262,6 +262,12 @@ pub struct Config {
 
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
+
+    /// Interval to check whether to reactivate in-memory pessimistic lock after being disabled
+    /// before transferring leader.
+    pub reactive_memory_lock_tick_interval: ReadableDuration,
+    /// Max tick count before reactivating in-memory pessimistic lock.
+    pub reactive_memory_lock_timeout_tick: usize,
 }
 
 impl Default for Config {
@@ -340,6 +346,8 @@ impl Default for Config {
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
             raft_msg_flush_interval: ReadableDuration::micros(250),
+            reactive_memory_lock_tick_interval: ReadableDuration::secs(2),
+            reactive_memory_lock_timeout_tick: 5,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -429,6 +437,13 @@ impl Config {
         if self.raft_max_inflight_msgs == 0 || self.raft_max_inflight_msgs > 16384 {
             return Err(box_err!(
                 "raft max inflight msgs should be greater than 0 and less than or equal to 16384"
+            ));
+        }
+
+        if self.raft_max_size_per_msg.0 == 0 || self.raft_max_size_per_msg.0 > ReadableSize::gb(3).0
+        {
+            return Err(box_err!(
+                "raft max size per message should be greater than 0 and less than or equal to 3GiB"
             ));
         }
 
@@ -1005,5 +1020,13 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
+
+        cfg = Config::new();
+        cfg.raft_max_size_per_msg = ReadableSize(0);
+        assert!(cfg.validate().is_err());
+        cfg.raft_max_size_per_msg = ReadableSize::gb(64);
+        assert!(cfg.validate().is_err());
+        cfg.raft_max_size_per_msg = ReadableSize::gb(3);
+        assert!(cfg.validate().is_ok());
     }
 }

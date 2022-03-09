@@ -1651,9 +1651,9 @@ impl<T: Simulator> Cluster<T> {
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
-        let cb = Callback::Test{
+        let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
-            assert_eq!(expect_buckets.get_keys(), stat.buckets.get_keys());
+                assert_eq!(expect_buckets.get_keys(), stat.buckets.get_keys());
             }),
         };
         CasualRouter::send(
