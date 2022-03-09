@@ -21,6 +21,7 @@ use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_L
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
+    kvrpcpb::IsolationLevel,
     metapb,
     raft_cmdpb::{
         CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -541,6 +542,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             key,
                             start_ts,
                             &Default::default(),
+                            IsolationLevel::Si,
                         )
                     },
                 );

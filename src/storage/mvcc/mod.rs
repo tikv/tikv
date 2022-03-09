@@ -21,7 +21,7 @@ use std::error;
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::kvrpcpb::Assertion;
+use kvproto::kvrpcpb::{Assertion, IsolationLevel};
 use thiserror::Error;
 
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -331,6 +331,19 @@ impl From<txn_types::Error> for ErrorInner {
             txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock_info)) => {
                 ErrorInner::KeyIsLocked(lock_info)
             }
+            txn_types::Error(box txn_types::ErrorInner::WriteConflict {
+                start_ts,
+                conflict_start_ts,
+                conflict_commit_ts,
+                key,
+                primary,
+            }) => ErrorInner::WriteConflict {
+                start_ts,
+                conflict_start_ts,
+                conflict_commit_ts,
+                key,
+                primary,
+            },
         }
     }
 }
@@ -442,8 +455,13 @@ pub mod tests {
         ts: TimeStamp,
     ) -> Result<()> {
         if let Some(lock) = reader.load_lock(key)? {
-            if let Err(e) = Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
-            {
+            if let Err(e) = Lock::check_ts_conflict(
+                Cow::Owned(lock),
+                key,
+                ts,
+                &Default::default(),
+                IsolationLevel::Si,
+            ) {
                 return Err(e.into());
             }
         }
