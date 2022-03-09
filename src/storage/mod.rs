@@ -1704,6 +1704,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let raw_value = RawValue {
                         user_value: value,
                         expire_ts: ttl_to_expire_ts(ttl),
+                        is_delete: false,
                     };
                     Modify::Put(
                         Self::rawkv_cf(&cf, self.api_version)?,
@@ -1773,6 +1774,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let raw_value = RawValue {
                                 user_value: v,
                                 expire_ts: ttl_to_expire_ts(ttl),
+                                is_delete: false,
                             };
                             Modify::Put(
                                 cf,
