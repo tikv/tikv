@@ -1368,6 +1368,9 @@ impl Applier {
                     self.handle_unsafe_destroy(ctx, region_id);
                 }
                 ApplyMsg::Resume { region_id } => unreachable!(),
+                ApplyMsg::SplitTask(split_task) => {
+                    ctx.split_scheduler.as_ref().unwrap().schedule(split_task);
+                }
             }
         }
     }

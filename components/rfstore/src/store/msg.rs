@@ -6,7 +6,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::Instant;
 
-use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot};
+use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot, SplitTask};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
@@ -45,6 +45,7 @@ impl PeerMsg {
 pub(crate) enum ApplyMsg {
     Apply(MsgApply),
     Registration(MsgRegistration),
+    SplitTask(SplitTask),
     UnsafeDestroy { region_id: u64 },
     Resume { region_id: u64 },
 }

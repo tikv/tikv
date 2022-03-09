@@ -269,6 +269,7 @@ impl Shard {
     pub(crate) fn set_split_keys(&self, keys: &[Vec<u8>]) -> bool {
         if !self.is_splitting() {
             *self.split_ctx.write().unwrap() = Arc::new(SplitContext::new(keys));
+            info!("shard {}:{} set split keys {:?}", self.id, self.ver, keys);
             return true;
         }
         warn!("shard {}:{} is already splitting", self.id, self.ver);

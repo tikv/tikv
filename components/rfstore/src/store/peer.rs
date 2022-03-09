@@ -2695,7 +2695,8 @@ impl Peer {
             self.peer.clone(),
             SplitMethod::SplitFiles(cb),
         );
-        ctx.global.split_scheduler.schedule(split_task).unwrap();
+        let apply_msg = ApplyMsg::SplitTask(split_task);
+        ctx.apply_msgs.msgs.push(apply_msg);
     }
 
     pub(crate) fn maybe_schedule_finish_split(&mut self, ctx: &mut RaftContext) {
@@ -2746,7 +2747,8 @@ impl Peer {
             self.peer.clone(),
             SplitMethod::Finish(outer_callback),
         );
-        ctx.global.split_scheduler.schedule(split_task).unwrap();
+        let apply_msg = ApplyMsg::SplitTask(split_task);
+        ctx.apply_msgs.msgs.push(apply_msg);
     }
 }
 
