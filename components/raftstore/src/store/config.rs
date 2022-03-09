@@ -549,13 +549,14 @@ impl Config {
             ));
         }
 
-        if self.apply_batch_system.max_batch_size == 0 {
-            self.apply_batch_system.max_batch_size = 256;
-        }
-        if self.apply_batch_system.max_batch_size > 10240 {
-            return Err(box_err!(
-                "apply-max-batch-size should be greater than 0 and less than or equal to 10240"
-            ));
+        if let Some(size) = self.apply_batch_system.max_batch_size {
+            if size == 0 || size > 10240 {
+                return Err(box_err!(
+                    "apply-max-batch-size should be greater than 0 and less than or equal to 10240"
+                ));
+            }
+        } else {
+            self.apply_batch_system.max_batch_size = Some(256);
         }
 
         if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > limit {
@@ -564,21 +565,21 @@ impl Config {
                 limit
             ));
         }
+
         if self.store_batch_system.low_priority_pool_size > 0 {
             // The store thread pool doesn't need a low-priority thread currently.
             self.store_batch_system.low_priority_pool_size = 0;
         }
-        if self.store_batch_system.max_batch_size == 0 {
-            if self.hibernate_regions {
-                self.store_batch_system.max_batch_size = 256;
-            } else {
-                self.store_batch_system.max_batch_size = 1024;
+        if let Some(size) = self.store_batch_system.max_batch_size {
+            if size == 0 || size > 10240 {
+                return Err(box_err!(
+                    "store-max-batch-size should be greater than 0 and less than or equal to 10240"
+                ));
             }
-        }
-        if self.store_batch_system.max_batch_size > 10240 {
-            return Err(box_err!(
-                "store-max-batch-size should be greater than 0 and less than or equal to 10240"
-            ));
+        } else if self.hibernate_regions {
+            self.store_batch_system.max_batch_size = Some(256);
+        } else {
+            self.store_batch_system.max_batch_size = Some(1024);
         }
 
         if self.store_io_notify_capacity == 0 {
@@ -980,7 +981,15 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
+        cfg.apply_batch_system.max_batch_size = Some(0);
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
         cfg.apply_batch_system.pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.store_batch_system.max_batch_size = Some(0);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
@@ -988,32 +997,32 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.apply_batch_system.max_batch_size = 10241;
+        cfg.apply_batch_system.max_batch_size = Some(10241);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.store_batch_system.max_batch_size = 10241;
+        cfg.store_batch_system.max_batch_size = Some(10241);
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
         cfg.hibernate_regions = true;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, 256);
-        assert_eq!(cfg.apply_batch_system.max_batch_size, 256);
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
         cfg = Config::new();
         cfg.hibernate_regions = false;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, 1024);
-        assert_eq!(cfg.apply_batch_system.max_batch_size, 256);
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
         cfg = Config::new();
         cfg.hibernate_regions = true;
-        cfg.store_batch_system.max_batch_size = 123;
-        cfg.apply_batch_system.max_batch_size = 234;
+        cfg.store_batch_system.max_batch_size = Some(123);
+        cfg.apply_batch_system.max_batch_size = Some(234);
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, 123);
-        assert_eq!(cfg.apply_batch_system.max_batch_size, 234);
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(123));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(234));
 
         cfg = Config::new();
         cfg.future_poll_size = 0;

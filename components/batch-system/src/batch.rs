@@ -397,7 +397,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 // We may avoid this once https://github.com/rust-lang/rfcs/pull/2229 is implemented.
                 let batch_size = &mut self.max_batch_size;
                 self.handler.begin(max_batch_size, |cfg| {
-                    *batch_size = cfg.max_batch_size;
+                    *batch_size = cfg.max_batch_size();
                 });
             }
             max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
