@@ -119,7 +119,7 @@ impl APIVersion for APIV2 {
     }
 
     fn decode_raw_key(encoded_key: &Key, with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
-        debug_assert!(verify_encoded_key(encoded_key, with_ts));
+        debug_assert!(is_valid_encoded_key(encoded_key, with_ts));
         let ts = decode_raw_key_timestamp(encoded_key, with_ts)?;
         Ok((encoded_key.to_raw()?, ts))
     }
@@ -128,7 +128,7 @@ impl APIVersion for APIV2 {
         encoded_key: Key,
         with_ts: bool,
     ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
-        debug_assert!(verify_encoded_key(&encoded_key, with_ts));
+        debug_assert!(is_valid_encoded_key(&encoded_key, with_ts));
         let ts = decode_raw_key_timestamp(&encoded_key, with_ts)?;
         Ok((encoded_key.into_raw()?, ts))
     }
@@ -164,23 +164,21 @@ impl APIVersion for APIV2 {
 
 impl APIV2 {
     pub fn append_ts_on_encoded_bytes(encoded_bytes: &mut Vec<u8>, ts: TimeStamp) {
-        debug_assert!(verify_encoded_bytes(encoded_bytes, false));
+        debug_assert!(is_valid_encoded_bytes(encoded_bytes, false));
         encoded_bytes.encode_u64_desc(ts.into_inner()).unwrap();
     }
 }
 
 #[inline]
-fn verify_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
-    if !matches!(APIV2::parse_key_mode(encoded_bytes), KeyMode::Raw) {
-        return false;
-    }
-    bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
+fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
+    APIV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
+        && bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
         && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
 }
 
 #[inline]
-fn verify_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
-    verify_encoded_bytes(&encoded_key.as_encoded()[..], with_ts)
+fn is_valid_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
+    is_valid_encoded_bytes(&encoded_key.as_encoded()[..], with_ts)
 }
 
 #[inline]

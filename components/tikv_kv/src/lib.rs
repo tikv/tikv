@@ -94,9 +94,8 @@ impl Modify {
     }
 }
 
-pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
-    let mut reqs = Vec::with_capacity(modifies.len());
-    for m in modifies {
+impl From<Modify> for raft_cmdpb::Request {
+    fn from(m: Modify) -> raft_cmdpb::Request {
         let mut req = raft_cmdpb::Request::default();
         match m {
             Modify::Delete(cf, k) => {
@@ -136,10 +135,13 @@ pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
                 req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
                 req.set_delete_range(delete_range);
             }
-        }
-        reqs.push(req);
+        };
+        req
     }
-    reqs
+}
+
+pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
+    modifies.into_iter().map(Into::into).collect::<Vec<_>>()
 }
 
 impl PessimisticLockPair for Modify {

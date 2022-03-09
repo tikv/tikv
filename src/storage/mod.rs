@@ -1664,7 +1664,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         "raw_write::pre_propose_cb";
                         "ts" => ts,
                         "key" => &log_wrappers::Value::key(req.get_put().get_key()),
-                        // "value" => &log_wrappers::Value::value(req.get_put().get_value()),
                     );
                 }
             }))
