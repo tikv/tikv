@@ -156,6 +156,9 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Service<
             let peer_id = msg.get_message().get_from();
             let m = CasualMessage::RejectRaftAppend { peer_id };
             let _ = ch.send_casual_msg(id, m);
+            info!(
+                "log append messages drop cause of memory limit";
+                "current total" => RAFT_APPEND_REJECTS.get());
             return Ok(());
         }
         // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or

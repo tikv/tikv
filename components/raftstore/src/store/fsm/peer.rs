@@ -1403,6 +1403,10 @@ where
                 self.fsm.peer.leader_unreachable = false;
             }
 
+            if r.has_pending_committed_entries {
+                self.schedule_tick(PeerTick::Raft);
+            }
+
             return r.has_write_ready;
         }
         false
@@ -1484,6 +1488,12 @@ where
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
         }
+
+        // if committed entries not be sent to appply cause of memory flow control,
+        // we need re-set has ready to deal with ready().
+        if self.fsm.peer.has_pending_committed_entries {
+            self.fsm.has_ready = true;
+        }
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
@@ -1493,6 +1503,12 @@ where
             self.fsm.missing_ticks = 0;
             self.register_raft_base_tick();
             return;
+        }
+
+        // When having pending committed entries not sent to apply, set has ready.
+        if self.fsm.peer.has_pending_committed_entries {
+            self.fsm.has_ready = true;
+            self.register_raft_base_tick();
         }
 
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);

@@ -222,6 +222,11 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=4.8G
     pub evict_cache_on_memory_ratio: f64,
 
+    /// Applys memory limit, including log entry and pending cmd, but most are log entries.
+    /// If greater than this, store loop will be paused to send apply tasks to apply loop.
+    /// Value advice: 5%-20% of total memory.
+    pub applys_memory_ratio: f64,
+
     pub cmd_batch: bool,
 
     /// When the count of concurrent ready exceeds this value, command will not be proposed
@@ -333,6 +338,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
+            applys_memory_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -578,6 +584,12 @@ impl Config {
         if self.evict_cache_on_memory_ratio < 0.0 {
             return Err(box_err!(
                 "evict_cache_on_memory_ratio must be greater than 0"
+            ));
+        }
+
+        if self.applys_memory_ratio < 0.0 || self.applys_memory_ratio > 0.3 {
+            return Err(box_err!(
+                "applys_memory_ratio is advised to be in [0.05, 0.3] of total memory"
             ));
         }
 

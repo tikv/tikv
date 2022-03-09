@@ -52,7 +52,9 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
-use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
+use crate::store::memory::{
+    apply_need_flow_control, needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES,
+};
 use crate::store::msg::RaftCommand;
 use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
@@ -452,6 +454,7 @@ pub struct ReadyResult {
     pub state_role: Option<StateRole>,
     pub has_new_entries: bool,
     pub has_write_ready: bool,
+    pub has_pending_committed_entries: bool,
 }
 
 pub struct Peer<EK, ER>
@@ -480,6 +483,9 @@ where
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
+
+    /// if apply takes to much memory, store will stop sending apply tasks.
+    pub has_pending_committed_entries: bool,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -677,6 +683,7 @@ where
             approximate_keys: None,
             has_calculated_region_size: false,
             compaction_declined_bytes: 0,
+            has_pending_committed_entries: false,
             leader_unreachable: false,
             pending_remove: false,
             should_wake_up: false,
@@ -2105,11 +2112,14 @@ where
         // needs to be sent to the apply system.
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        // Skip it now when there are committed entries which not be sent to apply loop.
+        if !self.has_pending_committed_entries {
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
         }
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
@@ -2271,6 +2281,7 @@ where
             state_role,
             has_new_entries,
             has_write_ready,
+            has_pending_committed_entries: self.has_pending_committed_entries,
         })
     }
 
@@ -2327,7 +2338,15 @@ where
                 |_| {}
             );
         }
+
         if let Some(last_entry) = committed_entries.last() {
+            // check apply memory usage.
+            if apply_need_flow_control(ctx.cfg.applys_memory_ratio) {
+                // deal with the log entries that have been commmitted but not sent to apply in next loop.
+                self.has_pending_committed_entries = true;
+                return;
+            }
+            self.has_pending_committed_entries = false;
             self.last_applying_idx = last_entry.get_index();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
                 // Urgent requests are flushed, make it lazy again.
