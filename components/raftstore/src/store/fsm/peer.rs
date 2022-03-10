@@ -4765,8 +4765,8 @@ where
             "region_id" => self.fsm.region_id(),
             "buckets count" => self.fsm.peer.region_buckets.get_keys().len(),
         );
-         // test purpose
-         test_only_callback(cb, self.fsm.peer.region_buckets.clone()); 
+        // test purpose
+        test_only_callback(cb, self.fsm.peer.region_buckets.clone());
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
