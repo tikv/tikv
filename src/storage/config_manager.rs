@@ -14,7 +14,6 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 use tikv_kv::Engine;
 use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::sys::SysQuota;
 use tikv_util::worker::Scheduler;
 
 pub struct StorageConfigManger<E: Engine, L: LockManager> {
