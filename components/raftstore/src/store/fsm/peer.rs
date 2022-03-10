@@ -1489,6 +1489,20 @@ where
     }
 
     fn on_raft_base_tick(&mut self) {
+        fail_point!(
+            "on_raft_base_tick_idle_with_missing_ticks",
+            self.fsm.hibernate_state.group_state() == GroupState::Idle
+                && self.fsm.missing_ticks == 1,
+            |_| {
+                fail::remove("on_raft_base_tick_idle_with_missing_ticks");
+                self.on_check_peer_stale_state_tick();
+                self.on_raft_base_tick_inner()
+            }
+        );
+        self.on_raft_base_tick_inner()
+    }
+
+    fn on_raft_base_tick_inner(&mut self) {
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
@@ -1527,6 +1541,12 @@ where
                 {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
+                } else {
+                    debug!("follower hibernates";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed,
+                        "missing_ticks" => self.fsm.missing_ticks);
                 }
                 return;
             }
@@ -1566,7 +1586,11 @@ where
             return;
         }
 
-        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        debug!("stop ticking";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "res" => ?res,
+            "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed);
         self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
         // to allow it to campaign quickly when abnormal situation is detected.
