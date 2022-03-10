@@ -18,6 +18,7 @@ pub use self::util::PdConnector;
 pub use self::util::REQUEST_RECONNECT_INTERVAL;
 pub use self::util::{merge_bucket_stats, new_bucket_stats};
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -79,6 +80,35 @@ pub struct BucketMeta {
     pub version: u64,
     pub region_epoch: metapb::RegionEpoch,
     pub keys: Vec<Vec<u8>>,
+}
+
+impl Eq for BucketMeta {}
+
+impl PartialEq for BucketMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.region_id == other.region_id
+            && self.region_epoch.get_version() == other.region_epoch.get_version()
+            && self.version == other.version
+    }
+}
+
+impl PartialOrd for BucketMeta {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BucketMeta {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self
+            .region_epoch
+            .get_version()
+            .cmp(&other.region_epoch.get_version())
+        {
+            Ordering::Equal => self.version.cmp(&other.version),
+            ord => ord,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

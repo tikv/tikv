@@ -404,9 +404,20 @@ impl ReadStats {
                 let stats = new_bucket_stats(buckets);
                 BucketStat::new(buckets.clone(), stats)
             });
+            if bucket_stat.meta < *buckets {
+                let stats = new_bucket_stats(buckets);
+                let mut new = BucketStat::new(buckets.clone(), stats);
+                merge_bucket_stats(
+                    &new.meta.keys,
+                    &mut new.stats,
+                    &bucket_stat.meta.keys,
+                    &bucket_stat.stats,
+                );
+                *bucket_stat = new;
+            }
             let mut delta = metapb::BucketStats::default();
-            let bytes = write.read_bytes + data.read_bytes;
-            delta.set_read_bytes(vec![bytes as u64]);
+            delta.set_write_bytes(vec![write.read_bytes as u64]);
+            delta.set_read_bytes(vec![data.read_bytes as u64]);
             let start = start.unwrap_or_default();
             let end = end.unwrap_or_default();
             merge_bucket_stats(
