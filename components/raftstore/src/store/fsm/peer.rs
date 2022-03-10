@@ -3039,7 +3039,7 @@ where
         // to the old region will stay in the original map.
         let region_locks = {
             let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
-            info!("moving {} locks to new regions", pessimistic_locks.len());
+            info!("moving {} locks to new regions", pessimistic_locks.len(); "region_id" => region_id);
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived.get_region_epoch().get_version();
