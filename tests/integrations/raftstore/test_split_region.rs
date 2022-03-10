@@ -991,12 +991,7 @@ fn test_refresh_region_bucket_keys() {
         .insert(0, region.get_start_key().to_vec());
     expected_buckets.keys.push(region.get_end_key().to_vec());
     let buckets = vec![bucket];
-    cluster.refresh_region_bucket_keys(
-        &region,
-        buckets,
-        Option::None,
-        expected_buckets.clone(),
-    );
+    cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
     let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
     region.mut_region_epoch().set_conf_ver(conf_ver);
 
@@ -1019,12 +1014,7 @@ fn test_refresh_region_bucket_keys() {
 
     let conf_ver = 0;
     region.mut_region_epoch().set_conf_ver(conf_ver);
-    cluster.refresh_region_bucket_keys(
-        &region,
-        buckets,
-        Option::None,
-        expected_buckets.clone(),
-    );
+    cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
 
     // further split k12 bucket into more buckets
     let region = pd_client.get_region(b"v1").unwrap();
