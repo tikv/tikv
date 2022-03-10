@@ -42,14 +42,17 @@ use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
-use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
+<<<<<<< HEAD
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+=======
+    self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+>>>>>>> 6291ebf37... server: disallow coexist of raft engine and raftdb (#12047)
 };
 use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -2648,18 +2651,8 @@ impl TiKvConfig {
             return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
-        if RocksEngine::exists(&kv_db_path)
-            && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            && !RaftLogEngine::exists(&self.raft_engine.config.dir)
-        {
-            return Err("default rocksdb exists, but raftdb and raft engine doesn't exist".into());
-        }
-        if !RocksEngine::exists(&kv_db_path)
-            && (RocksEngine::exists(&self.raft_store.raftdb_path)
-                || RaftLogEngine::exists(&self.raft_engine.config.dir))
-        {
-            return Err("default rocksdb doesn't exist, but raftdb or raft engine exists".into());
-        }
+        RaftDataStateMachine::new(&self.raft_store.raftdb_path, &self.raft_engine.config.dir)
+            .validate(RocksEngine::exists(&kv_db_path))?;
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
