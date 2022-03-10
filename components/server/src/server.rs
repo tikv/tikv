@@ -127,7 +127,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let mut tikv = TiKVServer::<$ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
-            let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+            let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
             let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
             register_memory_usage_high_water(high_water);
 
