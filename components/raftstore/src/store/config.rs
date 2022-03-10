@@ -56,10 +56,10 @@ pub struct Config {
     pub raft_min_election_timeout_ticks: usize,
     #[online_config(hidden)]
     pub raft_max_election_timeout_ticks: usize,
-    #[online_config(hidden)]
     pub raft_max_size_per_msg: ReadableSize,
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
+    #[online_config(hidden)]
     pub raft_entry_max_size: ReadableSize,
 
     // Interval to compact unnecessary raft log.
@@ -437,6 +437,13 @@ impl Config {
         if self.raft_max_inflight_msgs == 0 || self.raft_max_inflight_msgs > 16384 {
             return Err(box_err!(
                 "raft max inflight msgs should be greater than 0 and less than or equal to 16384"
+            ));
+        }
+
+        if self.raft_max_size_per_msg.0 == 0 || self.raft_max_size_per_msg.0 > ReadableSize::gb(3).0
+        {
+            return Err(box_err!(
+                "raft max size per message should be greater than 0 and less than or equal to 3GiB"
             ));
         }
 
@@ -1013,5 +1020,13 @@ mod tests {
         cfg.peer_stale_state_check_interval = ReadableDuration::minutes(5);
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.max_peer_down_duration, ReadableDuration::minutes(10));
+
+        cfg = Config::new();
+        cfg.raft_max_size_per_msg = ReadableSize(0);
+        assert!(cfg.validate().is_err());
+        cfg.raft_max_size_per_msg = ReadableSize::gb(64);
+        assert!(cfg.validate().is_err());
+        cfg.raft_max_size_per_msg = ReadableSize::gb(3);
+        assert!(cfg.validate().is_ok());
     }
 }

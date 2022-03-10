@@ -193,6 +193,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         }
                     }
                     IsolationLevel::Rc => {}
+                    IsolationLevel::RcCheckTs => {
+                        return Err(box_err!("RcCheckTs is not supported"));
+                    }
                 }
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     lock_cursor.prev(&mut self.statistics.lock);
