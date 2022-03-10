@@ -162,6 +162,8 @@ pub async fn region_resolved_ts_store(
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     min_ts: TimeStamp,
 ) -> Vec<u64> {
+    PENDING_RTS_COUNT.inc();
+    defer!(PENDING_RTS_COUNT.dec());
     fail_point!("before_sync_replica_read_state", |_| regions.clone());
 
     let store_id = match store_meta.lock().unwrap().store_id {
@@ -228,10 +230,12 @@ pub async fn region_resolved_ts_store(
 
             // Check leadership for `regions` on `to_store`.
             async move {
+                PENDING_CHECK_LEADER_REQ_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
                 let client =
                     get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
                         .await
-                        .map_err(|e| (to_store, true, format!("{}", e)))?;
+                        .map_err(|e| (to_store, true, format!("[get tikv client] {}", e)))?;
 
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
@@ -251,12 +255,14 @@ pub async fn region_resolved_ts_store(
 
                 let rpc = client
                     .check_leader_async(&req)
-                    .map_err(|e| (to_store, true, format!("{}", e)))?;
+                    .map_err(|e| (to_store, true, format!("[rpc create failed]{}", e)))?;
+                PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
                 let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
                 let resp = tokio::time::timeout(timeout, rpc)
-                    .map_err(|e| (to_store, true, format!("{}", e)))
+                    .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
                     .await?
-                    .map_err(|e| (to_store, true, format!("{}", e)))?;
+                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
                 Ok((to_store, resp))
             }
             .boxed()
