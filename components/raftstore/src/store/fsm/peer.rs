@@ -1081,6 +1081,21 @@ where
         {
             self.fsm.has_ready = true;
         }
+        if let Err(e) = self
+            .ctx
+            .split_check_scheduler
+            .schedule(SplitCheckTask::ApproximateBuckets(
+                self.fsm.peer.region().clone(),
+            ))
+        {
+            error!(
+                "failed to schedule check approximate buckets";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
+            return;
+        }
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {

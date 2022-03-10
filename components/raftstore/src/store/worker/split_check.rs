@@ -130,6 +130,7 @@ pub enum Task {
         auto_split: bool,
         policy: CheckPolicy,
     },
+    ApproximateBuckets(Region),
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
@@ -159,6 +160,7 @@ impl Display for Task {
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
+            Task::ApproximateBuckets(_) => write!(f, "[split check worker] Approximate buckets"),
         }
     }
 }
@@ -202,31 +204,7 @@ where
             self.coprocessor
                 .new_split_checker_host(region, &self.engine, auto_split, policy);
         if host.policy() == CheckPolicy::Approximate && host.enable_region_bucket() {
-            let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
-                Ok(keys) => keys
-                    .into_iter()
-                    .map(|k| keys::origin_key(&k).to_vec())
-                    .collect(),
-                Err(e) => {
-                    error!(%e;
-                        "failed to get approximate bucket key";
-                        "region_id" => region_id,
-                    );
-                    vec![]
-                }
-            };
-            info!(
-                "starting approximate_bucket_keys {}, bucket {:?}",
-                bucket_keys.len(),
-                bucket_keys
-            );
-            let _ = self.router.send(
-                region.get_id(),
-                CasualMessage::RefreshRegionBuckets {
-                    region_epoch: region.get_region_epoch().clone(),
-                    bucket_keys,
-                },
-            );
+            self.refresh_approximate_bucket_keys(region, &mut host)
         }
 
         if host.skip() {
@@ -360,6 +338,34 @@ where
         );
         self.coprocessor.cfg.update(change);
     }
+
+    fn refresh_approximate_bucket_keys(&self, region: &Region, host: &mut SplitCheckerHost<'_, E>) {
+        let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
+            Ok(keys) => keys
+                .into_iter()
+                .map(|k| keys::origin_key(&k).to_vec())
+                .collect(),
+            Err(e) => {
+                error!(%e;
+                    "failed to get approximate bucket key";
+                    "region_id" => region.get_id(),
+                );
+                vec![]
+            }
+        };
+        info!(
+            "starting approximate_bucket_keys {}, bucket {:?}",
+            bucket_keys.len(),
+            bucket_keys
+        );
+        let _ = self.router.send(
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                bucket_keys,
+            },
+        );
+    }
 }
 
 impl<E, S> Runnable for Runner<E, S>
@@ -377,6 +383,15 @@ where
                 policy,
             } => self.check_split_and_bucket(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
+            Task::ApproximateBuckets(region) => {
+                let mut host = self.coprocessor.new_split_checker_host(
+                    &region,
+                    &self.engine,
+                    false,
+                    CheckPolicy::Approximate,
+                );
+                self.refresh_approximate_bucket_keys(&region, &mut host);
+            }
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.coprocessor.cfg),
         }
