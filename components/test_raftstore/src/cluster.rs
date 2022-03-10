@@ -1091,13 +1091,13 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer) {
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
         let timer = Instant::now();
         let mut state;
         loop {
             state = self.region_local_state(region_id, peer.get_store_id());
             if state.get_state() == PeerState::Tombstone
-                && state.get_region().get_peers().contains(&peer)
+                && (!check_exist || state.get_region().get_peers().contains(&peer))
             {
                 return;
             }

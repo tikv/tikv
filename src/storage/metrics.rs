@@ -319,6 +319,11 @@ make_auto_flush_static_metric! {
         decrypt_data_nanos,
     }
 
+    pub label_enum InMemoryPessimisticLockingResult {
+        success,
+        full,
+    }
+
     pub struct CommandScanDetails: LocalIntCounter {
         "req" => CommandKind,
         "cf" => GcKeysCF,
@@ -370,6 +375,10 @@ make_auto_flush_static_metric! {
     pub struct PerfCounter: LocalIntCounter {
         "req" => CommandKind,
         "metric" => PerfMetric,
+    }
+
+    pub struct InMemoryPessimisticLockingCounter: LocalIntCounter {
+        "result" => InMemoryPessimisticLockingResult,
     }
 }
 
@@ -607,4 +616,13 @@ lazy_static! {
 
     pub static ref STORAGE_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(STORAGE_ROCKSDB_PERF_COUNTER, PerfCounter);
+
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_in_memory_pessimistic_locking",
+        "Count of different types of in-memory pessimistic locking",
+        &["result"]
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =
+        auto_flush_from!(IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER, InMemoryPessimisticLockingCounter);
 }
