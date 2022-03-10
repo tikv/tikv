@@ -4,6 +4,7 @@ use crate::storage::kv::{Iterator, Result, Snapshot};
 
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
+use tikv_util::codec::number::U64_SIZE;
 use txn_types::{Key, TimeStamp, Value};
 
 #[derive(Clone)]
@@ -88,6 +89,13 @@ pub struct RawMvccIterator<I: Iterator> {
     cur_value: Option<Vec<u8>>,
     is_valid: Option<bool>,
 }
+fn is_user_key_eq(left: &[u8], right: &[u8]) -> bool {
+    let len = left.len();
+    if len != right.len() {
+        return false;
+    }
+    Key::is_user_key_eq(left, &right[..len - U64_SIZE])
+}
 
 impl<I: Iterator> RawMvccIterator<I> {
     fn new(inner: I) -> Self {
@@ -120,7 +128,7 @@ impl<I: Iterator> RawMvccIterator<I> {
             return Ok(false);
         }
         while *res.as_ref().unwrap() && self.inner.valid()? {
-            if self.cur_key.as_ref().unwrap() == self.inner.key() {
+            if is_user_key_eq(self.cur_key.as_ref().unwrap(), self.inner.key()) {
                 self.update_cur_kv(self.inner.key().to_vec(), self.inner.value().to_vec());
                 self.inner.prev()?;
             } else {
@@ -135,7 +143,10 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         let cur_key = self.inner.key().to_owned();
         let mut res = self.inner.next();
-        while *res.as_ref().unwrap() && self.inner.valid()? && cur_key == self.inner.key() {
+        while *res.as_ref().unwrap()
+            && self.inner.valid()?
+            && is_user_key_eq(&cur_key, self.inner.key())
+        {
             res = self.inner.next();
         }
         self.clear_cur_kv();

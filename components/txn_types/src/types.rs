@@ -255,28 +255,6 @@ pub enum MutationType {
 }
 
 /// A row mutation.
-#[derive(Debug, Clone)]
-pub enum RawMutation {
-    /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
-    Put { key: Key, value: Value, ttl: u64 },
-    /// Delete `Key`.
-    Delete { key: Key },
-}
-
-impl RawMutation {
-    pub fn key(&self) -> &Key {
-        match self {
-            RawMutation::Put {
-                ref key,
-                value: _,
-                ttl: _,
-            } => key,
-            RawMutation::Delete { ref key } => key,
-        }
-    }
-}
-
-/// A row mutation.
 ///
 /// It may also carry an `Assertion` field, which means it has such an *assertion* to the data
 /// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite

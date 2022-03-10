@@ -80,7 +80,9 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 
-use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
+use api_version::{
+    match_template_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL, APIV2,
+};
 use causal_ts::{self, CausalTsProvider};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
@@ -106,7 +108,7 @@ use std::{
 };
 use tikv_kv::SnapshotExt;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1662,34 +1664,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    /// Build `pre_propose_cb` for API V2 raw write requests.
-    /// `pre_propose_cb` ingests causal timestamp into key in Raft pre-propose phase in Raftstore.
-    /// For a key, Raft pre-propose phase is single-threaded,
-    /// which will ensure that order of timestamp is consistent with sequence of Raft commands,
-    /// and maintain the "causality consistency" of the timestamp.
-    /// See https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
-    fn build_raw_write_pre_propose_cb(&self) -> Option<Box<dyn FnOnce(&mut [RaftRequest]) + Send>> {
-        if let ApiVersion::V2 = self.api_version {
-            let causal_ts_provider = self.causal_ts_provider.as_ref().unwrap().clone();
-            Some(Box::new(move |requests: &mut [RaftRequest]| {
-                for req in requests {
-                    debug_assert!(matches!(req.get_cmd_type(), CmdType::Put));
-                    let ts = causal_ts_provider.get_ts().unwrap(); // `get_ts()` must not fail.
-                    api_version::APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts);
-
-                    debug!(
-                        "raw_write::pre_propose_cb";
-                        "ts" => ts,
-                        "key" => &log_wrappers::Value::key(req.get_put().get_key()),
-                        // "value" => &log_wrappers::Value::value(req.get_put().get_value()),
-                    );
-                }
-            }))
-        } else {
-            None
-        }
-    }
-
     /// Write a raw key to the storage.
     pub fn raw_put(
         &self,
@@ -1732,7 +1706,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb = self.build_raw_write_pre_propose_cb();
+        let pre_propose_cb =
+            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
         self.engine.async_write_ext(
             &ctx,
             batch,
@@ -1745,33 +1720,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    /// Write some keys to the storage in a batch.
-    pub fn raw_batch_put(
-        &self,
-        ctx: Context,
-        cf: String,
+    fn raw_batch_put_requests_to_modifies(
+        api_version: ApiVersion,
+        cf: CfName,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
-        callback: Callback<()>,
-    ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_batch_put,
-            pairs.iter().map(|(ref k, _)| k),
-        )?;
-
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
-
-        check_key_size!(
-            pairs.iter().map(|(ref k, _)| k),
-            self.max_key_size,
-            callback
-        );
-
+    ) -> Result<Vec<Modify>> {
         let modifies = match_template_api_version!(
             API,
-            match self.api_version {
+            match api_version {
                 ApiVersion::API => {
                     if !API::IS_TTL_ENABLED {
                         if ttls.iter().any(|&x| x != 0) {
@@ -1800,11 +1757,39 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 }
             }
         );
+        Ok(modifies)
+    }
 
+    /// Write some keys to the storage in a batch.
+    pub fn raw_batch_put(
+        &self,
+        ctx: Context,
+        cf: String,
+        pairs: Vec<KvPair>,
+        ttls: Vec<u64>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        Self::check_api_version(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::raw_batch_put,
+            pairs.iter().map(|(ref k, _)| k),
+        )?;
+
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+
+        check_key_size!(
+            pairs.iter().map(|(ref k, _)| k),
+            self.max_key_size,
+            callback
+        );
+
+        let modifies = Self::raw_batch_put_requests_to_modifies(self.api_version, cf, pairs, ttls)?;
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb = self.build_raw_write_pre_propose_cb();
+        let pre_propose_cb =
+            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
         self.engine.async_write_ext(
             &ctx,
             batch,
@@ -1856,7 +1841,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb = self.build_raw_write_pre_propose_cb();
+        let pre_propose_cb =
+            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
         self.engine.async_write_ext(
             &ctx,
             batch,
@@ -1916,6 +1902,31 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
+    fn raw_batch_delete_requests_to_modifies(
+        api_version: ApiVersion,
+        cf: CfName,
+        keys: Vec<Vec<u8>>,
+    ) -> Vec<Modify> {
+        keys.into_iter()
+            .map(|k| match api_version {
+                ApiVersion::V1 => Modify::Delete(cf, APIV1::encode_raw_key_owned(k, None)),
+                ApiVersion::V1ttl => Modify::Delete(cf, APIV1TTL::encode_raw_key_owned(k, None)),
+                ApiVersion::V2 => {
+                    let raw_value = RawValue {
+                        user_value: vec![],
+                        expire_ts: None,
+                        is_delete: true,
+                    };
+                    Modify::Put(
+                        cf,
+                        APIV2::encode_raw_key_owned(k, None),
+                        APIV2::encode_raw_value_owned(raw_value),
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
     /// Delete some raw keys in a batch.
     /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_batch_delete(
@@ -1935,29 +1946,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
-        let modifies = keys
-            .into_iter()
-            .map(|k| match self.api_version {
-                ApiVersion::V2 => {
-                    let raw_value = RawValue {
-                        user_value: vec![],
-                        expire_ts: None,
-                        is_delete: true,
-                    };
-                    Modify::Put(
-                        cf,
-                        APIV2::encode_raw_key_owned(k, None),
-                        APIV2::encode_raw_value_owned(raw_value),
-                    )
-                }
-                _ => Modify::Delete(cf, Key::from_encoded(k)),
-            })
-            .collect();
-
+        let modifies = Self::raw_batch_delete_requests_to_modifies(self.api_version, cf, keys);
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb = self.build_raw_write_pre_propose_cb();
+        let pre_propose_cb =
+            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
         self.engine.async_write_ext(
             &ctx,
             batch,
@@ -2372,13 +2366,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if self.api_version == ApiVersion::V1 && ttl != 0 {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
+        let key: Key = match_template_api_version!(
+            API,
+            match self.api_version {
+                ApiVersion::API => API::encode_raw_key_owned(key, None),
+            }
+        );
+
         let cmd = RawCompareAndSwap::new(
             cf,
-            Key::from_encoded(key),
+            key,
             previous_value,
             value,
             ttl,
             self.api_version,
+            self.causal_ts_provider.as_ref().cloned(),
             ctx,
         );
         self.sched_txn_command(cmd, cb)
@@ -2400,37 +2402,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let mutations = match self.api_version {
-            ApiVersion::V1 => {
-                if ttls.iter().any(|&x| x != 0) {
-                    return Err(Error::from(ErrorInner::TTLNotEnabled));
-                }
-                pairs
-                    .into_iter()
-                    .map(|(k, v)| RawMutation::Put {
-                        key: Key::from_encoded(k),
-                        value: v,
-                        ttl: 0,
-                    })
-                    .collect()
-            }
-            ApiVersion::V1ttl | ApiVersion::V2 => {
-                if ttls.len() != pairs.len() {
-                    return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
-                }
-                pairs
-                    .iter()
-                    .zip(ttls)
-                    .into_iter()
-                    .map(|((k, v), ttl)| RawMutation::Put {
-                        key: Key::from_encoded(k.to_vec()),
-                        value: v.to_vec(),
-                        ttl,
-                    })
-                    .collect()
-            }
-        };
-        let cmd = RawAtomicStore::new(cf, mutations, self.api_version, ctx);
+        let modifies = Self::raw_batch_put_requests_to_modifies(self.api_version, cf, pairs, ttls)?;
+        let cmd = RawAtomicStore::new(
+            cf,
+            modifies,
+            self.api_version,
+            self.causal_ts_provider.as_ref().cloned(),
+            ctx,
+        );
         self.sched_txn_command(cmd, callback)
     }
 
@@ -2449,13 +2428,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let muations = keys
-            .into_iter()
-            .map(|k| RawMutation::Delete {
-                key: Key::from_encoded(k),
-            })
-            .collect();
-        let cmd = RawAtomicStore::new(cf, muations, self.api_version, ctx);
+        let modifies = Self::raw_batch_delete_requests_to_modifies(self.api_version, cf, keys);
+        let cmd = RawAtomicStore::new(
+            cf,
+            modifies,
+            self.api_version,
+            self.causal_ts_provider.as_ref().cloned(),
+            ctx,
+        );
         self.sched_txn_command(cmd, callback)
     }
 
@@ -2804,8 +2784,8 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
-    fn new_causal_ts_provider(&self) -> Option<Arc<dyn CausalTsProvider>> {
-        if let ApiVersion::V2 = self.config.api_version() {
+    pub fn new_causal_ts_provider(api_version: ApiVersion) -> Option<Arc<dyn CausalTsProvider>> {
+        if let ApiVersion::V2 = api_version {
             Some(Arc::new(causal_ts::TestHlcProvider::default()))
         } else {
             None
@@ -2814,7 +2794,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, L>> {
-        let causal_ts_provider = self.new_causal_ts_provider();
+        let causal_ts_provider = Self::new_causal_ts_provider(self.config.api_version());
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -2838,7 +2818,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L>> {
-        let causal_ts_provider = self.new_causal_ts_provider();
+        let causal_ts_provider = Self::new_causal_ts_provider(self.config.api_version());
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -2868,6 +2848,36 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
     fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
+}
+
+/// Build `pre_propose_cb` for API V2 raw write requests.
+/// `pre_propose_cb` ingests causal timestamp into key in Raft pre-propose phase in Raftstore.
+/// For a key, Raft pre-propose phase is single-threaded,
+/// which will ensure that order of timestamp is consistent with sequence of Raft commands,
+/// and maintain the "causality consistency" of the timestamp.
+/// See https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
+pub(crate) fn build_raw_write_pre_propose_cb(
+    api_version: ApiVersion,
+    causal_ts_provider: Option<&Arc<dyn causal_ts::CausalTsProvider>>,
+) -> Option<Box<dyn FnOnce(&mut [RaftRequest]) + Send>> {
+    if let ApiVersion::V2 = api_version {
+        let causal_ts_provider = causal_ts_provider.unwrap().clone();
+        Some(Box::new(move |requests: &mut [RaftRequest]| {
+            for req in requests {
+                debug_assert!(matches!(req.get_cmd_type(), CmdType::Put));
+                let ts = causal_ts_provider.get_ts().unwrap(); // `get_ts()` must not fail.
+                api_version::APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts);
+
+                debug!(
+                    "raw_write::pre_propose_cb";
+                    "ts" => ts,
+                    "key" => &log_wrappers::Value::key(req.get_put().get_key()),
+                );
+            }
+        }))
+    } else {
+        None
+    }
 }
 
 pub mod test_util {
@@ -3101,6 +3111,7 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
+    use std::iter::Iterator;
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -3110,10 +3121,10 @@ mod tests {
         time::Duration,
     };
 
+    use crate::storage::raw::encoded::RawEncodeSnapshot;
     use crate::storage::raw::raw_mvcc::RawMvccSnapshot;
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, PessimisticLock, WriteType};
-    use crate::storage::raw::encoded::RawEncodeSnapshot;
 
     #[test]
     fn test_prewrite_blocks_read() {
@@ -4543,6 +4554,7 @@ mod tests {
             ..Default::default()
         };
 
+        let last_data = test_data.last().unwrap().map(|x| (k.clone(), x.to_vec()));
         for v in test_data {
             if let Some(v) = v {
                 storage
@@ -4577,6 +4589,19 @@ mod tests {
                 );
             }
         }
+        expect_multi_values(
+            vec![last_data],
+            block_on(storage.raw_scan(
+                ctx,
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
     }
 
     #[test]
@@ -4785,12 +4810,29 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        test_raw_batch_put_impl(ApiVersion::V1);
-        test_raw_batch_put_impl(ApiVersion::V1ttl);
-        test_raw_batch_put_impl(ApiVersion::V2);
+        for for_cas in vec![false, true].into_iter() {
+            test_raw_batch_put_impl(ApiVersion::V1, for_cas);
+            test_raw_batch_put_impl(ApiVersion::V1ttl, for_cas);
+            test_raw_batch_put_impl(ApiVersion::V2, for_cas);
+        }
     }
 
-    fn test_raw_batch_put_impl(api_version: ApiVersion) {
+    fn run_raw_batch_put(
+        for_cas: bool,
+        storage: &Storage<RocksEngine, DummyLockManager>,
+        ctx: Context,
+        kvpairs: Vec<KvPair>,
+        ttls: Vec<u64>,
+        cb: Callback<()>,
+    ) -> Result<()> {
+        if for_cas {
+            storage.raw_batch_put_atomic(ctx, "".to_string(), kvpairs, ttls, cb)
+        } else {
+            storage.raw_batch_put(ctx, "".to_string(), kvpairs, ttls, cb)
+        }
+    }
+
+    fn test_raw_batch_put_impl(api_version: ApiVersion, for_cas: bool) {
         let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
             .build()
             .unwrap();
@@ -4828,15 +4870,15 @@ mod tests {
             vec![0; test_data.len()]
         };
         // Write key-value pairs in a batch
-        storage
-            .raw_batch_put(
-                ctx.clone(),
-                "".to_string(),
-                kvpairs,
-                ttls,
-                expect_ok_callback(tx, 0),
-            )
-            .unwrap();
+        run_raw_batch_put(
+            for_cas,
+            &storage,
+            ctx.clone(),
+            kvpairs,
+            ttls,
+            expect_ok_callback(tx, 0),
+        )
+        .unwrap();
         rx.recv().unwrap();
 
         // Verify pairs one by one
@@ -4846,6 +4888,24 @@ mod tests {
                 block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
             );
         }
+        // Verify by scan
+        let expected = test_data
+            .iter()
+            .map(|(k, v, _)| Some((k.clone(), v.clone())))
+            .collect();
+        expect_multi_values(
+            expected,
+            block_on(storage.raw_scan(
+                ctx,
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
     }
 
     #[test]
@@ -4972,12 +5032,28 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        test_raw_batch_delete_impl(ApiVersion::V1);
-        test_raw_batch_delete_impl(ApiVersion::V1ttl);
-        test_raw_batch_delete_impl(ApiVersion::V2);
+        for for_cas in vec![false, true].into_iter() {
+            test_raw_batch_delete_impl(ApiVersion::V1, for_cas);
+            test_raw_batch_delete_impl(ApiVersion::V1ttl, for_cas);
+            test_raw_batch_delete_impl(ApiVersion::V2, for_cas);
+        }
     }
 
-    fn test_raw_batch_delete_impl(api_version: ApiVersion) {
+    fn run_raw_batch_delete(
+        for_cas: bool,
+        storage: &Storage<RocksEngine, DummyLockManager>,
+        ctx: Context,
+        keys: Vec<Vec<u8>>,
+        cb: Callback<()>,
+    ) -> Result<()> {
+        if for_cas {
+            storage.raw_batch_delete_atomic(ctx, "".to_string(), keys, cb)
+        } else {
+            storage.raw_batch_delete(ctx, "".to_string(), keys, cb)
+        }
+    }
+
+    fn test_raw_batch_delete_impl(api_version: ApiVersion, for_cas: bool) {
         let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
             .build()
             .unwrap();
@@ -5001,15 +5077,15 @@ mod tests {
         ];
 
         // Write key-value pairs in batch
-        storage
-            .raw_batch_put(
-                ctx.clone(),
-                "".to_string(),
-                test_data.clone(),
-                vec![0; test_data.len()],
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
+        run_raw_batch_put(
+            for_cas,
+            &storage,
+            ctx.clone(),
+            test_data.clone(),
+            vec![0; test_data.len()],
+            expect_ok_callback(tx.clone(), 0),
+        )
+        .unwrap();
         rx.recv().unwrap();
 
         // Verify pairs exist
@@ -5024,14 +5100,14 @@ mod tests {
         );
 
         // Delete ["b", "d"]
-        storage
-            .raw_batch_delete(
-                ctx.clone(),
-                "".to_string(),
-                vec![b"r\0b".to_vec(), b"r\0d".to_vec()],
-                expect_ok_callback(tx.clone(), 1),
-            )
-            .unwrap();
+        run_raw_batch_delete(
+            for_cas,
+            &storage,
+            ctx.clone(),
+            vec![b"r\0b".to_vec(), b"r\0d".to_vec()],
+            expect_ok_callback(tx.clone(), 1),
+        )
+        .unwrap();
         rx.recv().unwrap();
 
         // Assert "b" and "d" are gone
@@ -5055,14 +5131,14 @@ mod tests {
         );
 
         // Delete ["a", "c", "e"]
-        storage
-            .raw_batch_delete(
-                ctx.clone(),
-                "".to_string(),
-                vec![b"r\0a".to_vec(), b"r\0c".to_vec(), b"r\0e".to_vec()],
-                expect_ok_callback(tx, 2),
-            )
-            .unwrap();
+        run_raw_batch_delete(
+            for_cas,
+            &storage,
+            ctx.clone(),
+            vec![b"r\0a".to_vec(), b"r\0c".to_vec(), b"r\0e".to_vec()],
+            expect_ok_callback(tx, 2),
+        )
+        .unwrap();
         rx.recv().unwrap();
 
         // Assert no key remains
@@ -5792,6 +5868,105 @@ mod tests {
                 assert_eq!(res, 0);
             }
         }
+    }
+
+    #[test]
+    fn test_raw_compare_and_swap() {
+        test_raw_compare_and_swap_impl(ApiVersion::V1);
+        test_raw_compare_and_swap_impl(ApiVersion::V1ttl);
+        test_raw_compare_and_swap_impl(ApiVersion::V2);
+    }
+
+    fn test_raw_compare_and_swap_impl(api_version: ApiVersion) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let req_api_version = if api_version == ApiVersion::V1ttl {
+            ApiVersion::V1
+        } else {
+            api_version
+        };
+        let ctx = Context {
+            api_version: req_api_version,
+            ..Default::default()
+        };
+
+        let key = b"r\0key";
+
+        let expected = (None, false);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"v".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v1".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let expected = (Some(b"v1".to_vec()), true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"v2".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let expected = (Some(b"v2".to_vec()), false);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v1".to_vec()),
+                b"v2".to_vec(),
+                0,
+                expect_value_callback(tx, 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        expect_value(
+            b"v2".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+        expect_multi_values(
+            vec![Some((key.to_vec(), b"v2".to_vec()))],
+            block_on(storage.raw_scan(
+                ctx,
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
     }
 
     #[test]
@@ -8725,6 +8900,7 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
+        use tikv_kv::Iterator;
         let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V2)
             .build()
             .unwrap();
@@ -8734,7 +8910,7 @@ mod tests {
             ..Default::default()
         };
 
-        let raw_test_data = vec![
+        let test_data = vec![
             (b"r\0a".to_vec(), b"aa".to_vec(), 10),
             (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
             (b"r\0b".to_vec(), b"bb".to_vec(), 30),
@@ -8749,16 +8925,6 @@ mod tests {
             (b"r\0cc".to_vec(), b"n_ccc".to_vec(), 120),
         ];
 
-        let test_data: Vec<(Vec<u8>, Vec<u8>, u64)> = raw_test_data
-            .into_iter()
-            .map(|(key, val, ts)| {
-                (
-                    APIV2::encode_raw_key_owned(key, Some(TimeStamp::from(ts))).into_encoded(),
-                    val,
-                    ts,
-                )
-            })
-            .collect();
         let ttl = 30;
         // Write key-value pairs one by one
         for (key, value, _) in test_data.clone() {
@@ -8793,6 +8959,15 @@ mod tests {
             iter.next().unwrap();
         }
 
+        let decoded_pairs: Vec<(Vec<u8>, Vec<u8>)> = pairs
+            .into_iter()
+            .map(|(key, value)| {
+                let (user_key, _) =
+                    APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
+                (user_key, value)
+            })
+            .collect();
+
         let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
             .clone()
             .into_iter()
@@ -8800,20 +8975,28 @@ mod tests {
             .map(|(key, val, _)| (key, val))
             .collect();
 
-        assert_eq!(pairs, ret_data);
+        assert_eq!(decoded_pairs, ret_data);
         let raw_key = APIV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
         iter.seek_for_prev(&raw_key).unwrap();
-        pairs.clear();
+        let mut pairs = vec![];
         while iter.valid().unwrap() {
             pairs.push((iter.key().to_owned(), iter.value().to_owned()));
             iter.prev().unwrap();
         }
+        let decoded_pairs: Vec<(Vec<u8>, Vec<u8>)> = pairs
+            .into_iter()
+            .map(|(key, value)| {
+                let (user_key, _) =
+                    APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
+                (user_key, value)
+            })
+            .collect();
         let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
             .into_iter()
             .skip(6)
             .rev()
             .map(|(key, val, _)| (key, val))
             .collect();
-        assert_eq!(pairs, ret_data);
+        assert_eq!(decoded_pairs, ret_data);
     }
 }

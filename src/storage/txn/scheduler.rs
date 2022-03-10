@@ -759,6 +759,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_info,
             lock_guards,
             response_policy,
+            pre_propose_cb,
         } = match deadline
             .check()
             .map_err(StorageError::from)
@@ -1009,7 +1010,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     &ctx,
                     to_be_write,
                     engine_cb,
-                    None,
+                    pre_propose_cb,
                     proposed_cb,
                     committed_cb,
                 ) {

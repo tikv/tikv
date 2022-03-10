@@ -7,12 +7,10 @@ use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Snapshot};
-use api_version::{match_template_api_version, APIVersion, RawValue};
-use engine_traits::raw_ttl::ttl_to_expire_ts;
+use crate::storage::{build_raw_write_pre_propose_cb, ProcessResult, Snapshot};
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
-use txn_types::RawMutation;
+use std::sync::Arc;
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
@@ -22,8 +20,9 @@ command! {
         content => {
             /// The set of mutations to apply.
             cf: CfName,
-            mutations: Vec<RawMutation>,
+            mutations: Vec<Modify>,
             api_version: ApiVersion,
+            causal_ts_provider: Option<Arc<dyn causal_ts::CausalTsProvider>>,
         }
 }
 
@@ -33,56 +32,15 @@ impl CommandExt for RawAtomicStore {
     gen_lock!(mutations: multiple(|x| x.key()));
 
     fn write_bytes(&self) -> usize {
-        let mut bytes = 0;
-        for m in &self.mutations {
-            match *m {
-                RawMutation::Put {
-                    ref key,
-                    ref value,
-                    ttl: _,
-                } => {
-                    bytes += key.as_encoded().len();
-                    bytes += value.len();
-                }
-                RawMutation::Delete { ref key } => {
-                    bytes += key.as_encoded().len();
-                }
-            }
-        }
-        bytes
+        self.mutations.iter().map(|x| x.size()).sum()
     }
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
     fn process_write(self, _: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut data = vec![];
         let rows = self.mutations.len();
-        let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        match_template_api_version!(
-            API,
-            match self.api_version {
-                ApiVersion::API => {
-                    for m in mutations {
-                        match m {
-                            RawMutation::Put { key, value, ttl } => {
-                                let raw_value = RawValue {
-                                    user_value: value,
-                                    expire_ts: ttl_to_expire_ts(ttl),
-                                    is_delete: false,
-                                };
-                                let m =
-                                    Modify::Put(cf, key, API::encode_raw_value_owned(raw_value));
-                                data.push(m);
-                            }
-                            RawMutation::Delete { key } => {
-                                data.push(Modify::Delete(cf, key));
-                            }
-                        }
-                    }
-                }
-            }
-        );
-        let mut to_be_write = WriteData::from_modifies(data);
+        let (mutations, ctx) = (self.mutations, self.ctx);
+        let mut to_be_write = WriteData::from_modifies(mutations);
         to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
@@ -92,6 +50,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            pre_propose_cb: build_raw_write_pre_propose_cb(
+                self.api_version,
+                self.causal_ts_provider.as_ref(),
+            ),
         })
     }
 }

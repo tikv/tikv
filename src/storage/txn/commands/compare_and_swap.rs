@@ -3,11 +3,11 @@
 // #[PerformanceCriticalPath]
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
-use crate::storage::raw;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
+use crate::storage::{build_raw_write_pre_propose_cb, raw};
 use crate::storage::{ProcessResult, Snapshot};
 use api_version::{match_template_api_version, APIVersion, RawValue};
 use engine_traits::raw_ttl::ttl_to_expire_ts;
@@ -16,6 +16,8 @@ use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
 use tikv_kv::Statistics;
 use txn_types::{Key, Value};
+
+use std::sync::Arc;
 
 command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
@@ -31,6 +33,7 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
+            causal_ts_provider: Option<Arc<dyn causal_ts::CausalTsProvider>>,
         }
 }
 
@@ -91,6 +94,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            pre_propose_cb: build_raw_write_pre_propose_cb(
+                self.api_version,
+                self.causal_ts_provider.as_ref(),
+            ),
         })
     }
 }
@@ -98,10 +105,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{Engine, Statistics, TestEngineBuilder};
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::{Engine, Statistics, TestEngineBuilder, TestStorageBuilder};
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
+    use tikv_kv::RocksEngine;
     use txn_types::Key;
 
     #[test]
@@ -111,18 +120,33 @@ mod tests {
         test_cas_basic_impl(ApiVersion::V2);
     }
 
+    /// Note: for API V2, TestEngine don't support MVCC reading, so `pre_propose_cb` of `WriteResult` is ignored,
+    /// and no timestamp will be append to key.
+    /// The full test of `RawCompareAndSwap` is in `src/storage/mod.rs`.
     fn test_cas_basic_impl(api_version: ApiVersion) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
-        let key = b"k";
+        let causal_ts_provider =
+            TestStorageBuilder::<RocksEngine, DummyLockManager>::new_causal_ts_provider(
+                api_version,
+            );
+        let key = b"rk";
+
+        let encoded_key: Key = match_template_api_version!(
+            API,
+            match api_version {
+                ApiVersion::API => API::encode_raw_key_owned(key.to_vec(), None),
+            }
+        );
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            Key::from_encoded(key.to_vec()),
+            encoded_key.clone(),
             None,
             b"v1".to_vec(),
             0,
             api_version,
+            causal_ts_provider.as_ref().cloned(),
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -131,11 +155,12 @@ mod tests {
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            Key::from_encoded(key.to_vec()),
+            encoded_key.clone(),
             None,
             b"v2".to_vec(),
             1,
             api_version,
+            causal_ts_provider.as_ref().cloned(),
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -144,11 +169,12 @@ mod tests {
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            Key::from_encoded(key.to_vec()),
+            encoded_key,
             Some(b"v1".to_vec()),
             b"v3".to_vec(),
             2,
             api_version,
+            causal_ts_provider,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
@@ -162,7 +188,6 @@ mod tests {
         cmd: TypedCommand<(Option<Value>, bool)>,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
-        use crate::storage::DummyLockManager;
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
         let context = WriteContext {
