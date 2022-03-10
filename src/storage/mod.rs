@@ -2395,7 +2395,10 @@ fn prepare_snap_ctx<'a>(
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
-    if isolation_level == IsolationLevel::Si {
+    if matches!(
+        isolation_level,
+        IsolationLevel::Si | IsolationLevel::RcCheckTs
+    ) {
         let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
