@@ -522,7 +522,10 @@ where
                             let mut import_err = kvproto::import_sstpb::Error::default();
                             let err = r.response.get_header().get_error();
                             import_err
-                                .set_message(format!("failed to complete raft command: {:?}", err));
+                                .set_message(format!("failed to complete raft command"));
+                            // FIXME: if there are many errors, we may lose some of them here.
+                            import_err 
+                                .set_store_error(err.clone());
                             warn!("failed to apply the file to the store"; "error" => ?err, "file" => %meta.get_name());
                             resp.set_error(import_err);
                         }
