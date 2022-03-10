@@ -800,7 +800,14 @@ mod tests {
         // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            TimeStamp::max(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
 
         // Should not ignore the primary lock of an async commit transaction even if setting u64::MAX as ts
         let async_commit_lock = lock.clone().use_async_commit(vec![]);
