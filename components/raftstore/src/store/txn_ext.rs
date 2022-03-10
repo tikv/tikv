@@ -197,6 +197,10 @@ impl PeerPessimisticLocks {
         self.map.is_empty()
     }
 
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
     pub fn is_writable(&self) -> bool {
         self.status == LocksStatus::Normal
     }
