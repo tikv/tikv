@@ -297,7 +297,9 @@ impl<L: LockManager> SchedulerInner<L> {
 
     fn scale_pool_size(&self, pool_size: usize) {
         self.worker_pool.pool.scale_pool_size(pool_size);
-        self.high_priority_pool.pool.scale_pool_size(pool_size);
+        self.high_priority_pool
+            .pool
+            .scale_pool_size(std::cmp::max(1, pool_size / 2));
     }
 }
 
@@ -487,6 +489,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
+                fail_point!("scheduler_start_execute");
                 if sched.check_task_deadline_exceeded(&task) {
                     return;
                 }

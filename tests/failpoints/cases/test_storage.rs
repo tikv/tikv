@@ -227,7 +227,7 @@ fn test_raftkv_early_error_report() {
 
 #[test]
 fn test_scale_scheduler_pool() {
-    let snapshot_fp = "scheduler_async_snapshot_finish";
+    let snapshot_fp = "scheduler_start_execute";
     let mut cluster = new_server_cluster(0, 2);
     cluster.run();
 
@@ -296,7 +296,7 @@ fn test_scale_scheduler_pool() {
                     ctx.clone(),
                 ),
                 Box::new(move |res: storage::Result<_>| {
-                    prewrite_tx.send(res).unwrap();
+                    let _ = prewrite_tx.send(res);
                 }),
             )
             .unwrap();
