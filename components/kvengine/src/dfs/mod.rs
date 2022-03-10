@@ -31,7 +31,7 @@ pub trait DFS: Sync + Send {
     async fn create(&self, file_id: u64, data: Bytes, opts: Options) -> Result<()>;
 
     // remove removes the file from the DFS.
-    async fn remove(&self, file_id: u64, opts: Options) -> Result<()>;
+    async fn remove(&self, file_id: u64, opts: Options);
 
     // get_runtime gets the tokio runtime for the DFS.
     fn get_runtime(&self) -> &tokio::runtime::Runtime;
@@ -101,9 +101,8 @@ impl DFS for InMemFS {
         Ok(())
     }
 
-    async fn remove(&self, file_id: u64, _opts: Options) -> Result<()> {
+    async fn remove(&self, file_id: u64, _opts: Options) {
         self.files.remove(&file_id);
-        Ok(())
     }
 
     fn get_runtime(&self) -> &Runtime {

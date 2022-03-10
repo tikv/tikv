@@ -19,7 +19,7 @@ use std::time::Duration;
 use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
 
-const MAX_RETRY_COUNT: usize = 5;
+const MAX_RETRY_COUNT: u32 = 5;
 
 #[derive(Clone)]
 pub struct S3FS {
@@ -212,7 +212,7 @@ impl DFS for S3FS {
             }
             let err = result.unwrap_err();
             if self.is_err_retryable(&err) {
-                if retry_cnt < 5 {
+                if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
                     let retry_sleep = 2u64.pow(retry_cnt) * 100;
                     tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
@@ -257,7 +257,7 @@ impl DFS for S3FS {
             }
             let err = result.unwrap_err();
             if self.is_err_retryable(&err) {
-                if retry_cnt < 5 {
+                if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
                     let retry_sleep = 2u64.pow(retry_cnt) * 100;
                     tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
@@ -275,24 +275,43 @@ impl DFS for S3FS {
         }
     }
 
-    async fn remove(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<()> {
+    async fn remove(&self, file_id: u64, _opts: Options) {
         let local_file_path = self.local_file_path(file_id);
         if let Err(err) = std::fs::remove_file(&local_file_path) {
             error!("failed to remove local file {:?}", err);
         }
-        let key = self.file_key(file_id);
-        let bucket = self.bucket.clone();
-        let tagging = Tagging::builder()
-            .tag_set(Tag::builder().key("deleted").value("true").build())
-            .build();
-        self.s3c
-            .put_object_tagging()
-            .bucket(bucket)
-            .key(key)
-            .tagging(tagging)
-            .send()
-            .await?;
-        Ok(())
+        let mut retry_cnt = 0;
+        loop {
+            let key = self.file_key(file_id);
+            let bucket = self.bucket.clone();
+            let tagging = Tagging::builder()
+                .tag_set(Tag::builder().key("deleted").value("true").build())
+                .build();
+            if let Err(err) = self
+                .s3c
+                .put_object_tagging()
+                .bucket(bucket)
+                .key(key)
+                .tagging(tagging)
+                .send()
+                .await
+            {
+                if retry_cnt < MAX_RETRY_COUNT {
+                    retry_cnt += 1;
+                    let retry_sleep = 2u64.pow(retry_cnt as u32) * 100;
+                    tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
+                    continue;
+                } else {
+                    error!(
+                        "failed to remove file {}, reach max retry count {}",
+                        file_id,
+                        start_time.saturating_elapsed(),
+                        MAX_RETRY_COUNT
+                    );
+                }
+            }
+            return;
+        }
     }
 
     fn get_runtime(&self) -> &Runtime {

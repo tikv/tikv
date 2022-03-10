@@ -223,9 +223,10 @@ impl Engine {
             let l0 = sstable::L0Table::new(file, Some(self.cache.clone()))?;
             new_l0s.push(l0);
         }
+        let mut remove_files = vec![];
         for old_l0 in old_l0s.tbls.as_ref() {
             if split_files.table_deletes.contains(&old_l0.id()) {
-                self.fs.remove(old_l0.id(), fs_opts);
+                remove_files.push(old_l0.id());
             } else {
                 new_l0s.push(old_l0.clone());
             }
@@ -252,13 +253,19 @@ impl Engine {
                 let old_handler = &old_cf.levels[level - 1];
                 for old_tbl in old_handler.tables.iter() {
                     if split_files.table_deletes.contains(&old_tbl.id()) {
-                        self.fs.remove(old_tbl.id(), fs_opts);
+                        remove_files.push(old_l0.id());
                     } else {
                         scf_builder.add_table(old_tbl.clone(), level);
                     }
                 }
             }
             shard.set_cf(cf, scf_builder.build());
+        }
+        for remove_file in remove_files {
+            let fs = self.fs.clone();
+            self.fs.get_runtime().spawn(async move {
+                fs.remove(remove_file, fs_opts).await;
+            })
         }
         shard.set_split_stage(cs.get_stage());
         Ok(())
