@@ -60,7 +60,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -75,42 +75,6 @@ impl From<ConfigValue> for ReadableSize {
             ReadableSize(s)
         } else {
             panic!("expect: ConfigValue::Size, got: {:?}", c);
-        }
-    }
-}
-
-/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
-/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `OnlineConfig` trait for `BlockCacheConfig`
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(from = "Option<ReadableSize>")]
-#[serde(into = "Option<ReadableSize>")]
-pub struct OptionReadableSize(pub Option<ReadableSize>);
-
-impl From<Option<ReadableSize>> for OptionReadableSize {
-    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
-        OptionReadableSize(s)
-    }
-}
-
-impl From<OptionReadableSize> for Option<ReadableSize> {
-    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
-        s.0
-    }
-}
-
-impl From<OptionReadableSize> for ConfigValue {
-    fn from(size: OptionReadableSize) -> ConfigValue {
-        ConfigValue::OptionSize(size.0.map(|v| v.0))
-    }
-}
-
-impl From<ConfigValue> for OptionReadableSize {
-    fn from(s: ConfigValue) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = s {
-            OptionReadableSize(s.map(ReadableSize))
-        } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -1416,6 +1380,148 @@ macro_rules! numeric_enum_serializing_mod {
     }
 }
 
+/// Helper for migrating Raft data safely. Such migration is defined as
+/// multiple states that can be uniquely distinguished. And the transtions
+/// between these states are atomic.
+///
+/// States:
+///   1. Init - Only source directory contains Raft data.
+///   2. Migrating - Source staging directory contains Raft data. Source and
+///      target staging directory does not contains Raft data.
+///   3. Completed - Only target directory contains Raft data.
+///   4. InvMigrating - Inverse of Migrating. Only occurs when an ongoing
+///      migration is interrupted and reopened in the reverse direction.
+pub struct RaftDataStateMachine {
+    source: PathBuf,
+    source_staging: PathBuf,
+    target: PathBuf,
+    target_staging: PathBuf,
+}
+
+impl RaftDataStateMachine {
+    pub fn new(source: &str, target: &str) -> Self {
+        let source = PathBuf::from(source);
+        let source_staging = source.with_extension("STAGING");
+        let target = PathBuf::from(target);
+        let target_staging = target.with_extension("STAGING");
+        Self {
+            source,
+            source_staging,
+            target,
+            target_staging,
+        }
+    }
+
+    /// Checks if the current condition is a valid state.
+    pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
+        if Self::data_exists(&self.source) && Self::data_exists(&self.target) {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.source.display(),
+                self.target.display()
+            ));
+        }
+        if Self::data_exists(&self.source_staging) && Self::data_exists(&self.target_staging) {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.source_staging.display(),
+                self.target_staging.display()
+            ));
+        }
+        if Self::data_exists(&self.source_staging) && Self::data_exists(&self.source) {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.source_staging.display(),
+                self.source.display()
+            ));
+        }
+        if Self::data_exists(&self.target_staging) && Self::data_exists(&self.target) {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.target_staging.display(),
+                self.target.display()
+            ));
+        }
+        let exists = Self::data_exists(&self.source_staging)
+            || Self::data_exists(&self.target_staging)
+            || Self::data_exists(&self.source)
+            || Self::data_exists(&self.target);
+        if exists != should_exist {
+            if should_exist {
+                return Err("Cannot find raft data set.".to_owned());
+            } else {
+                return Err("Found raft data set when it should not exist.".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    /// Enters the `Migrating` state and returns the source directory if a
+    /// migration is needed. Otherwise prepares the target directory for
+    /// opening.
+    pub fn before_open_target(&mut self) -> Option<PathBuf> {
+        // Clean up trash directory if there is any.
+        for p in [
+            &self.source,
+            &self.source_staging,
+            &self.target,
+            &self.target_staging,
+        ] {
+            let trash = p.with_extension("REMOVE");
+            if trash.exists() {
+                fs::remove_dir_all(&trash).unwrap();
+            }
+        }
+        if Self::data_exists(&self.target_staging) {
+            // InvMigrating -> Completed
+            assert!(!Self::data_exists(&self.source_staging));
+            Self::remove_dir_safe(&self.source);
+            Self::rename_dir_safe(&self.target_staging, &self.target);
+            return None;
+        }
+        if Self::data_exists(&self.source) {
+            // Init -> Migrating
+            assert!(!Self::data_exists(&self.source_staging));
+            Self::rename_dir_safe(&self.source, &self.source_staging);
+        } else if !Self::data_exists(&self.source_staging) {
+            // No source data.
+            return None;
+        }
+        Some(self.source_staging.clone())
+    }
+
+    /// Exits the `Migrating` state and enters the `Completed` state.
+    pub fn after_dump_data(&mut self) {
+        assert!(Self::data_exists(&self.target));
+        assert!(!Self::data_exists(&self.source));
+        assert!(!Self::data_exists(&self.target_staging));
+        Self::remove_dir_safe(&self.source_staging);
+    }
+
+    fn data_exists(path: &Path) -> bool {
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        fs::read_dir(&path).unwrap().next().is_some()
+    }
+
+    fn remove_dir_safe(path: &Path) {
+        if path.exists() {
+            info!("Removing directory"; "path" => %path.display());
+            let trash = path.with_extension("REMOVE");
+            Self::rename_dir_safe(path, &trash);
+            fs::remove_dir_all(&trash).unwrap();
+        }
+    }
+
+    fn rename_dir_safe(from: &Path, to: &Path) {
+        fs::rename(from, to).unwrap();
+        let mut dir = to.to_path_buf();
+        assert!(dir.pop());
+        fs::File::open(&dir).and_then(|d| d.sync_all()).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -1930,5 +2036,68 @@ yyy = 100
             toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
             Some(2)
         );
+    }
+
+    #[test]
+    fn test_raft_data_migration() {
+        fn run_migration<F: Fn()>(source: &Path, target: &Path, check: F) {
+            let mut state =
+                RaftDataStateMachine::new(source.to_str().unwrap(), target.to_str().unwrap());
+            state.validate(true).unwrap();
+            check();
+            // Dump to target.
+            if let Some(new_source) = state.before_open_target() {
+                check();
+                let new_source_file = new_source.join("file");
+                let target_file = target.join("file");
+                if !target.exists() {
+                    fs::create_dir_all(&target).unwrap();
+                    check();
+                }
+                fs::copy(&new_source_file, &target_file).unwrap();
+                check();
+                state.after_dump_data();
+            }
+            check();
+        }
+
+        fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+            if dst.exists() {
+                fs::remove_dir_all(dst)?;
+            }
+            fs::create_dir_all(&dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
+                if ty.is_dir() {
+                    copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
+                } else {
+                    fs::copy(entry.path(), &dst.join(entry.file_name()))?;
+                }
+            }
+            Ok(())
+        }
+
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        // Write some data into source.
+        let source_file = source.join("file");
+        File::create(&source_file).unwrap();
+
+        let shadow = dir.path().join("shadow");
+        let shadow_source = shadow.join("source");
+        let shadow_target = shadow.join("target");
+
+        run_migration(&source, &target, || {
+            // Simulate restart and migrate in halfway.
+            copy_dir(&root, &shadow).unwrap();
+            run_migration(&shadow_source, &shadow_target, || {});
+            copy_dir(&root, &shadow).unwrap();
+            run_migration(&shadow_target, &shadow_source, || {});
+        });
     }
 }

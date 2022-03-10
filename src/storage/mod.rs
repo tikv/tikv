@@ -49,7 +49,6 @@ pub mod txn;
 mod read_pool;
 mod types;
 
-use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -62,6 +61,7 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
+use self::{kv::SnapContext, test_util::latest_feature_gate};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -92,6 +92,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::pdpb::QueryKind;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
+use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -228,6 +229,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        feature_gate: FeatureGate,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -238,6 +240,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             flow_controller,
             reporter,
             resource_tag_factory.clone(),
+            feature_gate,
         );
 
         info!("Storage started.");
@@ -2708,6 +2711,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             DummyReporter,
             self.resource_tag_factory,
             causal_ts_provider,
+            latest_feature_gate(),
         )
     }
 
@@ -2736,6 +2740,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             causal_ts_provider,
+            latest_feature_gate(),
         )
     }
 }
@@ -2934,6 +2939,12 @@ pub mod test_util {
         fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
+    }
+
+    pub fn latest_feature_gate() -> FeatureGate {
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version(env!("CARGO_PKG_VERSION")).unwrap();
+        feature_gate
     }
 }
 
