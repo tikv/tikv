@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to TiKV! This document outlines some of the conventions on building, running, and testing TiKV, the development workflow, commit message formatting, contact points and other resources.
 
-TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://tikv.org/chat), or [WeChat](./README.md#WeChat). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
+TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://tikv.org/chat). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
 
 [<img src="images/contribution-map.png" alt="contribution-map" width="180">](https://github.com/pingcap/tidb-map/blob/master/maps/contribution-map.md#tikv-distributed-transactional-key-value-database)
 
@@ -19,9 +19,9 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
-* C++ compiler - gcc 4.9+ (required for gRPC)
+* C++ compiler - gcc 5+ (required for gRPC)
 
-If you are targeting platforms other than x86_64/aarch64 linux, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 linux or MacOS, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 

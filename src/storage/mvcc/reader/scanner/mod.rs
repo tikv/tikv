@@ -207,6 +207,9 @@ impl<S: Snapshot> ScannerBuilder<S> {
         Ok(match self.0.isolation_level {
             IsolationLevel::Si => Some(self.0.create_cf_cursor(CF_LOCK)?),
             IsolationLevel::Rc => None,
+            IsolationLevel::RcCheckTs => {
+                return Err(box_err!("RcCheckTs is not supported"));
+            }
         })
     }
 }
