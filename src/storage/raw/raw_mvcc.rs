@@ -7,6 +7,8 @@ use engine_traits::{IterOptions, ReadOptions};
 use tikv_util::codec::number::U64_SIZE;
 use txn_types::{Key, TimeStamp, Value};
 
+const VEC_SHRINK_THRESHOLD: usize = 512; // shrink vec when it's over 512.
+
 #[derive(Clone)]
 pub struct RawMvccSnapshot<S: Snapshot> {
     snap: S,
@@ -112,12 +114,18 @@ impl<I: Iterator> RawMvccIterator<I> {
         if let Some(ref mut key) = self.cur_key {
             key.clear();
             key.extend_from_slice(self.inner.key());
+            if key.capacity() > key.len() * 2 && key.capacity() > VEC_SHRINK_THRESHOLD {
+                key.shrink_to(key.len() * 2);
+            }
         } else {
             self.cur_key = Some(Vec::from(self.inner.key()));
         };
         if let Some(ref mut value) = self.cur_value {
             value.clear();
             value.extend_from_slice(self.inner.value());
+            if value.capacity() > value.len() * 2 && value.capacity() > VEC_SHRINK_THRESHOLD {
+                value.shrink_to(value.len() * 2);
+            }
         } else {
             self.cur_value = Some(Vec::from(self.inner.value()));
         };
@@ -151,6 +159,8 @@ impl<I: Iterator> RawMvccIterator<I> {
     }
 }
 
+// RawMvccIterator always return the latest ts of user key.
+// ts is desc encoded after user key, so it's placed the first one for the same user key.
 impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         let cur_key = self.inner.key().to_owned();
@@ -193,7 +203,7 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn valid(&self) -> Result<bool> {
-        self.is_valid.map_or_else(|| self.inner.valid(), |v| Ok(v))
+        self.is_valid.map_or_else(|| self.inner.valid(), Ok)
     }
 
     fn validate_key(&self, key: &Key) -> Result<()> {
@@ -204,12 +214,14 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
         // need map_or_else to lazy evaluate the default func, as it will abort when invalid.
         self.cur_key
             .as_ref()
-            .map_or_else(|| self.inner.key(), |k| k)
+            .map(|k| k.as_slice())
+            .unwrap_or_else(|| self.inner.key())
     }
 
     fn value(&self) -> &[u8] {
         self.cur_value
             .as_ref()
-            .map_or_else(|| self.inner.value(), |v| v)
+            .map(|v| v.as_slice())
+            .unwrap_or_else(|| self.inner.value())
     }
 }
