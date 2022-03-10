@@ -416,11 +416,12 @@ impl Engine {
         let new_shard = &new_shards[idx];
         if !new_shard.overlap_key(tbl.smallest()) || !new_shard.overlap_key(tbl.biggest()) {
             panic!(
-                "shard {}:{} start:{:x}, end:{:x}, tbl smallest:{:x?}, biggest:{:x?}",
+                "shard {}:{} start:{:x}, end:{:x}, tbl {} smallest:{:x?}, biggest:{:x?}",
                 new_shard.id,
                 new_shard.ver,
                 new_shard.start,
                 new_shard.end,
+                tbl.id(),
                 tbl.smallest(),
                 tbl.biggest()
             );

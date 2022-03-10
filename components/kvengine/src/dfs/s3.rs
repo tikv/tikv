@@ -15,6 +15,7 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
 
@@ -213,6 +214,8 @@ impl DFS for S3FS {
             if self.is_err_retryable(&err) {
                 if retry_cnt < 5 {
                     retry_cnt += 1;
+                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
                     continue;
                 } else {
                     error!(
@@ -256,6 +259,8 @@ impl DFS for S3FS {
             if self.is_err_retryable(&err) {
                 if retry_cnt < 5 {
                     retry_cnt += 1;
+                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
                     continue;
                 } else {
                     error!(
@@ -278,13 +283,13 @@ impl DFS for S3FS {
         let key = self.file_key(file_id);
         let bucket = self.bucket.clone();
         let tagging = Tagging::builder()
-            .set_tag_set(Some(vec![Tag::builder().key("deleted").build()]))
+            .tag_set(Tag::builder().key("deleted").value("true").build())
             .build();
         self.s3c
             .put_object_tagging()
             .bucket(bucket)
             .key(key)
-            .set_tagging(Some(tagging))
+            .tagging(tagging)
             .send()
             .await?;
         Ok(())
