@@ -8351,7 +8351,7 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V2)
+        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();
         let (tx, rx) = channel();

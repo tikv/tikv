@@ -120,15 +120,16 @@ impl<I: Iterator> RawMvccIterator<I> {
         self.is_valid = None;
     }
 
-    fn move_to_prev_max_ts(&mut self, res: Result<bool>) -> Result<bool> {
-        if *res.as_ref().unwrap() && self.inner.valid()? {
+    fn move_to_prev_max_ts(&mut self) -> Result<bool> {
+        if self.inner.valid()? {
             self.update_cur_kv(self.inner.key().to_vec(), self.inner.value().to_vec());
             self.inner.prev()?;
         } else {
             self.clear_cur_kv();
             return Ok(false);
         }
-        while *res.as_ref().unwrap() && self.inner.valid()? {
+        while self.inner.valid()? {
+            // cur_key should not be None here.
             if is_user_key_eq(self.cur_key.as_ref().unwrap(), self.inner.key()) {
                 self.update_cur_kv(self.inner.key().to_vec(), self.inner.value().to_vec());
                 self.inner.prev()?;
@@ -136,26 +137,23 @@ impl<I: Iterator> RawMvccIterator<I> {
                 break;
             }
         }
-        res
+        Ok(true)
     }
 }
 
 impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         let cur_key = self.inner.key().to_owned();
-        let mut res = self.inner.next();
-        while *res.as_ref().unwrap()
-            && self.inner.valid()?
-            && is_user_key_eq(&cur_key, self.inner.key())
-        {
-            res = self.inner.next();
+        let mut res = self.inner.next()?;
+        while res && self.inner.valid()? && is_user_key_eq(&cur_key, self.inner.key()) {
+            res = self.inner.next()?;
         }
         self.clear_cur_kv();
-        res
+        Ok(res)
     }
 
     fn prev(&mut self) -> Result<bool> {
-        self.move_to_prev_max_ts(Ok(true))
+        self.move_to_prev_max_ts()
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
@@ -163,8 +161,11 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        let res = self.inner.seek_for_prev(key);
-        self.move_to_prev_max_ts(res)
+        if self.inner.seek_for_prev(key)? {
+            self.move_to_prev_max_ts()
+        } else {
+            Ok(false)
+        }
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
@@ -172,8 +173,11 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        let res = self.inner.seek_to_last();
-        self.move_to_prev_max_ts(res)
+        if self.inner.seek_to_last()? {
+            self.move_to_prev_max_ts()
+        } else {
+            Ok(false)
+        }
     }
 
     fn valid(&self) -> Result<bool> {
