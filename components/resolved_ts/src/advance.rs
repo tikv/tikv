@@ -365,23 +365,24 @@ async fn get_tikv_client(
     env: Arc<Environment>,
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
 ) -> Result<TikvClient> {
-    let mut clients = tikv_clients.lock().await;
-    let client = match clients.get(&store_id) {
-        Some(client) => client.clone(),
-        None => {
-            let start = Instant::now_coarse();
-            let store = box_try!(pd_client.get_store_async(store_id).await);
-            // hack: so it's different args, grpc will always create a new connection.
-            let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
-                CString::new("random id").unwrap(),
-                CONN_ID.fetch_add(1, Ordering::SeqCst),
-            );
-            let channel = security_mgr.connect(cb, &store.address);
-            let client = TikvClient::new(channel);
-            clients.insert(store_id, client.clone());
-            RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
-            client
+    {
+        let clients = tikv_clients.lock().await;
+        if let Some(client) = clients.get(&store_id).cloned() {
+            return Ok(client);
         }
-    };
-    Ok(client)
+    }
+    let store = box_try!(pd_client.get_store_async(store_id).await);
+    let mut clients = tikv_clients.lock().await;
+    let start = Instant::now_coarse();
+    // let store = box_try!(pd_client.get_store_async(store_id).await);
+    // hack: so it's different args, grpc will always create a new connection.
+    let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
+        CString::new("random id").unwrap(),
+        CONN_ID.fetch_add(1, Ordering::SeqCst),
+    );
+    let channel = security_mgr.connect(cb, &store.address);
+    let cli = TikvClient::new(channel);
+    clients.insert(store_id, cli.clone());
+    RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+    Ok(cli)
 }
