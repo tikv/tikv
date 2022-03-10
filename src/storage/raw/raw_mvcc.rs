@@ -108,9 +108,19 @@ impl<I: Iterator> RawMvccIterator<I> {
         }
     }
 
-    fn update_cur_kv(&mut self, key: Vec<u8>, val: Vec<u8>) {
-        self.cur_key = Some(key);
-        self.cur_value = Some(val);
+    fn update_cur_kv(&mut self) {
+        if let Some(ref mut key) = self.cur_key {
+            key.clear();
+            key.extend_from_slice(self.inner.key());
+        } else {
+            self.cur_key = Some(Vec::from(self.inner.key()));
+        };
+        if let Some(ref mut value) = self.cur_value {
+            value.clear();
+            value.extend_from_slice(self.inner.value());
+        } else {
+            self.cur_value = Some(Vec::from(self.inner.value()));
+        };
         self.is_valid = Some(true);
     }
 
@@ -122,7 +132,7 @@ impl<I: Iterator> RawMvccIterator<I> {
 
     fn move_to_prev_max_ts(&mut self) -> Result<bool> {
         if self.inner.valid()? {
-            self.update_cur_kv(self.inner.key().to_vec(), self.inner.value().to_vec());
+            self.update_cur_kv();
             self.inner.prev()?;
         } else {
             self.clear_cur_kv();
@@ -131,7 +141,7 @@ impl<I: Iterator> RawMvccIterator<I> {
         while self.inner.valid()? {
             // cur_key should not be None here.
             if is_user_key_eq(self.cur_key.as_ref().unwrap(), self.inner.key()) {
-                self.update_cur_kv(self.inner.key().to_vec(), self.inner.value().to_vec());
+                self.update_cur_kv();
                 self.inner.prev()?;
             } else {
                 break;
@@ -157,6 +167,7 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
+        self.clear_cur_kv();
         self.inner.seek(key)
     }
 
@@ -169,6 +180,7 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
+        self.clear_cur_kv();
         self.inner.seek_to_first()
     }
 
