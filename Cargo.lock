@@ -1331,12 +1331,14 @@ name = "engine_rocks_helper"
 version = "0.1.0"
 dependencies = [
  "engine_rocks",
+ "engine_test",
  "futures 0.3.15",
  "keys",
  "kvproto",
  "pd_client",
  "protobuf",
  "raftstore",
+ "tempfile",
  "tikv_util",
 ]
 

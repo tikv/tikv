@@ -504,7 +504,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_sst_recovery_sender(&mut self) -> engine_rocks::ErrorListener {
-        let sender = if self.config.storage.enable_sst_recovery {
+        let sender = if !self.config.storage.max_background_error_hang_time.is_zero() {
             let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
             let scheduler = sst_worker.scheduler();
             self.sst_worker = Some(sst_worker);
@@ -617,12 +617,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let pd_worker = LazyWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
 
-        let sst_runner = RecoveryRunner::new(
-            engines.engines.kv.get_sync_db(),
-            engines.store_meta.clone(),
-            CHECK_DURATION,
-        );
         if let Some(sst_worker) = &mut self.sst_worker {
+            let sst_runner = RecoveryRunner::new(
+                engines.engines.kv.get_sync_db(),
+                engines.store_meta.clone(),
+                self.config.storage.max_background_error_hang_time.into(),
+            );
             sst_worker.start_with_timer(sst_runner);
         }
 

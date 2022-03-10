@@ -49,14 +49,15 @@ impl rocksdb::EventListener for ErrorListener {
 
             if err.starts_with("Corruption") || err.starts_with("IO error") {
                 if let Some(scheduler) = self.sst_recovery_tx.as_ref() {
-                    if let Ok(path) = resolve_sst_filename_from_err(&err) {
+                    if let Some(path) = resolve_sst_filename_from_err(&err) {
                         warn!(
-                            "rocksdb sst recovery job scheduling";
+                            "detected rocksdb background error";
                             "sst" => &path,
                             "err" => &err
                         );
                         match scheduler.schedule(path.clone()) {
                             Ok(()) => {
+                                status.reset();
                                 CRITICAL_ERROR.with_label_values(&["sst corruption"]).inc();
                                 return;
                             }
@@ -83,12 +84,12 @@ impl rocksdb::EventListener for ErrorListener {
 // 2. Corruption: Bad table magic number: expected 9863518390377041911, found 759105309091689679 in /qps/data/tikv-10014/db/000021.sst
 //
 // We assume that only the corruption sst file path is printed inside error.
-fn resolve_sst_filename_from_err(err: &str) -> Result<String, String> {
+fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     let r = Regex::new(r"/\w*\.sst").unwrap();
     let matches = match r.captures(&err) {
-        None => return Err("can't resolve sst file name".to_owned()),
+        None => return None,
         Some(v) => v,
     };
     let filename = matches.get(0).unwrap().as_str().to_owned();
-    Ok(filename)
+    Some(filename)
 }

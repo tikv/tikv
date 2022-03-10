@@ -1,4 +1,4 @@
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, Mutex};
@@ -10,6 +10,14 @@ use tikv_util::{self, set_panic_mark, worker::*};
 
 pub const CHECK_DURATION: Duration = Duration::from_secs(10);
 
+pub struct RecoveryRunner {
+    db: Arc<DB>,
+    store_meta: Arc<Mutex<StoreMeta>>,
+    // Considering that files will not be too much, it is enough to use `Vec`.
+    damaged_files: Vec<FileInfo>,
+    max_damage_duration: Duration,
+}
+
 #[derive(Debug, Clone)]
 struct FileInfo {
     // Corrupted file name. example: /000033.sst
@@ -17,16 +25,8 @@ struct FileInfo {
     smallestkey: Vec<u8>,
     largestkey: Vec<u8>,
     overlap_region_ids: Vec<u64>,
-    // Time to generate recovery task.
+    // Time to generate recovery task, be used to record whether the timeout
     instant: Instant,
-}
-
-pub struct RecoveryRunner {
-    db: Arc<DB>,
-    meta: Arc<Mutex<StoreMeta>>,
-    // Considering that files will not be too much, it is enough to use `Vec`.
-    scheduling_files: Vec<FileInfo>,
-    check_duration: Duration,
 }
 
 impl Runnable for RecoveryRunner {
@@ -39,33 +39,25 @@ impl Runnable for RecoveryRunner {
 
 impl RunnableWithTimer for RecoveryRunner {
     fn get_interval(&self) -> Duration {
-        self.check_duration
+        CHECK_DURATION
     }
 
     fn on_timeout(&mut self) {
-        self.check_scheduling_files();
+        self.check_damaged_files();
     }
 }
 
 impl RecoveryRunner {
-    pub fn new(db: Arc<DB>, meta: Arc<Mutex<StoreMeta>>, check_duration: Duration) -> Self {
+    pub fn new(db: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, check_duration: Duration) -> Self {
         RecoveryRunner {
             db,
-            meta,
-            scheduling_files: vec![],
-            check_duration,
+            store_meta,
+            damaged_files: vec![],
+            max_damage_duration: check_duration,
         }
     }
 
     fn generate_scheduling_tasks(&mut self, path: &str) {
-        // resume rocksdb directly to avoid other write blocking.
-        if !self.scheduling_files.is_empty() {
-            println!("exist files:{:?}", self.scheduling_files);
-            // The second resume will panic when corrupted files have not been removed.
-            return;
-        }
-        self.db.resume().unwrap();
-
         if self.exist_scheduling_regions(path) {
             return;
         }
@@ -105,8 +97,9 @@ impl RecoveryRunner {
         }
     }
 
+    // `sst_path` has been processed and is still in a damaged state.
     fn exist_scheduling_regions(&self, sst_path: &str) -> bool {
-        for region in &self.scheduling_files {
+        for region in &self.damaged_files {
             if region.name == sst_path {
                 return true;
             }
@@ -114,29 +107,39 @@ impl RecoveryRunner {
         false
     }
 
+    // Periodically check for recorded damaged files。
+    //
     // Acquire meta lock.
-    fn check_scheduling_files(&mut self) {
-        for index in 0..self.scheduling_files.len() {
-            if self.scheduling_files[index].instant.elapsed() > 3 * self.check_duration {
-                let f = self.scheduling_files.remove(index);
+    fn check_damaged_files(&mut self) {
+        for index in 0..self.damaged_files.len() {
+            if self.damaged_files[index].instant.elapsed() > self.max_damage_duration {
+                let f = self.damaged_files.remove(index);
                 let fname = f.name.clone();
-                // file may be put into `scheduling_files` again here, but when this happens,
+                // file may be put into `damaged_files` again here, but when this happens,
                 // panic will be triggered, so it doesn’t matter.
                 if self.check_overlap_damaged_regions(f) {
                     set_panic_mark_and_panic(
                         &fname,
-                        &format!("recovery job exceeded {:?}", 3 * self.check_duration),
+                        &format!("recovery job exceeded {:?}", self.max_damage_duration),
                     );
                 }
             }
         }
     }
+
     // Check whether the StoreMeta contains the region range, if it contains,
-    // recorded fault region ids to report to PD, if not, delete the file directly.
+    // recorded fault region ids to report to PD and add file info into `damaged_files`.
     //
     // Acquire meta lock.
     fn check_overlap_damaged_regions(&mut self, mut file: FileInfo) -> bool {
-        let mut meta = self.meta.lock().unwrap();
+        let mut meta = match self.store_meta.lock() {
+            Ok(meta) => meta,
+            Err(e) => {
+                set_panic_mark_and_panic(&file.name, &format!("{}", e));
+                return false;
+            }
+        };
+
         let mut overlap = false;
 
         // Find overlapping region ids.
@@ -157,19 +160,17 @@ impl RecoveryRunner {
         }
 
         if !overlap {
-            // File must be in last level.
-            // todo: consider delete_files_in_range
-            self.db.delete_file(&file.name).unwrap();
-            // No need to clean up `scheduling_files` again.
+            // TODO: User trigger to delete sst file here. `delete_file` only allow
+            // delete files in the last level, consider `delete_files_in_range`.
             for id in ids {
                 meta.damaged_regions_id.remove(&id);
             }
         } else if !self.exist_scheduling_regions(&file.name) {
-            // This file was detected for the first time.
+            // This sst file was detected for the first time.
             for id in ids {
                 meta.damaged_regions_id.insert(id);
             }
-            self.scheduling_files.push(file);
+            self.damaged_files.push(file);
         }
         overlap
     }
@@ -178,4 +179,70 @@ impl RecoveryRunner {
 fn set_panic_mark_and_panic(sst: &str, err: &str) {
     set_panic_mark();
     panic!("Failed to recover sst file: {}, error: {}", sst, err);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_rocks::raw_util;
+    use kvproto::metapb::{Peer, Region};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tempfile::Builder;
+
+    #[test]
+    fn test_sst_recovery_runner_check_overlap() {
+        let path = Builder::new()
+            .prefix("test_sst_recovery_runner")
+            .tempdir()
+            .unwrap();
+        let cf = "cf";
+        let db = Arc::new(
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+        );
+
+        db.put(b"z3", b"val").unwrap();
+        db.put(b"z8", b"val").unwrap();
+        db.compact_range(None, None);
+
+        let files = db.get_live_files();
+
+        // create r1 [z1, z3] r2 [z2, z4] r3 [z5, z5] r4 [z6, z9] r5 [z8 z10] for test.
+        let mut region_ranges = BTreeMap::<Vec<u8>, u64>::new();
+        region_ranges.insert(b"z3".to_vec(), 1);
+        region_ranges.insert(b"z4".to_vec(), 2);
+        region_ranges.insert(b"z5".to_vec(), 3);
+        region_ranges.insert(b"z9".to_vec(), 4);
+        region_ranges.insert(b"z10".to_vec(), 5);
+        let mut store_meta = StoreMeta::new(10);
+        store_meta.region_ranges = region_ranges;
+
+        add_region_to_store_meta(&mut store_meta, 1, b"1".to_vec());
+        add_region_to_store_meta(&mut store_meta, 2, b"2".to_vec());
+        add_region_to_store_meta(&mut store_meta, 3, b"5".to_vec());
+        add_region_to_store_meta(&mut store_meta, 4, b"6".to_vec());
+        add_region_to_store_meta(&mut store_meta, 5, b"8".to_vec());
+
+        let meta = Arc::new(Mutex::new(store_meta));
+        let runner = RecoveryRunner::new(db, meta.clone(), Duration::from_millis(100));
+        let mut worker = LazyWorker::new("abc");
+        worker.start_with_timer(runner);
+        let tx = worker.scheduler();
+        tx.schedule(files.get_name(0)).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        assert_eq!(meta.lock().unwrap().damaged_regions_id.len(), 3);
+        assert!(meta.lock().unwrap().damaged_regions_id.get(&2).is_some());
+        assert!(meta.lock().unwrap().damaged_regions_id.get(&3).is_some());
+        assert!(meta.lock().unwrap().damaged_regions_id.get(&4).is_some());
+    }
+
+    fn add_region_to_store_meta(meta: &mut StoreMeta, id: u64, start_key: Vec<u8>) {
+        let mut r = Region::new();
+        r.set_id(id);
+        r.set_start_key(start_key);
+        let peers = vec![Peer::default()];
+        r.set_peers(peers.into());
+        meta.regions.insert(id, r);
+    }
 }
