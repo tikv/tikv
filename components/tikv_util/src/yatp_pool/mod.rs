@@ -237,7 +237,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     pub fn build_future_pool(&mut self) -> FuturePool {
         let pool = self.build_single_level_pool();
         let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
-        FuturePool::from_pool(pool, name, self.max_thread_count, self.max_tasks)
+        FuturePool::from_pool(pool, name, self.core_thread_count, self.max_tasks)
     }
 
     pub fn build_single_level_pool(&mut self) -> ThreadPool<TaskCell> {

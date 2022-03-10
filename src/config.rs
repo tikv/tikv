@@ -3881,6 +3881,7 @@ mod tests {
             )),
             true,
             None,
+            Some(cfg.rocksdb.build_opt()),
         )
         .unwrap();
         let storage = TestStorageBuilder::from_engine_and_lock_mgr(

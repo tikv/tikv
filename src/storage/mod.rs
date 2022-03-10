@@ -3470,6 +3470,7 @@ mod tests {
                 Some(cfs_opts),
                 cache.is_some(),
                 None, /*io_rate_limiter*/
+                None, /* CFOptions */
             )
         }
         .unwrap();
