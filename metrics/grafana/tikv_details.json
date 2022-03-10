@@ -8586,7 +8586,7 @@
               "step": 4
             },
             {
-              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])))[30s:10s])",
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])))[30s:10s])",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "total",
@@ -8691,7 +8691,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])) by (type))[30s:10s])",
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])) by (type))[30s:10s])",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
@@ -8699,7 +8699,7 @@
               "step": 4
             },
             {
-              "expr": "max_over_time((sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])))[30s:10s])",
+              "expr": "max_over_time((sum(rate(tikv_io_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])))[30s:10s])",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "total",
@@ -8909,7 +8909,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_rate_limiter_request_wait_duration_seconds_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])) by (le, type))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_rate_limiter_request_wait_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])) by (le, type))",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": " {{type}}-99%",
@@ -8917,7 +8917,7 @@
               "step": 4
             },
             {
-              "expr": "rate(tikv_rate_limiter_request_wait_duration_seconds_sum{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s]) / rate(tikv_rate_limiter_request_wait_duration_seconds_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])",
+              "expr": "rate(tikv_rate_limiter_request_wait_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s]) / rate(tikv_rate_limiter_request_wait_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[30s])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": " {{type}}-avg",
@@ -9021,7 +9021,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_io_latency_micros_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[1m])) by (le, type))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_io_latency_micros_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[1m])) by (le, type))",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": " {{type}}",
@@ -9126,7 +9126,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_io_latency_micros_bucket{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])) by (le, type))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_io_latency_micros_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])) by (le, type))",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": " {{type}}",
@@ -34838,6 +34838,7 @@
           "targets": [
             {
 <<<<<<< HEAD
+<<<<<<< HEAD
               "expr": "sum(tikv_resolved_ts_region_resolve_status{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
 =======
 <<<<<<< HEAD
@@ -34846,6 +34847,9 @@
               "expr": "sum(tikv_resolved_ts_region_resolve_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (type)",
 >>>>>>> 11b48cbbc... metrics: support multi k8s in grafana dashboards (#12008)
 >>>>>>> d8c9b7849 (cherry pick #12008 to release-5.4)
+=======
+              "expr": "sum(delta(tikv_resolved_ts_fail_advance_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance, reason)",
+>>>>>>> 89c4bfb0a (resolve conflicts)
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
@@ -35068,6 +35072,7 @@
           "targets": [
             {
 <<<<<<< HEAD
+<<<<<<< HEAD
               "expr": "sum(delta(tikv_resolved_ts_fail_advance_count{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance, reason)",
 =======
 <<<<<<< HEAD
@@ -35076,12 +35081,27 @@
               "expr": "sum(delta(tikv_resolved_ts_fail_advance_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance, reason)",
 >>>>>>> 11b48cbbc... metrics: support multi k8s in grafana dashboards (#12008)
 >>>>>>> d8c9b7849 (cherry pick #12008 to release-5.4)
+=======
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_size_bytes_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+>>>>>>> 89c4bfb0a (resolve conflicts)
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
               "legendFormat": "{{instance}}-{{reason}}",
               "refId": "A",
+<<<<<<< HEAD
               "step": 10
+=======
+              "step": 40
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_check_leader_request_item_count_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le, instance))",
+              "format": "time_series",
+              "hide": true,
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-check-num",
+              "refId": "B"
+>>>>>>> 89c4bfb0a (resolve conflicts)
             }
           ],
           "thresholds": [],
@@ -35240,6 +35260,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 <<<<<<< HEAD
 =======
@@ -35372,6 +35393,8 @@
 =======
 >>>>>>> 11b48cbbc... metrics: support multi k8s in grafana dashboards (#12008)
 >>>>>>> d8c9b7849 (cherry pick #12008 to release-5.4)
+=======
+>>>>>>> 89c4bfb0a (resolve conflicts)
           "decimals": 1,
           "description": "Total bytes of pending commands in the channel",
           "editable": true,
