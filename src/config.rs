@@ -3225,24 +3225,15 @@ lazy_static! {
 }
 
 fn serde_to_online_config(name: String) -> String {
-    match name.as_ref() {
-        "raftstore.store-pool-size" => name.replace(
-            "raftstore.store-pool-size",
-            "raft_store.store_batch_system.pool_size",
-        ),
-        "raftstore.apply-pool-size" => name.replace(
-            "raftstore.apply-pool-size",
-            "raft_store.apply_batch_system.pool_size",
-        ),
-        "raftstore.store_pool_size" => name.replace(
-            "raftstore.store_pool_size",
-            "raft_store.store_batch_system.pool_size",
-        ),
-        "raftstore.apply_pool_size" => name.replace(
-            "raftstore.apply_pool_size",
-            "raft_store.apply_batch_system.pool_size",
-        ),
-        _ => name.replace("raftstore", "raft_store").replace('-', "_"),
+    let res = name.replace("raftstore", "raft_store").replace('-', "_");
+    match res.as_ref() {
+        "raft_store.store_pool_size" | "raft_store.store_max_batch_size" => {
+            res.replace("store_", "store_batch_system.")
+        }
+        "raft_store.apply_pool_size" | "raft_store.apply_max_batch_size" => {
+            res.replace("apply_", "apply_batch_system.")
+        }
+        _ => res,
     }
 }
 
@@ -3467,14 +3458,17 @@ impl ConfigController {
 
     fn update_impl(
         &self,
-        diff: HashMap<String, ConfigValue>,
+        mut diff: HashMap<String, ConfigValue>,
         change: Option<HashMap<String, String>>,
     ) -> CfgResult<()> {
-        {
-            let mut incoming = self.get_current();
-            incoming.update(diff.clone());
-            incoming.validate()?;
-        }
+        diff = {
+            let incoming = self.get_current();
+            let mut updated = incoming.clone();
+            updated.update(diff);
+            // Config might be adjusted in `validate`.
+            updated.validate()?;
+            incoming.diff(&updated)
+        };
         let mut inner = self.inner.write().unwrap();
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -4751,5 +4745,67 @@ mod tests {
                 .unwrap()
                 .contains("rate-limiter-mode = 1")
         );
+    }
+
+    #[test]
+    fn test_serde_to_online_config() {
+        let cases = vec![
+            (
+                "raftstore.store_pool_size",
+                "raft_store.store_batch_system.pool_size",
+            ),
+            (
+                "raftstore.store-pool-size",
+                "raft_store.store_batch_system.pool_size",
+            ),
+            (
+                "raftstore.store_max_batch_size",
+                "raft_store.store_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.store-max-batch-size",
+                "raft_store.store_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.apply_pool_size",
+                "raft_store.apply_batch_system.pool_size",
+            ),
+            (
+                "raftstore.apply-pool-size",
+                "raft_store.apply_batch_system.pool_size",
+            ),
+            (
+                "raftstore.apply_max_batch_size",
+                "raft_store.apply_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.apply-max-batch-size",
+                "raft_store.apply_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.store_io_pool_size",
+                "raft_store.store_io_pool_size",
+            ),
+            (
+                "raftstore.store-io-pool-size",
+                "raft_store.store_io_pool_size",
+            ),
+            (
+                "raftstore.apply_yield_duration",
+                "raft_store.apply_yield_duration",
+            ),
+            (
+                "raftstore.apply-yield-duration",
+                "raft_store.apply_yield_duration",
+            ),
+            (
+                "raftstore.raft_store_max_leader_lease",
+                "raft_store.raft_store_max_leader_lease",
+            ),
+        ];
+
+        for (name, res) in cases {
+            assert_eq!(serde_to_online_config(name.into()).as_str(), res);
+        }
     }
 }
