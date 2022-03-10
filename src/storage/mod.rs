@@ -5894,6 +5894,7 @@ mod tests {
 
         let key = b"r\0key";
 
+        // "v1" -> "v"
         let expected = (None, false);
         storage
             .raw_compare_and_swap_atomic(
@@ -5908,6 +5909,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        // "None" -> "v1"
         let expected = (None, true);
         storage
             .raw_compare_and_swap_atomic(
@@ -5922,6 +5924,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        // "v1" -> "v2"
         let expected = (Some(b"v1".to_vec()), true);
         storage
             .raw_compare_and_swap_atomic(
@@ -5936,6 +5939,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        // "v1" -> "v2"
         let expected = (Some(b"v2".to_vec()), false);
         storage
             .raw_compare_and_swap_atomic(
@@ -5945,17 +5949,90 @@ mod tests {
                 Some(b"v1".to_vec()),
                 b"v2".to_vec(),
                 0,
-                expect_value_callback(tx, 0, expected),
+                expect_value_callback(tx.clone(), 0, expected),
             )
             .unwrap();
         rx.recv().unwrap();
 
+        // expect "v2"
         expect_value(
             b"v2".to_vec(),
             block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
         );
         expect_multi_values(
             vec![Some((key.to_vec(), b"v2".to_vec()))],
+            block_on(storage.raw_scan(
+                ctx.clone(),
+                "".to_string(),
+                b"r".to_vec(),
+                Some(b"rz".to_vec()),
+                20,
+                false,
+                false,
+            ))
+            .unwrap(),
+        );
+
+        // put "v3"
+        storage
+            .raw_batch_put_atomic(
+                ctx.clone(),
+                "".to_string(),
+                vec![(key.to_vec(), b"v3".to_vec())],
+                vec![0],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // "v3" -> "v4"
+        let expected = (Some(b"v3".to_vec()), true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                Some(b"v3".to_vec()),
+                b"v4".to_vec(),
+                0,
+                expect_value_callback(tx.clone(), 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // delete
+        storage
+            .raw_batch_delete_atomic(
+                ctx.clone(),
+                "".to_string(),
+                vec![key.to_vec()],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // "None" -> "v"
+        let expected = (None, true);
+        storage
+            .raw_compare_and_swap_atomic(
+                ctx.clone(),
+                "".to_string(),
+                key.to_vec(),
+                None,
+                b"v".to_vec(),
+                0,
+                expect_value_callback(tx, 0, expected),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // expect "v"
+        expect_value(
+            b"v".to_vec(),
+            block_on(storage.raw_get(ctx.clone(), "".to_string(), key.to_vec())).unwrap(),
+        );
+        expect_multi_values(
+            vec![Some((key.to_vec(), b"v".to_vec()))],
             block_on(storage.raw_scan(
                 ctx,
                 "".to_string(),
