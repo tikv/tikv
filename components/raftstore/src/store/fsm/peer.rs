@@ -4684,6 +4684,14 @@ where
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
         cb: Callback<EK::Snapshot>,
     ) {
+        let test_only_callback = |cb, region_buckets| {
+            if let Callback::Test { cb } = cb {
+                let peer_stat = PeerInternalStat {
+                    buckets: region_buckets,
+                };
+                cb(peer_stat);
+            }
+        };
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
             info!(
@@ -4694,12 +4702,7 @@ where
                 "current_epoch" => ?region.get_region_epoch(),
             );
             // test purpose
-            if let Callback::Test { cb } = cb {
-                let peer_stat = PeerInternalStat {
-                    buckets: self.fsm.peer.region_buckets.clone(),
-                };
-                cb(peer_stat);
-            }
+            test_only_callback(cb, self.fsm.peer.region_buckets.clone());
             return;
         }
 
@@ -4757,12 +4760,13 @@ where
             region_buckets.keys.push(region.get_end_key().to_vec());
             self.fsm.peer.region_buckets = region_buckets;
         }
-        if let Callback::Test { cb } = cb {
-            let peer_stat = PeerInternalStat {
-                buckets: self.fsm.peer.region_buckets.clone(),
-            };
-            cb(peer_stat);
-        }
+        info!(
+            "finished on_refresh_region_buckets";
+            "region_id" => self.fsm.region_id(),
+            "buckets count" => self.fsm.peer.region_buckets.get_keys().len(),
+        );
+         // test purpose
+         test_only_callback(cb, self.fsm.peer.region_buckets.clone()); 
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
