@@ -113,10 +113,10 @@ impl Display for BatchComponent {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             BatchComponent::Store => {
-                write!(f, "apply")
+                write!(f, "raft")
             }
             BatchComponent::Apply => {
-                write!(f, "raft")
+                write!(f, "apply")
             }
         }
     }
