@@ -295,7 +295,7 @@ pub mod tests {
 
     pub fn must_generate_buckets(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
-        exp_buckets_keys: &Vec<Vec<u8>>,
+        exp_buckets_keys: &[Vec<u8>],
     ) {
         loop {
             if let Ok((

@@ -4724,10 +4724,11 @@ where
                                 <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
                         {
                             // i is not the last entry (which is end key)
+                            assert!(i < region_buckets_keys.len() - 1);
+                            // the region has more than one bucket
                             if region_buckets_keys.len() > 2 {
                                 region_buckets_keys.remove(i); // bucket is too small
-                                // the key is removed, to compensate the += 1 below.
-                                i -= 1;
+                                continue;
                             }
                         } else {
                             // insert new bucket keys (split the original bucket)
@@ -4749,9 +4750,7 @@ where
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
             let mut region_buckets = Buckets::default();
-            let now = monotonic_raw_now();
-            const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
-            region_buckets.version = (now.sec as u64) * NANOSECONDS_PER_SECOND + now.nsec as u64;
+            region_buckets.version = timespec_to_ns(monotonic_raw_now());
             region_buckets.set_keys(bucket_keys.into());
             // add region's start/end key
             region_buckets

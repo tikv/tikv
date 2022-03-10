@@ -993,7 +993,7 @@ fn test_refresh_region_bucket_keys() {
     let buckets = vec![bucket];
     cluster.refresh_region_bucket_keys(
         &region,
-        buckets.clone(),
+        buckets,
         Option::None,
         expected_buckets.clone(),
     );
@@ -1021,7 +1021,7 @@ fn test_refresh_region_bucket_keys() {
     region.mut_region_epoch().set_conf_ver(conf_ver);
     cluster.refresh_region_bucket_keys(
         &region,
-        buckets.clone(),
+        buckets,
         Option::None,
         expected_buckets.clone(),
     );
@@ -1046,7 +1046,7 @@ fn test_refresh_region_bucket_keys() {
     );
     cluster.refresh_region_bucket_keys(
         &region,
-        buckets.clone(),
+        buckets,
         Some(bucket_ranges),
         expected_buckets.clone(),
     );
@@ -1079,7 +1079,7 @@ fn test_refresh_region_bucket_keys() {
     );
     cluster.refresh_region_bucket_keys(
         &region,
-        buckets.clone(),
+        buckets,
         Some(bucket_ranges),
         expected_buckets.clone(),
     );
