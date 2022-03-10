@@ -1260,14 +1260,7 @@ impl TiKVServer<RocksEngine> {
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
         let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
-<<<<<<< HEAD
-=======
         let shared_block_cache = block_cache.is_some();
-        let env = self
-            .config
-            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
-            .unwrap();
->>>>>>> 6291ebf37... server: disallow coexist of raft engine and raftdb (#12047)
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &self.config.raft_engine.config().dir,

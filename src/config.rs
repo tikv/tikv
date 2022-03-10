@@ -48,11 +48,8 @@ use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-<<<<<<< HEAD
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
-=======
-    self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
->>>>>>> 6291ebf37... server: disallow coexist of raft engine and raftdb (#12047)
+    self, LogFormat, OptionReadableSize, RaftDataStateMachine, ReadableDuration, ReadableSize,
+    TomlWriter, GIB, MIB,
 };
 use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
