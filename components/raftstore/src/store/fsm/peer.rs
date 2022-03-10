@@ -1588,7 +1588,7 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
-                if let Some(delta) = res.buckets {
+                if let Some(delta) = res.bucket_stat {
                     let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
                     merge_bucket_stats(
                         &buckets.meta.keys,

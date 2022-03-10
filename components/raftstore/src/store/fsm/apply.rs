@@ -584,7 +584,7 @@ where
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
-            buckets: delegate.buckets.clone().map(Box::new),
+            bucket_stat: delegate.buckets.clone().map(Box::new),
         });
     }
 
@@ -2874,7 +2874,7 @@ where
     pub entries: SmallVec<[CachedEntries; 1]>,
     pub entries_size: usize,
     pub cbs: Vec<Proposal<S>>,
-    pub buckets: Option<Arc<BucketMeta>>,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2902,7 +2902,7 @@ impl<S: Snapshot> Apply<S> {
             entries: smallvec![cached_entries],
             entries_size,
             cbs,
-            buckets,
+            bucket_meta: buckets,
         }
     }
 
@@ -3197,7 +3197,7 @@ where
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
-    pub buckets: Option<Box<BucketStat>>,
+    pub bucket_stat: Option<Box<BucketStat>>,
 }
 
 #[derive(Debug)]
@@ -3308,7 +3308,7 @@ where
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        if let Some(meta) = apply.buckets.clone() {
+        if let Some(meta) = apply.bucket_meta.clone() {
             let buckets = self
                 .delegate
                 .buckets
