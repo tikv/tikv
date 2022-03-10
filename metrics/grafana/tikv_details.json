@@ -32765,7 +32765,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Thread CPU",
+          "title": "Lock Manager Thread CPU",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -32863,7 +32863,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Handled tasks",
+          "title": "Lock Manager Handled tasks",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -33628,7 +33628,7 @@
           }
         }
       ],
-      "title": "Lock manager",
+      "title": "Pessimistic Locking",
       "type": "row"
     },
     {
@@ -38677,24 +38677,24 @@
     "list": [
       {
         "allValue": null,
-        "current": { },
+        "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
         "hide": 2,
         "includeAll": false,
         "label": "K8s-cluster",
         "multi": false,
         "name": "k8s_cluster",
-        "options": [ ],
+        "options": [],
         "query": "label_values(tikv_engine_block_cache_size_bytes, k8s_cluster)",
         "refresh": 2,
         "regex": "",
         "sort": 1,
         "tagValuesQuery": "",
-        "tags": [ ],
+        "tags": [],
         "tagsQuery": "",
         "type": "query",
         "useTags": false
-        },
+      },
       {
         "allValue": null,
         "current": {},
