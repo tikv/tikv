@@ -93,14 +93,6 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
             }
         } else if let Some(v) = change.get("scheduler_worker_pool_size") {
             let pool_size: usize = v.into();
-            let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
-            if pool_size == 0 || pool_size > max_pool_size {
-                return Err(format!(
-                    "pool size should be great than 0 and less than or equal to {}",
-                    max_pool_size
-                )
-                .into());
-            }
             self.scheduler.scale_pool_size(pool_size);
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {

@@ -69,7 +69,11 @@ impl Default for Config {
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
-            scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
+            scheduler_worker_pool_size: if cpu_num >= 16.0 {
+                8
+            } else {
+                std::cmp::max(1, std::cmp::min(4, cpu_num as usize))
+            },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
@@ -105,6 +109,15 @@ impl Config {
                     .into(),
             );
         };
+        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        if self.scheduler_worker_pool_size == 0 || self.scheduler_worker_pool_size > max_pool_size {
+            return Err(
+                format!(
+                    "storage.scheduler_worker_pool_size should be greater than 0 and less than or equal to {}",
+                    max_pool_size
+                ).into()
+            );
+        }
         self.io_rate_limit.validate()?;
 
         Ok(())
@@ -339,5 +352,26 @@ impl IORateLimitConfig {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_storage_config() {
+        let mut cfg = Config::default();
+        assert!(cfg.validate().is_ok());
+
+        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        cfg.scheduler_worker_pool_size = max_pool_size;
+        assert!(cfg.validate().is_ok());
+
+        cfg.scheduler_worker_pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg.scheduler_worker_pool_size = max_pool_size + 1;
+        assert!(cfg.validate().is_err());
     }
 }
