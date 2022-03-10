@@ -797,29 +797,21 @@ pub fn new_bucket_stats(meta: &BucketMeta) -> BucketStats {
 }
 
 pub fn find_bucket_index<S: AsRef<[u8]>>(key: &[u8], bucket_keys: &[S]) -> Option<usize> {
-    let is_empty_end_key = bucket_keys[bucket_keys.len() - 1].as_ref().is_empty();
-    let search_keys = if is_empty_end_key {
-        &bucket_keys[..bucket_keys.len() - 1]
-    } else {
-        bucket_keys
-    };
-
-    match search_keys.binary_search_by(|k| k.as_ref().cmp(key)) {
-        Ok(idx) => {
-            if !is_empty_end_key && idx == search_keys.len() - 1 {
-                Some(idx - 1)
-            } else {
-                Some(idx)
-            }
-        }
-        Err(idx) => {
-            if idx == 0 || (idx == search_keys.len() && !is_empty_end_key) {
-                None
-            } else {
-                Some(idx - 1)
-            }
-        }
-    }
+    let last_key = bucket_keys.last().unwrap().as_ref();
+    let search_keys = &bucket_keys[..bucket_keys.len() - 1];
+    search_keys
+        .binary_search_by(|k| k.as_ref().cmp(key))
+        .map_or_else(
+            |idx| {
+                if idx == 0 || (idx == search_keys.len() && !last_key.is_empty() && key >= last_key)
+                {
+                    None
+                } else {
+                    Some(idx - 1)
+                }
+            },
+            Some,
+        )
 }
 
 /// Merge incoming bucket stats. If a range in new buckets overlaps with multiple ranges in
@@ -852,13 +844,16 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
             Some(idx) => {
                 // If end key is the start key of a bucket, this bucket should not be included.
                 if range.1 == keys[idx].as_ref() {
+                    if idx == 0 {
+                        return None;
+                    }
                     idx - 1
                 } else {
                     idx
                 }
             }
             None => {
-                if range.1 > keys[keys.len() - 1].as_ref() {
+                if range.1 >= keys[keys.len() - 1].as_ref() {
                     last_bucket_idx
                 } else {
                     // Not in the bucket range.
@@ -930,6 +925,11 @@ mod test {
                 ),
                 vec![3, 4],
             ),
+            (
+                (vec![b"k3", b"k5", b"k7"], vec![1, 1]),
+                (vec![b"k4", b"k5"], vec![1]),
+                vec![2, 1],
+            ),
         ];
         for (current, incoming, expected) in cases {
             let cur_keys = current.0;
@@ -955,7 +955,7 @@ mod test {
         assert_eq!(find_bucket_index(b"k5", &keys), Some(2));
         assert_eq!(find_bucket_index(b"k2", &keys), Some(0));
         assert_eq!(find_bucket_index(b"k6", &keys), Some(2));
-        assert_eq!(find_bucket_index(b"k7", &keys), Some(2));
+        assert_eq!(find_bucket_index(b"k7", &keys), None);
         assert_eq!(find_bucket_index(b"k0", &keys), None);
         assert_eq!(find_bucket_index(b"k8", &keys), None);
         let keys = vec![
