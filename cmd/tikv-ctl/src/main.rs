@@ -102,7 +102,7 @@ fn main() {
         Cmd::BadSsts { manifest, pd } => {
             let data_dir = opt.data_dir.as_deref();
             assert!(data_dir.is_some(), "--data-dir must be specified");
-            let data_dir = data_dir.unwrap();
+            let data_dir = data_dir.expect("--data-dir must be specified");
             let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
             print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
         }
@@ -671,37 +671,33 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     ];
     args.push(format!("--file={}", db));
 
-    let mut stderr = BufferRedirect::stderr().unwrap();
+    let stderr = BufferRedirect::stderr().unwrap();
     let stdout = BufferRedirect::stdout().unwrap();
     let opts = cfg.rocksdb.build_opt();
 
     match run_and_wait_child_process(|| engine_rocks::raw::run_sst_dump_tool(&args, &opts)) {
         Ok(code) => {
             if code != 0 {
-                let mut err = String::new();
-                stderr.read_to_string(&mut err).unwrap();
-                println!("failed to run {}:\n{}", args.join(" "), err);
+                flush_std_buffer_to_log(
+                    &format!("failed to run {}", args.join(" ")),
+                    stderr,
+                    stdout,
+                );
                 tikv_util::logger::exit_process_gracefully(code);
             }
         }
         Err(e) => {
-            let mut stderr_buf = stderr.into_inner();
-            let mut stdout_buf = stdout.into_inner();
-            let mut err_buf = Vec::new();
-            let mut out_buf = Vec::new();
-            stderr_buf.read_to_end(&mut err_buf).unwrap();
-            stdout_buf.read_to_end(&mut out_buf).unwrap();
-            let err_info = unsafe { String::from_utf8_unchecked(err_buf) };
-            let out_info = unsafe { String::from_utf8_unchecked(out_buf) };
-            panic!(
-                "run_and_wait_child_process return error:{}; std error:{}; std out:{};",
-                e, err_info, out_info
+            flush_std_buffer_to_log(
+                &format!("failed to run {} and get error:{}", args.join(" "), e),
+                stderr,
+                stdout,
             );
+            panic!();
         }
     }
 
-    let mut stderr_buf = stderr.into_inner();
     drop(stdout);
+    let mut stderr_buf = stderr.into_inner();
     let mut buffer = Vec::new();
     stderr_buf.read_to_end(&mut buffer).unwrap();
     let corruptions = unsafe { String::from_utf8_unchecked(buffer) };
@@ -715,7 +711,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         let r = Regex::new(r"/\w*\.sst").unwrap();
         let sst_file_number = match r.captures(line) {
             None => {
-                println!("skip bad line format: {}", line);
                 continue;
             }
             Some(parts) => {
@@ -726,7 +721,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                         .to_str()
                         .unwrap()
                 } else {
-                    println!("skip bad line format: {}", line);
                     continue;
                 }
             }
@@ -875,4 +869,16 @@ fn print_overlap_region_and_suggestions(
             data_dir, region.id
         );
     }
+}
+
+fn flush_std_buffer_to_log(
+    msg: &str,
+    mut err_buffer: BufferRedirect,
+    mut out_buffer: BufferRedirect,
+) {
+    let mut err = String::new();
+    let mut out = String::new();
+    err_buffer.read_to_string(&mut err).unwrap();
+    out_buffer.read_to_string(&mut out).unwrap();
+    println!("{}, err redirect:{}, out redirect:{}", msg, err, out);
 }
