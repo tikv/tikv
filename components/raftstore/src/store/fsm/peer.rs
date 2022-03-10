@@ -72,7 +72,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
+    SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::RaftlogFetchResult;
@@ -4707,8 +4708,13 @@ where
         meta.keys.insert(0, region.get_start_key().to_vec());
         meta.keys.push(region.get_end_key().to_vec());
         let stats = new_bucket_stats(&meta);
-        let region_buckets = BucketStat::new(Arc::new(meta), stats);
+        let meta = Arc::new(meta);
+        let region_buckets = BucketStat::new(meta.clone(), stats);
         self.fsm.peer.region_buckets = Some(region_buckets);
+        let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+            reader.update(ReadProgress::region_buckets(meta));
+        }
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

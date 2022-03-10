@@ -16,6 +16,7 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
+use pd_client::BucketMeta;
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -83,6 +84,7 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
+        bucket_meta: Option<Arc<BucketMeta>>,
         mut ts: Option<ThreadReadId>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
@@ -107,8 +109,9 @@ pub trait ReadExecutor<E: KvEngine> {
                     }
                 },
                 CmdType::Snap => {
-                    let snapshot =
+                    let mut snapshot =
                         RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
+                    snapshot.bucket_meta = bucket_meta.clone();
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -149,6 +152,7 @@ pub struct ReadDelegate {
     pub last_valid_ts: Timespec,
 
     pub tag: String,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
@@ -232,6 +236,7 @@ impl ReadDelegate {
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
+            bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
     }
@@ -260,6 +265,9 @@ impl ReadDelegate {
             }
             Progress::LeaderLease(leader_lease) => {
                 self.leader_lease = Some(leader_lease);
+            }
+            Progress::RegionBuckets(bucket_meta) => {
+                self.bucket_meta = Some(bucket_meta);
             }
         }
     }
@@ -357,6 +365,7 @@ impl ReadDelegate {
             read_progress,
             pending_remove: false,
             track_ver: TrackVer::new(),
+            bucket_meta: None,
         }
     }
 }
@@ -382,6 +391,7 @@ pub enum Progress {
     Term(u64),
     AppliedIndexTerm(u64),
     LeaderLease(RemoteLease),
+    RegionBuckets(Arc<BucketMeta>),
 }
 
 impl Progress {
@@ -399,6 +409,10 @@ impl Progress {
 
     pub fn leader_lease(lease: RemoteLease) -> Progress {
         Progress::LeaderLease(lease)
+    }
+
+    pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
+        Progress::RegionBuckets(bucket_meta)
     }
 }
 
@@ -630,7 +644,13 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response = self.execute(&req, &delegate.region, None, read_id);
+                        let response = self.execute(
+                            &req,
+                            &delegate.region,
+                            None,
+                            delegate.bucket_meta.clone(),
+                            read_id,
+                        );
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(
                             &self.router,
@@ -651,7 +671,13 @@ where
                         }
 
                         // Getting the snapshot
-                        let response = self.execute(&req, &delegate.region, None, read_id);
+                        let response = self.execute(
+                            &req,
+                            &delegate.region,
+                            None,
+                            delegate.bucket_meta.clone(),
+                            read_id,
+                        );
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) =
@@ -1081,6 +1107,7 @@ mod tests {
                 read_progress: read_progress.clone(),
                 pending_remove: false,
                 track_ver: TrackVer::new(),
+                bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
         }
@@ -1323,6 +1350,7 @@ mod tests {
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
                 pending_remove: false,
+                bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
         }
