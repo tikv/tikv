@@ -9,7 +9,7 @@ fn link_cpp(tool: &cc::Tool) {
         // Don't link to c++ statically on windows.
         return;
     };
-    link_sys_lib(stdlib, &tool)
+    link_sys_lib(stdlib, tool)
 }
 
 fn link_sys_lib(lib: &str, tool: &cc::Tool) {
