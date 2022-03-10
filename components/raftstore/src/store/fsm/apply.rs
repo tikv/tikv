@@ -1514,7 +1514,7 @@ where
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
-            s.write_key(key, Some(value));
+            s.write_key(key, value.len() as u64);
         }
 
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);
@@ -1564,7 +1564,7 @@ where
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
-            s.write_key(key, None);
+            s.write_key(key, 0);
         }
 
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);

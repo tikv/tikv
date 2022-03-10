@@ -137,17 +137,16 @@ impl BucketStat {
         }
     }
 
-    pub fn write_key(&mut self, key: &[u8], value: Option<&[u8]>) {
+    pub fn write_key(&mut self, key: &[u8], value_size: u64) {
         let idx = match util::find_bucket_index(key, &self.meta.keys) {
             Some(idx) => idx,
             None => return,
         };
-        let size = key.len() + value.map_or(0, |v| v.len());
         if let Some(keys) = self.stats.mut_write_keys().get_mut(idx) {
             *keys += 1;
         }
         if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
-            *bytes += size as u64;
+            *bytes += key.len() as u64 + value_size;
         }
     }
 }
