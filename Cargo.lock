@@ -3637,8 +3637,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=pre-alpha#48ce04d4d2c9016aa70eaa7850e2fbfb30d184aa"
+version = "0.1.0-pre-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8ca0751ee485ec52baa3aefb382159f7c4f9424a6316dcf55e1e9b80715f02a"
 dependencies = [
  "byteorder",
  "crc32fast",
