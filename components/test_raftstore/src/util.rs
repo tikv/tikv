@@ -19,7 +19,7 @@ use engine_rocks::{
 use engine_traits::{Engines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::{self, RegionEpoch};
@@ -926,7 +926,6 @@ pub fn must_kv_prewrite_with(
     );
 }
 
-// Disk full test interface.
 pub fn try_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
@@ -951,6 +950,32 @@ pub fn try_kv_prewrite_with(
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
     client.kv_prewrite(&prewrite_req).unwrap()
+}
+
+pub fn async_kv_prewrite_with(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pk: Vec<u8>,
+    ts: u64,
+    for_update_ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
+) -> ClientUnaryReceiver<PrewriteResponse> {
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx);
+    if for_update_ts != 0 {
+        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+    }
+    prewrite_req.set_mutations(muts.into_iter().collect());
+    prewrite_req.primary_lock = pk;
+    prewrite_req.start_version = ts;
+    prewrite_req.lock_ttl = 3000;
+    prewrite_req.for_update_ts = for_update_ts;
+    prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
+    prewrite_req.use_async_commit = use_async_commit;
+    prewrite_req.try_one_pc = try_one_pc;
+    client.kv_prewrite_async(&prewrite_req).unwrap()
 }
 
 pub fn try_kv_prewrite(
@@ -1265,6 +1290,15 @@ impl PeerClient {
 
     pub fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
         must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, 0, false, true)
+    }
+
+    pub fn async_kv_prewrite_one_pc(
+        &self,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: u64,
+    ) -> ClientUnaryReceiver<PrewriteResponse> {
+        async_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, 0, false, true)
     }
 
     pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {

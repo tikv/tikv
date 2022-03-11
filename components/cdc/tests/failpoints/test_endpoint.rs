@@ -417,3 +417,89 @@ fn test_old_value_cache_without_downstreams() {
 
     fail::remove("cdc_flush_old_value_metrics");
 }
+
+#[test]
+fn test_merge_with_async_commit() {
+    let cluster = new_server_cluster(0, 2);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+
+    // Prepare 2 regions.
+    let r1 = suite.cluster.get_region(b"k1");
+    suite.cluster.must_split(&r1, b"k5");
+    let mut regions = Vec::with_capacity(2);
+    let mut clients = Vec::with_capacity(2);
+    for i in 0..=1 {
+        let k = format!("k{}", i * 8 + 1).into_bytes();
+        let r = suite.cluster.get_region(&k);
+        let peer = find_peer(&r, (i + 1) as _).cloned().unwrap();
+        suite.cluster.must_transfer_leader(r.id, peer.clone());
+        let c = PeerClient::new(&suite.cluster, r.id, peer);
+        regions.push(r);
+        clients.push(c);
+    }
+
+    // Prepare an tso.
+    let mut tso;
+    loop {
+        tso = get_tso(&suite.cluster.pd_client);
+        if tso >= 3 {
+            break;
+        }
+        sleep_ms(100);
+    }
+
+    // Avoid to clean transaction memory locks.
+    fail::cfg("scheduler_async_write_finish", "pause").unwrap();
+
+    // Prewrite with `tso - 2` on `regions[0]`.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = b"k1".to_vec();
+    mutation.value = b"value".to_vec();
+    let _x1 = clients[0].async_kv_prewrite_one_pc(vec![mutation], b"k1".to_vec(), tso - 2);
+
+    // Prewrite with `tso - 1` on `regions[1]`.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = b"k9".to_vec();
+    mutation.value = b"value".to_vec();
+    let _x2 = clients[1].async_kv_prewrite_one_pc(vec![mutation], b"k9".to_vec(), tso - 1);
+
+    // We can get resolved ts = `tso - 1` on `regions[1]`.
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(regions[1].id));
+    let req = suite.new_changedata_request(regions[1].id);
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    for _ in 0..10 {
+        let events = receive_event(true);
+        if events.has_resolved_ts() {
+            assert_eq!(events.get_resolved_ts().ts, tso - 1);
+            break;
+        }
+    }
+    drop(req_tx);
+    drop(receive_event);
+
+    // Forbid the second capture to be finished.
+    fail::cfg("cdc_before_initialize", "pause").unwrap();
+
+    // Updates of `regions[0]` with timestamp `tso - 2` is lost.
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(regions[0].id));
+    let req = suite.new_changedata_request(regions[0].id);
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    suite.cluster.must_try_merge(regions[0].id, regions[1].id);
+    'LOOP: for _ in 0..10 {
+        for x in receive_event(true).get_events() {
+            if let Some(Event_oneof_event::Error(ref e)) = x.event {
+                assert_eq!(e.get_region_not_found().region_id, regions[0].id);
+                break 'LOOP;
+            } else {
+                panic!("should only contains the error");
+            }
+        }
+    }
+    drop(req_tx);
+    drop(receive_event);
+
+    fail::remove("cdc_before_initialize");
+    fail::remove("scheduler_async_write_finish");
+}
