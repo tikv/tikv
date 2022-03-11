@@ -7,10 +7,9 @@ use bitflags::bitflags;
 use collections::{HashMap, HashSet};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use kvenginepb::SplitStage;
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{PeerRole, Region};
+use kvproto::metapb::{PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
@@ -18,7 +17,7 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::*;
-use protobuf::{Message, ProtobufEnum};
+use protobuf::Message;
 use raft;
 use raft::{
     Changer, LightReady, ProgressState, ProgressTracker, RawNode, Ready, SnapshotStatus, StateRole,
@@ -35,9 +34,7 @@ use raftstore::store::{local_metrics::*, metrics::*, QueryStats, TxnExt};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::VecDeque;
-use std::ops::{Add, Mul, Sub};
-use std::sync::atomic::Ordering::SeqCst;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now, InstantExt};
@@ -59,6 +56,8 @@ pub(crate) enum StaleState {
 }
 
 pub(crate) fn notify_stale_req(term: u64, cb: Callback) {
+    let bt = std::backtrace::Backtrace::force_capture();
+    info!("notify stale req backtrace {:?}", bt);
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -442,8 +441,6 @@ pub(crate) struct Peer {
     /// marking the lowest bit.
     pub max_ts_sync_status: Arc<AtomicU64>,
 
-    pub(crate) split_callback: Option<Callback>,
-
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker,
 }
@@ -512,7 +509,6 @@ impl Peer {
             peer_stat: PeerStat::default(),
             txn_ext: Arc::new(TxnExt::default()),
             max_ts_sync_status: Arc::new(Default::default()),
-            split_callback: None,
             cmd_epoch_checker: Default::default(),
             pending_split: false,
         };
@@ -1380,16 +1376,6 @@ impl Peer {
                 "shard_meta_ver" => shard_meta.ver,
                 "version" => cs.get_shard_ver(),
             );
-        } else if shard_meta.split_stage.value() >= kvenginepb::SplitStage::PreSplit.value()
-            && cs.has_compaction()
-        {
-            rejected = true;
-            cs.mut_compaction().set_conflicted(true);
-            warn!(
-                "shard meta reject compaction for splitting state";
-                "region" => tag,
-                "seq" => cs.get_sequence(),
-            );
         } else if shard_meta.is_duplicated_change_set(&mut cs) {
             rejected = true;
             warn!(
@@ -1403,6 +1389,10 @@ impl Peer {
             ctx.global.region_scheduler.schedule(task).unwrap();
             return;
         }
+        let mut parent_id = 0;
+        if let Some(parent) = &shard_meta.parent {
+            parent_id = parent.id;
+        }
         shard_meta.apply_change_set(&mut cs);
         info!(
             "shard meta apply change set {:?}", &cs;
@@ -1411,17 +1401,10 @@ impl Peer {
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
 
-        if cs.has_flush() {
-            ctx.raft_wb
-                .truncate_raft_log(region_id, shard_meta.write_sequence);
+
+        if cs.has_initial_flush() {
             self.mut_store().initial_flushed = true;
-        }
-        if cs.has_split_files() {
-            let split_job_states = &mut self.mut_store().split_job_states;
-            if let Some(scheduled_split_file_time) = split_job_states.scheduled_split_file_time {
-                split_job_states.split_file_duration =
-                    Some(scheduled_split_file_time.saturating_elapsed());
-            }
+            ctx.global.engines.raft.remove_dependent(parent_id, self.region_id);
         }
     }
 
@@ -1433,9 +1416,13 @@ impl Peer {
     ) {
         self.last_committed_split_idx = entry.index;
         let regions = split_gen_new_region_metas(self.region(), splits).unwrap();
-        let change_set = build_split_change_set(self.region(), &regions, entry.index, entry.term);
+        let split = build_split_pb(self.region(), &regions, entry.term);
         let shard_meta = self.mut_store().mut_engine_meta();
-        let new_metas = shard_meta.apply_split(change_set, RAFT_INIT_LOG_INDEX);
+        let new_metas = shard_meta.apply_split(&split, entry.index, RAFT_INIT_LOG_INDEX);
+        let mut cs = shard_meta.to_change_set();
+        cs.set_split(split);
+        cs.set_sequence(entry.index);
+        ctx.apply_msgs.msgs.push(ApplyMsg::PendingSplit(cs));
         for (i, new_meta) in new_metas.iter().enumerate() {
             let new_region = &regions[i];
             write_peer_state(&mut ctx.raft_wb, new_region);
@@ -2643,110 +2630,6 @@ impl Peer {
         if self.is_leader() {
             self.raft_group.ping();
         }
-    }
-
-    pub(crate) fn maybe_recover_split(&mut self, ctx: &mut RaftContext) {
-        if self.is_leader() {
-            match self.get_store().split_stage {
-                SplitStage::PreSplit => {
-                    self.maybe_schedule_split_file(ctx);
-                }
-                SplitStage::SplitFileDone => {
-                    self.maybe_schedule_split_file(ctx);
-                    self.maybe_schedule_finish_split(ctx);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    pub(crate) fn maybe_schedule_split_file(&mut self, ctx: &mut RaftContext) {
-        let tag = self.tag();
-        let split_job_states = &mut self.mut_store().split_job_states;
-        if split_job_states.split_file_job_status.is_some() {
-            let split_file_status = split_job_states
-                .split_file_job_status
-                .as_ref()
-                .unwrap()
-                .load(SeqCst);
-            if split_file_status == JOB_STATUS_RUNNING || split_file_status == JOB_STATUS_FINISHED {
-                return;
-            }
-        }
-        info!("leader schedule split files";
-            "region" => tag);
-        let status = Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING));
-        split_job_states.split_file_job_status = Some(status.clone());
-        split_job_states.scheduled_split_file_time = Some(Instant::now());
-        let cb = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                let err_msg = resp.response.get_header().get_error().get_message();
-                error!("failed to propose split files {:?} for {:?}", err_msg, tag);
-                status.store(JOB_STATUS_FAILED, SeqCst);
-            } else {
-                info!("proposed split files for {:?}", tag);
-                status.store(JOB_STATUS_FINISHED, SeqCst);
-            }
-        }));
-        let split_task = SplitTask::new(
-            self.region().clone(),
-            self.peer.clone(),
-            SplitMethod::SplitFiles(cb),
-        );
-        let apply_msg = ApplyMsg::SplitTask(split_task);
-        ctx.apply_msgs.msgs.push(apply_msg);
-    }
-
-    pub(crate) fn maybe_schedule_finish_split(&mut self, ctx: &mut RaftContext) {
-        let tag = self.tag();
-        let split_job_states = &mut self.mut_store().split_job_states;
-        if split_job_states.finish_split_job_state.is_some() {
-            let finish_split_status = split_job_states
-                .finish_split_job_state
-                .as_ref()
-                .unwrap()
-                .load(SeqCst);
-            if finish_split_status == JOB_STATUS_RUNNING
-                || finish_split_status == JOB_STATUS_FINISHED
-            {
-                return;
-            }
-        }
-        if let Some(schedule_split_file_time) = split_job_states.scheduled_split_file_time {
-            if let Some(split_file_duration) = split_job_states.split_file_duration {
-                if Instant::now() < schedule_split_file_time.add(split_file_duration.mul(2)) {
-                    // Wait for another split file duration until we issue the finish split command.
-                    // So the followers should probably already in split file done state, don't need
-                    // to pause apply.
-                    return;
-                }
-            }
-        }
-        info!("leader schedule finish split"; "region" => tag);
-        let status = Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING));
-        split_job_states.finish_split_job_state = Some(status.clone());
-        let callback = self.split_callback.take();
-        let outer_callback = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                let err_msg = resp.response.get_header().get_error().get_message();
-                error!("failed to propose finish split {} for {:?}", err_msg, tag);
-                status.store(JOB_STATUS_FAILED, SeqCst);
-            } else {
-                info!("proposed finish split for {:?}", tag);
-                status.store(JOB_STATUS_FINISHED, SeqCst);
-            }
-            if let Some(cb) = callback {
-                cb.invoke_with_response(resp.response);
-            }
-        }));
-
-        let split_task = SplitTask::new(
-            self.region().clone(),
-            self.peer.clone(),
-            SplitMethod::Finish(outer_callback),
-        );
-        let apply_msg = ApplyMsg::SplitTask(split_task);
-        ctx.apply_msgs.msgs.push(apply_msg);
     }
 }
 

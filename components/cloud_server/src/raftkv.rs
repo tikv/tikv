@@ -706,7 +706,7 @@ fn build_pessimistic_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>
     }
 }
 
-fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
+fn build_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
     for (i, m) in modifies.iter().enumerate() {
         match m {
             Modify::Put(cf, key, val) => {

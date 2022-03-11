@@ -3,7 +3,6 @@
 use bytes::Bytes;
 use dashmap::DashMap;
 use fslock;
-use kvenginepb::SplitStage::PreSplit;
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::collections::{HashMap, HashSet};
@@ -17,7 +16,6 @@ use std::thread;
 use tikv_util::mpsc;
 
 use crate::meta::ShardMeta;
-use crate::table::memtable;
 use crate::table::sstable::{BlockCacheKey, L0Table, SSTable};
 use crate::*;
 
@@ -117,6 +115,8 @@ impl Engine {
                     recoverer.recover(&self, &parent_shard, parent)?;
                 }
             }
+        }
+        for meta in metas.values() {
             let shard = self.load_shard(meta)?;
             recoverer.recover(&self, &shard, meta)?;
         }
@@ -139,7 +139,7 @@ impl EngineCore {
     fn read_meta(&self, meta_iter: impl MetaIterator) -> Result<HashMap<u64, ShardMeta>> {
         let mut metas = HashMap::new();
         meta_iter.iterate(|cs| {
-            let meta = ShardMeta::new(cs);
+            let meta = ShardMeta::new(&cs);
             metas.insert(meta.id, meta);
         })?;
         Ok(metas)
@@ -212,46 +212,70 @@ impl EngineCore {
     }
 
     pub fn trigger_flush(&self, shard: &Arc<Shard>) {
-        let mem_tbls = shard.get_mem_tbls();
-        if mem_tbls.tbls.len() == 1 && mem_tbls.tbls[0].is_empty() && !shard.get_initial_flushed() {
-            let mem_tbl = memtable::CFTable::new();
-            mem_tbl.set_version(shard.load_mem_table_version());
-            let task = FlushTask {
-                shard_id: shard.id,
-                shard_ver: shard.ver,
-                split_keys: vec![],
-                next_mem_tbl_size: 0,
-                mem_tbl,
-            };
-            self.flush_tx.send(task).unwrap();
+        if !shard.get_initial_flushed() {
+            self.trigger_initial_flush(shard);
             return;
         }
+        let mem_tbls = shard.get_mem_tbls();
         for i in (1..mem_tbls.tbls.len()).rev() {
             let mem_tbl = &mem_tbls.tbls.as_slice()[i];
-            if mem_tbl.is_applying() {
-                continue;
-            }
-            let mut split_keys = vec![];
-            if mem_tbl.get_split_stage() == PreSplit {
-                split_keys = shard.get_split_keys();
-            }
             info!(
-                "shard {}:{} trigger flush mem-table ts {}, size {}",
+                "shard {}:{} trigger flush mem-table ts {}, size {}, idx: {}",
                 shard.id,
                 shard.ver,
                 mem_tbl.get_version(),
-                mem_tbl.size()
+                mem_tbl.size(),
+                i,
             );
             self.flush_tx
                 .send(FlushTask {
                     shard_id: shard.id,
                     shard_ver: shard.ver,
-                    split_keys,
-                    mem_tbl: mem_tbl.clone(),
-                    next_mem_tbl_size: 0,
+                    start: shard.start.to_vec(),
+                    end: shard.end.to_vec(),
+                    normal: Some(NormalFlush {
+                        mem_tbl: mem_tbl.clone(),
+                        next_mem_tbl_size: 0,
+                    }),
+                    initial: None
                 })
                 .unwrap();
         }
+    }
+
+    fn trigger_initial_flush(&self, shard: &Arc<Shard>) {
+        let guard = shard.parent_snap.read().unwrap();
+        let parent_snap = guard.as_ref().unwrap().clone();
+        let mut mem_tbls = vec![];
+        for mem_tbl in &shard.get_mem_tbls().tbls.as_slice()[1..] {
+            debug!("trigger initial flush check mem table version {}, size {}, parent base {} parent write {}",
+                mem_tbl.get_version(),
+                mem_tbl.size(),
+                parent_snap.base_version,
+                parent_snap.data_sequence,
+            );
+            if mem_tbl.get_version() > parent_snap.base_version + parent_snap.data_sequence {
+                if mem_tbl.has_data_in_range(&shard.start, &shard.end) {
+                    mem_tbls.push(mem_tbl.clone());
+                }
+            }
+        }
+        self.flush_tx
+            .send(FlushTask {
+                shard_id: shard.id,
+                shard_ver: shard.ver,
+                start: shard.start.to_vec(),
+                end: shard.end.to_vec(),
+                normal: None,
+                initial: Some(InitialFlush{
+                    parent_snap,
+                    mem_tbls,
+                    base_version: shard.base_version,
+                    // A newly split shard's meta_sequence is an in-mem state until initial flush.
+                    data_sequence: shard.get_meta_sequence(),
+                })
+            })
+            .unwrap();
     }
 }
 

@@ -6,6 +6,7 @@ mod forward;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use rfstore::WRITE_CF;
 use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
@@ -382,7 +383,7 @@ pub fn has_data_in_range<S: Snapshot>(
     if let Some(snap) = snapshot.get_kvengine_snap() {
         let raw_left = left.to_raw().unwrap();
         let raw_right = right.to_raw().unwrap();
-        let mut iter = snap.new_data_iterator(false, u64::MAX, false);
+        let mut iter = snap.new_iterator(WRITE_CF, false, false, Some(u64::MAX));
         iter.seek(&raw_left);
         return Ok(iter.valid() && iter.key() < raw_right.as_slice());
     }

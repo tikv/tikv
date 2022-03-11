@@ -6,12 +6,12 @@ use crate::{
     table::sstable::{self, SSTable},
 };
 use kvenginepb as pb;
-use protobuf::ProtobufEnum;
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::iter::Iterator as StdIterator;
 
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {
-        debug!("apply change set {:?}", &cs);
+        info!("{}:{} apply change set {:?}", cs.shard_id, cs.shard_ver, &cs);
         self.pre_load_files(&cs)?;
         let shard = self.get_shard(cs.shard_id);
         if shard.is_none() {
@@ -39,10 +39,11 @@ impl Engine {
             if result.is_err() {
                 return result;
             }
-        } else if cs.has_split_files() {
-            self.apply_split_files(&shard, cs)?
+        } else if cs.has_initial_flush() {
+            self.apply_initial_flush(&shard, cs)?;
         }
         shard.refresh_estimated_size();
+        shard.refresh_compaction_priority();
         Ok(())
     }
 
@@ -55,8 +56,28 @@ impl Engine {
             shard.atomic_add_l0_table(l0_tbl);
             shard.atomic_remove_mem_table();
         }
-        if shard.get_split_stage().value() < cs.stage.value() {
-            shard.set_split_stage(cs.stage);
+        if flush.is_initial_flush {
+            store_bool(&shard.initial_flushed, true);
+        }
+        Ok(())
+    }
+
+    pub fn apply_initial_flush(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
+        let initial_flush = cs.get_initial_flush();
+        let (l0s, mut scfs) = self.create_snapshot_tables(shard.id, shard.ver, initial_flush)?;
+        // sync the files from bottom to top.
+        for (cf, scf) in scfs.drain(..).enumerate() {
+            shard.set_cf(cf, scf);
+        }
+        let mut guard = shard.l0_tbls.write().unwrap();
+        *guard = l0s;
+        drop(guard);
+        while let Some(last_read_only) = shard.get_last_read_only_mem_table() {
+            if last_read_only.get_version() <= initial_flush.base_version + initial_flush.data_sequence {
+                shard.atomic_remove_mem_table();
+            } else {
+                break;
+            }
         }
         store_bool(&shard.initial_flushed, true);
         Ok(())
@@ -64,13 +85,14 @@ impl Engine {
 
     fn apply_compaction(&self, shard: &Shard, mut cs: pb::ChangeSet) -> Result<()> {
         let comp = cs.take_compaction();
-        let mut del_files = HashSet::new();
+        let mut del_files = HashMap::new();
         if comp.conflicted {
             if is_move_down(&comp) {
                 return Ok(());
             }
             for create in comp.get_table_creates() {
-                del_files.insert(create.id);
+                let cover = shard.cover_full_table(&create.smallest, &create.biggest);
+                del_files.insert(create.id, cover);
             }
             self.remove_dfs_files(shard, del_files);
             return Ok(());
@@ -80,7 +102,7 @@ impl Engine {
             for tbl in l0_tbls.tbls.as_ref() {
                 let id = tbl.id();
                 if comp.top_deletes.contains(&id) {
-                    del_files.insert(id);
+                    del_files.insert(id, shard.cover_full_table(tbl.smallest(), tbl.biggest()));
                 }
             }
             for cf in 0..NUM_CFS {
@@ -121,17 +143,17 @@ impl Engine {
         Ok(())
     }
 
-    fn remove_dfs_files(&self, shard: &Shard, del_files: HashSet<u64>) {
+    fn remove_dfs_files(&self, shard: &Shard, del_files: HashMap<u64, bool>) {
         let fs = self.fs.clone();
         let opts = dfs::Options::new(shard.id, shard.ver);
         let runtime = fs.get_runtime();
-        for id in del_files {
-            let fs_n = fs.clone();
-            runtime.spawn(async move {
-                if let Err(err) = fs_n.remove(id, opts).await {
-                    warn!("failed to remove dfs file {} err:{:?}", id, err)
-                }
-            });
+        for (id, cover) in del_files {
+            if cover {
+                let fs_n = fs.clone();
+                runtime.spawn(async move {
+                    fs_n.remove(id, opts).await
+                });
+            }
         }
     }
 
@@ -142,7 +164,7 @@ impl Engine {
         level: u32,
         creates: &[pb::TableCreate],
         del_ids: &[u64],
-        del_files: &mut HashSet<u64>,
+        del_files: &mut HashMap<u64, bool>,
     ) -> Result<()> {
         let opts = dfs::Options::new(shard.id, shard.ver);
         let old_scf = shard.get_cf(cf);
@@ -170,7 +192,7 @@ impl Engine {
         for old_tbl in old_level.tables.iter() {
             let id = old_tbl.id();
             if del_ids.contains(&id) {
-                del_files.insert(id);
+                del_files.insert(id, shard.cover_full_table(old_tbl.smallest(), old_tbl.biggest()));
                 need_update = true;
             } else {
                 new_level.total_size += old_tbl.size();
@@ -206,71 +228,6 @@ impl Engine {
         Ok(())
     }
 
-    fn apply_split_files(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
-        if shard.get_split_stage() != pb::SplitStage::PreSplit {
-            error!(
-                "wrong split stage for apply split files {:?}",
-                shard.get_split_stage()
-            );
-            return Err(Error::WrongSplitStage(shard.get_split_stage().value()));
-        }
-        let split_files = cs.get_split_files();
-        let old_l0s = shard.get_l0_tbls();
-        let mut new_l0s = vec![];
-        let fs_opts = dfs::Options::new(shard.id, shard.ver);
-        for l0 in split_files.get_l0_creates() {
-            let file = self.fs.open(l0.id, fs_opts)?;
-            let l0 = sstable::L0Table::new(file, Some(self.cache.clone()))?;
-            new_l0s.push(l0);
-        }
-        let mut remove_files = vec![];
-        for old_l0 in old_l0s.tbls.as_ref() {
-            if split_files.table_deletes.contains(&old_l0.id()) {
-                remove_files.push(old_l0.id());
-            } else {
-                new_l0s.push(old_l0.clone());
-            }
-        }
-        new_l0s.sort_by(|a, b| b.version().cmp(&a.version()));
-        *shard.l0_tbls.write().unwrap() = L0Tables::new(new_l0s);
-        let mut scf_builders: Vec<ShardCFBuilder> = Vec::new();
-        for cf in 0..NUM_CFS {
-            let scf_builder = ShardCFBuilder::new(cf);
-            scf_builders.push(scf_builder);
-        }
-        for tbl in split_files.get_table_creates() {
-            let cf = tbl.cf as usize;
-            let scf_builder = &mut scf_builders[cf];
-            let level = tbl.level as usize;
-            let file = self.fs.open(tbl.id, fs_opts)?;
-            let table = sstable::SSTable::new(file, Some(self.cache.clone()))?;
-            scf_builder.add_table(table, level);
-        }
-        for cf in 0..NUM_CFS {
-            let scf_builder = &mut scf_builders[cf];
-            let old_cf = shard.get_cf(cf);
-            for level in 1..=CF_LEVELS[cf] {
-                let old_handler = &old_cf.levels[level - 1];
-                for old_tbl in old_handler.tables.iter() {
-                    if split_files.table_deletes.contains(&old_tbl.id()) {
-                        remove_files.push(old_l0.id());
-                    } else {
-                        scf_builder.add_table(old_tbl.clone(), level);
-                    }
-                }
-            }
-            shard.set_cf(cf, scf_builder.build());
-        }
-        for remove_file in remove_files {
-            let fs = self.fs.clone();
-            self.fs.get_runtime().spawn(async move {
-                fs.remove(remove_file, fs_opts).await;
-            })
-        }
-        shard.set_split_stage(cs.get_stage());
-        Ok(())
-    }
-
     pub fn pre_load_files(&self, cs: &pb::ChangeSet) -> Result<()> {
         let mut ids = vec![];
         if cs.has_flush() {
@@ -287,25 +244,22 @@ impl Engine {
                 }
             }
         }
-        if cs.has_split_files() {
-            let split_files = cs.get_split_files();
-            for l0 in split_files.get_l0_creates() {
-                ids.push(l0.id);
-            }
-            for ln in split_files.get_table_creates() {
-                ids.push(ln.id);
-            }
-        }
         if cs.has_snapshot() {
-            let snap = cs.get_snapshot();
-            for l0 in snap.get_l0_creates() {
-                ids.push(l0.id);
-            }
-            for ln in snap.get_table_creates() {
-                ids.push(ln.id);
-            }
+            self.collect_snap_ids(cs.get_snapshot(), &mut ids);
+        }
+        if cs.has_initial_flush() {
+            self.collect_snap_ids(cs.get_initial_flush(), &mut ids);
         }
         pre_load_files_by_ids(self.fs.clone(), cs.shard_id, cs.shard_ver, ids)
+    }
+
+    pub fn collect_snap_ids(&self, snap: &pb::Snapshot, ids: &mut Vec<u64>) {
+        for l0 in snap.get_l0_creates() {
+            ids.push(l0.id);
+        }
+        for ln in snap.get_table_creates() {
+            ids.push(ln.id);
+        }
     }
 }
 

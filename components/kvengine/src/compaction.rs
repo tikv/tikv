@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::iter::Iterator as StdIterator;
 use std::sync::atomic::AtomicU64;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
@@ -85,6 +86,8 @@ pub struct CompactionRequest {
 
     pub shard_id: u64,
     pub shard_ver: u64,
+    pub start: Vec<u8>,
+    pub end: Vec<u8>,
 
     // Used for L1+ compaction.
     pub bottoms: Vec<u64>,
@@ -127,6 +130,8 @@ pub struct CompactDef {
     bot_left_idx: usize,
     bot_right_idx: usize,
 }
+
+const MAX_COMPACTION_EXPAND_SIZE: u64 = 256 * 1024 * 1024;
 
 impl CompactDef {
     pub(crate) fn new(cf: usize, level: usize) -> Self {
@@ -211,7 +216,7 @@ impl CompactDef {
             let new_bot_size =
                 Self::sume_tbl_size(&next[self.bot_right_idx..right]) + self.bot_size;
             let new_ratio = Self::calc_ratio(new_top_size, new_bot_size);
-            if new_ratio > candidate_ratio {
+            if new_ratio > candidate_ratio && (new_top_size + new_bot_size) < MAX_COMPACTION_EXPAND_SIZE {
                 self.top_right_idx += 1;
                 self.bot_right_idx = right;
                 self.top_size = new_top_size;
@@ -306,8 +311,7 @@ impl Engine {
         for entry in self.shards.iter() {
             let shard = entry.value().clone();
             if shard.is_active() && !load_bool(&shard.compacting) {
-                let pri = self.get_compaction_priority(&shard);
-                if pri.score > 1.0 {
+                if let Some(pri) = shard.get_compaction_priority() {
                     results.push(pri);
                 }
             }
@@ -315,37 +319,8 @@ impl Engine {
         results.sort_by(|i, j| i.score.partial_cmp(&j.score).unwrap().reverse());
     }
 
-    fn get_compaction_priority(&self, shard: &Shard) -> CompactionPriority {
-        let mut max_pri = CompactionPriority::default();
-        max_pri.shard_id = shard.id;
-        max_pri.shard_ver = shard.ver;
-        let l0s = shard.get_l0_tbls();
-        let size_score = l0s.total_size() as f64 / self.opts.base_size as f64;
-        let num_tbl_score = l0s.tbls.len() as f64 / 5.0;
-        max_pri.score = size_score * 0.7 + num_tbl_score * 0.3;
-        max_pri.cf = -1;
-
-        for cf in 0..NUM_CFS {
-            let scf = shard.get_cf(cf);
-            for lh in &scf.levels[..scf.levels.len() - 1] {
-                let score = lh.total_size as f64
-                    / ((self.opts.base_size as f64) * 10f64.powf((lh.level - 1) as f64));
-                if max_pri.score < score {
-                    max_pri.score = score;
-                    max_pri.level = lh.level;
-                    max_pri.cf = cf as isize;
-                }
-            }
-        }
-        max_pri
-    }
-
     pub(crate) fn compact(&self, pri: &CompactionPriority) -> Result<()> {
         let shard = self.get_shard_with_ver(pri.shard_id, pri.shard_ver)?;
-        if shard.is_splitting() {
-            info!("avoid compaction for splitting shard");
-            return Ok(());
-        }
         if !shard.is_active() {
             info!("avoid passive shard compaction");
             return Ok(());
@@ -452,6 +427,8 @@ impl Engine {
         CompactionRequest {
             shard_id: shard.id,
             shard_ver: shard.ver,
+            start: shard.start.to_vec(),
+            end: shard.end.to_vec(),
             cf,
             level,
             safe_ts: load_u64(&self.managed_safe_ts),
@@ -483,7 +460,7 @@ impl Engine {
     }
 
     pub(crate) fn handle_compact_response(&self, comp: pb::Compaction, shard: &Shard) {
-        let mut cs = new_change_set(shard.id, shard.ver, shard.get_split_stage());
+        let mut cs = new_change_set(shard.id, shard.ver);
         cs.set_compaction(comp);
         self.meta_change_listener.on_change_set(cs);
     }
@@ -557,6 +534,7 @@ pub(crate) fn compact_l0(
             cf,
             l0_tbls.clone(),
             std::mem::take(&mut mult_cf_bot_tbls[cf]),
+            &req.start,
         );
         let mut helper = CompactL0Helper::new(cf, req);
         loop {
@@ -650,6 +628,7 @@ fn build_compact_l0_iterator(
     cf: usize,
     top_tbls: Vec<sstable::L0Table>,
     bot_tbls: Vec<sstable::SSTable>,
+    start: &[u8],
 ) -> Box<dyn table::Iterator> {
     let mut iters: Vec<Box<dyn table::Iterator>> = vec![];
     for top_tbl in top_tbls {
@@ -663,7 +642,7 @@ fn build_compact_l0_iterator(
         iters.push(Box::new(iter));
     }
     let mut iter = table::new_merge_iterator(iters, false);
-    iter.rewind();
+    iter.seek(start);
     iter
 }
 
@@ -674,6 +653,7 @@ struct CompactL0Helper {
     skip_key: BytesMut,
     safe_ts: u64,
     opts: sstable::TableBuilderOptions,
+    end: Vec<u8>,
 }
 
 impl CompactL0Helper {
@@ -685,6 +665,7 @@ impl CompactL0Helper {
             skip_key: BytesMut::new(),
             safe_ts: req.safe_ts,
             opts: req.get_table_builder_options(),
+            end: req.end.clone(),
         }
     }
 
@@ -711,6 +692,9 @@ impl CompactL0Helper {
             if key != self.last_key {
                 // We only break on table size.
                 if self.builder.estimated_size() > self.opts.max_table_size {
+                    break;
+                }
+                if key >= self.end.as_slice() {
                     break;
                 }
                 self.last_key.truncate(0);
@@ -763,6 +747,7 @@ pub(crate) fn compact_tables(
     req: &CompactionRequest,
     fs: Arc<dyn dfs::DFS>,
 ) -> Result<Vec<pb::TableCreate>> {
+    info!("compact req tops {:?}, bots {:?}", &req.tops, &req.bottoms);
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
     let mut top_tables = in_mem_files_to_tables(&top_files);
@@ -773,7 +758,7 @@ pub(crate) fn compact_tables(
     let top_iter = Box::new(ConcatIterator::new_with_tables(top_tables, false));
     let bot_iter = Box::new(ConcatIterator::new_with_tables(bot_tables, false));
     let mut iter = table::new_merge_iterator(vec![top_iter, bot_iter], false);
-    iter.rewind();
+    iter.seek(&req.start);
 
     let mut last_key = BytesMut::new();
     let mut skip_key = BytesMut::new();
@@ -799,6 +784,9 @@ pub(crate) fn compact_tables(
             }
             if key != last_key {
                 if last_key.len() > 0 && builder.estimated_size() + kv_size > req.max_table_size {
+                    break;
+                }
+                if key > req.end.as_slice() {
                     break;
                 }
                 last_key.truncate(0);

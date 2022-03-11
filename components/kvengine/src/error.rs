@@ -14,8 +14,6 @@ pub enum Error {
     ShardNotMatch,
     #[error("already splitting")]
     AlreadySplitting,
-    #[error("wrong split stage {0}")]
-    WrongSplitStage(i32),
     #[error("alloc id error {0}")]
     ErrAllocID(String),
     #[error("open error {0}")]
@@ -28,6 +26,8 @@ pub enum Error {
     Io(std::io::Error),
     #[error("remote compaction {0}")]
     RemoteCompaction(String),
+    #[error("apply change set {0}")]
+    ApplyChangeSet(String),
 }
 
 impl From<table::Error> for Error {

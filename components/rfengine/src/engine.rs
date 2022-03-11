@@ -6,7 +6,9 @@ use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
+use slog_global::info;
 use std::collections::hash_map::Entry;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -344,6 +346,43 @@ impl RFEngine {
             h.join().unwrap();
         }
     }
+
+    /// After split and before the new region is initially flushed, the old region's raft log
+    /// can not be truncated, otherwise, it would not be able to recover the new region.
+    /// So we can call add_dependent after split to protect the raft log.
+    /// After the new region is initially flushed or re-ingested or destroyed, call
+    /// remove_dependent to resume truncate the raft log.
+    pub fn add_dependent(&self, region_id: u64, dependent_id: u64) {
+        let map_ref = self.regions.get(&region_id);
+        if map_ref.is_none() {
+            return;
+        }
+        let map_ref = map_ref.unwrap();
+        let mut region_data = map_ref.write().unwrap();
+        region_data.dependents.insert(dependent_id);
+        let dependents_len = region_data.dependents.len();
+        drop(region_data);
+        info!(
+            "region {} add dependent {}, dependents_len {}",
+            region_id, dependent_id, dependents_len
+        );
+    }
+
+    pub fn remove_dependent(&self, region_id: u64, dependent_id: u64) {
+        let map_ref = self.regions.get(&region_id);
+        if map_ref.is_none() {
+            return;
+        }
+        let map_ref = map_ref.unwrap();
+        let mut region_data = map_ref.write().unwrap();
+        region_data.dependents.remove(&dependent_id);
+        let dependents_len = region_data.dependents.len();
+        drop(region_data);
+        info!(
+            "region {} remove dependent {}, dependents_len {}",
+            region_id, dependent_id, dependents_len
+        );
+    }
 }
 
 pub(crate) fn maybe_create_dir(dir: &Path) -> Result<()> {
@@ -363,6 +402,7 @@ pub(crate) struct RegionData {
     pub(crate) truncated_idx: u64,
     pub(crate) raft_logs: VecDeque<RaftLogOp>,
     pub(crate) states: BTreeMap<Bytes, Bytes>,
+    pub(crate) dependents: HashSet<u64>,
 }
 
 impl RegionData {
@@ -554,7 +594,9 @@ impl RegionData {
     }
 
     pub(crate) fn need_truncate(&self) -> bool {
-        self.range.start_index > 0 && self.truncated_idx > self.range.start_index
+        self.dependents.is_empty()
+            && self.range.start_index > 0
+            && self.truncated_idx > self.range.start_index
     }
 }
 

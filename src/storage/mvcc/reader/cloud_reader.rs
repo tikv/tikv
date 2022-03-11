@@ -3,6 +3,7 @@
 use crate::storage::mvcc::{Result, TxnCommitRecord};
 use rfstore::{UserMeta, EXTRA_CF, LOCK_CF, WRITE_CF};
 use std::sync::Arc;
+use bytes::Bytes;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub struct CloudReader {
@@ -47,7 +48,7 @@ impl CloudReader {
                 return Ok(record);
             }
         }
-        let mut data_iter = self.snapshot.new_iterator(WRITE_CF, false, true);
+        let mut data_iter = self.snapshot.new_iterator(WRITE_CF, false, true, None);
         data_iter.seek(&raw_key);
         while data_iter.valid() {
             let key = data_iter.key();
@@ -180,12 +181,18 @@ impl CloudReader {
         F: Fn(&Lock) -> bool,
     {
         let mut locks = vec![];
-        let mut lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
+        let mut lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false, None);
+        let bound = if let Some(k) = end {
+            Bytes::from(k.to_raw().unwrap())
+        } else {
+            self.snapshot.clone_end_key()
+        };
+        lock_iter.set_bound(bound, false);
         if let Some(start) = start {
             let raw_start = start.to_raw()?;
             lock_iter.seek(&raw_start);
         } else {
-            lock_iter.rewind();
+            lock_iter.seek(self.snapshot.get_start_key());
         }
         self.statistics.lock.seek += 1;
         while lock_iter.valid() {

@@ -10,7 +10,7 @@ use kvengine::{Engine, Shard, ShardMeta};
 use kvenginepb::ChangeSet;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::{metapb, raft_serverpb};
-use protobuf::{Message, ProtobufEnum};
+use protobuf::Message;
 use raft_proto::eraftpb;
 use slog_global::info;
 use std::sync::Arc;
@@ -111,7 +111,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
             "recover region:{}, ver:{} from index {}",
             shard.id, shard.ver, applied_index
         );
-        let mut ctx = ApplyContext::new(engine.clone(), None, None, None);
+        let mut ctx = ApplyContext::new(engine.clone(), None, None);
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
         let (region_meta, commit_idx) = self.load_region_meta(shard.id, shard.ver)?;
@@ -147,19 +147,9 @@ impl kvengine::RecoverHandler for RecoverHandler {
                     if rlog::is_engine_meta_log(custom.data.chunk()) {
                         let mut cs = custom.get_change_set().unwrap();
                         cs.sequence = e.get_index();
-                        let mut rejected = false;
-                        if meta.split_stage.value() >= kvenginepb::SplitStage::PreSplit.value()
-                            && cs.has_compaction()
-                        {
-                            let comp = cs.mut_compaction();
-                            comp.conflicted = true;
-                            rejected = true;
-                        }
-                        if rejected || !meta.is_duplicated_change_set(&mut cs) {
+                        if !meta.is_duplicated_change_set(&mut cs) {
                             // We don't have a background region worker now, should do it synchronously.
-                            if !rejected {
-                                engine.pre_load_files(&cs)?;
-                            }
+                            engine.pre_load_files(&cs)?;
                             engine.apply_change_set(cs)?;
                         }
                     } else {

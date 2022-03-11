@@ -1,13 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use protobuf::ProtobufEnum;
 use std::ops::Deref;
-use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::{Arena, SkipList};
-use crate::NUM_CFS;
+use crate::{Iterator, NUM_CFS};
 
 #[derive(Clone)]
 pub struct CFTable {
@@ -28,6 +26,24 @@ impl CFTable {
             core: Arc::new(CFTableCore::new()),
         }
     }
+
+    pub fn new_split(&self) -> Self {
+        if self.is_empty() {
+            return Self::new();
+        }
+        let tbls = self.core.tbls.clone();
+        let arena = self.core.arena.clone();
+        let ver = AtomicU64::new(self.ver.load(Ordering::Acquire));
+        let props = Mutex::new(self.core.props.lock().unwrap().clone());
+        Self {
+            core: Arc::new(CFTableCore {
+                tbls,
+                arena,
+                ver,
+                props,
+            })
+        }
+    }
 }
 
 pub struct CFTableCore {
@@ -35,8 +51,6 @@ pub struct CFTableCore {
     arena: Arc<Arena>,
     ver: AtomicU64,
     props: Mutex<Option<kvenginepb::Properties>>,
-    applying: AtomicBool,
-    stage: AtomicI32,
 }
 
 impl CFTableCore {
@@ -51,8 +65,6 @@ impl CFTableCore {
             arena,
             ver: AtomicU64::new(0),
             props: Mutex::new(None),
-            applying: AtomicBool::new(false),
-            stage: AtomicI32::new(kvenginepb::SplitStage::Initial.value()),
         }
     }
 
@@ -89,19 +101,15 @@ impl CFTableCore {
         return self.ver.load(Ordering::Acquire);
     }
 
-    pub fn set_applying(&self) {
-        self.applying.store(true, Release);
-    }
-
-    pub fn is_applying(&self) -> bool {
-        self.applying.load(Acquire)
-    }
-
-    pub fn set_split_stage(&self, stage: kvenginepb::SplitStage) {
-        self.stage.store(stage.value(), Release);
-    }
-
-    pub fn get_split_stage(&self) -> kvenginepb::SplitStage {
-        kvenginepb::SplitStage::from_i32(self.stage.load(Acquire)).unwrap()
+    pub fn has_data_in_range(&self, start: &[u8], end: &[u8]) -> bool {
+        for cf in 0..NUM_CFS {
+            let tbl = &self.tbls[cf];
+            let mut iter = tbl.new_iterator(false);
+            iter.seek(start);
+            if iter.valid() && iter.key() < end {
+                return true;
+            }
+        }
+        false
     }
 }

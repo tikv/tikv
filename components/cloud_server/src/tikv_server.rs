@@ -76,6 +76,7 @@ pub fn run_tikv(config: TiKvConfig) {
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
     initial_logger(&config);
+    tracing::log::set_max_level(tracing::log::LevelFilter::Warn);
 
     // Print version information.
     let build_timestamp = option_env!("TIKV_BUILD_TIME");

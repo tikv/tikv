@@ -36,7 +36,6 @@ impl Item<'_> {
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct AccessPath {
-    pub splitting: u8,
     pub mem_table: u8,
     pub l0: u8,
     pub ln: u8,
@@ -46,7 +45,6 @@ pub struct SnapAccess {
     shard: Arc<Shard>,
     managed_ts: u64,
     write_sequence: u64,
-    splitting: Option<Arc<SplitContext>>,
     mem_tbls: MemTables,
     l0_tbls: L0Tables,
 
@@ -57,11 +55,10 @@ impl Debug for SnapAccess {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "snap access {}:{}, seq: {}, splitting: {}",
+            "snap access {}:{}, seq: {}",
             self.shard.id,
             self.shard.ver,
             self.write_sequence,
-            self.splitting.is_some(),
         )
     }
 }
@@ -69,10 +66,6 @@ impl Debug for SnapAccess {
 impl SnapAccess {
     pub fn new(shard: &Arc<Shard>) -> Self {
         let shard = shard.clone();
-        let mut splitting = None;
-        if shard.is_splitting() {
-            splitting = Some(shard.get_split_ctx());
-        }
         let mem_tbls = shard.get_mem_tbls();
         let l0_tbls = shard.get_l0_tbls();
         let mut scfs = Vec::with_capacity(NUM_CFS);
@@ -87,18 +80,20 @@ impl SnapAccess {
             managed_ts: 0,
             mem_tbls,
             l0_tbls,
-            splitting,
             scfs,
         }
     }
 
-    pub fn new_iterator(&self, cf: usize, reversed: bool, all_versions: bool) -> Iterator {
-        let read_ts: u64;
-        if CF_MANAGED[cf] && self.managed_ts != 0 {
-            read_ts = self.managed_ts;
+    pub fn new_iterator(&self, cf: usize, reversed: bool, all_versions: bool, read_ts: Option<u64>) -> Iterator {
+        let read_ts= if let Some(ts) = read_ts {
+            ts
         } else {
-            read_ts = u64::MAX;
-        }
+            if CF_MANAGED[cf] && self.managed_ts != 0 {
+                self.managed_ts
+            } else {
+                u64::MAX
+            }
+        };
         Iterator {
             all_versions,
             reversed,
@@ -106,19 +101,10 @@ impl SnapAccess {
             key: BytesMut::new(),
             val: table::Value::new(),
             inner: self.new_table_iterator(cf, reversed),
+            start: self.clone_start_key(),
+            end: self.clone_end_key(),
             bound: None,
-        }
-    }
-
-    pub fn new_data_iterator(&self, reversed: bool, read_ts: u64, all_versions: bool) -> Iterator {
-        Iterator {
-            all_versions,
-            reversed,
-            read_ts,
-            key: BytesMut::new(),
-            val: table::Value::new(),
-            inner: self.new_table_iterator(0, reversed),
-            bound: None,
+            bound_include: false,
         }
     }
 
@@ -142,14 +128,6 @@ impl SnapAccess {
         path: &mut AccessPath,
     ) -> table::Value {
         let key_hash = farmhash::fingerprint64(key);
-        if let Some(split_ctx) = self.splitting.clone() {
-            let tbl = split_ctx.get_spliting_table(key);
-            let v = tbl.get_cf(cf).get(key, version);
-            path.splitting += 1;
-            if v.is_valid() {
-                return v;
-            }
-        }
         for i in 0..self.mem_tbls.tbls.len() {
             let tbl = self.mem_tbls.tbls[i].get_cf(cf);
             let v = tbl.get(key, version);
@@ -193,11 +171,6 @@ impl SnapAccess {
 
     fn new_table_iterator(&self, cf: usize, reversed: bool) -> Box<dyn table::Iterator> {
         let mut iters: Vec<Box<dyn table::Iterator>> = Vec::new();
-        if let Some(split_ctx) = &self.splitting {
-            for tbl in &split_ctx.mem_tbls {
-                iters.push(Box::new(tbl.get_cf(cf).new_iterator(reversed)));
-            }
-        }
         for mem_tbl in self.mem_tbls.tbls.as_ref() {
             iters.push(Box::new(mem_tbl.get_cf(cf).new_iterator(reversed)));
         }
@@ -232,8 +205,16 @@ impl SnapAccess {
         self.shard.start.chunk()
     }
 
+    pub fn clone_start_key(&self) -> Bytes {
+        self.shard.start.clone()
+    }
+
     pub fn get_end_key(&self) -> &[u8] {
         self.shard.end.chunk()
+    }
+
+    pub fn clone_end_key(&self) -> Bytes {
+        self.shard.end.clone()
     }
 
     pub fn get_id(&self) -> u64 {
@@ -260,7 +241,10 @@ pub struct Iterator {
     pub key: BytesMut,
     val: table::Value,
     pub inner: Box<dyn table::Iterator>,
+    start: Bytes,
+    end: Bytes,
     pub bound: Option<Bytes>,
+    pub bound_include: bool,
 }
 
 impl Iterator {
@@ -301,16 +285,8 @@ impl Iterator {
 
     fn parse_item(&mut self) {
         while self.inner.valid() {
-            if let Some(bound) = &self.bound {
-                if self.reversed {
-                    if self.key.chunk() < bound.chunk() {
-                        break;
-                    }
-                } else {
-                    if self.key.chunk() >= bound.chunk() {
-                        break;
-                    }
-                }
+            if self.is_inner_key_over_bound() {
+                break;
             }
             let val = self.inner.value();
             if val.version > self.read_ts {
@@ -350,6 +326,20 @@ impl Iterator {
     // whether the cursor started with a seek().
     pub fn rewind(&mut self) {
         self.inner.rewind();
+        if self.inner.valid() {
+            if self.reversed {
+                if self.inner.key() >= self.end.chunk() {
+                    self.inner.seek(self.end.chunk());
+                    if self.inner.key() == self.end.chunk() {
+                        self.inner.next();
+                    }
+                }
+            } else {
+                if self.inner.key() < self.start.chunk() {
+                    self.inner.seek(self.start.chunk())
+                }
+            }
+        }
         self.parse_item();
     }
 
@@ -361,7 +351,32 @@ impl Iterator {
         return self.reversed;
     }
 
-    pub fn set_bound(&mut self, bound: Bytes) {
-        self.bound = Some(bound)
+    pub fn set_bound(&mut self, bound: Bytes, bound_include: bool) {
+        self.bound = Some(bound);
+        self.bound_include = bound_include;
+    }
+
+    pub fn is_inner_key_over_bound(&self) -> bool {
+        if let Some(bound) = &self.bound {
+            if self.reversed {
+                if self.bound_include {
+                    self.inner.key() < bound.chunk()
+                } else {
+                    self.inner.key() <= bound.chunk()
+                }
+            } else {
+                if self.bound_include {
+                    self.inner.key() > bound.chunk()
+                } else {
+                    self.inner.key() >= bound.chunk()
+                }
+            }
+        } else {
+            if self.reversed {
+                self.inner.key() < self.start.chunk()
+            } else {
+                self.inner.key() >= self.end.chunk()
+            }
+        }
     }
 }

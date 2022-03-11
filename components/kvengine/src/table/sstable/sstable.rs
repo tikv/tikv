@@ -443,7 +443,6 @@ pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<
 pub(crate) fn new_table_builder_for_test(id: u64) -> Builder {
     let opts = TableBuilderOptions {
         block_size: 4096,
-        bloom_fpr: 0.01,
         max_table_size: 32 * 1024,
     };
     Builder::new(id, opts)
@@ -467,6 +466,7 @@ pub(crate) fn test_key(prefix: &str, i: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::Iterator as StdIterator;
     use bytes::BytesMut;
     use rand::Rng;
 

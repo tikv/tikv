@@ -120,12 +120,6 @@ impl Engine {
         let shard = self.get_shard(wb.shard_id).unwrap();
         let version = shard.base_version + wb.sequence;
         self.update_write_batch_version(wb, version);
-        if shard.is_splitting() {
-            let split_ctx = shard.get_split_ctx();
-            self.write_splitting(wb, &shard, &split_ctx);
-            store_u64(&shard.write_sequence, wb.sequence);
-            return;
-        }
         let mem_tbl = shard.get_writable_mem_table();
         for cf in 0..NUM_CFS {
             mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf));
@@ -158,18 +152,6 @@ impl Engine {
         }
     }
 
-    fn write_splitting(&self, wb: &mut WriteBatch, shard: &Shard, split_ctx: &SplitContext) {
-        for cf in 0..NUM_CFS {
-            let cf_wb = wb.get_cf_mut(cf);
-            cf_wb.iterate(|entry, buf| {
-                split_ctx.write(cf, entry, buf);
-            });
-        }
-        for (key, val) in &wb.properties {
-            shard.properties.set(key.as_str(), val.chunk());
-        }
-    }
-
     pub(crate) fn schedule_flush_task(&self, shard: &Shard, mem_tbl: memtable::CFTable) {
         let mut guard = shard.last_switch_time.write().unwrap();
         let last_switch_instant = *guard;
@@ -185,16 +167,16 @@ impl Engine {
                 next_mem_tbl_size =
                     shard.next_mem_table_size(mem_tbl.size() as u64, last_switch_instant);
             }
-            let mut split_keys = vec![];
-            if mem_tbl.get_split_stage() == kvenginepb::SplitStage::PreSplit {
-                split_keys = shard.get_split_keys();
-            }
             let task = FlushTask {
                 shard_id: shard.id,
                 shard_ver: shard.ver,
-                split_keys,
-                next_mem_tbl_size,
-                mem_tbl,
+                start: shard.start.to_vec(),
+                end: shard.end.to_vec(),
+                normal: Some(NormalFlush {
+                    next_mem_tbl_size,
+                    mem_tbl,
+                }),
+                initial: None,
             };
             self.flush_tx.send(task).unwrap();
         }

@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{ByteOrder, LittleEndian};
-use bytes::{Buf, BufMut, Bytes};
+use bytes::BufMut;
 use kvproto::raft_cmdpb::{CustomRequest, RaftCmdRequest};
 use protobuf::Message;
 use std::mem;
@@ -23,10 +23,7 @@ pub const TYPE_ROLLBACK: CustomRaftlogType = 3;
 pub const TYPE_PESSIMISTIC_LOCK: CustomRaftlogType = 4;
 pub const TYPE_PESSIMISTIC_ROLLBACK: CustomRaftlogType = 5;
 pub const TYPE_ONE_PC: CustomRaftlogType = 6;
-pub const TYPE_PRE_SPLIT: CustomRaftlogType = 7;
-pub const TYPE_FLUSH: CustomRaftlogType = 8;
-pub const TYPE_COMPACTION: CustomRaftlogType = 9;
-pub const TYPE_SPLIT_FILES: CustomRaftlogType = 10;
+pub const TYPE_ENGINE_META: CustomRaftlogType = 10;
 pub const TYPE_NEX_MEM_TABLE_SIZE: CustomRaftlogType = 11;
 pub const TYPE_DELETE_RANGE: CustomRaftlogType = 12;
 
@@ -160,19 +157,6 @@ impl CustomRaftLog<'a> {
         let end_key = &self.data[i + start_key_len..];
         (start_key, end_key)
     }
-
-    pub(crate) fn get_split_keys(&self) -> Vec<Vec<u8>> {
-        let mut i = HEADER_SIZE;
-        let mut keys = vec![];
-        while i < self.data.len() {
-            let key_len = LittleEndian::read_u16(&self.data[i..]) as usize;
-            i += 2;
-            let key = &self.data[i..i + key_len];
-            i += key_len;
-            keys.push(key.to_vec());
-        }
-        keys
-    }
 }
 
 pub struct CustomBuilder {
@@ -239,28 +223,14 @@ impl CustomBuilder {
 
     pub fn set_change_set(&mut self, cs: kvenginepb::ChangeSet) {
         assert_eq!(self.buf.len(), HEADER_SIZE);
-        let mut tp: CustomRaftlogType = 0;
-        if cs.has_flush() {
-            tp = TYPE_FLUSH;
-        } else if cs.has_compaction() {
-            tp = TYPE_COMPACTION;
-        } else if cs.has_split_files() {
-            tp = TYPE_SPLIT_FILES;
-        } else if cs.get_next_mem_table_size() > 0 {
-            tp = TYPE_NEX_MEM_TABLE_SIZE;
-        }
-        assert_ne!(tp, 0);
+        let tp = if cs.get_next_mem_table_size() > 0 {
+            TYPE_NEX_MEM_TABLE_SIZE
+        } else {
+            TYPE_ENGINE_META
+        };
         let data = cs.write_to_bytes().unwrap();
         self.buf.extend_from_slice(&data);
         self.set_type(tp);
-    }
-
-    pub fn set_pre_split(&mut self, keys: &[Bytes]) {
-        for key in keys {
-            self.buf.put_u16_le(key.len() as u16);
-            self.buf.extend_from_slice(key.chunk());
-        }
-        self.set_type(TYPE_PRE_SPLIT)
     }
 
     pub fn set_type(&mut self, tp: CustomRaftlogType) {
@@ -284,10 +254,7 @@ impl CustomBuilder {
 }
 
 pub fn is_engine_meta_log(data: &[u8]) -> bool {
-    match data[0] as CustomRaftlogType {
-        TYPE_FLUSH | TYPE_COMPACTION | TYPE_SPLIT_FILES => true,
-        _ => false,
-    }
+    data[0] == TYPE_ENGINE_META
 }
 
 #[test]

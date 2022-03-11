@@ -36,7 +36,6 @@ struct Workers {
     pd_worker: LazyWorker<PdTask>,
     region_worker: Worker,
     region_apply_worker: Worker,
-    split_worker: LazyWorker<SplitTask>,
     coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -96,7 +95,6 @@ impl RaftBatchSystem {
             pd_worker,
             region_worker: Worker::new("region-worker"),
             region_apply_worker: Worker::new("region-apply-worker"),
-            split_worker: LazyWorker::new("split-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
 
@@ -111,16 +109,6 @@ impl RaftBatchSystem {
             .region_worker
             .start("snapshot-worker", region_runner);
         let pd_scheduler = workers.pd_worker.scheduler();
-        let split_scheduler = workers.split_worker.scheduler();
-        let split_remote = workers.split_worker.remote();
-        let split_runner = SplitRunner::new(
-            engines.kv.clone(),
-            self.router(),
-            split_scheduler.clone(),
-            pd_scheduler.clone(),
-            split_remote,
-        );
-        workers.split_worker.start(split_runner);
         let ctx = GlobalContext {
             cfg,
             engines,
@@ -129,7 +117,6 @@ impl RaftBatchSystem {
             router: self.router.clone(),
             trans,
             pd_scheduler,
-            split_scheduler,
             region_scheduler,
             coprocessor_host,
         };
@@ -204,7 +191,6 @@ impl RaftBatchSystem {
             let mut aw = ApplyWorker::new(
                 self.ctx.as_ref().unwrap().engines.kv.clone(),
                 self.ctx.as_ref().unwrap().region_scheduler.clone(),
-                self.ctx.as_ref().unwrap().split_scheduler.clone(),
                 self.router.clone(),
                 apply_receiver,
             );
@@ -280,7 +266,6 @@ impl RaftBatchSystem {
             let shard = ctx.engines.kv.get_shard(region.get_id()).unwrap();
             let peer_store = peer.peer.mut_store();
             peer_store.initial_flushed = shard.get_initial_flushed();
-            peer_store.split_stage = shard.get_split_stage();
             store_meta
                 .region_ranges
                 .insert(raw_end_key(region), region.get_id());
@@ -408,7 +393,6 @@ pub(crate) struct GlobalContext {
     pub(crate) trans: Box<dyn Transport>,
     pub(crate) pd_scheduler: Scheduler<PdTask>,
     pub(crate) region_scheduler: Scheduler<RegionTask>,
-    pub(crate) split_scheduler: Scheduler<SplitTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -420,11 +404,6 @@ pub(crate) struct RaftContext {
     pub(crate) current_time: Option<Timespec>,
     pub(crate) raft_metrics: RaftMetrics,
     pub(crate) cfg: Config,
-}
-
-pub(crate) struct PostPersistTask {
-    pub(crate) region_id: u64,
-    pub(crate) ready: raft::Ready,
 }
 
 impl RaftContext {

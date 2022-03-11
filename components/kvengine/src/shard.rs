@@ -3,12 +3,11 @@
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes};
 use dashmap::DashMap;
-use protobuf::ProtobufEnum;
 use std::iter::Iterator;
-use std::sync::{Mutex, RwLock};
+use std::sync::RwLock;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering::*, *},
+        atomic::{AtomicBool, AtomicU64, Ordering::*, *},
         Arc,
     },
     time::Instant,
@@ -42,53 +41,6 @@ impl MemTables {
     }
 }
 
-pub(crate) struct SplitContext {
-    pub(crate) split_keys: Vec<Bytes>,
-    pub(crate) mem_tbls: Vec<memtable::CFTable>,
-}
-
-impl SplitContext {
-    pub(crate) fn new(keys: &[Vec<u8>]) -> Self {
-        let mut split_keys = Vec::with_capacity(keys.len());
-        for key in keys {
-            split_keys.push(Bytes::copy_from_slice(key.as_slice()));
-        }
-        let mut mem_tbls = Vec::with_capacity(keys.len() + 1);
-        if keys.len() > 0 {
-            for _ in 0..=keys.len() {
-                mem_tbls.push(memtable::CFTable::new());
-            }
-        }
-        Self {
-            split_keys,
-            mem_tbls,
-        }
-    }
-
-    pub(crate) fn get_spliting_index(&self, key: &[u8]) -> usize {
-        let mut i = 0;
-        while i < self.split_keys.len() {
-            if key < self.split_keys[i].chunk() {
-                break;
-            }
-            i += 1;
-        }
-        i
-    }
-
-    pub(crate) fn get_spliting_table(&self, key: &[u8]) -> &memtable::CFTable {
-        let idx = self.get_spliting_index(key);
-        &self.mem_tbls[idx]
-    }
-
-    pub(crate) fn write(&self, cf: usize, entry: &memtable::WriteBatchEntry, buf: &[u8]) {
-        let key = entry.key(buf);
-        let idx = self.get_spliting_index(key);
-        let mem_tbl = self.mem_tbls[idx].get_cf(cf);
-        mem_tbl.put(buf, entry);
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct L0Tables {
     pub tbls: Arc<Vec<L0Table>>,
@@ -115,14 +67,12 @@ pub struct Shard {
     pub ver: u64,
     pub start: Bytes,
     pub end: Bytes,
+    pub parent_id: u64,
     pub(crate) cfs: [RwLock<ShardCF>; NUM_CFS],
     pub(crate) opt: Arc<Options>,
 
     mem_tbls: RwLock<MemTables>,
     pub(crate) l0_tbls: RwLock<L0Tables>,
-
-    split_stage: AtomicI32,
-    pub(crate) split_ctx: RwLock<Arc<SplitContext>>,
 
     // If the shard is not active, flush mem table and do compaction will ignore this shard.
     pub(crate) active: AtomicBool,
@@ -136,10 +86,18 @@ pub struct Shard {
     pub(crate) base_version: u64,
 
     pub(crate) estimated_size: AtomicU64,
+
+    // meta_seq is the raft log index of the applied change set.
+    // Because change set are applied in the worker thread, the value is usually smaller
+    // than write_sequence.
     pub(crate) meta_seq: AtomicU64,
+
+    // write_sequence is the raft log index of the applied write batch.
     pub(crate) write_sequence: AtomicU64,
 
-    pub(crate) compact_lock: Mutex<()>,
+    pub(crate) compaction_priority: RwLock<Option<CompactionPriority>>,
+
+    pub(crate) parent_snap: RwLock<Option<pb::Snapshot>>,
 }
 
 pub const MEM_TABLE_SIZE_KEY: &str = "_mem_table_size";
@@ -158,6 +116,7 @@ impl Shard {
             ver,
             start: Bytes::copy_from_slice(start),
             end: Bytes::copy_from_slice(end),
+            parent_id: 0,
             cfs: [
                 RwLock::new(ShardCF::new(0)),
                 RwLock::new(ShardCF::new(1)),
@@ -166,8 +125,6 @@ impl Shard {
             opt: opt.clone(),
             mem_tbls: RwLock::new(MemTables::new(vec![CFTable::new()])),
             l0_tbls: RwLock::new(L0Tables::new(Vec::new())),
-            split_stage: AtomicI32::new(kvenginepb::SplitStage::Initial.value()),
-            split_ctx: RwLock::new(Arc::new(SplitContext::new(&[]))),
             active: Default::default(),
             properties: Properties::new().apply_pb(props),
             compacting: Default::default(),
@@ -178,7 +135,8 @@ impl Shard {
             estimated_size: Default::default(),
             meta_seq: Default::default(),
             write_sequence: Default::default(),
-            compact_lock: Mutex::new(()),
+            compaction_priority: RwLock::new(None),
+            parent_snap: RwLock::new(None),
         };
         if let Some(val) = get_shard_property(MEM_TABLE_SIZE_KEY, props) {
             shard.set_max_mem_table_size(LittleEndian::read_u64(val.as_slice()))
@@ -194,14 +152,10 @@ impl Shard {
             meta.end.as_slice(),
             opt,
         );
-        if meta.split_stage.value() > 0 {
-            shard.set_split_keys(&meta.split_keys);
-            shard.set_split_stage(meta.split_stage);
-        }
         store_bool(&shard.initial_flushed, true);
         shard.base_version = meta.base_version;
         shard.meta_seq.store(meta.seq, Release);
-        shard.write_sequence.store(meta.write_sequence, Release);
+        shard.write_sequence.store(meta.data_sequence, Release);
         shard
     }
 
@@ -214,10 +168,6 @@ impl Shard {
             snap.end.as_slice(),
             opt,
         );
-        if cs.get_stage().value() > 0 {
-            shard.set_split_keys(snap.get_split_keys());
-            shard.set_split_stage(cs.get_stage());
-        }
         store_bool(&shard.initial_flushed, true);
         shard.base_version = snap.base_version;
         shard.meta_seq.store(cs.sequence, Release);
@@ -241,10 +191,6 @@ impl Shard {
         self.active.load(Acquire)
     }
 
-    pub fn is_splitting(&self) -> bool {
-        self.split_ctx.read().unwrap().split_keys.len() > 0
-    }
-
     pub(crate) fn refresh_estimated_size(&self) {
         let mut size = 0;
         let l0s = self.get_l0_tbls();
@@ -266,16 +212,6 @@ impl Shard {
         self.max_mem_table_size.load(Acquire)
     }
 
-    pub(crate) fn set_split_keys(&self, keys: &[Vec<u8>]) -> bool {
-        if !self.is_splitting() {
-            *self.split_ctx.write().unwrap() = Arc::new(SplitContext::new(keys));
-            info!("shard {}:{} set split keys {:?}", self.id, self.ver, keys);
-            return true;
-        }
-        warn!("shard {}:{} is already splitting", self.id, self.ver);
-        false
-    }
-
     pub(crate) fn for_each_level<F>(&self, mut f: F)
     where
         F: FnMut(usize /*cf*/, &LevelHandler) -> bool, /*stopped*/
@@ -292,7 +228,7 @@ impl Shard {
 
     pub fn get_suggest_split_keys(&self, target_size: u64) -> Vec<Bytes> {
         let estimated_size = load_u64(&self.estimated_size);
-        if estimated_size < target_size || self.is_splitting() {
+        if estimated_size < target_size {
             return vec![];
         }
         let mut keys = Vec::new();
@@ -331,32 +267,16 @@ impl Shard {
         keys
     }
 
-    pub fn overlap_range(&self, start_key: &[u8], end_key: &[u8]) -> bool {
-        self.start < end_key && start_key < self.end
+    pub fn overlap_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
+        self.start <= biggest && smallest < self.end
+    }
+
+    pub fn cover_full_table(&self, smallest: &[u8], biggest: &[u8]) -> bool {
+        self.start <= smallest && biggest < self.end
     }
 
     pub fn overlap_key(&self, key: &[u8]) -> bool {
         self.start <= key && key < self.end
-    }
-
-    pub fn get_split_stage(&self) -> pb::SplitStage {
-        pb::SplitStage::from_i32(self.split_stage.load(Acquire)).unwrap()
-    }
-
-    pub(crate) fn set_split_stage(&self, stage: pb::SplitStage) {
-        debug!(
-            "shard {}:{} set split stage {:?}",
-            self.id, self.ver, &stage
-        );
-        self.split_stage.store(stage.value(), Release);
-    }
-
-    pub(crate) fn get_split_ctx(&self) -> Arc<SplitContext> {
-        self.split_ctx.read().unwrap().clone()
-    }
-
-    pub fn get_split_keys(&self) -> Vec<Bytes> {
-        self.split_ctx.read().unwrap().split_keys.clone()
     }
 
     pub(crate) fn get_mem_tbls(&self) -> MemTables {
@@ -435,7 +355,15 @@ impl Shard {
 
     pub fn get_writable_mem_table(&self) -> memtable::CFTable {
         let guard = self.mem_tbls.read().unwrap();
-        guard.tbls.as_slice()[0].clone()
+        guard.tbls.first().unwrap().clone()
+    }
+
+    pub fn get_last_read_only_mem_table(&self) -> Option<memtable::CFTable> {
+        let guard = self.mem_tbls.read().unwrap();
+        if guard.tbls.len() < 2 {
+            return None
+        }
+        Some(guard.tbls.last().unwrap().clone())
     }
 
     pub fn atomic_add_mem_table(&self, mem_tbl: memtable::CFTable) {
@@ -452,7 +380,6 @@ impl Shard {
     }
 
     pub fn atomic_remove_mem_table(&self) {
-        info!("shard {}:{} atomic remove mem table", self.id, self.ver);
         let mut guard = self.mem_tbls.write().unwrap();
         let old_tables = guard.tbls.as_ref();
         let old_len = old_tables.len();
@@ -460,6 +387,7 @@ impl Shard {
             warn!("atomic remove mem table with old table len {}", old_len);
             return;
         }
+        info!("shard {}:{} atomic remove mem table version {}", self.id, self.ver, old_tables.last().unwrap().get_version());
         let new_len = old_len - 1;
         let mut tbl_vec = Vec::with_capacity(new_len);
         for tbl in old_tables {
@@ -470,6 +398,20 @@ impl Shard {
         }
         let new_mem_tbls = MemTables {
             tbls: Arc::new(tbl_vec),
+        };
+        *guard = new_mem_tbls;
+    }
+
+    pub fn set_split_mem_tables(&self, old_mem_tbls: &[CFTable]) {
+        let mut new_mem_tbls = Vec::with_capacity(old_mem_tbls.len());
+        for old_mem_tbl in old_mem_tbls {
+            if old_mem_tbl.is_empty() || old_mem_tbl.has_data_in_range(self.start.chunk(), self.end.chunk()) {
+                new_mem_tbls.push( old_mem_tbl.new_split());
+            }
+        }
+        let mut guard = self.mem_tbls.write().unwrap();
+        let new_mem_tbls = MemTables {
+            tbls: Arc::new(new_mem_tbls),
         };
         *guard = new_mem_tbls;
     }
@@ -514,26 +456,60 @@ impl Shard {
         self.meta_seq.load(Ordering::Acquire)
     }
 
-    pub fn mark_mem_table_applying_flush(&self, version: u64) {
-        let mems = self.get_mem_tbls();
-        for mem in mems.tbls.iter().rev() {
-            let mem_version = mem.get_version();
-            if mem_version > version {
-                return;
-            }
-            if mem_version == version {
-                mem.set_applying();
-                break;
-            }
-        }
-    }
-
     pub fn get_estimated_size(&self) -> u64 {
         self.estimated_size.load(Ordering::Relaxed)
     }
 
     pub fn get_initial_flushed(&self) -> bool {
-        self.initial_flushed.load(Ordering::Acquire)
+        self.initial_flushed.load(Acquire)
+    }
+
+    pub(crate) fn refresh_compaction_priority(&self) {
+        let mut max_pri = CompactionPriority::default();
+        max_pri.shard_id = self.id;
+        max_pri.shard_ver = self.ver;
+        let l0s = self.get_l0_tbls();
+        let size_score = l0s.total_size() as f64 / self.opt.base_size as f64;
+        let num_tbl_score = l0s.tbls.len() as f64 / 5.0;
+        max_pri.score = size_score * 0.7 + num_tbl_score * 0.3;
+        max_pri.cf = -1;
+        for l0 in l0s.tbls.as_ref() {
+            if !self.cover_full_table(l0.smallest(), l0.biggest()) {
+                // set highest priority for newly split L0.
+                max_pri.score += 2.0;
+                let mut lock = self.compaction_priority.write().unwrap();
+                *lock = Some(max_pri);
+                return
+            }
+        }
+        for cf in 0..NUM_CFS {
+            let scf = self.get_cf(cf);
+            for lh in &scf.levels[..scf.levels.len() - 1] {
+                let score = lh.total_size as f64
+                    / ((self.opt.base_size as f64) * 10f64.powf((lh.level - 1) as f64));
+                if max_pri.score < score {
+                    max_pri.score = score;
+                    max_pri.level = lh.level;
+                    max_pri.cf = cf as isize;
+                }
+                for tbl in &lh.tables {
+                    if !self.cover_full_table(tbl.smallest(), tbl.biggest()) {
+                        // increase the priority for non-cover table.
+                        max_pri.score += 1.0;
+                    }
+                }
+            }
+        }
+        let mut lock = self.compaction_priority.write().unwrap();
+        if max_pri.score <= 1.0 {
+            *lock = None
+        } else {
+            *lock = Some(max_pri);
+        }
+    }
+
+    pub(crate) fn get_compaction_priority(&self) -> Option<CompactionPriority> {
+        self.compaction_priority.read().unwrap().clone()
     }
 }
 
@@ -667,7 +643,7 @@ impl LevelHandler {
         }
     }
 
-    fn overlapping_tables(&self, key_range: &KeyRange) -> (usize, usize) {
+    pub(crate) fn overlapping_tables(&self, key_range: &KeyRange) -> (usize, usize) {
         get_tables_in_range(
             &self.tables,
             key_range.left.chunk(),

@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io::Write;
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
@@ -7,11 +8,11 @@ use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
 use aws_smithy_http::result::SdkError;
 use aws_smithy_types::retry::ErrorKind;
 use aws_types::credentials::SharedCredentialsProvider;
-use bytes::{Buf, Bytes};
-use file_system::{DirectWriter, IORateLimiter, IOType};
+use bytes::Bytes;
+use file_system::{IOOp, IORateLimiter, IOType};
 use http::Uri;
 use std::ops::Deref;
-use std::os::unix::fs::{FileExt, MetadataExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -146,6 +147,24 @@ impl S3FSCore {
             SdkError::ServiceError { .. } => false,
         }
     }
+
+    fn write_local_file(&self, file_name: &PathBuf, data: Bytes) -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .custom_flags(libc::O_DSYNC)
+            .open(file_name)?;
+        let mut start_off = 0;
+        let write_batch_size = 256 * 1024;
+        while start_off < data.len() {
+            self.rate_limiter.request(IOType::Compaction, IOOp::Write, write_batch_size);
+            let end_off = std::cmp::min(start_off + write_batch_size, data.len());
+            file.write(&data[start_off..end_off])?;
+            start_off = end_off;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -176,9 +195,8 @@ impl DFS for S3FS {
         }
         let data = self.read_file(file_id, opts).await?;
         let tmp_file_path = self.tmp_file_path(file_id);
-        let mut writer = DirectWriter::new(self.rate_limiter.clone(), IOType::Compaction);
-        writer.write_to_file(data.chunk(), tmp_file_path.clone())?;
-        std::fs::rename(tmp_file_path, local_file_path)?;
+        self.write_local_file(&tmp_file_path, data)?;
+        std::fs::rename(tmp_file_path, &local_file_path)?;
         Ok(())
     }
 
@@ -247,7 +265,7 @@ impl DFS for S3FS {
                 .await;
             if result.is_ok() {
                 info!(
-                    "create file {}, size {}, duration {:?}, retry {}",
+                    "create file {}, size {}, takes {:?}, retry {}",
                     file_id,
                     data.len(),
                     start_time.saturating_elapsed(),
@@ -303,10 +321,10 @@ impl DFS for S3FS {
                     continue;
                 } else {
                     error!(
-                        "failed to remove file {}, reach max retry count {}",
+                        "failed to remove file {}, reach max retry count {}, err {:?}",
                         file_id,
-                        start_time.saturating_elapsed(),
-                        MAX_RETRY_COUNT
+                        MAX_RETRY_COUNT,
+                        err,
                     );
                 }
             }
@@ -355,7 +373,6 @@ mod tests {
     use crate::dfs::s3::S3FS;
     use crate::dfs::{Options, DFS};
     use file_system::{IORateLimitMode, IORateLimiter};
-    use std::future::Future;
     use std::path::PathBuf;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -367,7 +384,7 @@ mod tests {
         let end_point = "http://127.0.0.1:9000";
         let local_dir = PathBuf::from_str("/tmp/s3test").unwrap();
         if !local_dir.exists() {
-            std::fs::create_dir(&local_dir);
+            std::fs::create_dir(&local_dir).unwrap();
         }
         let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
         rate_limiter.set_io_rate_limit(0);
@@ -392,11 +409,11 @@ mod tests {
                 .await
             {
                 Ok(_) => {
-                    tx.send(true);
+                    tx.send(true).unwrap();
                     println!("create ok");
                 }
                 Err(err) => {
-                    tx.send(false);
+                    tx.send(false).unwrap();
                     println!("create error {:?}", err)
                 }
             }
@@ -413,11 +430,11 @@ mod tests {
             let opts = Options::new(1, 1);
             match fs.prefetch(321, opts).await {
                 Ok(_) => {
-                    tx.send(true);
+                    tx.send(true).unwrap();
                     println!("prefetch ok");
                 }
                 Err(err) => {
-                    tx.send(false);
+                    tx.send(false).unwrap();
                     println!("prefetch failed {:?}", err)
                 }
             }
@@ -434,12 +451,8 @@ mod tests {
         let fs = s3fs.clone();
         let (tx, rx) = tikv_util::mpsc::bounded(1);
         let f = async move {
-            if let Err(err) = fs.remove(321, Options::new(1, 1)).await {
-                println!("remove error {:?}", err);
-                tx.send(false);
-            } else {
-                tx.send(true);
-            }
+            fs.remove(321, Options::new(1, 1)).await;
+            tx.send(true).unwrap();
         };
         s3fs.runtime.spawn(f);
         assert!(rx.recv().unwrap());

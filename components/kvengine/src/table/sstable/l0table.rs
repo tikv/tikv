@@ -152,6 +152,8 @@ impl L0TableCore {
 pub struct L0Builder {
     builders: Vec<Builder>,
     version: u64,
+    count: usize,
+    fid: u64,
 }
 
 impl L0Builder {
@@ -161,11 +163,12 @@ impl L0Builder {
             let builder = Builder::new(fid, opt);
             builders.push(builder);
         }
-        Self { builders, version }
+        Self { builders, version, count: 0, fid }
     }
 
     pub fn add(&mut self, cf: usize, key: &[u8], val: Value) {
         self.builders[cf].add(key, val);
+        self.count += 1;
     }
 
     pub fn finish(&mut self) -> Bytes {
@@ -207,5 +210,13 @@ impl L0Builder {
             }
         }
         (smallest_buf.freeze(), biggest_buf.freeze())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn get_fid(&self) -> u64 {
+        self.fid
     }
 }

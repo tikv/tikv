@@ -30,6 +30,7 @@ use std::vec::Drain;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 use time::Timespec;
+use kvenginepb::ChangeSet;
 use txn_types::LockType;
 
 pub(crate) struct PendingCmd {
@@ -137,7 +138,6 @@ pub enum ExecResult {
 
 pub(crate) enum ApplyResult {
     None,
-    Yield,
     /// Additional result that needs to be sent back to raftstore.
     Res(ExecResult),
 }
@@ -162,21 +162,6 @@ pub(crate) struct ApplyBatch {
     pub(crate) applier: Arc<Mutex<Applier>>,
     pub(crate) msgs: Vec<ApplyMsg>,
     pub(crate) applying_cnt: Arc<AtomicU64>,
-}
-
-pub(crate) struct YieldState {
-    /// All of messages that need to continue to be handled after
-    /// the source peer has applied its logs and pending entries
-    /// are all handled.
-    pending_msgs: Vec<ApplyMsg>,
-}
-
-impl Debug for YieldState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("YieldState")
-            .field("pending_msgs", &self.pending_msgs.len())
-            .finish()
-    }
 }
 
 /// The Applier of a Region which is responsible for handling committed
@@ -212,9 +197,9 @@ pub(crate) struct Applier {
 
     pub(crate) snap: Option<Arc<SnapAccess>>,
 
-    pub(crate) yield_state: Option<YieldState>,
-
     pub(crate) metrics: ApplyMetrics,
+
+    pub(crate) pending_split: Option<ChangeSet>,
 }
 
 impl Applier {
@@ -234,8 +219,8 @@ impl Applier {
             apply_state: reg.apply_state,
             lock_cache: Default::default(),
             snap: None,
-            yield_state: None,
             metrics: ApplyMetrics::default(),
+            pending_split: Default::default(),
         }
     }
 
@@ -264,8 +249,8 @@ impl Applier {
             apply_state,
             lock_cache: Default::default(),
             snap: Some(snap),
-            yield_state: None,
             metrics: ApplyMetrics::default(),
+            pending_split: Default::default(),
         }
     }
 
@@ -481,25 +466,10 @@ impl Applier {
                     wb.delete(mvcc::LOCK_CF, k, 0);
                 });
             }
-            TYPE_PRE_SPLIT => {
-                ctx.engine.pre_split(
-                    self.region_id(),
-                    self.region.get_region_epoch().get_version(),
-                    &cl.get_split_keys(),
-                    ctx.exec_log_index,
-                )?;
-                // After pre_split, the snap become obsolete.
-                self.snap.take();
-            }
-            TYPE_FLUSH | TYPE_COMPACTION | TYPE_SPLIT_FILES => {
+            TYPE_ENGINE_META => {
                 let mut cs = cl.get_change_set().unwrap();
                 // Assign the raft log's index as the sequence number of the ChangeSet to ensure monotonic increase.
                 cs.sequence = ctx.exec_log_index;
-                if cs.has_flush() {
-                    if let Some(shard) = ctx.engine.get_shard(self.region.get_id()) {
-                        shard.mark_mem_table_applying_flush(cs.get_flush().get_version());
-                    }
-                }
                 let task = RegionTask::ApplyChangeSet { change: cs };
                 ctx.region_scheduler
                     .as_ref()
@@ -546,11 +516,8 @@ impl Applier {
         if let Err(err) = check_region_epoch(req, &self.region, true) {
             let mut check_in_region_worker = false;
             if let Some(custom) = rlog::get_custom_log(req) {
-                match custom.get_type() {
-                    rlog::TYPE_FLUSH | rlog::TYPE_COMPACTION | rlog::TYPE_SPLIT_FILES => {
-                        check_in_region_worker = true;
-                    }
-                    _ => {}
+                if custom.get_type() == rlog::TYPE_ENGINE_META {
+                    check_in_region_worker = true;
                 }
             }
             if !check_in_region_worker {
@@ -577,12 +544,6 @@ impl Applier {
         result: &ApplyResult,
         is_conf_change: bool,
     ) {
-        match result {
-            ApplyResult::Yield => {
-                return;
-            }
-            _ => {}
-        }
         self.apply_state.applied_index = ctx.exec_log_index;
         self.apply_state.applied_index_term = ctx.exec_log_term;
         if let ApplyResult::Res(exec_result) = result {
@@ -1103,7 +1064,6 @@ impl Applier {
                 }
                 ApplyResult::Res(res)
             }
-            ApplyResult::Yield => unreachable!(),
         }
     }
 
@@ -1142,28 +1102,18 @@ impl Applier {
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         // Write the engine before run finish split, or we will get shard not match error.
-        let regions = split_gen_new_region_metas(&self.region, request.get_splits())?;
-        let cs = build_split_change_set(
-            &self.region,
-            &regions,
-            ctx.exec_log_index,
-            ctx.exec_log_term,
-        );
+        let cs = self.pending_split.take().unwrap();
         let mut resp = AdminResponse::default();
-        if let Err(kvengine::Error::WrongSplitStage(_)) =
-            ctx.engine.finish_split(cs, RAFT_INIT_LOG_INDEX)
-        {
+        if let Err(err) = ctx.engine.split(cs, RAFT_INIT_LOG_INDEX) {
             // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
             // in the background worker.
-            warn!("region is not in split file done stage for finish split, pause apply";
-                "region" => self.tag());
-            let result = ApplyResult::Yield;
-            return Ok((resp, result));
+            panic!("region {} failed to execute split operation, error {:?}", self.tag(), err);
         }
         self.snap.take(); // snapshot is outdated.
         // clear the cache here or the locks doesn't belong to the new range would never have chance to delete.
         self.lock_cache.clear();
         let mut splits = BatchSplitResponse::default();
+        let regions = split_gen_new_region_metas(&self.region, request.get_splits())?;
         splits.set_regions(RepeatedField::from(regions.clone()));
         resp.set_splits(splits);
         let result = ApplyResult::Res(ExecResult::SplitRegion { regions });
@@ -1242,26 +1192,6 @@ impl Applier {
                 ApplyResult::Res(res) => {
                     results.push_back(res);
                 }
-                ApplyResult::Yield => {
-                    // Both cancel and merge will yield current processing.
-                    let mut pending_entries =
-                        Vec::with_capacity(committed_entries_drainer.len() + 1);
-                    // Note that current entry is skipped when yield.
-                    pending_entries.push(entry);
-                    pending_entries.extend(committed_entries_drainer);
-                    ctx.finish_for(self, results);
-                    let pending_msg = ApplyMsg::Apply(MsgApply {
-                        region_id: self.region_id(),
-                        term: ctx.exec_log_term,
-                        entries: pending_entries,
-                        new_role: None,
-                        cbs: Vec::default(),
-                    });
-                    self.yield_state = Some(YieldState {
-                        pending_msgs: vec![pending_msg],
-                    });
-                    return;
-                }
             }
         }
         ctx.finish_for(&self, results);
@@ -1337,7 +1267,6 @@ impl Applier {
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
             notify_req_region_removed(self.region.get_id(), cmd.cb);
         }
-        self.yield_state = None;
     }
 
     fn handle_unsafe_destroy(&mut self, ctx: &mut ApplyContext, region_id: u64) {
@@ -1348,32 +1277,18 @@ impl Applier {
     }
 
     pub(crate) fn handle_msg(&mut self, ctx: &mut ApplyContext, msg: ApplyMsg) {
-        if let ApplyMsg::Resume { region_id } = &msg {
-            if let Some(yield_state) = self.yield_state.take() {
-                info!("{} resume paused apply", self.tag());
-                for msg in yield_state.pending_msgs {
-                    self.handle_msg(ctx, msg);
-                }
+        match msg {
+            ApplyMsg::Apply(apply) => {
+                self.handle_apply(ctx, apply);
             }
-        } else {
-            if self.yield_state.is_some() {
-                self.yield_state.as_mut().unwrap().pending_msgs.push(msg);
-                return;
+            ApplyMsg::Registration(reg) => {
+                self.handle_registration(reg);
             }
-            match msg {
-                ApplyMsg::Apply(apply) => {
-                    self.handle_apply(ctx, apply);
-                }
-                ApplyMsg::Registration(reg) => {
-                    self.handle_registration(reg);
-                }
-                ApplyMsg::UnsafeDestroy { region_id } => {
-                    self.handle_unsafe_destroy(ctx, region_id);
-                }
-                ApplyMsg::Resume { region_id } => unreachable!(),
-                ApplyMsg::SplitTask(split_task) => {
-                    ctx.split_scheduler.as_ref().unwrap().schedule(split_task);
-                }
+            ApplyMsg::UnsafeDestroy { region_id } => {
+                self.handle_unsafe_destroy(ctx, region_id);
+            }
+            ApplyMsg::PendingSplit(pending_split) => {
+                self.pending_split = Some(pending_split);
             }
         }
     }
@@ -1475,12 +1390,11 @@ pub(crate) fn split_gen_new_region_metas(
     Ok(new_regions)
 }
 
-pub(crate) fn build_split_change_set(
+pub(crate) fn build_split_pb(
     old: &metapb::Region,
     new_regions: &Vec<metapb::Region>,
-    index: u64,
     term: u64,
-) -> kvenginepb::ChangeSet {
+) -> kvenginepb::Split {
     let mut split = kvenginepb::Split::new();
     for new_region in new_regions {
         let mut props = kvenginepb::Properties::new();
@@ -1498,13 +1412,7 @@ pub(crate) fn build_split_change_set(
     for new_region in &new_regions[1..] {
         split.mut_keys().push(raw_start_key(new_region).to_vec());
     }
-    let mut cs = kvenginepb::ChangeSet::new();
-    cs.set_shard_id(old.get_id());
-    cs.set_shard_ver(old.get_region_epoch().get_version());
-    cs.set_stage(kvenginepb::SplitStage::SplitFileDone);
-    cs.set_sequence(index);
-    cs.set_split(split);
-    cs
+    split
 }
 
 #[derive(Clone)]
@@ -1516,7 +1424,6 @@ pub(crate) struct ApplyContext {
     pub(crate) engine: kvengine::Engine,
     pub(crate) region_scheduler: Option<Scheduler<RegionTask>>, // None in recover mode.
     pub(crate) router: Option<RaftRouter>,                      // None in recover mode.
-    pub(crate) split_scheduler: Option<Scheduler<SplitTask>>,
     pub(crate) apply_task_res_list: Vec<ApplyResult>,
     pub(crate) exec_log_index: u64,
     pub(crate) exec_log_term: u64,
@@ -1527,13 +1434,11 @@ impl ApplyContext {
     pub fn new(
         engine: kvengine::Engine,
         region_scheduler: Option<Scheduler<RegionTask>>,
-        split_scheduler: Option<Scheduler<SplitTask>>,
         router: Option<RaftRouter>,
     ) -> Self {
         Self {
             engine,
             region_scheduler,
-            split_scheduler,
             router,
             apply_task_res_list: Default::default(),
             exec_log_index: Default::default(),

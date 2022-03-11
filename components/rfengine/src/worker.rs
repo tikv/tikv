@@ -182,11 +182,16 @@ impl Worker {
         }
         let map_ref = map_ref.unwrap();
         let mut region_data = map_ref.write().unwrap();
+        if !region_data.need_truncate() {
+            return;
+        }
         let index = region_data.truncated_idx;
         region_data.truncate(index);
         drop(region_data);
         self.truncated_idx.insert(region_id, index);
         let mut removed_epoch_ids = HashSet::new();
+        let mut remove_cnt = 0;
+        let mut retain_cnt = 0;
         for ep in &mut self.epoches {
             let mut raft_log_files = ep.raft_log_files.lock().unwrap();
             if let Some(range) = raft_log_files.get(&region_id) {
@@ -194,27 +199,23 @@ impl Worker {
                     let filename = raft_log_file_name(&self.dir, ep.id, region_id, *range);
                     if let Err(err) = fs::remove_file(filename.clone()) {
                         error!("failed to remove rlog file {:?}, {:?}", filename, err);
-                    } else {
-                        info!(
-                            "remove rlog file {}",
-                            filename.file_name().unwrap().to_string_lossy()
-                        );
                     }
                     raft_log_files.remove(&region_id);
                     if raft_log_files.len() == 0 {
                         removed_epoch_ids.insert(ep.id);
                     }
+                    remove_cnt += 1;
                 } else {
-                    info!(
-                        "rlog file not deletable endIdx {}, truncateIdx {}",
-                        range.end_index, index
-                    );
+                    retain_cnt += 1;
                 }
             }
         }
+        info!("region {} truncate raft log to {}, remove {} files, retain {} files",
+            region_id, index, remove_cnt, retain_cnt);
         if removed_epoch_ids.len() == 0 {
             return;
         }
+        info!("remove epoches {:?}", &removed_epoch_ids);
         self.epoches.retain(|x| !removed_epoch_ids.contains(&x.id));
     }
 }

@@ -22,8 +22,7 @@ message ChangeSet {
   Compaction compaction = 4;
   Flush flush = 5;
   Snapshot snapshot = 6;
-  SplitStage stage = 7;
-  SplitFiles splitFiles = 9;
+  Snapshot initial_flush = 7;
   Split split = 10;
   bool shardDelete = 11;
   // The sequence value is not set by the DB when generating the change set, user have to assign the value.
@@ -31,12 +30,6 @@ message ChangeSet {
   uint64 sequence = 12;
   uint64 nextMemTableSize = 13;
   ChangeSet parent = 14;
-}
-
-enum SplitStage {
-  INITIAL = 0;
-  PRE_SPLIT = 1;
-  SPLIT_FILE_DONE = 2;
 }
 
 message Compaction {
@@ -52,24 +45,17 @@ message Flush {
   L0Create l0Create = 1;
   Properties properties = 2;
   uint64 version = 3;
-  repeated bytes splitKeys = 4;
+  bool is_initial_flush = 4;
 }
 
 message Snapshot {
   bytes start = 1;
   bytes end = 2;
   Properties properties = 3;
-  repeated bytes splitKeys = 4;
   repeated L0Create l0Creates = 5;
   repeated TableCreate tableCreates = 6;
   uint64 baseVersion = 7;
-  uint64 writeSequence = 8;
-}
-
-message SplitFiles {
-  repeated L0Create l0Creates = 1;
-  repeated TableCreate tableCreates = 2;
-  repeated uint64 tableDeletes = 3;
+  uint64 data_sequence = 8;
 }
 
 message L0Create {

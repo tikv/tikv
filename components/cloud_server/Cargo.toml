@@ -93,6 +93,7 @@ tokio = { version = "1.12", features = ["full"] }
 tokio-timer = "0.2"
 tokio-openssl = "0.6"
 toml = "0.5"
+tracing = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

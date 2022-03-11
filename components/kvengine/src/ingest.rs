@@ -3,6 +3,7 @@
 use crate::table::sstable::{L0Table, SSTable};
 use crate::*;
 use dashmap::mapref::entry::Entry;
+use kvenginepb::Snapshot;
 use std::iter::Iterator;
 use std::sync::Arc;
 
@@ -13,7 +14,11 @@ pub struct IngestTree {
 
 impl Engine {
     pub fn ingest(&self, tree: IngestTree) -> Result<()> {
-        let (l0s, mut scfs) = self.create_level_tree_level_handlers(&tree)?;
+        let (l0s, mut scfs) = self.create_snapshot_tables(
+            tree.change_set.shard_id,
+            tree.change_set.shard_ver,
+            tree.change_set.get_snapshot(),
+        )?;
         let shard = Shard::new_for_ingest(tree.change_set, self.opts.clone());
         shard.set_active(tree.active);
         *shard.l0_tbls.write().unwrap() = l0s;
@@ -39,13 +44,14 @@ impl Engine {
         Ok(())
     }
 
-    fn create_level_tree_level_handlers(
+    pub(crate) fn create_snapshot_tables(
         &self,
-        tree: &IngestTree,
+        id: u64,
+        ver: u64,
+        snap: &Snapshot,
     ) -> Result<(L0Tables, Vec<ShardCF>)> {
         let mut l0_tbls = vec![];
-        let snap = tree.change_set.get_snapshot();
-        let fs_opts = dfs::Options::new(tree.change_set.shard_id, tree.change_set.shard_ver);
+        let fs_opts = dfs::Options::new(id, ver);
         for l0_create in snap.get_l0_creates() {
             let file = self.fs.open(l0_create.id, fs_opts)?;
             let l0_tbl = L0Table::new(file, Some(self.cache.clone()))?;

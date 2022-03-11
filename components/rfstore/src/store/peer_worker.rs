@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::RaftRouter;
-use crossbeam::channel::{RecvError, RecvTimeoutError};
+use crossbeam::channel::RecvTimeoutError;
 use raftstore::store::util;
 use std::collections::HashMap;
 use std::mem;
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::time::InstantExt;
 use tikv_util::worker::Scheduler;
-use tikv_util::{debug, error, info};
+use tikv_util::{debug, error};
 
 #[derive(Clone)]
 pub(crate) struct PeerStates {
@@ -177,7 +177,6 @@ impl RaftWorker {
         PeerMsgHandler::new(&mut peer_fsm, &mut self.ctx).handle_msgs(&mut inbox.msgs);
         peer_fsm.peer.handle_raft_ready(&mut self.ctx);
         self.maybe_send_apply(&inbox.peer.applier, &peer_fsm);
-        peer_fsm.peer.maybe_recover_split(&mut self.ctx);
     }
 
     fn maybe_send_apply(&mut self, applier: &Arc<Mutex<Applier>>, peer_fsm: &PeerFsm) {
@@ -221,14 +220,12 @@ impl ApplyWorker {
     pub(crate) fn new(
         engine: kvengine::Engine,
         region_sched: Scheduler<RegionTask>,
-        split_scheduler: Scheduler<SplitTask>,
         router: RaftRouter,
         receiver: Receiver<ApplyBatch>,
     ) -> Self {
         let ctx = ApplyContext::new(
             engine,
             Some(region_sched),
-            Some(split_scheduler),
             Some(router),
         );
         Self { ctx, receiver }

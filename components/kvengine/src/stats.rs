@@ -2,14 +2,12 @@
 
 use crate::{load_bool, NUM_CFS};
 use bytes::Buf;
-use protobuf::ProtobufEnum;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct EngineStats {
     pub num_shards: usize,
-    pub num_splitting_shards: usize,
     pub num_active_shards: usize,
     pub num_compacting_shards: usize,
     pub num_mem_tables: usize,
@@ -48,17 +46,11 @@ impl super::Engine {
         let mut engine_stats = EngineStats::new();
         engine_stats.num_shards = shard_stats.len();
         for shard in &shard_stats {
-            if shard.splitting_mem_tbls.len() > 0 {
-                engine_stats.num_splitting_shards += 1;
-            }
             if shard.active {
                 engine_stats.num_active_shards += 1;
             }
             if shard.compacting {
                 engine_stats.num_compacting_shards += 1;
-            }
-            for size in &shard.splitting_mem_tbls {
-                engine_stats.total_splitting_mem_tables_size += *size;
             }
             engine_stats.num_mem_tables += shard.mem_tbls.len();
             for size in &shard.mem_tbls {
@@ -92,13 +84,10 @@ pub struct ShardStats {
     pub ver: u64,
     pub start: String,
     pub end: String,
-    pub split_stage: i32,
-    pub split_keys: Vec<String>,
     pub active: bool,
     pub compacting: bool,
     pub flushed: bool,
     pub mem_tbls: Vec<usize>,
-    pub splitting_mem_tbls: Vec<usize>,
     pub l0_tbls: Vec<(u64, usize)>,
     pub cfs: Vec<CFStats>,
     pub base_version: u64,
@@ -124,17 +113,7 @@ pub struct LevelStats {
 
 impl super::Shard {
     pub fn get_stats(&self) -> ShardStats {
-        let splitting_ctx = self.get_split_ctx();
-        let mut splitting_mem_tbls = vec![];
-        let mut split_keys = Vec::with_capacity(splitting_ctx.split_keys.len());
         let mut total_size = 0;
-        for key in splitting_ctx.split_keys.as_slice() {
-            split_keys.push(format!("{:x?}", key.chunk()));
-        }
-        for splitting_mem_tbl in &splitting_ctx.mem_tbls {
-            total_size += splitting_mem_tbl.size() as u64;
-            splitting_mem_tbls.push(splitting_mem_tbl.size())
-        }
         let shard_mem_tbls = self.get_mem_tbls();
         let mut mem_tbls = vec![];
         for mem_tbl in shard_mem_tbls.tbls.as_ref() {
@@ -166,13 +145,10 @@ impl super::Shard {
             ver: self.ver,
             start: format!("{:?}", self.start.chunk()),
             end: format!("{:?}", self.end.chunk()),
-            split_stage: self.get_split_stage().value(),
-            split_keys,
             active: self.is_active(),
             compacting: load_bool(&self.compacting),
             flushed: self.get_initial_flushed(),
             mem_tbls,
-            splitting_mem_tbls,
             l0_tbls,
             cfs,
             base_version: self.base_version,

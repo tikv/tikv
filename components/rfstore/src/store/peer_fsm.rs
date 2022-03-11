@@ -9,7 +9,6 @@ use kvproto::raft_cmdpb::{
     StatusResponse,
 };
 use kvproto::raft_serverpb::RaftMessage;
-use protobuf::ProtobufEnum;
 use raft;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft_proto::eraftpb;
@@ -33,12 +32,11 @@ use crate::store::{
 };
 use crate::store::{util as _util, CasualMessage, Config, PeerMsg, SignificantMsg};
 use crate::store::{write_peer_state, ChangePeer, ExecResult, MsgApplyChangeSetResult, SnapState};
-use crate::store::{SplitMethod, SplitTask};
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
 use raftstore::store::util::is_region_initialized;
-use txn_types::WriteBatchFlags;
+use txn_types::{Key, WriteBatchFlags};
 
 /// Limits the maximum number of regions returned by error.
 ///
@@ -556,6 +554,9 @@ impl<'a> PeerMsgHandler<'a> {
 
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
+        if let Some(parent_id) = self.peer.mut_store().parent_id() {
+            self.ctx.global.engines.raft.remove_dependent(parent_id, self.region_id());
+        }
 
         let mut meta = self.ctx.global.store_meta.lock().unwrap();
 
@@ -871,13 +872,9 @@ impl<'a> PeerMsgHandler<'a> {
         drop(meta);
         self.peer.mut_store().reset_meta();
         if is_leader {
-            let store = self.peer.mut_store();
-            if let Some(cs) = store.pending_flush.take() {
-                self.propose_change_set(cs);
+            if let Some(shard) = self.ctx.global.engines.kv.get_shard(self.region_id()) {
+                self.ctx.global.engines.kv.trigger_flush(&shard);
             }
-        }
-        if let Some(callback) = self.peer.split_callback.take() {
-            callback.invoke_with_response(RaftCmdResponse::default());
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
@@ -1065,7 +1062,7 @@ impl<'a> PeerMsgHandler<'a> {
             if !self.fsm.peer.is_leader() {
                 return;
             }
-            if shard.is_splitting() {
+            if !shard.get_initial_flushed() {
                 return;
             }
             let cfg_split_size = self.ctx.cfg.region_split_size.0;
@@ -1079,20 +1076,23 @@ impl<'a> PeerMsgHandler<'a> {
                 estimated_size,
                 cfg_split_size
             );
-            let task = SplitTask::new(
-                self.region().clone(),
-                self.peer.peer.clone(),
-                SplitMethod::MaxSize(cfg_split_size),
-            );
-            if let Err(e) = self.ctx.global.split_scheduler.schedule(task) {
-                error!(
-                    "failed to schedule split check";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "err" => %e,
-                );
-                return;
-            }
+            let raw_keys = shard.get_suggest_split_keys(cfg_split_size);
+            let encoded_split_keys = raw_keys
+                .iter()
+                .map(|k| {
+                    let key = Key::from_raw(k);
+                    key.as_encoded().to_vec()
+                })
+                .collect();
+            let task = PdTask::AskBatchSplit {
+                region: self.region().clone(),
+                split_keys: encoded_split_keys,
+                peer: self.peer.peer.clone(),
+                right_derive: true,
+                callback: Callback::None,
+            };
+            self.ctx.global.pd_scheduler.schedule(task).unwrap();
+
         }
     }
 
@@ -1122,19 +1122,14 @@ impl<'a> PeerMsgHandler<'a> {
             "split_keys" => %util::KeysInfoFormatter(split_keys.iter()),
             "source" => source,
         );
-        self.peer.split_callback = Some(cb);
-        let region = self.fsm.peer.region();
-        let peer = &self.fsm.peer.peer;
-        let split_task = SplitTask::new(
-            region.clone(),
-            peer.clone(),
-            SplitMethod::Keys(split_keys.clone()),
-        );
-        self.ctx
-            .global
-            .split_scheduler
-            .schedule(split_task)
-            .unwrap();
+        let task = PdTask::AskBatchSplit {
+            region: self.region().clone(),
+            split_keys,
+            peer: self.peer.peer.clone(),
+            right_derive: true,
+            callback: cb,
+        };
+        self.ctx.global.pd_scheduler.schedule(task).unwrap();
     }
 
     fn validate_split_region(
@@ -1142,17 +1137,6 @@ impl<'a> PeerMsgHandler<'a> {
         epoch: &metapb::RegionEpoch,
         split_keys: &[Vec<u8>],
     ) -> Result<()> {
-        let split_stage = self.peer.get_store().split_stage;
-        if self.peer.split_callback.is_some() {
-            return Err(Error::KVEngineError(kvengine::Error::WrongSplitStage(
-                split_stage.value(),
-            )));
-        }
-        if split_stage != kvenginepb::SplitStage::Initial {
-            return Err(Error::KVEngineError(kvengine::Error::WrongSplitStage(
-                split_stage.value(),
-            )));
-        }
         if split_keys.is_empty() {
             error!(
                 "no split key is specified.";
@@ -1214,6 +1198,9 @@ impl<'a> PeerMsgHandler<'a> {
                 vec![region.to_owned()],
             ));
         }
+        if !self.peer.get_store().initial_flushed {
+            return Err(Error::RegionNotInitialized(self.region_id()))
+        }
         Ok(())
     }
 
@@ -1230,14 +1217,6 @@ impl<'a> PeerMsgHandler<'a> {
     fn on_generate_engine_change_set(&mut self, cs: kvenginepb::ChangeSet) {
         let tag = self.peer.tag();
         info!("generate meta change event {:?}", &cs; "region" => tag);
-        if cs.shard_ver > tag.ver() && cs.has_flush() {
-            // This is the initial flush that has greater version than current.
-            // If we propose now, it would get epoch not match error.
-            // So need to wait for the split, then proposed it.
-            let store = self.peer.mut_store();
-            store.pending_flush = Some(cs);
-            return;
-        }
         self.propose_change_set(cs);
     }
 
@@ -1291,32 +1270,25 @@ impl<'a> PeerMsgHandler<'a> {
             }
             return;
         }
-        info!("on apply change set result"; "region" => tag);
         let change = msg.result.unwrap();
         if change.shard_ver != self.region().get_region_epoch().get_version() {
             error!("change set version not match change {:?}", &change; "region" => tag);
             return;
         }
+        if change.has_flush() {
+            let write_sequence = self.peer.mut_store().shard_meta.as_ref().unwrap().data_sequence;
+            self.ctx.raft_wb.truncate_raft_log(tag.id(), write_sequence);
+        }
         if change.has_snapshot() {
             let store = self.peer.mut_store();
+            let parent_id = store.parent_id();
             store.initial_flushed = true;
             store.snap_state = SnapState::Relax;
-            store.shard_meta = Some(ShardMeta::new(change));
+            store.shard_meta = Some(ShardMeta::new(&change));
+            if let Some(parent_id) = parent_id {
+                self.ctx.global.engines.raft.remove_dependent(parent_id, tag.id());
+            }
             return;
-        }
-        if change.has_split_files() {
-            self.ctx.apply_msgs.msgs.push(ApplyMsg::Resume {
-                region_id: self.region_id(),
-            })
-        }
-        let split_stage = self.peer.get_store().split_stage;
-        if change.get_stage().value() > split_stage.value() {
-            info!("peer storage split stage changed";
-                "region" => tag,
-                "from" => split_stage.value(),
-                "to" => change.get_stage().value(),
-            );
-            self.peer.mut_store().split_stage = change.get_stage();
         }
     }
 

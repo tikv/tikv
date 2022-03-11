@@ -285,7 +285,7 @@ impl SkipListCore {
             // Even the recomputeHeight is 0, we still need to check match and do in place update to insert the new version.
             if !h.next[0].is_null() {
                 let node = deref(self.arena.get_node(h.next[0]));
-                if self.arena.get(node.key_addr).eq(key) {
+                if self.arena.get_key(node).eq(key) {
                     self.set_value(node, buf, entry);
                     return;
                 }
@@ -300,9 +300,6 @@ impl SkipListCore {
         for i in 0..height {
             loop {
                 let next_off = h.next[i];
-                if next_off.0 != NULL_ARENA_ADDR {
-                    assert!(next_off.block_idx() < 32);
-                }
                 x.tower[i].store(next_off.0, SeqCst);
                 if deref(self.arena.get_node(h.prev[i])).cas_next_off(i, next_off, x.addr) {
                     // Managed to insert x between prev[i] and next[i]. Go to the next level.
@@ -380,7 +377,7 @@ impl SkipListCore {
             return Value::new();
         }
         let n_node = deref(self.arena.get_node(n));
-        let next_key = self.arena.get(n_node.key_addr);
+        let next_key = self.arena.get_key(n_node);
         if next_key.ne(key) {
             return Value::new();
         }
@@ -433,7 +430,7 @@ impl SkipListCore {
                         prev_node.0, self.arena.rand_id
                     );
                 }
-                if key <= self.arena.get(prev_node_node.key_addr) {
+                if key <= self.arena.get_key(prev_node_node) {
                     // Key is before splice.
                     while prev_node == h.prev[recompute_height] {
                         recompute_height += 1;
@@ -445,7 +442,7 @@ impl SkipListCore {
                 && key
                     > self
                         .arena
-                        .get(deref(self.arena.get_node(next_node)).key_addr)
+                        .get_key(deref(self.arena.get_node(next_node)))
             {
                 // Key is after splice.
                 while next_node == h.next[recompute_height] {
@@ -473,7 +470,7 @@ impl SkipListCore {
                 return (before, next, false);
             }
             let next_node = self.arena.get_node(next);
-            let next_key = self.arena.get(deref(next_node).key_addr);
+            let next_key = self.arena.get_key(deref(next_node));
             let order = key.cmp(next_key);
             if order != Greater {
                 return (before, next, order == Equal);
@@ -511,7 +508,7 @@ impl SkipListCore {
                 // We compared the same node on the upper level, no need to compare again.
                 cmp = Less;
             } else {
-                let next_key = self.arena.get(deref(self.arena.get_node(next)).key_addr);
+                let next_key = self.arena.get_key(deref(self.arena.get_node(next)));
                 cmp = key.cmp(next_key);
             }
             if cmp == Greater {
@@ -584,7 +581,7 @@ impl SkipListCore {
             return Value::new();
         }
         let n_node = deref(self.arena.get_node(n));
-        let next_key = self.arena.get(n_node.key_addr);
+        let next_key = self.arena.get_key(n_node);
         if key.ne(next_key) {
             return Value::new();
         }
@@ -659,7 +656,7 @@ impl SKIterator {
         self.uk.truncate(0);
         let n_node = deref(self.list.arena.get_node(self.n));
         self.uk
-            .extend_from_slice(self.list.arena.get(n_node.key_addr));
+            .extend_from_slice(self.list.arena.get_key(n_node));
         let mut val_addr = n_node.get_val_addr();
         if !val_addr.is_value_node_addr() {
             self.v = self.list.arena.get_val(val_addr);
@@ -861,14 +858,14 @@ mod tests {
         let (n, eq) = l.find_near("00001".as_bytes(), false, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "00005".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("00001".as_bytes(), false, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "00005".as_bytes()
         );
         assert_eq!(eq, false);
@@ -882,14 +879,14 @@ mod tests {
         let (n, eq) = l.find_near("00005".as_bytes(), false, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "00015".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("00005".as_bytes(), false, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "00005".as_bytes()
         );
         assert_eq!(eq, true);
@@ -899,7 +896,7 @@ mod tests {
         let (n, eq) = l.find_near("00005".as_bytes(), true, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "00005".as_bytes()
         );
         assert_eq!(eq, true);
@@ -907,28 +904,28 @@ mod tests {
         let (n, eq) = l.find_near("05555".as_bytes(), false, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05565".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("05555".as_bytes(), false, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05555".as_bytes()
         );
         assert_eq!(eq, true);
         let (n, eq) = l.find_near("05555".as_bytes(), true, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05545".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("05555".as_bytes(), true, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05555".as_bytes()
         );
         assert_eq!(eq, true);
@@ -936,7 +933,7 @@ mod tests {
         let (n, eq) = l.find_near("05558".as_bytes(), false, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05565".as_bytes()
         );
         assert_eq!(eq, false);
@@ -944,21 +941,21 @@ mod tests {
         assert_eq!(n.is_null(), false);
 
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05565".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("05558".as_bytes(), true, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05555".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("05558".as_bytes(), true, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "05555".as_bytes()
         );
         assert_eq!(eq, false);
@@ -969,21 +966,21 @@ mod tests {
         let (n, eq) = l.find_near("09995".as_bytes(), false, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "09995".as_bytes()
         );
         assert_eq!(eq, true);
         let (n, eq) = l.find_near("09995".as_bytes(), true, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "09985".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("09995".as_bytes(), true, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "09995".as_bytes()
         );
         assert_eq!(eq, true);
@@ -997,14 +994,14 @@ mod tests {
         let (n, eq) = l.find_near("59995".as_bytes(), true, false);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "09995".as_bytes()
         );
         assert_eq!(eq, false);
         let (n, eq) = l.find_near("59995".as_bytes(), true, true);
         assert_eq!(n.is_null(), false);
         assert_eq!(
-            l.arena.get(deref(l.arena.get_node(n)).key_addr),
+            l.arena.get_key(deref(l.arena.get_node(n))),
             "09995".as_bytes()
         );
         assert_eq!(eq, false);
@@ -1135,6 +1132,7 @@ mod tests {
             wb.put(key.as_slice(), 0, &[], 0, key.as_slice());
             cnt += 1;
             l.put_batch(&mut wb);
+            wb.reset();
         }
         let mut it = l.new_iterator(false);
         let mut last_key = Vec::new();

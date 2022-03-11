@@ -4,6 +4,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::{mem, ptr, slice};
 
 use super::super::table::Value;
@@ -12,18 +13,17 @@ use super::WriteBatchEntry;
 
 pub const NULL_ARENA_ADDR: u64 = 0;
 
-const BLOCK_ALIGN: u32 = 7;
-const ALIGN_MASK: u32 = 0xffff_fff8;
 const NULL_BLOCK_OFF: u32 = 0xffff_ffff;
 const MAX_VAL_SIZE: u32 = 1 << 24 - 1;
 
-const VALUE_NODE_SHIFT: u64 = 63;
-const VALUE_NODE_MASK: u64 = 0x8000_0000_0000_0000;
+const BLOCK_IDX_MASK: u64 = 0xff00_0000_0000_0000;
 const BLOCK_IDX_SHIFT: u64 = 56;
-const BLOCK_IDX_MASK: u64 = 0x7f00_0000_0000_0000;
-const BLOCK_OFF_SHIFT: u64 = 24;
-const BLOCK_OFF_MASK: u64 = 0x00ff_ffff_ff00_0000;
+const BLOCK_OFF_MASK: u64 = 0x00ff_ffff_0000_0000;
+const BLOCK_OFF_SHIFT: u64 = 32;
 const SIZE_MASK: u64 = 0x0000_0000_00ff_ffff;
+const FLAG_MASK: u64 = 0x0000_0000_ff00_0000;
+const FLAG_SHIFT: u64 = 24;
+const FLAG_VALUE_NODE: u8 = 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArenaAddr(pub u64);
@@ -36,11 +36,10 @@ impl Display for ArenaAddr {
 
 impl ArenaAddr {
     fn new(block_idx: usize, block_off: u32, size: u32) -> ArenaAddr {
-        assert!(block_idx < 32);
         ArenaAddr(
-            (block_idx as u64 + 1) << BLOCK_IDX_SHIFT
-                | (block_off as u64) << BLOCK_OFF_SHIFT
-                | size as u64,
+            ((block_idx as u64 + 1) << BLOCK_IDX_SHIFT)
+                | ((block_off as u64) << BLOCK_OFF_SHIFT)
+                | (size as u64),
         )
     }
 
@@ -49,7 +48,6 @@ impl ArenaAddr {
     }
 
     pub fn block_idx(self) -> usize {
-        assert!(self.0 > 0);
         (((self.0 & BLOCK_IDX_MASK) >> BLOCK_IDX_SHIFT) - 1) as usize
     }
 
@@ -62,11 +60,11 @@ impl ArenaAddr {
     }
 
     fn mark_value_node_addr(&mut self) {
-        self.0 = 1 << VALUE_NODE_SHIFT | self.0
+        self.0 |= (FLAG_VALUE_NODE as u64) << FLAG_SHIFT
     }
 
     pub fn is_value_node_addr(self) -> bool {
-        self.0 & VALUE_NODE_MASK != 0
+        ((self.0 & FLAG_MASK) >> FLAG_SHIFT) as u8 & FLAG_VALUE_NODE > 0
     }
 
     pub fn is_null(self) -> bool {
@@ -74,46 +72,13 @@ impl ArenaAddr {
     }
 }
 
-const MB: u32 = 1024 * 1024;
-
-const BLOCK_SIZE_ARRAY: [u32; 32] = [
-    64 * 1024, // Make the first arena block small to save memory.
-    1 * MB,
-    1 * MB,
-    1 * MB,
-    2 * MB,
-    2 * MB,
-    3 * MB,
-    3 * MB,
-    4 * MB,
-    5 * MB,
-    6 * MB,
-    7 * MB,
-    8 * MB,
-    10 * MB,
-    12 * MB,
-    14 * MB,
-    16 * MB,
-    20 * MB,
-    24 * MB,
-    28 * MB,
-    32 * MB,
-    40 * MB,
-    48 * MB,
-    56 * MB,
-    64 * MB,
-    96 * MB,
-    128 * MB,
-    192 * MB,
-    256 * MB,
-    384 * MB,
-    512 * MB,
-    768 * MB,
-];
+const MAX_NUM_BLOCKS: usize = 256;
 
 pub struct Arena {
-    blocks: [AtomicPtr<ArenaBlock>; 32],
-    block_idx: AtomicU32,
+    nodes: ArenaSegment,
+    keys: ArenaSegment,
+    values: ArenaSegment,
+    total_size: Arc<AtomicU32>,
     pub(crate) rand_id: i32,
 }
 
@@ -122,34 +87,20 @@ impl Arena {
     pub fn new() -> Self {
         let mut rng = rand::thread_rng();
         let rand_id = rng.gen_range(0..i32::MAX);
-
+        let total_size = Arc::new(AtomicU32::new(0));
         let s = Self {
-            blocks: Default::default(),
-            block_idx: Default::default(),
+            nodes: ArenaSegment::new(total_size.clone()),
+            keys: ArenaSegment::new(total_size.clone()),
+            values: ArenaSegment::new(total_size.clone()),
+            total_size,
             rand_id,
         };
-        let new_block = Box::into_raw(Box::new(ArenaBlock::new(BLOCK_SIZE_ARRAY[0])));
-        s.blocks[0].store(new_block, Ordering::Release);
         s
     }
 
-    pub fn alloc(&self, size: u32) -> ArenaAddr {
-        if size > MAX_VAL_SIZE {
-            panic!("value {} is too large", size)
-        }
-        let block_idx = self.block_idx.load(Ordering::Acquire) as usize;
-        let block = self.get_block(block_idx);
-        let block_off = block.alloc(size);
-        if block_off != NULL_BLOCK_OFF {
-            return ArenaAddr::new(block_idx, block_off, size);
-        }
-        self.grow(size);
-        self.alloc(size)
-    }
-
     pub fn put_key(&self, key: &[u8]) -> ArenaAddr {
-        let addr = self.alloc(key.len() as u32);
-        let buf = self.get_mut_bytes(addr);
+        let addr = self.keys.alloc(key.len() as u32);
+        let buf = self.keys.get_mut_bytes(addr);
         unsafe {
             ptr::copy(key.as_ptr(), buf.as_mut_ptr(), key.len());
         }
@@ -158,8 +109,8 @@ impl Arena {
 
     pub fn put_val(&self, buf: &[u8], entry: &WriteBatchEntry) -> ArenaAddr {
         let size = entry.encoded_val_size();
-        let addr = self.alloc(size as u32);
-        let m_buf = self.get_mut_bytes(addr);
+        let addr = self.values.alloc(size as u32);
+        let m_buf = self.values.get_mut_bytes(addr);
         m_buf[0] = entry.meta;
         m_buf[1] = entry.user_meta_len;
         LittleEndian::write_u64(&mut m_buf[2..], entry.version);
@@ -171,7 +122,7 @@ impl Arena {
 
     pub fn put_node(&self, height: usize, buf: &[u8], entry: &WriteBatchEntry) -> &mut Node {
         let node_size = mem::size_of::<Node>() - (MAX_HEIGHT - height) * 8;
-        let node_addr = self.alloc(node_size as u32);
+        let node_addr = self.nodes.alloc(node_size as u32);
         let key_addr = self.put_key(entry.key(buf));
         let val_addr = self.put_val(buf, entry);
         let node_ptr = self.get_node(node_addr);
@@ -183,31 +134,83 @@ impl Arena {
         node
     }
 
-    fn get_block(&self, block_idx: usize) -> &ArenaBlock {
-        unsafe {
-            self.blocks[block_idx]
-                .load(Ordering::Acquire)
-                .as_ref()
-                .unwrap()
+    pub fn get_node(&self, addr: ArenaAddr) -> *mut Node {
+        if addr.0 == NULL_ARENA_ADDR {
+            return ptr::null_mut();
         }
+        let bin = self.nodes.get_mut_bytes(addr);
+        let ptr = bin.as_mut_ptr() as *mut Node;
+        unsafe { &mut *ptr }
     }
 
-    pub fn get(&self, addr: ArenaAddr) -> &[u8] {
-        self.get_block(addr.block_idx())
-            .get_bytes(addr.block_off(), addr.size())
+    pub fn get_key(&self, node: &mut Node) -> &[u8] {
+        self.keys.get_bytes(node.key_addr)
     }
 
-    pub fn get_mut_bytes(&self, addr: ArenaAddr) -> &mut [u8] {
-        self.get_block(addr.block_idx())
-            .get_mut_bytes(addr.block_off(), addr.size())
+    pub fn get_val(&self, addr: ArenaAddr) -> Value {
+        let bin = self.values.get_bytes(addr);
+        Value::decode(bin)
+    }
+
+    pub fn put_val_node(&self, vn: ValueNode) -> ArenaAddr {
+        let mut addr = self.nodes.alloc(VALUE_NODE_SIZE as u32);
+        vn.encode(self.nodes.get_mut_bytes(addr));
+        addr.mark_value_node_addr();
+        addr
+    }
+
+    pub fn get_value_node(&self, addr: ArenaAddr) -> ValueNode {
+        let mut vn: ValueNode = Default::default();
+        vn.decode(self.nodes.get_bytes(addr));
+        vn
+    }
+
+    pub fn size(&self) -> usize {
+        self.total_size.load(Ordering::Acquire) as usize
+    }
+}
+
+struct ArenaSegment {
+    blocks: Vec<AtomicPtr<ArenaBlock>>,
+    block_idx: AtomicU32,
+    total_size: Arc<AtomicU32>,
+}
+
+impl ArenaSegment {
+    fn new(total_size: Arc<AtomicU32>) -> Self {
+        let mut blocks = Vec::with_capacity(MAX_NUM_BLOCKS);
+        blocks.resize_with(MAX_NUM_BLOCKS, || AtomicPtr::<ArenaBlock>::default());
+        let s = Self {
+            blocks,
+            block_idx: Default::default(),
+            total_size,
+        };
+        let new_block = Box::into_raw(Box::new(ArenaBlock::new(block_cap(0))));
+        s.blocks[0].store(new_block, Ordering::Release);
+        s
+    }
+
+    fn alloc(&self, size: u32) -> ArenaAddr {
+        if size > MAX_VAL_SIZE {
+            panic!("value {} is too large", size)
+        }
+        let block_idx = self.block_idx.load(Ordering::Acquire) as usize;
+        let block = self.get_block(block_idx);
+        let block_off = block.alloc(size);
+        if block_off != NULL_BLOCK_OFF {
+            self.total_size.fetch_add(size, Ordering::AcqRel);
+            return ArenaAddr::new(block_idx, block_off, size);
+        }
+        self.grow(size);
+        self.alloc(size)
     }
 
     fn grow(&self, min_size: u32) {
         let block_idx = self.block_idx.load(Ordering::Acquire) as usize;
         let new_block_idx = block_idx + 1;
-        let mut new_block_size = BLOCK_SIZE_ARRAY[new_block_idx];
+        let mut new_block_size = block_cap(block_idx);
         if new_block_size < min_size {
-            new_block_size = (min_size + BLOCK_ALIGN) & ALIGN_MASK;
+            new_block_size = min_size;
         }
         let new_block = Box::into_raw(Box::new(ArenaBlock::new(new_block_size)));
         self.blocks[new_block_idx].store(new_block, Ordering::Release);
@@ -215,52 +218,34 @@ impl Arena {
             .store(new_block_idx as u32, Ordering::Release);
     }
 
-    pub fn get_node(&self, addr: ArenaAddr) -> *mut Node {
-        if addr.0 == NULL_ARENA_ADDR {
-            return ptr::null_mut();
+    #[inline(always)]
+    fn get_block(&self, block_idx: usize) -> &ArenaBlock {
+        unsafe {
+            if let Some(block) = self.blocks[block_idx].load(Ordering::Acquire).as_ref() {
+                block
+            } else {
+                panic!(
+                    "failed to get block idx {}, max {}",
+                    block_idx, self.block_idx.load(Ordering::Acquire),
+                );
+            }
         }
-        assert!(addr.block_idx() < 32, "{}, {}", addr.block_idx(), addr.0);
-        let bin = self.get_mut_bytes(addr);
-        let ptr = bin.as_mut_ptr() as *mut Node;
-        unsafe { &mut *ptr }
     }
 
-    fn get_key(&self, node: &mut Node) -> &[u8] {
-        self.get(node.key_addr)
+    fn get_bytes(&self, addr: ArenaAddr) -> &[u8] {
+        self.get_block(addr.block_idx())
+            .get_bytes(addr.block_off(), addr.size())
     }
 
-    pub fn get_val(&self, addr: ArenaAddr) -> Value {
-        let bin = self.get(addr);
-        Value::decode(bin)
-    }
-
-    pub fn put_val_node(&self, vn: ValueNode) -> ArenaAddr {
-        let mut addr = self.alloc(VALUE_NODE_SIZE as u32);
-        vn.encode(self.get_mut_bytes(addr));
-        addr.mark_value_node_addr();
-        addr
-    }
-
-    pub fn get_value_node(&self, addr: ArenaAddr) -> ValueNode {
-        let mut vn: ValueNode = Default::default();
-        vn.decode(self.get(addr));
-        vn
-    }
-
-    pub fn size(&self) -> usize {
-        let block_idx = self.block_idx.load(Ordering::Acquire) as usize;
-        let mut sum: usize = 0;
-        for i in 0..block_idx {
-            sum += BLOCK_SIZE_ARRAY[i] as usize;
-        }
-        sum += self.get_block(block_idx).len.load(Ordering::Acquire) as usize;
-        sum
+    fn get_mut_bytes(&self, addr: ArenaAddr) -> &mut [u8] {
+        self.get_block(addr.block_idx())
+            .get_mut_bytes(addr.block_off(), addr.size())
     }
 }
 
-impl Drop for Arena {
+impl Drop for ArenaSegment {
     fn drop(&mut self) {
-        for i in 0..32 {
+        for i in 0..MAX_NUM_BLOCKS {
             let block = self.blocks[i].load(Ordering::Acquire);
             if block.is_null() {
                 break;
@@ -270,6 +255,10 @@ impl Drop for Arena {
             }
         }
     }
+}
+
+fn block_cap(idx: usize) -> u32 {
+    (idx as u32 + 1) * 32 * 1024
 }
 
 struct ArenaBlock {
@@ -300,7 +289,7 @@ impl ArenaBlock {
 
     pub fn alloc(&self, size: u32) -> u32 {
         // The returned addr should be aligned in 8 bytes.
-        let offset = (self.len.load(Ordering::Acquire) + BLOCK_ALIGN) & ALIGN_MASK;
+        let offset = self.len.load(Ordering::Acquire);
         let length = offset + size;
         if length > self.cap {
             return NULL_BLOCK_OFF;
@@ -353,9 +342,9 @@ mod tests {
     #[test]
     fn test_arena() {
         let arena = Arena::new();
-        let addr = arena.alloc(8);
-        let buf = arena.get_mut_bytes(addr);
+        let addr = arena.keys.alloc(8);
+        let buf = arena.keys.get_mut_bytes(addr);
         buf[0] = 3;
-        println!("{:?}", arena.get(addr))
+        println!("{:?}", arena.keys.get_bytes(addr))
     }
 }

@@ -34,8 +34,7 @@ pub struct ChangeSet {
     pub compaction: ::protobuf::SingularPtrField<Compaction>,
     pub flush: ::protobuf::SingularPtrField<Flush>,
     pub snapshot: ::protobuf::SingularPtrField<Snapshot>,
-    pub stage: SplitStage,
-    pub split_files: ::protobuf::SingularPtrField<SplitFiles>,
+    pub initial_flush: ::protobuf::SingularPtrField<Snapshot>,
     pub split: ::protobuf::SingularPtrField<Split>,
     pub shard_delete: bool,
     pub sequence: u64,
@@ -186,52 +185,37 @@ impl ChangeSet {
         self.snapshot.take().unwrap_or_else(|| Snapshot::new())
     }
 
-    // .enginepb.SplitStage stage = 7;
+    // .enginepb.Snapshot initial_flush = 7;
 
 
-    pub fn get_stage(&self) -> SplitStage {
-        self.stage
+    pub fn get_initial_flush(&self) -> &Snapshot {
+        self.initial_flush.as_ref().unwrap_or_else(|| Snapshot::default_instance())
     }
-    pub fn clear_stage(&mut self) {
-        self.stage = SplitStage::Initial;
-    }
-
-    // Param is passed by value, moved
-    pub fn set_stage(&mut self, v: SplitStage) {
-        self.stage = v;
+    pub fn clear_initial_flush(&mut self) {
+        self.initial_flush.clear();
     }
 
-    // .enginepb.SplitFiles splitFiles = 9;
-
-
-    pub fn get_split_files(&self) -> &SplitFiles {
-        self.split_files.as_ref().unwrap_or_else(|| SplitFiles::default_instance())
-    }
-    pub fn clear_split_files(&mut self) {
-        self.split_files.clear();
-    }
-
-    pub fn has_split_files(&self) -> bool {
-        self.split_files.is_some()
+    pub fn has_initial_flush(&self) -> bool {
+        self.initial_flush.is_some()
     }
 
     // Param is passed by value, moved
-    pub fn set_split_files(&mut self, v: SplitFiles) {
-        self.split_files = ::protobuf::SingularPtrField::some(v);
+    pub fn set_initial_flush(&mut self, v: Snapshot) {
+        self.initial_flush = ::protobuf::SingularPtrField::some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_split_files(&mut self) -> &mut SplitFiles {
-        if self.split_files.is_none() {
-            self.split_files.set_default();
+    pub fn mut_initial_flush(&mut self) -> &mut Snapshot {
+        if self.initial_flush.is_none() {
+            self.initial_flush.set_default();
         }
-        self.split_files.as_mut().unwrap()
+        self.initial_flush.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_split_files(&mut self) -> SplitFiles {
-        self.split_files.take().unwrap_or_else(|| SplitFiles::new())
+    pub fn take_initial_flush(&mut self) -> Snapshot {
+        self.initial_flush.take().unwrap_or_else(|| Snapshot::new())
     }
 
     // .enginepb.Split split = 10;
@@ -363,7 +347,7 @@ impl ::protobuf::Message for ChangeSet {
                 return false;
             }
         };
-        for v in &self.split_files {
+        for v in &self.initial_flush {
             if !v.is_initialized() {
                 return false;
             }
@@ -409,10 +393,7 @@ impl ::protobuf::Message for ChangeSet {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.snapshot)?;
                 },
                 7 => {
-                    ::protobuf::rt::read_proto3_enum_with_unknown_fields_into(wire_type, is, &mut self.stage, 7, &mut self.unknown_fields)?
-                },
-                9 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.split_files)?;
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.initial_flush)?;
                 },
                 10 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.split)?;
@@ -471,10 +452,7 @@ impl ::protobuf::Message for ChangeSet {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
-        if self.stage != SplitStage::Initial {
-            my_size += ::protobuf::rt::enum_size(7, self.stage);
-        }
-        if let Some(ref v) = self.split_files.as_ref() {
+        if let Some(ref v) = self.initial_flush.as_ref() {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
@@ -522,11 +500,8 @@ impl ::protobuf::Message for ChangeSet {
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
-        if self.stage != SplitStage::Initial {
-            os.write_enum(7, self.stage.value())?;
-        }
-        if let Some(ref v) = self.split_files.as_ref() {
-            os.write_tag(9, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+        if let Some(ref v) = self.initial_flush.as_ref() {
+            os.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
@@ -616,15 +591,10 @@ impl ::protobuf::Message for ChangeSet {
                     |m: &ChangeSet| { &m.snapshot },
                     |m: &mut ChangeSet| { &mut m.snapshot },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeEnum<SplitStage>>(
-                    "stage",
-                    |m: &ChangeSet| { &m.stage },
-                    |m: &mut ChangeSet| { &mut m.stage },
-                ));
-                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<SplitFiles>>(
-                    "splitFiles",
-                    |m: &ChangeSet| { &m.split_files },
-                    |m: &mut ChangeSet| { &mut m.split_files },
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Snapshot>>(
+                    "initial_flush",
+                    |m: &ChangeSet| { &m.initial_flush },
+                    |m: &mut ChangeSet| { &mut m.initial_flush },
                 ));
                 fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Split>>(
                     "split",
@@ -678,8 +648,7 @@ impl ::protobuf::Clear for ChangeSet {
         self.compaction.clear();
         self.flush.clear();
         self.snapshot.clear();
-        self.stage = SplitStage::Initial;
-        self.split_files.clear();
+        self.initial_flush.clear();
         self.split.clear();
         self.shard_delete = false;
         self.sequence = 0;
@@ -699,8 +668,7 @@ impl ::protobuf::PbPrint for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.compaction, "compaction", buf);
         ::protobuf::PbPrint::fmt(&self.flush, "flush", buf);
         ::protobuf::PbPrint::fmt(&self.snapshot, "snapshot", buf);
-        ::protobuf::PbPrint::fmt(&self.stage, "stage", buf);
-        ::protobuf::PbPrint::fmt(&self.split_files, "split_files", buf);
+        ::protobuf::PbPrint::fmt(&self.initial_flush, "initial_flush", buf);
         ::protobuf::PbPrint::fmt(&self.split, "split", buf);
         ::protobuf::PbPrint::fmt(&self.shard_delete, "shard_delete", buf);
         ::protobuf::PbPrint::fmt(&self.sequence, "sequence", buf);
@@ -721,8 +689,7 @@ impl ::std::fmt::Debug for ChangeSet {
         ::protobuf::PbPrint::fmt(&self.compaction, "compaction", &mut s);
         ::protobuf::PbPrint::fmt(&self.flush, "flush", &mut s);
         ::protobuf::PbPrint::fmt(&self.snapshot, "snapshot", &mut s);
-        ::protobuf::PbPrint::fmt(&self.stage, "stage", &mut s);
-        ::protobuf::PbPrint::fmt(&self.split_files, "split_files", &mut s);
+        ::protobuf::PbPrint::fmt(&self.initial_flush, "initial_flush", &mut s);
         ::protobuf::PbPrint::fmt(&self.split, "split", &mut s);
         ::protobuf::PbPrint::fmt(&self.shard_delete, "shard_delete", &mut s);
         ::protobuf::PbPrint::fmt(&self.sequence, "sequence", &mut s);
@@ -1132,7 +1099,7 @@ pub struct Flush {
     pub l0_create: ::protobuf::SingularPtrField<L0Create>,
     pub properties: ::protobuf::SingularPtrField<Properties>,
     pub version: u64,
-    pub split_keys: ::protobuf::RepeatedField<::std::vec::Vec<u8>>,
+    pub is_initial_flush: bool,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -1230,29 +1197,19 @@ impl Flush {
         self.version = v;
     }
 
-    // repeated bytes splitKeys = 4;
+    // bool is_initial_flush = 4;
 
 
-    pub fn get_split_keys(&self) -> &[::std::vec::Vec<u8>] {
-        &self.split_keys
+    pub fn get_is_initial_flush(&self) -> bool {
+        self.is_initial_flush
     }
-    pub fn clear_split_keys(&mut self) {
-        self.split_keys.clear();
+    pub fn clear_is_initial_flush(&mut self) {
+        self.is_initial_flush = false;
     }
 
     // Param is passed by value, moved
-    pub fn set_split_keys(&mut self, v: ::protobuf::RepeatedField<::std::vec::Vec<u8>>) {
-        self.split_keys = v;
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_split_keys(&mut self) -> &mut ::protobuf::RepeatedField<::std::vec::Vec<u8>> {
-        &mut self.split_keys
-    }
-
-    // Take field
-    pub fn take_split_keys(&mut self) -> ::protobuf::RepeatedField<::std::vec::Vec<u8>> {
-        ::std::mem::replace(&mut self.split_keys, ::protobuf::RepeatedField::new())
+    pub fn set_is_initial_flush(&mut self, v: bool) {
+        self.is_initial_flush = v;
     }
 }
 
@@ -1289,7 +1246,11 @@ impl ::protobuf::Message for Flush {
                     self.version = tmp;
                 },
                 4 => {
-                    ::protobuf::rt::read_repeated_bytes_into(wire_type, is, &mut self.split_keys)?;
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_bool()?;
+                    self.is_initial_flush = tmp;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -1314,9 +1275,9 @@ impl ::protobuf::Message for Flush {
         if self.version != 0 {
             my_size += ::protobuf::rt::value_size(3, self.version, ::protobuf::wire_format::WireTypeVarint);
         }
-        for value in &self.split_keys {
-            my_size += ::protobuf::rt::bytes_size(4, &value);
-        };
+        if self.is_initial_flush != false {
+            my_size += 2;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
@@ -1336,9 +1297,9 @@ impl ::protobuf::Message for Flush {
         if self.version != 0 {
             os.write_uint64(3, self.version)?;
         }
-        for v in &self.split_keys {
-            os.write_bytes(4, &v)?;
-        };
+        if self.is_initial_flush != false {
+            os.write_bool(4, self.is_initial_flush)?;
+        }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1396,10 +1357,10 @@ impl ::protobuf::Message for Flush {
                     |m: &Flush| { &m.version },
                     |m: &mut Flush| { &mut m.version },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
-                    "splitKeys",
-                    |m: &Flush| { &m.split_keys },
-                    |m: &mut Flush| { &mut m.split_keys },
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+                    "is_initial_flush",
+                    |m: &Flush| { &m.is_initial_flush },
+                    |m: &mut Flush| { &mut m.is_initial_flush },
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<Flush>(
                     "Flush",
@@ -1426,7 +1387,7 @@ impl ::protobuf::Clear for Flush {
         self.l0_create.clear();
         self.properties.clear();
         self.version = 0;
-        self.split_keys.clear();
+        self.is_initial_flush = false;
         self.unknown_fields.clear();
     }
 }
@@ -1439,7 +1400,7 @@ impl ::protobuf::PbPrint for Flush {
         ::protobuf::PbPrint::fmt(&self.l0_create, "l0_create", buf);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", buf);
         ::protobuf::PbPrint::fmt(&self.version, "version", buf);
-        ::protobuf::PbPrint::fmt(&self.split_keys, "split_keys", buf);
+        ::protobuf::PbPrint::fmt(&self.is_initial_flush, "is_initial_flush", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -1453,7 +1414,7 @@ impl ::std::fmt::Debug for Flush {
         ::protobuf::PbPrint::fmt(&self.l0_create, "l0_create", &mut s);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", &mut s);
         ::protobuf::PbPrint::fmt(&self.version, "version", &mut s);
-        ::protobuf::PbPrint::fmt(&self.split_keys, "split_keys", &mut s);
+        ::protobuf::PbPrint::fmt(&self.is_initial_flush, "is_initial_flush", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -1470,11 +1431,10 @@ pub struct Snapshot {
     pub start: ::std::vec::Vec<u8>,
     pub end: ::std::vec::Vec<u8>,
     pub properties: ::protobuf::SingularPtrField<Properties>,
-    pub split_keys: ::protobuf::RepeatedField<::std::vec::Vec<u8>>,
     pub l0_creates: ::protobuf::RepeatedField<L0Create>,
     pub table_creates: ::protobuf::RepeatedField<TableCreate>,
     pub base_version: u64,
-    pub write_sequence: u64,
+    pub data_sequence: u64,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -1576,31 +1536,6 @@ impl Snapshot {
         self.properties.take().unwrap_or_else(|| Properties::new())
     }
 
-    // repeated bytes splitKeys = 4;
-
-
-    pub fn get_split_keys(&self) -> &[::std::vec::Vec<u8>] {
-        &self.split_keys
-    }
-    pub fn clear_split_keys(&mut self) {
-        self.split_keys.clear();
-    }
-
-    // Param is passed by value, moved
-    pub fn set_split_keys(&mut self, v: ::protobuf::RepeatedField<::std::vec::Vec<u8>>) {
-        self.split_keys = v;
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_split_keys(&mut self) -> &mut ::protobuf::RepeatedField<::std::vec::Vec<u8>> {
-        &mut self.split_keys
-    }
-
-    // Take field
-    pub fn take_split_keys(&mut self) -> ::protobuf::RepeatedField<::std::vec::Vec<u8>> {
-        ::std::mem::replace(&mut self.split_keys, ::protobuf::RepeatedField::new())
-    }
-
     // repeated .enginepb.L0Create l0Creates = 5;
 
 
@@ -1666,19 +1601,19 @@ impl Snapshot {
         self.base_version = v;
     }
 
-    // uint64 writeSequence = 8;
+    // uint64 data_sequence = 8;
 
 
-    pub fn get_write_sequence(&self) -> u64 {
-        self.write_sequence
+    pub fn get_data_sequence(&self) -> u64 {
+        self.data_sequence
     }
-    pub fn clear_write_sequence(&mut self) {
-        self.write_sequence = 0;
+    pub fn clear_data_sequence(&mut self) {
+        self.data_sequence = 0;
     }
 
     // Param is passed by value, moved
-    pub fn set_write_sequence(&mut self, v: u64) {
-        self.write_sequence = v;
+    pub fn set_data_sequence(&mut self, v: u64) {
+        self.data_sequence = v;
     }
 }
 
@@ -1715,9 +1650,6 @@ impl ::protobuf::Message for Snapshot {
                 3 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.properties)?;
                 },
-                4 => {
-                    ::protobuf::rt::read_repeated_bytes_into(wire_type, is, &mut self.split_keys)?;
-                },
                 5 => {
                     ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.l0_creates)?;
                 },
@@ -1736,7 +1668,7 @@ impl ::protobuf::Message for Snapshot {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint64()?;
-                    self.write_sequence = tmp;
+                    self.data_sequence = tmp;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -1760,9 +1692,6 @@ impl ::protobuf::Message for Snapshot {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
-        for value in &self.split_keys {
-            my_size += ::protobuf::rt::bytes_size(4, &value);
-        };
         for value in &self.l0_creates {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
@@ -1774,8 +1703,8 @@ impl ::protobuf::Message for Snapshot {
         if self.base_version != 0 {
             my_size += ::protobuf::rt::value_size(7, self.base_version, ::protobuf::wire_format::WireTypeVarint);
         }
-        if self.write_sequence != 0 {
-            my_size += ::protobuf::rt::value_size(8, self.write_sequence, ::protobuf::wire_format::WireTypeVarint);
+        if self.data_sequence != 0 {
+            my_size += ::protobuf::rt::value_size(8, self.data_sequence, ::protobuf::wire_format::WireTypeVarint);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -1794,9 +1723,6 @@ impl ::protobuf::Message for Snapshot {
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
-        for v in &self.split_keys {
-            os.write_bytes(4, &v)?;
-        };
         for v in &self.l0_creates {
             os.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
@@ -1810,8 +1736,8 @@ impl ::protobuf::Message for Snapshot {
         if self.base_version != 0 {
             os.write_uint64(7, self.base_version)?;
         }
-        if self.write_sequence != 0 {
-            os.write_uint64(8, self.write_sequence)?;
+        if self.data_sequence != 0 {
+            os.write_uint64(8, self.data_sequence)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1870,11 +1796,6 @@ impl ::protobuf::Message for Snapshot {
                     |m: &Snapshot| { &m.properties },
                     |m: &mut Snapshot| { &mut m.properties },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
-                    "splitKeys",
-                    |m: &Snapshot| { &m.split_keys },
-                    |m: &mut Snapshot| { &mut m.split_keys },
-                ));
                 fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<L0Create>>(
                     "l0Creates",
                     |m: &Snapshot| { &m.l0_creates },
@@ -1891,9 +1812,9 @@ impl ::protobuf::Message for Snapshot {
                     |m: &mut Snapshot| { &mut m.base_version },
                 ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "writeSequence",
-                    |m: &Snapshot| { &m.write_sequence },
-                    |m: &mut Snapshot| { &mut m.write_sequence },
+                    "data_sequence",
+                    |m: &Snapshot| { &m.data_sequence },
+                    |m: &mut Snapshot| { &mut m.data_sequence },
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<Snapshot>(
                     "Snapshot",
@@ -1920,11 +1841,10 @@ impl ::protobuf::Clear for Snapshot {
         self.start.clear();
         self.end.clear();
         self.properties.clear();
-        self.split_keys.clear();
         self.l0_creates.clear();
         self.table_creates.clear();
         self.base_version = 0;
-        self.write_sequence = 0;
+        self.data_sequence = 0;
         self.unknown_fields.clear();
     }
 }
@@ -1937,11 +1857,10 @@ impl ::protobuf::PbPrint for Snapshot {
         ::protobuf::PbPrint::fmt(&self.start, "start", buf);
         ::protobuf::PbPrint::fmt(&self.end, "end", buf);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", buf);
-        ::protobuf::PbPrint::fmt(&self.split_keys, "split_keys", buf);
         ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", buf);
         ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", buf);
         ::protobuf::PbPrint::fmt(&self.base_version, "base_version", buf);
-        ::protobuf::PbPrint::fmt(&self.write_sequence, "write_sequence", buf);
+        ::protobuf::PbPrint::fmt(&self.data_sequence, "data_sequence", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -1955,301 +1874,15 @@ impl ::std::fmt::Debug for Snapshot {
         ::protobuf::PbPrint::fmt(&self.start, "start", &mut s);
         ::protobuf::PbPrint::fmt(&self.end, "end", &mut s);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", &mut s);
-        ::protobuf::PbPrint::fmt(&self.split_keys, "split_keys", &mut s);
         ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", &mut s);
         ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", &mut s);
         ::protobuf::PbPrint::fmt(&self.base_version, "base_version", &mut s);
-        ::protobuf::PbPrint::fmt(&self.write_sequence, "write_sequence", &mut s);
+        ::protobuf::PbPrint::fmt(&self.data_sequence, "data_sequence", &mut s);
         write!(f, "{}", s)
     }
 }
 
 impl ::protobuf::reflect::ProtobufValue for Snapshot {
-    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
-        ::protobuf::reflect::ProtobufValueRef::Message(self)
-    }
-}
-
-#[derive(PartialEq,Clone,Default)]
-pub struct SplitFiles {
-    // message fields
-    pub l0_creates: ::protobuf::RepeatedField<L0Create>,
-    pub table_creates: ::protobuf::RepeatedField<TableCreate>,
-    pub table_deletes: ::std::vec::Vec<u64>,
-    // special fields
-    pub unknown_fields: ::protobuf::UnknownFields,
-    pub cached_size: ::protobuf::CachedSize,
-}
-
-impl<'a> ::std::default::Default for &'a SplitFiles {
-    fn default() -> &'a SplitFiles {
-        <SplitFiles as ::protobuf::Message>::default_instance()
-    }
-}
-
-impl SplitFiles {
-    pub fn new() -> SplitFiles {
-        ::std::default::Default::default()
-    }
-
-    // repeated .enginepb.L0Create l0Creates = 1;
-
-
-    pub fn get_l0_creates(&self) -> &[L0Create] {
-        &self.l0_creates
-    }
-    pub fn clear_l0_creates(&mut self) {
-        self.l0_creates.clear();
-    }
-
-    // Param is passed by value, moved
-    pub fn set_l0_creates(&mut self, v: ::protobuf::RepeatedField<L0Create>) {
-        self.l0_creates = v;
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_l0_creates(&mut self) -> &mut ::protobuf::RepeatedField<L0Create> {
-        &mut self.l0_creates
-    }
-
-    // Take field
-    pub fn take_l0_creates(&mut self) -> ::protobuf::RepeatedField<L0Create> {
-        ::std::mem::replace(&mut self.l0_creates, ::protobuf::RepeatedField::new())
-    }
-
-    // repeated .enginepb.TableCreate tableCreates = 2;
-
-
-    pub fn get_table_creates(&self) -> &[TableCreate] {
-        &self.table_creates
-    }
-    pub fn clear_table_creates(&mut self) {
-        self.table_creates.clear();
-    }
-
-    // Param is passed by value, moved
-    pub fn set_table_creates(&mut self, v: ::protobuf::RepeatedField<TableCreate>) {
-        self.table_creates = v;
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_table_creates(&mut self) -> &mut ::protobuf::RepeatedField<TableCreate> {
-        &mut self.table_creates
-    }
-
-    // Take field
-    pub fn take_table_creates(&mut self) -> ::protobuf::RepeatedField<TableCreate> {
-        ::std::mem::replace(&mut self.table_creates, ::protobuf::RepeatedField::new())
-    }
-
-    // repeated uint64 tableDeletes = 3;
-
-
-    pub fn get_table_deletes(&self) -> &[u64] {
-        &self.table_deletes
-    }
-    pub fn clear_table_deletes(&mut self) {
-        self.table_deletes.clear();
-    }
-
-    // Param is passed by value, moved
-    pub fn set_table_deletes(&mut self, v: ::std::vec::Vec<u64>) {
-        self.table_deletes = v;
-    }
-
-    // Mutable pointer to the field.
-    pub fn mut_table_deletes(&mut self) -> &mut ::std::vec::Vec<u64> {
-        &mut self.table_deletes
-    }
-
-    // Take field
-    pub fn take_table_deletes(&mut self) -> ::std::vec::Vec<u64> {
-        ::std::mem::replace(&mut self.table_deletes, ::std::vec::Vec::new())
-    }
-}
-
-impl ::protobuf::Message for SplitFiles {
-    fn is_initialized(&self) -> bool {
-        for v in &self.l0_creates {
-            if !v.is_initialized() {
-                return false;
-            }
-        };
-        for v in &self.table_creates {
-            if !v.is_initialized() {
-                return false;
-            }
-        };
-        true
-    }
-
-    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream) -> ::protobuf::ProtobufResult<()> {
-        while !is.eof()? {
-            let (field_number, wire_type) = is.read_tag_unpack()?;
-            match field_number {
-                1 => {
-                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.l0_creates)?;
-                },
-                2 => {
-                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.table_creates)?;
-                },
-                3 => {
-                    ::protobuf::rt::read_repeated_uint64_into(wire_type, is, &mut self.table_deletes)?;
-                },
-                _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
-                },
-            };
-        }
-        ::std::result::Result::Ok(())
-    }
-
-    // Compute sizes of nested messages
-    #[allow(unused_variables)]
-    fn compute_size(&self) -> u32 {
-        let mut my_size = 0;
-        for value in &self.l0_creates {
-            let len = value.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        };
-        for value in &self.table_creates {
-            let len = value.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        };
-        for value in &self.table_deletes {
-            my_size += ::protobuf::rt::value_size(3, *value, ::protobuf::wire_format::WireTypeVarint);
-        };
-        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
-        self.cached_size.set(my_size);
-        my_size
-    }
-
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        for v in &self.l0_creates {
-            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
-            os.write_raw_varint32(v.get_cached_size())?;
-            v.write_to_with_cached_sizes(os)?;
-        };
-        for v in &self.table_creates {
-            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
-            os.write_raw_varint32(v.get_cached_size())?;
-            v.write_to_with_cached_sizes(os)?;
-        };
-        for v in &self.table_deletes {
-            os.write_uint64(3, *v)?;
-        };
-        os.write_unknown_fields(self.get_unknown_fields())?;
-        ::std::result::Result::Ok(())
-    }
-
-    fn get_cached_size(&self) -> u32 {
-        self.cached_size.get()
-    }
-
-    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
-        &self.unknown_fields
-    }
-
-    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
-        &mut self.unknown_fields
-    }
-
-    fn as_any(&self) -> &dyn (::std::any::Any) {
-        self as &dyn (::std::any::Any)
-    }
-    fn as_any_mut(&mut self) -> &mut dyn (::std::any::Any) {
-        self as &mut dyn (::std::any::Any)
-    }
-    fn into_any(self: Box<Self>) -> ::std::boxed::Box<dyn (::std::any::Any)> {
-        self
-    }
-
-    fn descriptor(&self) -> &'static ::protobuf::reflect::MessageDescriptor {
-        Self::descriptor_static()
-    }
-
-    fn new() -> SplitFiles {
-        SplitFiles::new()
-    }
-
-    fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::lazy::Lazy {
-            lock: ::protobuf::lazy::ONCE_INIT,
-            ptr: 0 as *const ::protobuf::reflect::MessageDescriptor,
-        };
-        unsafe {
-            descriptor.get(|| {
-                let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<L0Create>>(
-                    "l0Creates",
-                    |m: &SplitFiles| { &m.l0_creates },
-                    |m: &mut SplitFiles| { &mut m.l0_creates },
-                ));
-                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TableCreate>>(
-                    "tableCreates",
-                    |m: &SplitFiles| { &m.table_creates },
-                    |m: &mut SplitFiles| { &mut m.table_creates },
-                ));
-                fields.push(::protobuf::reflect::accessor::make_vec_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
-                    "tableDeletes",
-                    |m: &SplitFiles| { &m.table_deletes },
-                    |m: &mut SplitFiles| { &mut m.table_deletes },
-                ));
-                ::protobuf::reflect::MessageDescriptor::new::<SplitFiles>(
-                    "SplitFiles",
-                    fields,
-                    file_descriptor_proto()
-                )
-            })
-        }
-    }
-
-    fn default_instance() -> &'static SplitFiles {
-        static mut instance: ::protobuf::lazy::Lazy<SplitFiles> = ::protobuf::lazy::Lazy {
-            lock: ::protobuf::lazy::ONCE_INIT,
-            ptr: 0 as *const SplitFiles,
-        };
-        unsafe {
-            instance.get(SplitFiles::new)
-        }
-    }
-}
-
-impl ::protobuf::Clear for SplitFiles {
-    fn clear(&mut self) {
-        self.l0_creates.clear();
-        self.table_creates.clear();
-        self.table_deletes.clear();
-        self.unknown_fields.clear();
-    }
-}
-
-impl ::protobuf::PbPrint for SplitFiles {
-    #[allow(unused_variables)]
-    fn fmt(&self, name: &str, buf: &mut String) {
-        ::protobuf::push_message_start(name, buf);
-        let old_len = buf.len();
-        ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", buf);
-        ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", buf);
-        ::protobuf::PbPrint::fmt(&self.table_deletes, "table_deletes", buf);
-        if old_len < buf.len() {
-          buf.push(' ');
-        }
-        buf.push('}');
-    }
-}
-impl ::std::fmt::Debug for SplitFiles {
-    #[allow(unused_variables)]
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-        let mut s = String::new();
-        ::protobuf::PbPrint::fmt(&self.l0_creates, "l0_creates", &mut s);
-        ::protobuf::PbPrint::fmt(&self.table_creates, "table_creates", &mut s);
-        ::protobuf::PbPrint::fmt(&self.table_deletes, "table_deletes", &mut s);
-        write!(f, "{}", s)
-    }
-}
-
-impl ::protobuf::reflect::ProtobufValue for SplitFiles {
     fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
         ::protobuf::reflect::ProtobufValueRef::Message(self)
     }
@@ -3356,116 +2989,41 @@ impl ::protobuf::reflect::ProtobufValue for Properties {
     }
 }
 
-#[derive(Clone,PartialEq,Eq,Debug,Hash)]
-pub enum SplitStage {
-    Initial = 0,
-    PreSplit = 1,
-    SplitFileDone = 2,
-}
-
-impl ::protobuf::ProtobufEnum for SplitStage {
-    fn value(&self) -> i32 {
-        *self as i32
-    }
-
-    fn from_i32(value: i32) -> ::std::option::Option<SplitStage> {
-        match value {
-            0 => ::std::option::Option::Some(SplitStage::Initial),
-            1 => ::std::option::Option::Some(SplitStage::PreSplit),
-            2 => ::std::option::Option::Some(SplitStage::SplitFileDone),
-            _ => ::std::option::Option::None
-        }
-    }
-
-    fn values() -> &'static [Self] {
-        static values: &'static [SplitStage] = &[
-            SplitStage::Initial,
-            SplitStage::PreSplit,
-            SplitStage::SplitFileDone,
-        ];
-        values
-    }
-
-    fn enum_descriptor_static() -> &'static ::protobuf::reflect::EnumDescriptor {
-        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::lazy::Lazy {
-            lock: ::protobuf::lazy::ONCE_INIT,
-            ptr: 0 as *const ::protobuf::reflect::EnumDescriptor,
-        };
-        unsafe {
-            descriptor.get(|| {
-                ::protobuf::reflect::EnumDescriptor::new("SplitStage", file_descriptor_proto())
-            })
-        }
-    }
-}
-
-impl ::std::marker::Copy for SplitStage {
-}
-
-impl ::protobuf::PbPrint for SplitStage {
-    fn fmt(&self, name: &str, buf: &mut String) {
-        use std::fmt::Write;
-        if *self == SplitStage::default() {
-            return;
-        }
-        ::protobuf::push_field_start(name, buf);
-        write!(buf, "{:?}", self).unwrap();
-    }
-}
-
-impl ::std::default::Default for SplitStage {
-    fn default() -> Self {
-        SplitStage::Initial
-    }
-}
-
-impl ::protobuf::reflect::ProtobufValue for SplitStage {
-    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
-        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
-    }
-}
-
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x0fchangeset.proto\x12\x08enginepb\"\x8d\x03\n\tChangeSet\x12\x11\n\
+    \n\x0fchangeset.proto\x12\x08enginepb\"\xe7\x02\n\tChangeSet\x12\x11\n\
     \x07shardID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08shardVer\x18\x02\x20\
     \x01(\x04B\0\x12*\n\ncompaction\x18\x04\x20\x01(\x0b2\x14.enginepb.Compa\
     ctionB\0\x12\x20\n\x05flush\x18\x05\x20\x01(\x0b2\x0f.enginepb.FlushB\0\
-    \x12&\n\x08snapshot\x18\x06\x20\x01(\x0b2\x12.enginepb.SnapshotB\0\x12%\
-    \n\x05stage\x18\x07\x20\x01(\x0e2\x14.enginepb.SplitStageB\0\x12*\n\nspl\
-    itFiles\x18\t\x20\x01(\x0b2\x14.enginepb.SplitFilesB\0\x12\x20\n\x05spli\
-    t\x18\n\x20\x01(\x0b2\x0f.enginepb.SplitB\0\x12\x15\n\x0bshardDelete\x18\
-    \x0b\x20\x01(\x08B\0\x12\x12\n\x08sequence\x18\x0c\x20\x01(\x04B\0\x12\
-    \x1a\n\x10nextMemTableSize\x18\r\x20\x01(\x04B\0\x12%\n\x06parent\x18\
-    \x0e\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0:\0\"\xa1\x01\n\nCompaction\
-    \x12\x0c\n\x02cf\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\x02\x20\
-    \x01(\rB\0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.enginepb.Tab\
-    leCreateB\0\x12\x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\x17\n\rbot\
-    tomDeletes\x18\x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\x06\x20\x01\
-    (\x08B\0:\0\"\x85\x01\n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01(\x0b\
-    2\x12.enginepb.L0CreateB\0\x12*\n\nproperties\x18\x02\x20\x01(\x0b2\x14.\
-    enginepb.PropertiesB\0\x12\x11\n\x07version\x18\x03\x20\x01(\x04B\0\x12\
-    \x13\n\tsplitKeys\x18\x04\x20\x03(\x0cB\0:\0\"\xf5\x01\n\x08Snapshot\x12\
-    \x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\n\x03end\x18\x02\x20\x01(\
-    \x0cB\0\x12*\n\nproperties\x18\x03\x20\x01(\x0b2\x14.enginepb.Properties\
-    B\0\x12\x13\n\tsplitKeys\x18\x04\x20\x03(\x0cB\0\x12'\n\tl0Creates\x18\
-    \x05\x20\x03(\x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\
-    \x06\x20\x03(\x0b2\x15.enginepb.TableCreateB\0\x12\x15\n\x0bbaseVersion\
-    \x18\x07\x20\x01(\x04B\0\x12\x17\n\rwriteSequence\x18\x08\x20\x01(\x04B\
-    \0:\0\"~\n\nSplitFiles\x12'\n\tl0Creates\x18\x01\x20\x03(\x0b2\x12.engin\
-    epb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x02\x20\x03(\x0b2\x15.enginep\
-    b.TableCreateB\0\x12\x16\n\x0ctableDeletes\x18\x03\x20\x03(\x04B\0:\0\"A\
-    \n\x08L0Create\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08smal\
-    lest\x18\x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x03\x20\x01(\x0cB\
-    \0:\0\"c\n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\
-    \x0f\n\x05level\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\x18\x03\x20\x01(\
-    \x05B\0\x12\x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\x07bigge\
-    st\x18\x05\x20\x01(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\
-    \x20\x03(\x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\
-    \x03(\x0cB\0:\0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\
-    \x04B\0\x12\x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\
-    \x03\x20\x03(\x0cB\0:\0*?\n\nSplitStage\x12\x0b\n\x07INITIAL\x10\0\x12\r\
-    \n\tPRE_SPLIT\x10\x01\x12\x13\n\x0fSPLIT_FILE_DONE\x10\x02\x1a\0B\0b\x06\
-    proto3\
+    \x12&\n\x08snapshot\x18\x06\x20\x01(\x0b2\x12.enginepb.SnapshotB\0\x12+\
+    \n\rinitial_flush\x18\x07\x20\x01(\x0b2\x12.enginepb.SnapshotB\0\x12\x20\
+    \n\x05split\x18\n\x20\x01(\x0b2\x0f.enginepb.SplitB\0\x12\x15\n\x0bshard\
+    Delete\x18\x0b\x20\x01(\x08B\0\x12\x12\n\x08sequence\x18\x0c\x20\x01(\
+    \x04B\0\x12\x1a\n\x10nextMemTableSize\x18\r\x20\x01(\x04B\0\x12%\n\x06pa\
+    rent\x18\x0e\x20\x01(\x0b2\x13.enginepb.ChangeSetB\0:\0\"\xa1\x01\n\nCom\
+    paction\x12\x0c\n\x02cf\x18\x01\x20\x01(\x05B\0\x12\x0f\n\x05level\x18\
+    \x02\x20\x01(\rB\0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.engi\
+    nepb.TableCreateB\0\x12\x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\
+    \x17\n\rbottomDeletes\x18\x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\
+    \x06\x20\x01(\x08B\0:\0\"\x8c\x01\n\x05Flush\x12&\n\x08l0Create\x18\x01\
+    \x20\x01(\x0b2\x12.enginepb.L0CreateB\0\x12*\n\nproperties\x18\x02\x20\
+    \x01(\x0b2\x14.enginepb.PropertiesB\0\x12\x11\n\x07version\x18\x03\x20\
+    \x01(\x04B\0\x12\x1a\n\x10is_initial_flush\x18\x04\x20\x01(\x08B\0:\0\"\
+    \xe0\x01\n\x08Snapshot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\
+    \n\x03end\x18\x02\x20\x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\x01(\
+    \x0b2\x14.enginepb.PropertiesB\0\x12'\n\tl0Creates\x18\x05\x20\x03(\x0b2\
+    \x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x06\x20\x03(\x0b2\
+    \x15.enginepb.TableCreateB\0\x12\x15\n\x0bbaseVersion\x18\x07\x20\x01(\
+    \x04B\0\x12\x17\n\rdata_sequence\x18\x08\x20\x01(\x04B\0:\0\"A\n\x08L0Cr\
+    eate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08smallest\x18\
+    \x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x03\x20\x01(\x0cB\0:\0\"c\
+    \n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\x05l\
+    evel\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\x12\
+    \x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x05\
+    \x20\x01(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\x0b\
+    2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\0:\
+    \0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\x0e\
+    \n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03(\
+    \x0cB\0:\0B\0b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

@@ -74,7 +74,6 @@ impl Runner {
         mut change_set: kvenginepb::ChangeSet,
     ) -> Option<Receiver<crate::Result<Task>>> {
         let kv = &self.kv;
-        let tp = get_change_set_type(&change_set);
         let change_set_key =
             ChangeSetKey::new(change_set.get_shard_id(), change_set.get_sequence());
         let id_ver = RegionIDVer::new(change_set.get_shard_id(), change_set.get_shard_ver());
@@ -82,8 +81,7 @@ impl Runner {
             if let Some(shard) = self.kv.get_shard(change_set.get_shard_id()) {
                 warn!("shard reject change set";
                     "region" => id_ver,
-                    "type" => tp,
-                    "seq" => change_set.get_sequence(),
+                    "change_set" => ?&change_set,
                     "initial_flushed" => shard.get_initial_flushed(),
                 );
                 if !meta_change.has_compaction() || !meta_change.get_compaction().get_conflicted() {
@@ -96,10 +94,10 @@ impl Runner {
                 return Some(rx);
             }
             warn!("shard not found for prepare change set resource";
-                "region" => id_ver, "type" => tp);
+                "change_set" => ?&change_set,
+                "region" => id_ver);
             return None;
         }
-        info!("shard apply change set"; "region" => id_ver, "type" => tp);
         let (tx, rx) = tikv_util::mpsc::bounded(1);
         let res = kv
             .pre_load_files(&change_set)
@@ -108,28 +106,6 @@ impl Runner {
             .unwrap();
         Some(rx)
     }
-}
-
-pub fn get_change_set_type(change_set: &kvenginepb::ChangeSet) -> &'static str {
-    if change_set.has_flush() {
-        return "flush";
-    }
-    if change_set.has_compaction() {
-        return "compaction";
-    }
-    if change_set.has_split_files() {
-        return "split_files";
-    }
-    if change_set.has_snapshot() {
-        return "snapshot";
-    }
-    if change_set.has_split() {
-        return "split";
-    }
-    if change_set.next_mem_table_size > 0 {
-        return "next_mem_table_size";
-    }
-    return "unknown";
 }
 
 impl Runnable for Runner {

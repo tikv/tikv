@@ -90,7 +90,7 @@ fn initial_ingest_tree(region_id: u64, shard_ver: u64) -> kvengine::IngestTree {
     change_set.set_sequence(RAFT_INIT_LOG_INDEX);
     let mut snap = Snapshot::default();
     snap.set_end(kvengine::GLOBAL_SHARD_END_KEY.to_vec());
-    snap.set_write_sequence(RAFT_INIT_LOG_INDEX);
+    snap.set_data_sequence(RAFT_INIT_LOG_INDEX);
     let props = new_initial_properties(region_id);
     snap.set_properties(props);
     change_set.set_snapshot(snap);

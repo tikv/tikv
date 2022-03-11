@@ -97,9 +97,6 @@ pub(crate) struct PeerStorage {
 
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
-    pub(crate) split_stage: kvenginepb::SplitStage,
-    pub(crate) pending_flush: Option<kvenginepb::ChangeSet>,
-    pub(crate) split_job_states: SplitJobStates,
 }
 
 impl raft::Storage for PeerStorage {
@@ -166,7 +163,7 @@ impl raft::Storage for PeerStorage {
     }
 
     fn first_index(&self) -> raft::Result<u64> {
-        Ok(self.shard_meta.as_ref().map_or(1, |m| m.write_sequence + 1))
+        Ok(self.shard_meta.as_ref().map_or(1, |m| m.data_sequence + 1))
     }
 
     fn last_index(&self) -> raft::Result<u64> {
@@ -181,7 +178,7 @@ impl raft::Storage for PeerStorage {
             ));
         }
         let shard_meta = self.shard_meta.as_ref().unwrap();
-        let snap_index = shard_meta.write_sequence;
+        let snap_index = shard_meta.data_sequence;
         if snap_index < request_index {
             info!("requesting index is too high"; "region" => self.tag(),
                 "request_index" => request_index, "snap_index" => snap_index);
@@ -218,13 +215,16 @@ impl PeerStorage {
             let shard_meta_bin = res.unwrap();
             let mut change_set = kvenginepb::ChangeSet::default();
             change_set.merge_from_bytes(&shard_meta_bin).unwrap();
-            let meta = kvengine::ShardMeta::new(change_set);
+            let meta = kvengine::ShardMeta::new(&change_set);
             shard_meta = Some(meta);
         }
         let last_term = init_last_term(&engines.raft, &region, raft_state)?;
         let mut initial_flushed = false;
         if let Some(shard) = engines.kv.get_shard(region.get_id()) {
             initial_flushed = shard.get_initial_flushed();
+            if !initial_flushed {
+                engines.raft.add_dependent(shard.parent_id, shard.id);
+            }
         }
         Ok(PeerStorage {
             engines,
@@ -236,9 +236,6 @@ impl PeerStorage {
             snap_state: SnapState::Relax,
             initial_flushed,
             shard_meta,
-            split_stage: kvenginepb::SplitStage::Initial,
-            pending_flush: None,
-            split_job_states: Default::default(),
         })
     }
 
@@ -311,7 +308,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn truncated_index(&self) -> u64 {
-        self.shard_meta.as_ref().map_or(0, |m| m.write_sequence)
+        self.shard_meta.as_ref().map_or(0, |m| m.data_sequence)
     }
 
     #[inline]
@@ -433,7 +430,7 @@ impl PeerStorage {
             KV_ENGINE_META_KEY,
             &change_set.write_to_bytes().unwrap(),
         );
-        self.shard_meta = Some(kvengine::ShardMeta::new(change_set.clone()));
+        self.shard_meta = Some(kvengine::ShardMeta::new(&change_set));
         self.region = region;
 
         let snap_task = RegionTask::ApplyChangeSet { change: change_set };
@@ -466,10 +463,17 @@ impl PeerStorage {
             .unwrap();
         let mut change = kvenginepb::ChangeSet::new();
         change.merge_from_bytes(&meta_bin).unwrap();
-        self.shard_meta = Some(ShardMeta::new(change));
-        self.split_stage = kvenginepb::SplitStage::Initial;
+        self.shard_meta = Some(ShardMeta::new(&change));
         self.initial_flushed = false;
-        self.split_job_states.reset();
+    }
+
+    pub(crate) fn parent_id(&self) -> Option<u64> {
+        if let Some(meta) = &self.shard_meta {
+            if let Some(parent) = &meta.parent {
+                return Some(parent.id)
+            }
+        }
+        None
     }
 }
 

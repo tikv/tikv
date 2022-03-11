@@ -7,6 +7,7 @@ use bytes::{Buf, Bytes};
 use kvengine::Item;
 use std::borrow::Cow;
 use std::marker::PhantomData;
+use std::ops;
 use std::sync::Arc;
 use tikv_kv::{Snapshot, Statistics};
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value};
@@ -85,17 +86,25 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<Self::Scanner> {
-        let lower_bound = lower_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
-        let upper_bound = upper_bound.map(|k| Bytes::from(k.to_raw().unwrap()));
+        let lower_bound = if let Some(k) = lower_bound {
+            Some(Bytes::from(k.to_raw().unwrap()))
+        } else {
+            None
+        };
+        let upper_bound = if let Some(k) = upper_bound {
+            Some(Bytes::from(k.to_raw().unwrap()))
+        } else {
+            None
+        };
         let mut stats = Statistics::default();
-        let lock_iter = self.snapshot.new_iterator(LOCK_CF, false, false);
+        let lock_iter = self.snapshot.new_iterator(LOCK_CF, desc, false, None);
         self.check_locks(
             lock_iter,
             lower_bound.clone(),
             upper_bound.clone(),
             &mut stats,
         )?;
-        let iter = self.snapshot.new_data_iterator(desc, self.start_ts, false);
+        let iter = self.snapshot.new_iterator(WRITE_CF, desc, false, Some(self.start_ts));
         Ok(CloudStoreScanner {
             iter,
             desc,
@@ -103,7 +112,6 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
             is_started: false,
             lower_bound,
             upper_bound,
-            stopped: false,
         })
     }
 }
@@ -167,13 +175,20 @@ impl<S: Snapshot> CloudStore<S> {
         upper_bound: Option<Bytes>,
         stats: &mut Statistics,
     ) -> mvcc::Result<()> {
-        if let Some(upper) = upper_bound {
-            lock_iter.set_bound(upper)
-        }
-        if let Some(seek_key) = lower_bound {
-            lock_iter.seek(&seek_key);
+        if lock_iter.is_reverse() {
+            if let Some(lower) = lower_bound {
+                lock_iter.set_bound(lower, false);
+            }
+            if let Some(upper) = upper_bound {
+                lock_iter.seek(upper.chunk());
+            }
         } else {
-            lock_iter.rewind();
+            if let Some(upper) = upper_bound {
+                lock_iter.set_bound(upper, false);
+            }
+            if let Some(lower) = lower_bound {
+                lock_iter.seek(lower.chunk());
+            }
         }
         stats.lock.seek += 1;
         while lock_iter.valid() {
@@ -202,7 +217,6 @@ pub struct CloudStoreScanner {
     is_started: bool,
     lower_bound: Option<Bytes>,
     upper_bound: Option<Bytes>,
-    stopped: bool,
     desc: bool,
 }
 
@@ -210,14 +224,20 @@ impl CloudStoreScanner {
     fn init(&mut self) {
         self.stats.write.seek += 1;
         if self.desc {
-            if let Some(seek_key) = &self.upper_bound {
-                self.iter.seek(seek_key);
+            if let Some(lower) = &self.lower_bound {
+                self.iter.set_bound(lower.clone(), false);
+            }
+            if let Some(upper) = &self.upper_bound {
+                self.iter.seek(upper.chunk());
             } else {
                 self.iter.rewind();
             }
         } else {
-            if let Some(seek_key) = &self.lower_bound {
-                self.iter.seek(seek_key);
+            if let Some(upper) = &self.upper_bound {
+                self.iter.set_bound(upper.clone(), false);
+            }
+            if let Some(lower) = &self.lower_bound {
+                self.iter.seek(lower.chunk());
             } else {
                 self.iter.rewind();
             }
@@ -227,9 +247,6 @@ impl CloudStoreScanner {
 
 impl super::Scanner for CloudStoreScanner {
     fn next(&mut self) -> Result<Option<(Key, Value)>> {
-        if self.stopped {
-            return Ok(None);
-        }
         if self.is_started {
             self.iter.next();
         } else {
@@ -241,21 +258,6 @@ impl super::Scanner for CloudStoreScanner {
                 return Ok(None);
             }
             let iter_key = self.iter.key();
-            if self.desc {
-                if let Some(bound_key) = &self.lower_bound {
-                    if iter_key < bound_key.chunk() {
-                        self.stopped = true;
-                        return Ok(None);
-                    }
-                }
-            } else {
-                if let Some(bound_key) = &self.upper_bound {
-                    if iter_key >= bound_key.chunk() {
-                        self.stopped = true;
-                        return Ok(None);
-                    }
-                }
-            };
             let item = self.iter.item();
             self.stats.write.next += 1;
             self.stats.write.flow_stats.read_keys += 1;
