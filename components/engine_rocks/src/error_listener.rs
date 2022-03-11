@@ -1,4 +1,4 @@
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use regex::Regex;
 use rocksdb::{DBBackgroundErrorReason, MutableStatus};
@@ -55,7 +55,7 @@ impl rocksdb::EventListener for ErrorListener {
                             "sst" => &path,
                             "err" => &err
                         );
-                        match scheduler.schedule(path.clone()) {
+                        match scheduler.schedule(path) {
                             Ok(()) => {
                                 status.reset();
                                 CRITICAL_ERROR.with_label_values(&["sst corruption"]).inc();
@@ -86,7 +86,7 @@ impl rocksdb::EventListener for ErrorListener {
 // We assume that only the corruption sst file path is printed inside error.
 fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     let r = Regex::new(r"/\w*\.sst").unwrap();
-    let matches = match r.captures(&err) {
+    let matches = match r.captures(err) {
         None => return None,
         Some(v) => v,
     };

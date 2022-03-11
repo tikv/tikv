@@ -231,6 +231,13 @@
 ## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
+## The maximum hang time after rocksdb detects a background error. When some data belonging to the
+## data range is damaged, it will be reported to PD, and PD will add `evict-leader-scheduler` in
+## this store to minimize the impact on user workload as much as possible.
+##
+## Set to 0 to disable this feature if you want to panic immediately when encountering such an error.
+# max-background-error-hang-time = "24h"
+
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
 ##

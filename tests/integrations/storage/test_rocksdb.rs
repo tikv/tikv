@@ -19,7 +19,7 @@ fn test_sst_recovery_for_rocksdb() {
     cluster.start().unwrap();
 
     let node_ids = cluster.get_node_ids();
-    let corruption_id = node_ids.iter().next().unwrap().clone();
+    let corruption_id = *node_ids.iter().next().unwrap();
     assert_eq!(cluster.count, 1);
     assert_eq!(cluster.sst_workers.len(), 1);
     assert_eq!(cluster.sst_workers_map.len(), 1);
@@ -90,12 +90,12 @@ fn test_sst_recovery_for_rocksdb() {
 fn disturb_sst_file(path: &Path) {
     assert!(path.exists());
     let mut file = std::fs::File::create(path).unwrap();
-    file.write(b"surprise").unwrap();
+    file.write_all(b"surprise").unwrap();
     file.sync_all().unwrap();
 }
 
 fn compact_files_to_bottom(engine: &Arc<DB>, files: Vec<String>) -> Result<(), String> {
-    let handle = get_cf_handle(&engine, CF_DEFAULT).unwrap();
+    let handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
     let mut opt = CompactionOptions::new();
     opt.set_max_subcompactions(1);
     // output_level should be from 0 to 6.

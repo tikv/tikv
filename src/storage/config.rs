@@ -88,7 +88,7 @@ impl Default for Config {
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IORateLimitConfig::default(),
-            max_background_error_hang_time: ReadableDuration::hours(0),
+            max_background_error_hang_time: ReadableDuration::hours(24),
         }
     }
 }
