@@ -4,7 +4,6 @@ use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
 
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
-use tikv_util::codec::number::U64_SIZE;
 use txn_types::{Key, TimeStamp, Value};
 
 const VEC_SHRINK_THRESHOLD: usize = 512; // shrink vec when it's over 512.
@@ -98,7 +97,8 @@ fn is_user_key_eq(left: &[u8], right: &[u8]) -> bool {
     if len != right.len() {
         return false;
     }
-    Key::is_user_key_eq(left, &right[..len - U64_SIZE])
+    // ensure all keys is encoded with ts.
+    Key::is_user_key_eq(left, Key::truncate_ts_for(right).unwrap())
 }
 
 impl<I: Iterator> RawMvccIterator<I> {
@@ -117,7 +117,7 @@ impl<I: Iterator> RawMvccIterator<I> {
             key.clear();
             key.extend_from_slice(self.inner.key());
             if key.capacity() > key.len() * 2 && key.capacity() > VEC_SHRINK_THRESHOLD {
-                key.shrink_to(key.len() * 2);
+                key.shrink_to_fit();
             }
         } else {
             self.cur_key = Some(Vec::from(self.inner.key()));
@@ -126,7 +126,7 @@ impl<I: Iterator> RawMvccIterator<I> {
             value.clear();
             value.extend_from_slice(self.inner.value());
             if value.capacity() > value.len() * 2 && value.capacity() > VEC_SHRINK_THRESHOLD {
-                value.shrink_to(value.len() * 2);
+                value.shrink_to_fit();
             }
         } else {
             self.cur_value = Some(Vec::from(self.inner.value()));
@@ -229,16 +229,12 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
 
     fn key(&self) -> &[u8] {
         // need map_or_else to lazy evaluate the default func, as it will abort when invalid.
-        self.cur_key
-            .as_ref()
-            .map(|k| k.as_slice())
-            .unwrap_or_else(|| self.inner.key())
+        self.cur_key.as_deref().unwrap_or_else(|| self.inner.key())
     }
 
     fn value(&self) -> &[u8] {
         self.cur_value
-            .as_ref()
-            .map(|v| v.as_slice())
+            .as_deref()
             .unwrap_or_else(|| self.inner.value())
     }
 }
