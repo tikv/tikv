@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
@@ -21,8 +22,8 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
+use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
+use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
     StatusCmdType, StatusResponse,
@@ -44,7 +45,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, timespec_to_ns, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -56,7 +57,7 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
+    ExecResult, StoreInfo,
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftMetrics;
@@ -73,8 +74,9 @@ use crate::store::worker::{
     ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
+use crate::store::RaftlogFetchResult;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, MergeResultKind, PeerMsg, PeerTick,
+    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
@@ -131,6 +133,7 @@ where
     /// sync-log in apply threads. Stale logs will be deleted if the skip time reaches this
     /// `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
+    reactivate_memory_lock_ticks: usize,
 
     /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
@@ -143,6 +146,12 @@ where
     /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
     /// can start destroying without seeking.
     logs_gc_flushed: bool,
+
+    /// To make sure the reported store/peer meta is up to date, each peer has to wait for the log
+    /// at its target commit index to be applied. The last peer does so triggers the next procedure
+    /// which is reporting the store/peer meta to PD.
+    unsafe_recovery_target_commit_index: Option<u64>,
+    unsafe_recovery_wait_apply_counter: Option<Arc<AtomicUsize>>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -256,10 +265,13 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
+                reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                unsafe_recovery_target_commit_index: None,
+                unsafe_recovery_wait_apply_counter: None,
             }),
         ))
     }
@@ -309,10 +321,13 @@ where
                 receiver: rx,
                 skip_split_count: 0,
                 skip_gc_raft_log_ticks: 0,
+                reactivate_memory_lock_ticks: 0,
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(),
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                unsafe_recovery_target_commit_index: None,
+                unsafe_recovery_wait_apply_counter: None,
             }),
         ))
     }
@@ -663,6 +678,9 @@ where
                 PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                     self.on_update_region_for_unsafe_recover(region)
                 }
+                PeerMsg::UnsafeRecoveryWaitApply(counter) => {
+                    self.on_unsafe_recovery_wait_apply(counter)
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -859,6 +877,56 @@ where
         self.register_raft_base_tick();
     }
 
+    fn finish_unsafe_recovery_wait_apply(&mut self) {
+        if self
+            .fsm
+            .unsafe_recovery_wait_apply_counter
+            .as_ref()
+            .unwrap()
+            .fetch_sub(1, Ordering::Relaxed)
+            == 1
+        {
+            let mut stats = StoreStats::default();
+            stats.set_store_id(self.store_id());
+            let store_info = StoreInfo {
+                kv_engine: self.ctx.engines.kv.clone(),
+                raft_engine: self.ctx.engines.raft.clone(),
+                capacity: self.ctx.cfg.capacity.0,
+            };
+            let task = PdTask::StoreHeartbeat {
+                stats,
+                store_info,
+                send_detailed_report: true,
+                dr_autosync_status: self
+                    .ctx
+                    .global_replication_state
+                    .lock()
+                    .unwrap()
+                    .store_dr_autosync_status(),
+            };
+            if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+                panic!("fail to send detailed report to pd {:?}", e);
+            }
+        }
+        self.fsm.unsafe_recovery_target_commit_index = None;
+        self.fsm.unsafe_recovery_wait_apply_counter = None;
+    }
+
+    fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
+        self.fsm.unsafe_recovery_target_commit_index =
+            Some(self.fsm.peer.raft_group.store().commit_index());
+        self.fsm.unsafe_recovery_wait_apply_counter = Some(counter);
+        // If the applied index equals to the commit index, there is nothing to wait for, proceeds
+        // to the next step immediately. If they are not equal, further checks will be performed in
+        // on_apply_res().
+        if self.fsm.stopped
+            || self.fsm.peer.raft_group.store().applied_index()
+                == self.fsm.peer.raft_group.store().commit_index()
+        {
+            self.finish_unsafe_recovery_wait_apply();
+        }
+    }
+
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -881,6 +949,12 @@ where
             }
             CasualMessage::RegionApproximateKeys { keys } => {
                 self.on_approximate_region_keys(keys);
+            }
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch,
+                bucket_keys,
+            } => {
+                self.on_refresh_region_buckets(region_epoch, bucket_keys);
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 self.on_compaction_declined_bytes(bytes);
@@ -955,6 +1029,9 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
+            CasualMessage::SnapshotApplied => {
+                self.fsm.has_ready = true;
+            }
         }
     }
 
@@ -969,6 +1046,7 @@ where
             "region_id" => self.region_id(),
         );
         self.fsm.tick_registry[tick as usize] = false;
+        self.fsm.peer.adjust_cfg_if_changed(self.ctx);
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(false),
@@ -978,6 +1056,7 @@ where
             PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
+            PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
         }
     }
 
@@ -1186,21 +1265,32 @@ where
                 self.on_raft_log_gc_flushed();
             }
             SignificantMsg::RaftlogFetched { context, res } => {
-                let low = res.low;
-                if self.fsm.peer.term() != res.term {
-                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
-                } else {
-                    self.fsm
-                        .peer
-                        .mut_store()
-                        .update_async_fetch_res(low, Some(res));
-                }
-                self.fsm.peer.raft_group.on_entries_fetched(context);
-                // clean the async fetch result immediately if not used to free memory
-                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-                self.fsm.has_ready = true;
+                self.on_raft_log_fetched(context, res);
             }
         }
+    }
+
+    fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
+        let low = res.low;
+        // if the peer is not the leader anymore or being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+            return;
+        }
+
+        if self.fsm.peer.term() != res.term {
+            // term has changed, the result may be not correct.
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+        } else {
+            self.fsm
+                .peer
+                .mut_store()
+                .update_async_fetch_res(low, Some(res));
+        }
+        self.fsm.peer.raft_group.on_entries_fetched(context);
+        // clean the async fetch result immediately if not used to free memory
+        self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+        self.fsm.has_ready = true;
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
@@ -1448,9 +1538,12 @@ where
                 self.fsm.missing_ticks = 0;
             }
         }
+
+        // Tick the raft peer and update some states which can be changed in `tick`.
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
         }
+        self.fsm.peer.post_raft_group_tick();
 
         self.fsm.peer.mut_store().flush_cache_metrics();
 
@@ -1535,6 +1628,12 @@ where
                         .unwrap();
                     *is_ready = true;
                 }
+            }
+        }
+        // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
+        if let Some(target_commit_index) = self.fsm.unsafe_recovery_target_commit_index {
+            if self.fsm.peer.raft_group.store().applied_index() >= target_commit_index {
+                self.finish_unsafe_recovery_wait_apply();
             }
         }
     }
@@ -2363,14 +2462,14 @@ where
                     if self.fsm.batch_req_builder.request.is_some() {
                         self.propose_batch_raft_command(true);
                     }
-                    // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
-                    // is a reply to a transfer leader command before. Then, we can initiate
-                    // transferring leader.
-                    if msg.get_context() != TRANSFER_LEADER_COMMAND_REPLY_CTX
-                        && self.propose_locks_before_transfer_leader()
-                    {
+                    if self.propose_locks_before_transfer_leader(msg) {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
+                        info!("propose transfer leader command";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "to" => ?from,
+                        );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
                             self.fsm.peer.peer.clone(),
@@ -2405,16 +2504,38 @@ where
     // unavailable time caused by waiting for the transferree catching up logs.
     // 2. Make transferring leader strictly after write commands that executes
     // before proposing the locks, preventing unexpected lock loss.
-    fn propose_locks_before_transfer_leader(&mut self) -> bool {
+    fn propose_locks_before_transfer_leader(&mut self, msg: &eraftpb::Message) -> bool {
         // 1. Disable in-memory pessimistic locks.
-        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
-        // If `is_valid` is false, the locks should have been proposed. But we still need to
-        // return true to propose another TransferLeader command. Otherwise, some write requests
-        // that have marked some locks as deleted will fail because raft rejects more proposals.
-        if !pessimistic_locks.is_valid {
+
+        // Clone to make borrow checker happy when registering ticks.
+        let txn_ext = self.fsm.peer.txn_ext.clone();
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+
+        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
+        // is a reply to a transfer leader command before. If the locks status remain
+        // in the TransferringLeader status, we can safely initiate transferring leader
+        // now.
+        // If it's not in TransferringLeader status now, it is probably because several
+        // ticks have passed after proposing the locks in the last time and we reactivate
+        // the memory locks. Then, we should propose the locks again.
+        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
+            && pessimistic_locks.status == LocksStatus::TransferringLeader
+        {
+            return false;
+        }
+
+        // If it is not writable, it's probably because it's a retried TransferLeader and the locks
+        // have been proposed. But we still need to return true to propose another TransferLeader
+        // command. Otherwise, some write requests that have marked some locks as deleted will fail
+        // because raft rejects more proposals.
+        // It is OK to return true here if it's in other states like MergingRegion or NotLeader.
+        // In those cases, the locks will fail to propose and nothing will happen.
+        if !pessimistic_locks.is_writable() {
             return true;
         }
-        pessimistic_locks.is_valid = false;
+        pessimistic_locks.status = LocksStatus::TransferringLeader;
+        self.fsm.reactivate_memory_lock_ticks = 0;
+        self.register_reactivate_memory_lock_tick();
 
         // 2. Propose pessimistic locks
         if pessimistic_locks.is_empty() {
@@ -2451,6 +2572,7 @@ where
         cmd.mut_header()
             .set_region_epoch(self.region().get_region_epoch().clone());
         cmd.mut_header().set_peer(self.fsm.peer.peer.clone());
+        info!("propose {} locks before transferring leader", cmd.get_requests().len(); "region_id" => self.fsm.region_id());
         self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
         true
     }
@@ -2590,6 +2712,11 @@ where
         let region_id = self.region_id();
         // We can't destroy a peer which is handling snapshot.
         assert!(!self.fsm.peer.is_handling_snapshot());
+
+        // No need to wait for the apply anymore.
+        if self.fsm.unsafe_recovery_target_commit_index.is_some() {
+            self.finish_unsafe_recovery_wait_apply();
+        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
@@ -2782,6 +2909,12 @@ where
                     if self.fsm.peer.is_leader() {
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
+                        // As `raft_max_inflight_msgs` may have been updated via online config
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
                     }
                 }
                 ConfChangeType::RemoveNode => {
@@ -2909,6 +3042,7 @@ where
         // to the old region will stay in the original map.
         let region_locks = {
             let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+            info!("moving {} locks to new regions", pessimistic_locks.len(); "region_id" => region_id);
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived.get_region_epoch().get_version();
@@ -3125,10 +3259,8 @@ where
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
-            if util::is_epoch_stale(
-                target_region.get_region_epoch(),
-                target_state.get_region().get_region_epoch(),
-            ) {
+            let state_epoch = target_state.get_region().get_region_epoch();
+            if util::is_epoch_stale(target_region.get_region_epoch(), state_epoch) {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
@@ -3153,6 +3285,10 @@ where
                         );
                     }
                     cmp::Ordering::Greater => {
+                        if state_epoch.get_version() == 0 && state_epoch.get_conf_ver() == 0 {
+                            // There is a new peer and it's destroyed without being initialised.
+                            return Ok(true);
+                        }
                         // The local target peer id is greater than the one in target region, but its epoch
                         // is staler than target_region's. That is contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
@@ -3602,7 +3738,12 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "commit_index" => commit,
             );
-            self.fsm.peer.txn_ext.pessimistic_locks.write().is_valid = true;
+            {
+                let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+                if pessimistic_locks.status == LocksStatus::MergingRegion {
+                    pessimistic_locks.status = LocksStatus::Normal;
+                }
+            }
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
     }
@@ -4271,7 +4412,7 @@ where
             // Raft log size ecceeds the limit.
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            applied_idx
+            std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft logs.
             // There will be at least 3 entries left after one compaction:
@@ -4545,6 +4686,29 @@ where
         self.register_pd_heartbeat_tick();
     }
 
+    fn on_refresh_region_buckets(&mut self, region_epoch: RegionEpoch, bucket_keys: Vec<Vec<u8>>) {
+        let region = self.fsm.peer.region();
+        if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
+            info!(
+                "receive a stale refresh region bucket message";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "epoch" => ?region_epoch,
+                "current_epoch" => ?region.get_region_epoch(),
+            );
+            return;
+        }
+        let mut region_buckets = Buckets::default();
+        region_buckets.version = timespec_to_ns(monotonic_raw_now());
+        region_buckets.set_keys(bucket_keys.into());
+        // add region's start/end key
+        region_buckets
+            .keys
+            .insert(0, region.get_start_key().to_vec());
+        region_buckets.keys.push(region.get_end_key().to_vec());
+        self.fsm.peer.region_buckets = region_buckets;
+    }
+
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
         self.fsm.peer.compaction_declined_bytes += declined_bytes;
         if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff.0 {
@@ -4713,6 +4877,37 @@ where
 
     fn register_check_peer_stale_state_tick(&mut self) {
         self.schedule_tick(PeerTick::CheckPeerStaleState)
+    }
+
+    fn register_reactivate_memory_lock_tick(&mut self) {
+        self.schedule_tick(PeerTick::ReactivateMemoryLock)
+    }
+
+    fn on_reactivate_memory_lock_tick(&mut self) {
+        let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+
+        // If it is not leader, we needn't reactivate by tick. In-memory pessimistic lock will
+        // be enabled when this region becomes leader again.
+        // And this tick is currently only used for the leader transfer failure case.
+        if !self.fsm.peer.is_leader() || pessimistic_locks.status != LocksStatus::TransferringLeader
+        {
+            return;
+        }
+
+        self.fsm.reactivate_memory_lock_ticks += 1;
+        let transferring_leader = self.fsm.peer.raft_group.raft.lead_transferee.is_some();
+        // `lead_transferee` is not set immediately after the lock status changes. So, we need
+        // the tick count condition to avoid reactivating too early.
+        if !transferring_leader
+            && self.fsm.reactivate_memory_lock_ticks
+                >= self.ctx.cfg.reactive_memory_lock_timeout_tick
+        {
+            pessimistic_locks.status = LocksStatus::Normal;
+            self.fsm.reactivate_memory_lock_ticks = 0;
+        } else {
+            drop(pessimistic_locks);
+            self.register_reactivate_memory_lock_tick();
+        }
     }
 }
 

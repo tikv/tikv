@@ -141,13 +141,33 @@ pub trait SplitCheckObserver<E>: Coprocessor {
     );
 }
 
+pub struct RoleChange {
+    pub state: StateRole,
+    pub leader_id: u64,
+    /// The previous `lead_transferee` if no leader currently.
+    pub prev_lead_transferee: u64,
+    /// Which peer is voted by itself.
+    pub vote: u64,
+}
+
+impl RoleChange {
+    pub fn new(state: StateRole) -> Self {
+        RoleChange {
+            state,
+            leader_id: raft::INVALID_ID,
+            prev_lead_transferee: raft::INVALID_ID,
+            vote: raft::INVALID_ID,
+        }
+    }
+}
+
 pub trait RoleObserver: Coprocessor {
     /// Hook to call when role of a peer changes.
     ///
     /// Please note that, this hook is not called at realtime. There maybe a
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
-    fn on_role_change(&self, _: &mut ObserverContext<'_>, _: StateRole) {}
+    fn on_role_change(&self, _: &mut ObserverContext<'_>, _: &RoleChange) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -346,7 +366,7 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    fn on_step(&self, _msg: &mut eraftpb::Message) {}
+    fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
 }
 
 #[cfg(test)]

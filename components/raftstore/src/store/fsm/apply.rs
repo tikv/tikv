@@ -18,8 +18,8 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
+    HandlerBuilder, PollHandler, Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -3261,6 +3261,7 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
+        fail_point!("on_handle_apply_store_1", apply_ctx.store_id == 1, |_| {});
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
@@ -3764,7 +3765,10 @@ where
     EK: KvEngine,
     W: WriteBatch<EK> + 'static,
 {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a BatchSystemConfig),
+    {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
                 CmpOrdering::Greater => {
@@ -3777,6 +3781,7 @@ where
                 }
                 _ => {}
             }
+            update_cfg(&incoming.apply_batch_system);
         }
         self.apply_ctx.perf_context.start_observe();
     }

@@ -207,6 +207,9 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
             IsolationLevel::Rc => {}
+            IsolationLevel::RcCheckTs => {
+                return Err(box_err!("RcCheckTs is not supported"));
+            }
         }
 
         self.load_data(user_key)
