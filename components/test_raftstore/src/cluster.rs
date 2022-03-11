@@ -1654,6 +1654,7 @@ impl<T: Simulator> Cluster<T> {
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
                 assert_eq!(expect_buckets.get_keys(), stat.buckets.get_keys());
+                assert_eq!(expect_buckets.get_keys().len() - 1, stat.buckets_size.len());
             }),
         };
         CasualRouter::send(

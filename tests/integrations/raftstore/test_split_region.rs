@@ -977,7 +977,7 @@ fn test_refresh_region_bucket_keys() {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     cluster.must_put(b"k11", b"v1");
-    let mut region = pd_client.get_region(b"v1").unwrap();
+    let mut region = pd_client.get_region(b"k11").unwrap();
 
     let bucket = Bucket {
         keys: vec![b"k11".to_vec()],
@@ -1016,13 +1016,22 @@ fn test_refresh_region_bucket_keys() {
     region.mut_region_epoch().set_conf_ver(conf_ver);
     cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
 
-    // further split k12 bucket into more buckets
-    let region = pd_client.get_region(b"v1").unwrap();
-    let bucket_ranges = vec![SplitCheckBucketRange(vec![], b"k12".to_vec())];
-    let buckets = vec![Bucket {
-        keys: vec![b"k0".to_vec(), b"k10".to_vec(), b"k11".to_vec()],
-        size: 1024 * 1024 * 200,
-    }];
+    // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more buckets
+    let region = pd_client.get_region(b"k11").unwrap();
+    let bucket_ranges = vec![
+        SplitCheckBucketRange(vec![], b"k12".to_vec()),
+        SplitCheckBucketRange(b"k12".to_vec(), vec![]),
+    ];
+    let buckets = vec![
+        Bucket {
+            keys: vec![b"k0".to_vec(), b"k10".to_vec(), b"k11".to_vec()],
+            size: 1024 * 1024 * 200,
+        },
+        Bucket {
+            keys: vec![b"k121".to_vec(), b"k122".to_vec()],
+            size: 1024 * 1024 * 200,
+        },
+    ];
     expected_buckets.set_keys(
         vec![
             vec![],
@@ -1030,6 +1039,8 @@ fn test_refresh_region_bucket_keys() {
             b"k10".to_vec(),
             b"k11".to_vec(),
             b"k12".to_vec(),
+            b"k121".to_vec(),
+            b"k122".to_vec(),
             vec![],
         ]
         .into(),
@@ -1041,7 +1052,7 @@ fn test_refresh_region_bucket_keys() {
         expected_buckets.clone(),
     );
 
-    // remove k11~k12 and k12~[] bucket
+    // remove k11~k12, k12~k121, k122~[] bucket
     let buckets = vec![
         Bucket {
             keys: vec![],
@@ -1049,20 +1060,26 @@ fn test_refresh_region_bucket_keys() {
         },
         Bucket {
             keys: vec![],
-            size: 1, // small enough to merge with left bucket
+            size: 1024 * 1024 * 65, // not small enough to merge with left
+        },
+        Bucket {
+            keys: vec![],
+            size: 1024 * 1024 * 63, // small enough to merge with left bucket
         },
     ];
 
     let bucket_ranges = vec![
         SplitCheckBucketRange(b"k11".to_vec(), b"k12".to_vec()),
-        SplitCheckBucketRange(b"k12".to_vec(), vec![]),
+        SplitCheckBucketRange(b"k121".to_vec(), b"k122".to_vec()),
+        SplitCheckBucketRange(b"k122".to_vec(), vec![]),
     ];
     expected_buckets.set_keys(
         vec![
             vec![],
             b"k0".to_vec(),
             b"k10".to_vec(),
-            b"k12".to_vec(), // k11-k12 are merged into k11 ~ []
+            b"k12".to_vec(),
+            b"k121".to_vec(), // k121~k122 cannot be merged to left as it's too big
             vec![],
         ]
         .into(),

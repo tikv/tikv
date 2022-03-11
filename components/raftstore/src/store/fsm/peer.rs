@@ -4697,10 +4697,11 @@ where
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
         cb: Callback<EK::Snapshot>,
     ) {
-        let test_only_callback = |cb, region_buckets| {
+        let test_only_callback = |cb, region_buckets, buckets_size| {
             if let Callback::Test { cb } = cb {
                 let peer_stat = PeerInternalStat {
                     buckets: region_buckets,
+                    buckets_size,
                 };
                 cb(peer_stat);
             }
@@ -4715,50 +4716,69 @@ where
                 "current_epoch" => ?region.get_region_epoch(),
             );
             // test purpose
-            test_only_callback(cb, self.fsm.peer.region_buckets.clone());
+            test_only_callback(
+                cb,
+                self.fsm.peer.region_buckets.clone(),
+                self.fsm.peer.buckets_size.clone(),
+            );
             return;
         }
 
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut region_buckets_keys = self.fsm.peer.region_buckets.keys.to_vec();
+            let mut region_buckets_size = self.fsm.peer.buckets_size.clone();
             let mut region_buckets = Buckets::default();
             region_buckets.version = timespec_to_ns(monotonic_raw_now());
             let mut i = 0;
             let mut j = 0;
             let buckets = buckets.drain(..);
             for mut bucket in buckets {
-                while i < region_buckets_keys.len() {
-                    if region_buckets_keys[i] == bucket_ranges[j].0 {
-                        // the bucket size is small and does not have split keys,
-                        // then it should be merged with its left neighbor
-                        if bucket.keys.is_empty()
-                            && bucket.size
-                                <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
-                        {
-                            // i is not the last entry (which is end key)
-                            assert!(i < region_buckets_keys.len() - 1);
-                            // the region has more than one bucket
-                            if region_buckets_keys.len() > 2 {
-                                region_buckets_keys.remove(i); // bucket is too small
-                                continue;
-                            }
-                        } else {
-                            // insert new bucket keys (split the original bucket)
-                            for bucket_key in bucket.keys.drain(..) {
-                                i += 1;
-                                region_buckets_keys.insert(i, bucket_key);
-                            }
-                        }
-                    }
+                while i < region_buckets_keys.len() && region_buckets_keys[i] != bucket_ranges[j].0
+                {
                     i += 1;
                 }
+                assert!(i != region_buckets_keys.len());
+                // the bucket size is small and does not have split keys,
+                // then it should be merged with its left neighbor
+                if bucket.keys.is_empty()
+                    && bucket.size <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
+                {
+                    region_buckets_size[i] = bucket.size;
+                    // i is not the last entry (which is end key)
+                    assert!(i < region_buckets_keys.len() - 1);
+                    // the region has more than one bucket
+                    // and the left neighbor + current bucket size is not very big
+                    if region_buckets_keys.len() > 2
+                        && i != 0
+                        && region_buckets_size[i - 1] + bucket.size
+                            < self.ctx.coprocessor_host.cfg.region_bucket_size.0 * 2
+                    {
+                        region_buckets_size[i - 1] += region_buckets_size[i];
+                        region_buckets_keys.remove(i); // bucket is too small
+                        region_buckets_size.remove(i);
+                        j += 1;
+                        continue;
+                    }
+                } else {
+                    // update size
+                    region_buckets_size[i] = bucket.size / (bucket.keys.len() + 1) as u64;
+                    // insert new bucket keys (split the original bucket)
+                    for bucket_key in bucket.keys.drain(..) {
+                        i += 1;
+                        region_buckets_keys.insert(i, bucket_key);
+                        region_buckets_size
+                            .insert(i, self.ctx.coprocessor_host.cfg.region_bucket_size.0);
+                    }
+                }
+                i += 1;
                 j += 1;
             }
 
             region_buckets.set_keys(region_buckets_keys.into());
             assert_eq!(j, bucket_ranges.len());
             self.fsm.peer.region_buckets = region_buckets;
+            self.fsm.peer.buckets_size = region_buckets_size;
         } else {
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
@@ -4771,14 +4791,23 @@ where
                 .insert(0, region.get_start_key().to_vec());
             region_buckets.keys.push(region.get_end_key().to_vec());
             self.fsm.peer.region_buckets = region_buckets;
+            self.fsm.peer.buckets_size = vec![
+                self.ctx.coprocessor_host.cfg.region_bucket_size.0;
+                self.fsm.peer.region_buckets.keys.len() - 1
+            ];
         }
-        info!(
+        debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
             "buckets count" => self.fsm.peer.region_buckets.get_keys().len(),
+            "buckets size" => ?self.fsm.peer.buckets_size,
         );
         // test purpose
-        test_only_callback(cb, self.fsm.peer.region_buckets.clone());
+        test_only_callback(
+            cb,
+            self.fsm.peer.region_buckets.clone(),
+            self.fsm.peer.buckets_size.clone(),
+        );
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

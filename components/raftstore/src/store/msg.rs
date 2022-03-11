@@ -45,6 +45,7 @@ pub struct WriteResponse {
 #[derive(Debug)]
 pub struct PeerInternalStat {
     pub buckets: Buckets,
+    pub buckets_size: Vec<u64>,
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t

@@ -608,6 +608,7 @@ where
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
     pub region_buckets: Buckets,
+    pub buckets_size: Vec<u64>,
 
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
@@ -737,6 +738,7 @@ where
             apply_snap_ctx: None,
             region_buckets: Buckets::default(),
             lead_transferee: raft::INVALID_ID,
+            buckets_size: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
