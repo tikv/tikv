@@ -28,7 +28,7 @@ pub struct Opt {
     /// Set the address of pd
     pub pd: Option<String>,
 
-    #[structopt(long, default_value = "info")]
+    #[structopt(long, default_value = "warn")]
     /// Set the log level
     pub log_level: String,
 
