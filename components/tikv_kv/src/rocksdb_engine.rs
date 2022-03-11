@@ -21,8 +21,8 @@ use txn_types::{Key, Value};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    modifies_to_requests, write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
-    ExtCallback, Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -186,7 +186,7 @@ impl Engine for RocksEngine {
     fn async_write_ext(
         &self,
         _: &Context,
-        batch: WriteData,
+        mut batch: WriteData,
         cb: Callback<()>,
         pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
@@ -198,8 +198,13 @@ impl Engine for RocksEngine {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
         if let Some(cb) = pre_propose_cb {
-            let mut reqs = modifies_to_requests(batch.modifies.clone());
+            let mut reqs = batch
+                .modifies
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>();
             cb(&mut reqs);
+            batch.modifies = reqs.into_iter().map(Into::into).collect::<Vec<_>>();
         }
         if let Some(cb) = proposed_cb {
             cb();

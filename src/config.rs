@@ -2294,10 +2294,6 @@ pub struct CdcConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
-    /// `causal_ts_refresh_interval` is used for causal timestamp of RawKV CDC, to balance metrics precision & PD load.
-    /// TODO: make doc visible when RawKV CDC feature enabled.
-    #[doc(hidden)]
-    pub causal_ts_refresh_interval: ReadableDuration,
 }
 
 impl Default for CdcConfig {
@@ -2319,7 +2315,6 @@ impl Default for CdcConfig {
             old_value_cache_memory_quota: ReadableSize::mb(512),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
-            causal_ts_refresh_interval: ReadableDuration::millis(500),
         }
     }
 }
@@ -2434,6 +2429,30 @@ impl LogConfig {
             return Err("Max log file size upper limit to 4096MB".to_string().into());
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CausalTsConfig {
+    pub physical_clock_interval: ReadableDuration,
+}
+
+impl CausalTsConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.physical_clock_interval.is_zero() {
+            return Err("causal-ts.refresh-interval can't be zero".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for CausalTsConfig {
+    fn default() -> Self {
+        Self {
+            physical_clock_interval: ReadableDuration::millis(500),
+        }
     }
 }
 
@@ -2552,6 +2571,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(skip)]
+    pub causal_ts: CausalTsConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2591,6 +2613,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            causal_ts: CausalTsConfig::default(),
         }
     }
 }
@@ -2715,6 +2738,7 @@ impl TiKvConfig {
         self.gc.validate()?;
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
+        self.causal_ts.validate()?;
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net

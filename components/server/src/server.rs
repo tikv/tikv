@@ -671,7 +671,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             if let ApiVersion::V2 = self.config.storage.api_version() {
                 let hlc = block_on(causal_ts::HlcProvider::new_opt(
                     self.pd_client.clone(),
-                    self.config.cdc.causal_ts_refresh_interval.0,
+                    self.config.causal_ts.physical_clock_interval.0,
                 ));
                 if let Err(e) = hlc {
                     panic!("Causal timestamp provider initialize failed: {:?}", e);

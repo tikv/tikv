@@ -36,7 +36,6 @@ use raftstore::{
         RegionSnapshot, WriteResponse,
     },
 };
-use tikv_kv::modifies_to_requests;
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
@@ -251,7 +250,7 @@ where
             raftkv_early_error_report_fp()?;
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
+        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {

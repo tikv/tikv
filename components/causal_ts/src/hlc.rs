@@ -4,7 +4,7 @@ use pd_client::PdClient;
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
@@ -12,10 +12,7 @@ use std::{
 use tikv_util::worker::{Builder as WorkerBuilder, Worker};
 use txn_types::TimeStamp;
 
-use crate::{
-    errors::{Error, Result},
-    CausalTsProvider,
-};
+use crate::{errors::Result, CausalTsProvider};
 
 /// An implementation of Hybrid Logical Clock (HLC)
 /// See proposal for detail:
@@ -63,8 +60,6 @@ pub struct HlcProvider {
     /// Smaller interval will get more accurate metrics, but more pressure on PD.
     /// Can be Duration::ZERO, which means never refresh from TSO. For test purpose ONLY.
     tso_refresh_interval: Duration,
-
-    initialized: AtomicBool,
 }
 
 impl HlcProvider {
@@ -81,7 +76,6 @@ impl HlcProvider {
             pd_client,
             tso_worker: WorkerBuilder::new("hlc_tso_worker").create(),
             tso_refresh_interval,
-            initialized: AtomicBool::new(false),
         };
         s.init().await?;
         Ok(s)
@@ -90,7 +84,6 @@ impl HlcProvider {
     async fn init(&self) -> Result<()> {
         let tso = self.pd_client.get_tso().await?;
         self.hlc.advance(tso);
-        self.initialized.store(true, Ordering::Release);
         debug!("HlcProvider::init"; "tso" => ?tso);
 
         let hlc = self.hlc.clone();
@@ -125,11 +118,7 @@ impl HlcProvider {
 
 impl CausalTsProvider for HlcProvider {
     fn get_ts(&self) -> Result<TimeStamp> {
-        if !self.initialized.load(Ordering::Acquire) {
-            Err(Error::Hlc("Uninitialized".to_string()))
-        } else {
-            Ok(self.hlc.next())
-        }
+        Ok(self.hlc.next())
     }
 
     fn advance(&self, to: TimeStamp) -> Result<()> {

@@ -140,8 +140,52 @@ impl From<Modify> for raft_cmdpb::Request {
     }
 }
 
-pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
-    modifies.into_iter().map(Into::into).collect()
+impl From<raft_cmdpb::Request> for Modify {
+    fn from(mut req: raft_cmdpb::Request) -> Modify {
+        match req.get_cmd_type() {
+            raft_cmdpb::CmdType::Delete => {
+                let delete = req.mut_delete();
+                Modify::Delete(
+                    engine_traits::name_to_cf(delete.get_cf()).unwrap(),
+                    Key::from_encoded(delete.take_key()),
+                )
+            }
+            raft_cmdpb::CmdType::Put if req.get_put().get_cf() == engine_traits::CF_LOCK => {
+                let put = req.mut_put();
+                let lock = txn_types::Lock::parse(put.get_value()).unwrap();
+                Modify::PessimisticLock(
+                    Key::from_encoded(put.take_key()),
+                    txn_types::PessimisticLock {
+                        primary: lock.primary.into_boxed_slice(),
+                        start_ts: lock.ts,
+                        ttl: lock.ttl,
+                        for_update_ts: lock.for_update_ts,
+                        min_commit_ts: lock.min_commit_ts,
+                    },
+                )
+            }
+            raft_cmdpb::CmdType::Put => {
+                let put = req.mut_put();
+                Modify::Put(
+                    engine_traits::name_to_cf(put.get_cf()).unwrap(),
+                    Key::from_encoded(put.take_key()),
+                    put.take_value(),
+                )
+            }
+            raft_cmdpb::CmdType::DeleteRange => {
+                let delete_range = req.mut_delete_range();
+                Modify::DeleteRange(
+                    engine_traits::name_to_cf(delete_range.get_cf()).unwrap(),
+                    Key::from_encoded(delete_range.take_start_key()),
+                    Key::from_encoded(delete_range.take_end_key()),
+                    delete_range.get_notify_only(),
+                )
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
 }
 
 impl PessimisticLockPair for Modify {
@@ -1157,6 +1201,22 @@ mod unit_tests {
                 req
             },
         ];
-        assert_eq!(modifies_to_requests(modifies), requests);
+
+        assert_eq!(
+            modifies
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<raft_cmdpb::Request>>(),
+            requests
+        );
+
+        assert_eq!(
+            requests
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<Modify>>(),
+            modifies
+        )
     }
 }

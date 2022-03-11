@@ -746,12 +746,14 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_ts_filter_ratio: 0.7,
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
-        causal_ts_refresh_interval: ReadableDuration::millis(500),
     };
     value.resolved_ts = ResolvedTsConfig {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+    };
+    value.causal_ts = CausalTsConfig {
+        physical_clock_interval: ReadableDuration::millis(500),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

@@ -1,22 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::{APIVersion, KeyMode, APIV2};
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::CmdType;
+use parking_lot::RwLock;
 use raft::StateRole;
 use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxRegionChangeObserver,
     BoxRoleObserver, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
-    ObserverContext, RegionChangeObserver, RoleObserver,
+    ObserverContext, RegionChangeObserver, RoleChange, RoleObserver,
 };
 use std::cmp;
-use tikv_util::HandyRwLock;
+use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
-
-use api_version::{APIVersion, KeyMode, APIV2};
-use std::sync::{Arc, RwLock};
 
 use crate::CausalTsProvider;
 
@@ -46,7 +45,7 @@ impl RegionsCausalManager {
     }
 
     pub fn update_max_ts(&self, region_id: u64, new_ts: TimeStamp) {
-        let mut m = self.regions_map.wl();
+        let mut m = self.regions_map.write();
         m.entry(region_id)
             .and_modify(|r| {
                 if new_ts > r.max_ts {
@@ -57,12 +56,12 @@ impl RegionsCausalManager {
     }
 
     pub fn max_ts(&self, region_id: u64) -> TimeStamp {
-        let m = self.regions_map.rl();
+        let m = self.regions_map.read();
         m.get(&region_id).map_or_else(TimeStamp::zero, |r| r.max_ts)
     }
 
     pub fn remove_region(&self, region_id: u64) {
-        let mut m = self.regions_map.write().unwrap();
+        let mut m = self.regions_map.write();
         m.remove(&region_id);
     }
 }
@@ -173,8 +172,8 @@ impl CausalObserver {
 
 impl RoleObserver for CausalObserver {
     /// Observe becoming leader, to advance CausalTsProvider not less than this region.
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
-        if role == StateRole::Leader {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        if role_change.state == StateRole::Leader {
             let region_id = ctx.region().get_id();
             let max_ts = self.causal_manager.max_ts(region_id);
             self.causal_ts.advance(max_ts.next()).unwrap();
