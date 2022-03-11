@@ -59,6 +59,8 @@ pub struct Config {
     pub api_version: u8,
     #[online_config(skip)]
     pub enable_ttl: bool,
+    #[online_config(skip)]
+    pub max_background_error_hang_time: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(submodule)]
@@ -67,7 +69,6 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IORateLimitConfig,
-    pub max_background_error_hang_time: ReadableDuration,
 }
 
 impl Default for Config {
