@@ -711,6 +711,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
         let r = Regex::new(r"/\w*\.sst").unwrap();
         let sst_file_number = match r.captures(line) {
             None => {
+                println!("skip bad line format");
                 continue;
             }
             Some(parts) => {
@@ -721,6 +722,7 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
                         .to_str()
                         .unwrap()
                 } else {
+                    println!("skip bad line format");
                     continue;
                 }
             }
