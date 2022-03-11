@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Iterator, Result, Snapshot};
+use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
 
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
@@ -90,6 +90,7 @@ pub struct RawMvccIterator<I: Iterator> {
     cur_key: Option<Vec<u8>>,
     cur_value: Option<Vec<u8>>,
     is_valid: Option<bool>,
+    is_forward: bool,
 }
 
 fn is_user_key_eq(left: &[u8], right: &[u8]) -> bool {
@@ -107,6 +108,7 @@ impl<I: Iterator> RawMvccIterator<I> {
             cur_key: None,
             cur_value: None,
             is_valid: None,
+            is_forward: true,
         }
     }
 
@@ -161,8 +163,14 @@ impl<I: Iterator> RawMvccIterator<I> {
 
 // RawMvccIterator always return the latest ts of user key.
 // ts is desc encoded after user key, so it's placed the first one for the same user key.
+// Only one-way direction scan is supported. Like `seek` then `next` or `seek_for_prev` then `prev`
 impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
+        if !self.is_forward {
+            return Err(Error::from(ErrorInner::Other(Box::from(
+                "invalid raw mvcc operation",
+            ))));
+        }
         let cur_key = self.inner.key().to_owned();
         let mut res = self.inner.next()?;
         while res && self.inner.valid()? && is_user_key_eq(&cur_key, self.inner.key()) {
@@ -173,15 +181,22 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn prev(&mut self) -> Result<bool> {
+        if self.is_forward {
+            return Err(Error::from(ErrorInner::Other(Box::from(
+                "invalid raw mvcc operation",
+            ))));
+        }
         self.move_to_prev_max_ts()
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
+        self.is_forward = true;
         self.clear_cur_kv();
         self.inner.seek(key)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
+        self.is_forward = false;
         if self.inner.seek_for_prev(key)? {
             self.move_to_prev_max_ts()
         } else {
@@ -190,11 +205,13 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
+        self.is_forward = true;
         self.clear_cur_kv();
         self.inner.seek_to_first()
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
+        self.is_forward = false;
         if self.inner.seek_to_last()? {
             self.move_to_prev_max_ts()
         } else {
