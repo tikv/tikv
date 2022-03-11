@@ -105,9 +105,9 @@ pub struct PeerPessimisticLocks {
     ///      be deleted. It's correct that we include the locks that are marked deleted in the
     ///      commit merge request.
     map: HashMap<Key, (PessimisticLock, bool)>,
-    /// Whether the pessimistic lock map is valid to read or write. If it is invalid,
-    /// the in-memory pessimistic lock feature cannot be used at the moment.
-    pub is_valid: bool,
+    /// Status of the pessimistic lock map.
+    /// The map is writable only in the Normal state.
+    pub status: LocksStatus,
     /// Refers to the Raft term in which the pessimistic lock table is valid.
     pub term: u64,
     /// Refers to the region version in which the pessimistic lock table is valid.
@@ -116,12 +116,20 @@ pub struct PeerPessimisticLocks {
     pub memory_size: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LocksStatus {
+    Normal,
+    TransferringLeader,
+    MergingRegion,
+    NotLeader,
+}
+
 impl fmt::Debug for PeerPessimisticLocks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeerPessimisticLocks")
             .field("count", &self.map.len())
             .field("memory_size", &self.memory_size)
-            .field("is_valid", &self.is_valid)
+            .field("status", &self.status)
             .field("term", &self.term)
             .field("version", &self.version)
             .finish()
@@ -132,7 +140,7 @@ impl Default for PeerPessimisticLocks {
     fn default() -> Self {
         PeerPessimisticLocks {
             map: HashMap::default(),
-            is_valid: true,
+            status: LocksStatus::Normal,
             term: 0,
             version: 0,
             memory_size: 0,
@@ -187,6 +195,14 @@ impl PeerPessimisticLocks {
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_writable(&self) -> bool {
+        self.status == LocksStatus::Normal
     }
 
     pub fn get(&self, key: &Key) -> Option<&(PessimisticLock, bool)> {

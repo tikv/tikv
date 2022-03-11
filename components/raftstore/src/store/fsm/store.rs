@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use std::{mem, u64};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
+    HandlerBuilder, PollHandler, Priority,
 };
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
@@ -434,6 +434,8 @@ where
             self.cfg.merge_check_tick_interval.0;
         self.tick_batch[PeerTick::CheckLeaderLease as usize].wait_duration =
             self.cfg.check_leader_lease_interval.0;
+        self.tick_batch[PeerTick::ReactivateMemoryLock as usize].wait_duration =
+            self.cfg.reactive_memory_lock_tick_interval.0;
     }
 }
 
@@ -683,7 +685,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
     for RaftPoller<EK, ER, T>
 {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a BatchSystemConfig),
+    {
         self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
@@ -711,6 +716,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.raft_metrics.waterfall_metrics = self.poll_ctx.cfg.waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
+            update_cfg(&incoming.store_batch_system);
         }
     }
 
@@ -1656,7 +1662,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
-                assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
+                if peer.get_id() < msg.get_from_peer().get_id() {
+                    panic!(
+                        "peer id increased after region is merged, message peer id {}, local peer id {}, region {:?}",
+                        msg.get_from_peer().get_id(),
+                        peer.get_id(),
+                        region
+                    );
+                }
                 // Let stale peer decides whether it should wait for merging or just remove
                 // itself.
                 Some(local_state.get_merge_state().get_target().to_owned())
@@ -2221,6 +2234,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             stats,
             store_info,
             send_detailed_report: false,
+            dr_autosync_status: self
+                .ctx
+                .global_replication_state
+                .lock()
+                .unwrap()
+                .store_dr_autosync_status(),
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";

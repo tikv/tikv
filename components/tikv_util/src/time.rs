@@ -36,6 +36,12 @@ pub fn duration_to_us(d: Duration) -> u64 {
     d.as_secs() * 1_000_000 + (nanos / 1_000)
 }
 
+/// Converts TimeSpec to nanoseconds
+#[inline]
+pub fn timespec_to_ns(t: Timespec) -> u64 {
+    (t.sec as u64) * NANOSECONDS_PER_SECOND + t.nsec as u64
+}
+
 /// Converts Duration to nanoseconds.
 #[inline]
 pub fn duration_to_ns(d: Duration) -> u64 {

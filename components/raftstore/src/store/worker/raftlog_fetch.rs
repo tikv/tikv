@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, RaftEngine};
+use fail::fail_point;
 use raft::GetEntriesContext;
 use std::fmt;
 use tikv_util::worker::Runnable;
@@ -94,7 +95,7 @@ where
                     .as_ref()
                     .map(|c| (*c as u64) != high - low)
                     .unwrap_or(false);
-
+                fail_point!("worker_async_fetch_raft_log");
                 // it may return a region not found error as the region could be merged.
                 let _ = self.router.significant_send(
                     region_id,
