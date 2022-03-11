@@ -85,6 +85,7 @@ txn_types = { path = "../../components/txn_types", default-features = false }
 
 [build-dependencies]
 time = "0.1"
+cc = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
