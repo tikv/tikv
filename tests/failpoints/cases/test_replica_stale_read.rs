@@ -401,11 +401,11 @@ fn test_stale_read_while_region_merge() {
 
     let mut follower_client2 = PeerClient::new(&cluster, target.get_id(), new_peer(2, 2));
     follower_client2.ctx.set_stale_read(true);
+    // We can read `(key5, value1)` with `k1_prewrite_ts`
+    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), k1_prewrite_ts);
     // Can't read `key5` with `k5_commit_ts` because `k1_prewrite_ts` is smaller than `k5_commit_ts`
     let resp = follower_client2.kv_read(b"key5".to_vec(), k5_commit_ts);
     assert!(resp.get_region_error().has_data_is_not_ready());
-    // We can read `(key5, value1)` with `k1_prewrite_ts`
-    follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), k1_prewrite_ts);
 
     let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
     // Commit on `key1`
