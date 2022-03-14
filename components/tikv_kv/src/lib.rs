@@ -30,6 +30,7 @@ use std::cell::UnsafeCell;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use std::{error, ptr, result};
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK};
@@ -55,6 +56,7 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -456,10 +458,24 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
+    quota_limiter: Option<Arc<QuotaLimiter>>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
+    let start_time = if let Some(quota_limiter) = &quota_limiter {
+        quota_limiter.get_now_time()
+    } else {
+        Box::new(Instant::now())
+    };
+
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
+    if let Some(quota_limiter) = quota_limiter {
+        let delay_quota =
+            quota_limiter.consume_read(0, 0, start_time.elapsed().as_micros() as usize);
+        if !delay_quota.is_zero() {
+            std::thread::sleep(delay_quota);
+        }
+    }
     // make engine not cross yield point
     async move {
         val?; // propagate error

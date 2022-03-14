@@ -275,7 +275,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         engine: &E,
         ctx: SnapContext<'_>,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        kv::snapshot(engine, ctx)
+        kv::snapshot(engine, ctx, None)
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }

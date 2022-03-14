@@ -270,6 +270,7 @@ impl<E: Engine> Endpoint<E> {
                 );
 
                 self.check_memory_locks(&req_ctx)?;
+                let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
                     statistics::analyze::AnalyzeContext::new(
@@ -278,6 +279,7 @@ impl<E: Engine> Endpoint<E> {
                         start_ts,
                         snap,
                         req_ctx,
+                        quota_limiter,
                     )
                     .map(|h| h.into_boxed())
                 });
@@ -356,7 +358,7 @@ impl<E: Engine> Endpoint<E> {
                 snap_ctx.key_ranges.push(key_range);
             }
         }
-        kv::snapshot(engine, snap_ctx).map_err(Error::from)
+        kv::snapshot(engine, snap_ctx, None).map_err(Error::from)
     }
 
     /// The real implementation of handling a unary request.

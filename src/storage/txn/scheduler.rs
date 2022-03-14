@@ -477,6 +477,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
         let sched = self.clone();
+        let quota_limiter = self.inner.quota_limiter.clone();
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
@@ -493,7 +494,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 };
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
+                match unsafe {
+                    with_tls_engine(|engine: &E| {
+                        kv::snapshot(engine, snap_ctx, Some(quota_limiter))
+                    })
+                }
+                .await
                 {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
