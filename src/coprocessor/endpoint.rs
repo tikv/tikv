@@ -666,6 +666,7 @@ mod tests {
     use std::vec;
 
     use futures::executor::{block_on, block_on_stream};
+    use kvproto::kvrpcpb::IsolationLevel;
 
     use tipb::Executor;
     use tipb::Expr;
