@@ -2325,7 +2325,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_worker_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=\"pd-worker\"}[1m]))",
+          "expr": "sum(tikv_worker_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=\"pd-worker\"})",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
