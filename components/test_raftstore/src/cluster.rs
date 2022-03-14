@@ -763,6 +763,9 @@ impl<T: Simulator> Cluster<T> {
         }
         self.leaders.clear();
         self.store_metas.clear();
+        for sst_worker in self.sst_workers.drain(..) {
+            sst_worker.stop_worker();
+        }
         debug!("all nodes are shut down.");
     }
 
