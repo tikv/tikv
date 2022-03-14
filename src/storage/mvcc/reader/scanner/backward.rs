@@ -11,6 +11,7 @@ use super::ScannerConfig;
 use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
 use crate::storage::mvcc::ErrorInner::WriteConflict;
 use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
+use crate::storage::need_check_locks;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -153,48 +154,45 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             let ts = self.cfg.ts;
 
             if has_lock {
-                match self.cfg.isolation_level {
-                    IsolationLevel::Si | IsolationLevel::RcCheckTs => {
-                        let lock = {
-                            let lock_value = self
-                                .lock_cursor
-                                .as_mut()
-                                .unwrap()
-                                .value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                            self.met_newer_ts_data = NewerTsCheckState::Met;
-                        }
-                        result = Lock::check_ts_conflict(
-                            Cow::Borrowed(&lock),
-                            &current_user_key,
-                            ts,
-                            &self.cfg.bypass_locks,
-                            self.cfg.isolation_level,
-                        )
-                        .map(|_| None)
-                        .map_err(Into::into);
-                        if result.is_err() {
-                            self.statistics.lock.processed_keys += 1;
-                            if self.cfg.access_locks.contains(lock.ts) {
-                                self.ensure_default_cursor()?;
-                                result = super::load_data_by_lock(
-                                    &current_user_key,
-                                    &self.cfg,
-                                    self.default_cursor.as_mut().unwrap(),
-                                    lock,
-                                    &mut self.statistics,
-                                );
-                                if has_write {
-                                    // Skip current_user_key because this key is either blocked or handled.
-                                    has_write = false;
-                                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
-                                }
+                if need_check_locks(self.cfg.isolation_level) {
+                    let lock = {
+                        let lock_value = self
+                            .lock_cursor
+                            .as_mut()
+                            .unwrap()
+                            .value(&mut self.statistics.lock);
+                        Lock::parse(lock_value)?
+                    };
+                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    result = Lock::check_ts_conflict(
+                        Cow::Borrowed(&lock),
+                        &current_user_key,
+                        ts,
+                        &self.cfg.bypass_locks,
+                        self.cfg.isolation_level,
+                    )
+                    .map(|_| None)
+                    .map_err(Into::into);
+                    if result.is_err() {
+                        self.statistics.lock.processed_keys += 1;
+                        if self.cfg.access_locks.contains(lock.ts) {
+                            self.ensure_default_cursor()?;
+                            result = super::load_data_by_lock(
+                                &current_user_key,
+                                &self.cfg,
+                                self.default_cursor.as_mut().unwrap(),
+                                lock,
+                                &mut self.statistics,
+                            );
+                            if has_write {
+                                // Skip current_user_key because this key is either blocked or handled.
+                                has_write = false;
+                                self.move_write_cursor_to_prev_user_key(&current_user_key)?;
                             }
                         }
                     }
-                    IsolationLevel::Rc => {}
                 }
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     lock_cursor.prev(&mut self.statistics.lock);

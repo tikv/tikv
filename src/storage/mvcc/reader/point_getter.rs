@@ -10,6 +10,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteTyp
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::ErrorInner::WriteConflict;
 use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
+use crate::storage::need_check_locks;
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -200,14 +201,11 @@ impl<S: Snapshot> PointGetter<S> {
             }
         }
 
-        match self.isolation_level {
-            IsolationLevel::Si | IsolationLevel::RcCheckTs => {
-                // Check locks that signal concurrent writes for `Si` or more recent writes for `RcCheckTs`.
-                if let Some(lock) = self.load_and_check_lock(user_key)? {
-                    return self.load_data_from_lock(user_key, lock);
-                }
+        if need_check_locks(self.isolation_level) {
+            // Check locks that signal concurrent writes for `Si` or more recent writes for `RcCheckTs`.
+            if let Some(lock) = self.load_and_check_lock(user_key)? {
+                return self.load_data_from_lock(user_key, lock);
             }
-            IsolationLevel::Rc => {}
         }
 
         self.load_data(user_key)

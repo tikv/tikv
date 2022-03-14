@@ -1024,10 +1024,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if !ctx.get_stale_read() {
                     concurrency_manager.update_max_ts(start_ts);
                 }
-                if matches!(
-                    ctx.get_isolation_level(),
-                    IsolationLevel::Si | IsolationLevel::RcCheckTs
-                ) {
+                if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
@@ -2398,10 +2395,7 @@ fn prepare_snap_ctx<'a>(
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
-    if matches!(
-        isolation_level,
-        IsolationLevel::Si | IsolationLevel::RcCheckTs
-    ) {
+    if need_check_locks(isolation_level) {
         let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
@@ -2446,6 +2440,11 @@ fn prepare_snap_ctx<'a>(
 
 pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
     ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+}
+
+// checks whether the current isolation level needs to check related locks.
+pub fn need_check_locks(iso_level: IsolationLevel) -> bool {
+    matches!(iso_level, IsolationLevel::Si | IsolationLevel::RcCheckTs)
 }
 
 pub fn point_key_range(key: Key) -> KeyRange {
