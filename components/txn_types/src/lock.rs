@@ -364,7 +364,7 @@ impl Lock {
     }
 
     // Check if lock could be bypassed for isolation level `RcCheckTs`.
-    fn check_ts_conflict_rc_read(
+    fn check_ts_conflict_rc_check_ts(
         lock: Cow<'_, Self>,
         key: &Key,
         ts: TimeStamp,
@@ -400,7 +400,7 @@ impl Lock {
         match iso_level {
             IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks),
             IsolationLevel::RcCheckTs => {
-                Lock::check_ts_conflict_rc_read(lock, key, ts, bypass_locks)
+                Lock::check_ts_conflict_rc_check_ts(lock, key, ts, bypass_locks)
             }
             _ => Ok(()),
         }
