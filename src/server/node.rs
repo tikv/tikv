@@ -22,7 +22,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
@@ -50,6 +50,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     reporter: R,
     resource_tag_factory: ResourceTagFactory,
     causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+    feature_gate: FeatureGate,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -66,6 +67,7 @@ where
         reporter,
         resource_tag_factory,
         causal_ts_provider,
+        feature_gate,
     )?;
     Ok(store)
 }

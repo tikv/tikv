@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]
 use super::encoded::RawEncodeSnapshot;
 use super::raw_mvcc::RawMvccSnapshot;
 
@@ -35,6 +34,10 @@ impl<'a, S: Snapshot> RawStore<S> {
             ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 RawMvccSnapshot::from_snapshot(snapshot),
             ))),
+            // TODO: after ts encoded in raw interface, RawMvccSnapshot should be used.
+            /*ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
+                RawMvccSnapshot::from_snapshot(snapshot),
+            ))),*/
         }
     }
 

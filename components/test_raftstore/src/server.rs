@@ -362,6 +362,7 @@ impl Simulator for ServerCluster {
             pd_sender,
             res_tag_factory.clone(),
             causal_ts_provider,
+            self.pd_client.feature_gate().clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 

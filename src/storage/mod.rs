@@ -49,7 +49,6 @@ pub mod txn;
 mod read_pool;
 mod types;
 
-use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -62,6 +61,7 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
+use self::{kv::SnapContext, test_util::latest_feature_gate};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -94,6 +94,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::pdpb::QueryKind;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
+use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -230,6 +231,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        feature_gate: FeatureGate,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -240,6 +242,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             flow_controller,
             reporter,
             resource_tag_factory.clone(),
+            feature_gate,
         );
 
         info!("Storage started.");
@@ -2814,6 +2817,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             DummyReporter,
             self.resource_tag_factory,
             causal_ts_provider,
+            latest_feature_gate(),
         )
     }
 
@@ -2842,6 +2846,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             causal_ts_provider,
+            latest_feature_gate(),
         )
     }
 }
@@ -3071,6 +3076,12 @@ pub mod test_util {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
+
+    pub fn latest_feature_gate() -> FeatureGate {
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version(env!("CARGO_PKG_VERSION")).unwrap();
+        feature_gate
+    }
 }
 
 /// All statistics related to KvGet/KvBatchGet.
@@ -3088,6 +3099,8 @@ mod tests {
         test_util::*,
         *,
     };
+    use raw::encoded::RawEncodeSnapshot;
+    use raw::raw_mvcc::RawMvccSnapshot;
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
@@ -8977,8 +8990,7 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
-        use tikv_kv::Iterator;
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V2)
+        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -8987,7 +8999,7 @@ mod tests {
             ..Default::default()
         };
 
-        let test_data = vec![
+        let raw_test_data = vec![
             (b"r\0a".to_vec(), b"aa".to_vec(), 10),
             (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
             (b"r\0b".to_vec(), b"bb".to_vec(), 30),
@@ -9002,6 +9014,16 @@ mod tests {
             (b"r\0cc".to_vec(), b"n_ccc".to_vec(), 120),
         ];
 
+        let test_data: Vec<(Vec<u8>, Vec<u8>, u64)> = raw_test_data
+            .into_iter()
+            .map(|(key, val, ts)| {
+                (
+                    APIV2::encode_raw_key_owned(key, Some(TimeStamp::from(ts))).into_encoded(),
+                    val,
+                    ts,
+                )
+            })
+            .collect();
         let ttl = 30;
         // Write key-value pairs one by one
         for (key, value, _) in test_data.clone() {
@@ -9036,15 +9058,6 @@ mod tests {
             iter.next().unwrap();
         }
 
-        let decoded_pairs: Vec<(Vec<u8>, Vec<u8>)> = pairs
-            .into_iter()
-            .map(|(key, value)| {
-                let (user_key, _) =
-                    APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
-                (user_key, value)
-            })
-            .collect();
-
         let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
             .clone()
             .into_iter()
@@ -9052,28 +9065,23 @@ mod tests {
             .map(|(key, val, _)| (key, val))
             .collect();
 
-        assert_eq!(decoded_pairs, ret_data);
+        assert_eq!(pairs, ret_data);
         let raw_key = APIV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
         iter.seek_for_prev(&raw_key).unwrap();
-        let mut pairs = vec![];
+        pairs.clear();
         while iter.valid().unwrap() {
             pairs.push((iter.key().to_owned(), iter.value().to_owned()));
             iter.prev().unwrap();
         }
-        let decoded_pairs: Vec<(Vec<u8>, Vec<u8>)> = pairs
-            .into_iter()
-            .map(|(key, value)| {
-                let (user_key, _) =
-                    APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
-                (user_key, value)
-            })
-            .collect();
         let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
             .into_iter()
             .skip(6)
             .rev()
             .map(|(key, val, _)| (key, val))
             .collect();
-        assert_eq!(decoded_pairs, ret_data);
+        assert_eq!(pairs, ret_data);
+
+        // two way direction scan is not supported.
+        assert_eq!(iter.next().is_err(), true);
     }
 }

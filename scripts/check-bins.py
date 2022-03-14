@@ -18,6 +18,8 @@ WHITE_LIST = {
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]
 
+SYS_LIB = ["libstdc++"]
+
 def pr(s):
     if sys.stdout.isatty():
         sys.stdout.write("\x1b[2K\r" + s)
@@ -95,7 +97,20 @@ def check_tests(features):
     pr("")
     print("Done, takes %.2fs." % (time.time() - start))
 
+def ensure_link(args):
+    p = os.popen("uname")
+    if "Linux" not in p.readline():
+        return
+    for bin in args:
+        p = os.popen("ldd " + bin)
+        requires = set(l.split()[0] for l in p.readlines())
+        for lib in SYS_LIB:
+            if any(lib in r for r in requires):
+                pr("error: %s should not requires dynamic library %s\n" % (bin, lib))
+                sys.exit(1)
+
 def check_release(enabled_features, args):
+    ensure_link(args)
     checked_features = []
     if is_jemalloc_enabled(enabled_features):
         checked_features.append("jemalloc")
