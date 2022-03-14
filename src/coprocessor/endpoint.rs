@@ -366,7 +366,7 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.on_scheduled();
-        tracker.req_ctx.deadline.check()?;
+        tracker.check_deadline()?;
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
@@ -375,7 +375,7 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
-        tracker.req_ctx.deadline.check()?;
+        tracker.check_deadline()?;
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
             && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
@@ -499,7 +499,7 @@ impl<E: Engine> Endpoint<E> {
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.on_scheduled();
-            tracker.req_ctx.deadline.check()?;
+            tracker.check_deadline()?;
 
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
             // exists.
@@ -509,7 +509,7 @@ impl<E: Engine> Endpoint<E> {
             .await?;
             // When snapshot is retrieved, deadline may exceed.
             tracker.on_snapshot_finished();
-            tracker.req_ctx.deadline.check()?;
+            tracker.check_deadline()?;
 
             let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
 
