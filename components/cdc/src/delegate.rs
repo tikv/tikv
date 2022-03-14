@@ -51,6 +51,7 @@ impl Default for DownstreamID {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
     Uninitialized,
+    Initializing,
     Normal,
     Stopped,
 }
@@ -58,6 +59,25 @@ pub enum DownstreamState {
 impl Default for DownstreamState {
     fn default() -> Self {
         Self::Uninitialized
+    }
+}
+
+impl DownstreamState {
+    pub fn ready_for_changes(&self) -> bool {
+        match *self {
+            DownstreamState::Uninitialized | DownstreamState::Stopped => false,
+            DownstreamState::Initializing | DownstreamState::Normal => true,
+        }
+    }
+
+    pub fn ready_for_advancing_ts(&self) -> bool {
+        match *self {
+            DownstreamState::Normal => true,
+
+            DownstreamState::Uninitialized
+            | DownstreamState::Stopped
+            | DownstreamState::Initializing => false,
+        }
     }
 }
 
@@ -550,7 +570,7 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            if downstream.state.load() != DownstreamState::Normal {
+            if !downstream.state.load().ready_for_changes() {
                 return Ok(());
             }
             let event = change_data_event.clone();
