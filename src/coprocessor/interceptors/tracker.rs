@@ -47,6 +47,9 @@ where
         let perf_statistics_instant = PerfStatisticsInstant::new();
 
         let res = this.fut.poll(cx);
+        if res.is_ready() {
+            let _ = this.cop_tracker.check_deadline();
+        }
 
         let perf_statistics = perf_statistics_instant.delta();
         this.cop_tracker.on_finish_item(None, perf_statistics);
