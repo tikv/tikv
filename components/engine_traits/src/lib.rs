@@ -139,7 +139,7 @@
 //!
 //! # The porting process
 //!
-//! These are some guidelines that seem to make the porting managable. As the
+//! These are some guidelines that seem to make the porting manageable. As the
 //! process continues new strategies are discovered and written here. This is a
 //! big refactoring and will take many monthse.
 //!
@@ -328,7 +328,9 @@ pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
 mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask};
+pub use raft_engine::{
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, RAFT_LOG_MULTI_GET_CNT,
+};
 
 // These modules need further scrutiny
 

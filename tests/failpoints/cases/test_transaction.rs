@@ -7,6 +7,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::tikvpb::TikvClient;
 use raftstore::store::util::new_peer;
+use raftstore::store::LocksStatus;
 use std::sync::Arc;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::tests::must_get;
@@ -523,15 +524,16 @@ fn test_pessimistic_lock_check_valid() {
 
     let lock_resp = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(300));
-    // Set `is_valid` to false, but the region remains available to serve.
-    txn_ext.pessimistic_locks.write().is_valid = false;
+    // Set `status` to `TransferringLeader` to make the locks table not writable,
+    // but the region remains available to serve.
+    txn_ext.pessimistic_locks.write().status = LocksStatus::TransferringLeader;
     fail::remove("acquire_pessimistic_lock");
 
     let resp = lock_resp.join().unwrap();
     // There should be no region error.
     assert!(!resp.has_region_error());
     // The lock should not be written to the in-memory pessimistic lock table.
-    assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+    assert!(txn_ext.pessimistic_locks.read().is_empty());
 }
 
 #[test]
@@ -556,10 +558,13 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    txn_ext
-        .pessimistic_locks
-        .write()
-        .insert(Key::from_raw(b"key"), lock.clone());
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+            .is_ok()
+    );
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();

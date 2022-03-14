@@ -2,6 +2,8 @@
 
 use super::*;
 
+use std::sync::Arc;
+
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 
@@ -14,6 +16,7 @@ use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::thread_group::GroupProperties;
 
 #[derive(Clone)]
@@ -102,6 +105,7 @@ pub fn init_data_with_details<E: Engine>(
         cm,
         PerfLevel::EnableCount,
         ResourceTagFactory::new_for_test(),
+        Arc::new(QuotaLimiter::default()),
     );
     (store, copr)
 }

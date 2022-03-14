@@ -35,6 +35,7 @@ use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
+use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
@@ -70,6 +71,8 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 // The default limit is set to be very large. Then, requests without `max_exectuion_duration`
 // will not be aborted unexpectedly.
 pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+
+const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 
 /// Task is a running command.
 pub(super) struct Task {
@@ -204,6 +207,7 @@ struct SchedulerInner<L: LockManager> {
     resource_tag_factory: ResourceTagFactory,
 
     quota_limiter: Arc<QuotaLimiter>,
+    feature_gate: FeatureGate,
 }
 
 #[inline]
@@ -316,6 +320,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
+        feature_gate: FeatureGate,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -350,6 +355,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             flow_controller,
             resource_tag_factory,
             quota_limiter,
+            feature_gate,
         });
 
         slow_log!(
@@ -471,25 +477,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
         let sched = self.clone();
-
-        let quota_delay = self.inner.quota_limiter.as_ref().consume_write(
-            1,
-            task.cmd.write_kvs(),
-            task.cmd.write_bytes(),
-        );
-
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
-                // Delay if hit quota limit
-                if !quota_delay.is_zero() {
-                    GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + quota_delay)
-                        .compat()
-                        .await
-                        .unwrap();
-                }
-
                 if sched.check_task_deadline_exceeded(&task) {
                     return;
                 }
@@ -747,6 +737,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
+        let quota_limiter = Arc::clone(&self.inner.quota_limiter);
+        let kvs = task.cmd.write_kvs();
+        let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
         let priority = task.cmd.priority();
@@ -758,7 +751,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
 
         let deadline = task.cmd.deadline();
-        let write_result = {
+        let (write_result, cost_time) = {
+            let start_time = quota_limiter.get_now_time();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
@@ -767,9 +761,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };
 
-            task.cmd
+            let result = task
+                .cmd
                 .process_write(snapshot, context)
-                .map_err(StorageError::from)
+                .map_err(StorageError::from);
+            let cost_time = start_time.elapsed();
+            (result, cost_time)
         };
         let WriteResult {
             ctx,
@@ -797,6 +794,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             Ok(res) => res,
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+
+        let quota_delay =
+            quota_limiter.consume_write(1, kvs, write_bytes, cost_time.as_micros() as usize);
+        KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+            .get(tag)
+            .inc_by(quota_delay.as_micros() as u64);
+        if !quota_delay.is_zero() {
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + quota_delay)
+                .compat()
+                .await
+                .unwrap();
+        }
 
         if let Some(lock_info) = lock_info {
             let WriteResultLockInfo {
@@ -945,14 +955,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
             Some(locks)
                 // If there is a leader or region change, removing the locks is unnecessary.
-                if locks.term == term && locks.version == version && !locks.map.is_empty() =>
+                if locks.term == term && locks.version == version && !locks.is_empty() =>
             {
                 to_be_write
                     .modifies
                     .iter()
                     .filter_map(|write| match write {
                         Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
-                            locks.map.get_mut(key).map(|(_, deleted)| {
+                            locks.get_mut(key).map(|(_, deleted)| {
                                 *deleted = true;
                                 key.to_owned()
                             })
@@ -988,7 +998,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     // so we needn't remove the key.
                     if pessimistic_locks.term == term && pessimistic_locks.version == version {
                         for key in removed_pessimistic_locks {
-                            pessimistic_locks.map.remove(&key);
+                            pessimistic_locks.remove(&key);
                         }
                     }
                 }
@@ -1049,26 +1059,27 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             None => return false,
         };
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-        // When `is_valid` is false, it only means we cannot write locks to the in-memory lock table,
+        // When not writable, it only means we cannot write locks to the in-memory lock table,
         // but it is still possible for the region to propose request.
         // When term or epoch version has changed, the request must fail. To be simple, here we just
         // let the request fallback to propose and let raftstore generate an appropriate error.
-        if !pessimistic_locks.is_valid
+        if !pessimistic_locks.is_writable()
             || pessimistic_locks.term != context.get_term()
             || pessimistic_locks.version != context.get_region_epoch().get_version()
         {
             return false;
         }
-        // TODO: add memory limit check
-        for modify in mem::take(&mut to_be_write.modifies) {
-            match modify {
-                Modify::PessimisticLock(key, lock) => {
-                    pessimistic_locks.insert(key, lock);
-                }
-                _ => panic!("all modifies should be PessimisticLock"),
+        match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
+            Ok(()) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.success.inc();
+                true
+            }
+            Err(modifies) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.full.inc();
+                to_be_write.modifies = modifies;
+                false
             }
         }
-        true
     }
 
     /// If the task has expired, return `true` and call the callback of
@@ -1091,7 +1102,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let in_memory = self
             .inner
             .in_memory_pessimistic_lock
-            .load(Ordering::Relaxed);
+            .load(Ordering::Relaxed)
+            && self
+                .inner
+                .feature_gate
+                .can_enable(IN_MEMORY_PESSIMISTIC_LOCK);
         if pipelined && in_memory {
             PessimisticLockMode::InMemory
         } else if pipelined {
@@ -1120,6 +1135,7 @@ mod tests {
     use crate::storage::{
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
+        test_util::latest_feature_gate,
         txn::commands::TypedCommand,
         TxnStatus,
     };
@@ -1281,6 +1297,7 @@ mod tests {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1338,6 +1355,7 @@ mod tests {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1395,6 +1413,7 @@ mod tests {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1460,6 +1479,7 @@ mod tests {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1503,6 +1523,9 @@ mod tests {
             enable_async_apply_prewrite: false,
             ..Default::default()
         };
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.0.0").unwrap();
+
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
@@ -1516,6 +1539,7 @@ mod tests {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            feature_gate.clone(),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
@@ -1534,6 +1558,13 @@ mod tests {
             scheduler.pessimistic_lock_mode(),
             PessimisticLockMode::InMemory
         );
+        // Test the feature gate. The feature should not work under 6.0.0.
+        unsafe { feature_gate.reset_version("5.4.0").unwrap() };
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::Pipelined
+        );
+        feature_gate.set_version("6.0.0").unwrap();
         // Mode is Pipelined when only pipelined is true.
         scheduler
             .inner

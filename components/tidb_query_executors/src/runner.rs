@@ -17,11 +17,13 @@ use yatp::task::future::reschedule;
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 
+use futures::compat::Future01CompatExt;
 use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
+use tikv_util::{quota_limiter::QuotaLimiter, timer::GLOBAL_TIMER_HANDLE};
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -69,6 +71,8 @@ pub struct BatchExecutorsRunner<SS> {
 
     /// If it's a paging request, paging_size indicates to the required size for current page.
     paging_size: Option<u64>,
+
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -120,6 +124,11 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                ExecType::TypeProjection => {
+                    let descriptor = ed.get_projection();
+                    BatchProjectionExecutor::check_supported(descriptor)
+                        .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
+                }
                 ExecType::TypeJoin => {
                     other_err!("Join executor not implemented");
                 }
@@ -132,8 +141,8 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeExchangeReceiver => {
                     other_err!("ExchangeReceiver executor not implemented");
                 }
-                ExecType::TypeProjection => {
-                    other_err!("Projection executor not implemented");
+                ExecType::TypePartitionTableScan => {
+                    other_err!("PartitionTableScan executor not implemented");
                 }
             }
         }
@@ -162,13 +171,13 @@ pub fn build_executors<S: Storage + 'static>(
         .next()
         .ok_or_else(|| other_err!("No executors"))?;
 
-    let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>>;
     let mut summary_slot_index = 0;
     // Limit executor use this flag to check if its src is table/index scan.
     // Performance enhancement for plan like: limit 1 -> table/index scan.
     let mut is_src_scan_executor = true;
 
-    match first_ed.get_tp() {
+    let mut executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match first_ed.get_tp()
+    {
         ExecType::TypeTableScan => {
             EXECUTOR_COUNT_METRICS.batch_table_scan.inc();
 
@@ -177,7 +186,7 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
-            executor = Box::new(
+            Box::new(
                 BatchTableScanExecutor::new(
                     storage,
                     config.clone(),
@@ -189,7 +198,7 @@ pub fn build_executors<S: Storage + 'static>(
                     primary_prefix_column_ids,
                 )?
                 .collect_summary(summary_slot_index),
-            );
+            )
         }
         ExecType::TypeIndexScan => {
             EXECUTOR_COUNT_METRICS.batch_index_scan.inc();
@@ -197,7 +206,7 @@ pub fn build_executors<S: Storage + 'static>(
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids_len = descriptor.take_primary_column_ids().len();
-            executor = Box::new(
+            Box::new(
                 BatchIndexScanExecutor::new(
                     storage,
                     config.clone(),
@@ -209,7 +218,7 @@ pub fn build_executors<S: Storage + 'static>(
                     is_scanned_range_aware,
                 )?
                 .collect_summary(summary_slot_index),
-            );
+            )
         }
         _ => {
             return Err(other_err!(
@@ -217,12 +226,12 @@ pub fn build_executors<S: Storage + 'static>(
                 first_ed.get_tp()
             ));
         }
-    }
+    };
 
     for mut ed in executor_descriptors {
         summary_slot_index += 1;
 
-        let new_executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match ed.get_tp() {
+        executor = match ed.get_tp() {
             ExecType::TypeSelection => {
                 EXECUTOR_COUNT_METRICS.batch_selection.inc();
 
@@ -231,6 +240,18 @@ pub fn build_executors<S: Storage + 'static>(
                         config.clone(),
                         executor,
                         ed.take_selection().take_conditions().into(),
+                    )?
+                    .collect_summary(summary_slot_index),
+                )
+            }
+            ExecType::TypeProjection => {
+                EXECUTOR_COUNT_METRICS.batch_projection.inc();
+
+                Box::new(
+                    BatchProjectionExecutor::new(
+                        config.clone(),
+                        executor,
+                        ed.take_projection().take_exprs().into(),
                     )?
                     .collect_summary(summary_slot_index),
                 )
@@ -331,7 +352,6 @@ pub fn build_executors<S: Storage + 'static>(
                 ));
             }
         };
-        executor = new_executor;
         is_src_scan_executor = false;
     }
 
@@ -347,6 +367,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         stream_row_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -391,6 +412,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             stream_row_limit,
             encode_type,
             paging_size,
+            quota_limiter,
         })
     }
 
@@ -414,16 +436,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
-            if time_slice_len > MAX_TIME_SLICE {
+            if need_reschedule(time_slice_start) {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
 
             let mut chunk = Chunk::default();
 
-            let (drained, record_len) = self.internal_handle_request(
+            let (drained, record_len, quota_delay) = self.internal_handle_request(
                 false,
                 batch_size,
                 &mut chunk,
@@ -431,6 +452,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 &mut ctx,
             )?;
 
+            if !quota_delay.is_zero() {
+                GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + quota_delay)
+                    .compat()
+                    .await
+                    .unwrap();
+            }
             if record_len > 0 {
                 chunks.push(chunk);
                 record_all += record_len;
@@ -496,13 +524,16 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // record count less than batch size and is not drained
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
-            let (drained, len) = self.internal_handle_request(
+            let (drained, len, quota_delay) = self.internal_handle_request(
                 true,
                 batch_size.min(self.stream_row_limit - record_len),
                 &mut current_chunk,
                 &mut warnings,
                 &mut ctx,
             )?;
+
+            std::thread::sleep(quota_delay);
+
             chunk
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());
@@ -541,7 +572,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         chunk: &mut Chunk,
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
-    ) -> Result<(bool, usize)> {
+    ) -> Result<(bool, usize, Duration)> {
+        let start_time = self.quota_limiter.get_now_time();
         let mut record_len = 0;
 
         self.deadline.check()?;
@@ -591,7 +623,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
 
         warnings.merge(&mut result.warnings);
-        Ok((is_drained, record_len))
+        let wait = self.quota_limiter.consume_read(
+            1,
+            record_len,
+            (start_time.elapsed().as_micros()) as usize,
+        );
+        Ok((is_drained, record_len, wait))
     }
 
     fn make_stream_response(
@@ -637,4 +674,10 @@ fn grow_batch_size(batch_size: &mut usize) {
             *batch_size = BATCH_MAX_SIZE
         }
     }
+}
+
+#[inline]
+fn need_reschedule(time_slice_start: Instant) -> bool {
+    fail_point!("copr_reschedule", |_| true);
+    time_slice_start.saturating_elapsed() > MAX_TIME_SLICE
 }

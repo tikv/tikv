@@ -49,13 +49,13 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 memory_trace_macros = { path = "../memory_trace_macros" }
 ordered-float = "2.6"
-parking_lot = "0.11"
+parking_lot = "0.12"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
-raft-proto = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft-proto = { version = "0.7.0", default-features = false }
 rand = "0.8.3"
 resource_metering = { path = "../resource_metering" }
 serde = "1.0"
@@ -76,7 +76,6 @@ tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
 txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-affinity = "0.1.2"
 
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915

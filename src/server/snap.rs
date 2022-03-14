@@ -36,7 +36,7 @@ use super::{Config, Error, Result};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
-const DEFAULT_POOL_SIZE: usize = 1;
+const DEFAULT_POOL_SIZE: usize = 4;
 
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {

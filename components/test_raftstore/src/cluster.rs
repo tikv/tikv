@@ -9,6 +9,7 @@ use std::{result, thread};
 use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
+use kvproto::kvrpcpb::Context;
 use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -737,15 +738,14 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn shutdown(&mut self) {
         debug!("about to shutdown cluster");
-        let keys;
-        match self.sim.read() {
-            Ok(s) => keys = s.get_node_ids(),
+        let keys = match self.sim.read() {
+            Ok(s) => s.get_node_ids(),
             Err(_) => {
                 safe_panic!("failed to acquire read lock");
                 // Leave the resource to avoid double panic.
                 return;
             }
-        }
+        };
         for id in keys {
             self.stop_node(id);
         }
@@ -1089,6 +1089,27 @@ impl<T: Simulator> Cluster<T> {
             }
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
+        let timer = Instant::now();
+        let mut state;
+        loop {
+            state = self.region_local_state(region_id, peer.get_store_id());
+            if state.get_state() == PeerState::Tombstone
+                && (!check_exist || state.get_region().get_peers().contains(&peer))
+            {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{:?} is still not gc in region {} {:?}",
+            peer, region_id, state
+        );
     }
 
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
@@ -1522,6 +1543,11 @@ impl<T: Simulator> Cluster<T> {
         );
     }
 
+    pub fn must_send_store_heartbeat(&self, node_id: u64) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        StoreRouter::send(&router, StoreMsg::Tick(StoreTick::PdStoreHeartbeat)).unwrap();
+    }
+
     pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         let mut try_cnt = 0;
@@ -1603,6 +1629,17 @@ impl<T: Simulator> Cluster<T> {
             "gc peer timeout: region id {}, node id {}, peer {:?}",
             region_id, node_id, peer
         );
+    }
+
+    pub fn get_ctx(&mut self, key: &[u8]) -> Context {
+        let region = self.get_region(key);
+        let leader = self.leader_of_region(region.id).unwrap();
+        let epoch = self.get_region_epoch(region.id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region.id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+        ctx
     }
 }
 

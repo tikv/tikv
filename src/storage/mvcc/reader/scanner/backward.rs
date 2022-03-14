@@ -193,6 +193,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         }
                     }
                     IsolationLevel::Rc => {}
+                    IsolationLevel::RcCheckTs => {
+                        return Err(box_err!("RcCheckTs is not supported"));
+                    }
                 }
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     lock_cursor.prev(&mut self.statistics.lock);
@@ -415,7 +418,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 // Value is in the default CF.
                 self.ensure_default_cursor()?;
                 let value = super::near_reverse_load_data_by_write(
-                    &mut self.default_cursor.as_mut().unwrap(),
+                    self.default_cursor.as_mut().unwrap(),
                     user_key,
                     write.start_ts,
                     &mut self.statistics,

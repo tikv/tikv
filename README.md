@@ -12,7 +12,8 @@ The design of TiKV ('Ti' stands for titanium) is inspired by some great distribu
 
 If you're interested in contributing to TiKV, or want to build it from source, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-![cncf_logo](images/cncf.png)
+![cncf_logo](images/cncf.png#gh-light-mode-only)
+![cncf_logo](images/cncf-white.png#gh-dark-mode-only)
 
 TiKV is a graduated project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). If you are an organization that wants to help shape the evolution of technologies that are container-packaged, dynamically-scheduled and microservices-oriented, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF [announcement](https://www.cncf.io/announcements/2020/09/02/cloud-native-computing-foundation-announces-tikv-graduation/).
 
@@ -79,7 +80,7 @@ You can see [this page](https://docs.pingcap.com/tidb/stable/quick-start-with-ti
 
 ### Deploy a playground with binary
 
-TiKV is able to run separatedly with PD, which is the minimal deployment required.
+TiKV is able to run separately with PD, which is the minimal deployment required.
 
 1. Download and extract binaries.
 
@@ -177,16 +178,6 @@ appearance, race, religion, or sexual identity and orientation.
 ### Slack
 
 Join the TiKV community on [Slack](https://slack.tidb.io/invite?team=tikv-wg&channel=general) - Sign up and join channels on TiKV topics that interest you.
-
-### WeChat
-
-The TiKV community is also available on WeChat. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
-
-- WeChat ID (**Required**)
-- A contribution you've made to TiKV, such as a PR (**Required**)
-- Other basic information
-
-We will invite you in right away.
 
 ## License
 

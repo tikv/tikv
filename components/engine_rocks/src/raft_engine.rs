@@ -6,14 +6,12 @@ use crate::{util, RocksEngine, RocksWriteBatch};
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineReadOnly,
     RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT,
+    CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
-
-const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -59,7 +57,7 @@ impl RaftEngineReadOnly for RocksEngine {
             return Ok(count);
         }
 
-        let (mut check_compacted, mut next_index) = (true, low);
+        let (mut check_compacted, mut compacted, mut next_index) = (true, false, low);
         let start_key = keys::raft_log_key(region_id, low);
         let end_key = keys::raft_log_key(region_id, high);
         self.scan(
@@ -72,6 +70,7 @@ impl RaftEngineReadOnly for RocksEngine {
 
                 if check_compacted {
                     if entry.get_index() != low {
+                        compacted = true;
                         // May meet gap or has been compacted.
                         return Ok(false);
                     }
@@ -94,8 +93,29 @@ impl RaftEngineReadOnly for RocksEngine {
             return Ok(count);
         }
 
+        if compacted {
+            return Err(Error::EntriesCompacted);
+        }
+
         // Here means we don't fetch enough entries.
         Err(Error::EntriesUnavailable)
+    }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        let start_key = keys::raft_log_key(region_id, 0);
+        let end_key = keys::raft_log_key(region_id, u64::MAX);
+        self.scan(
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |_, value| {
+                let mut entry = Entry::default();
+                entry.merge_from_bytes(value)?;
+                buf.push(entry);
+                Ok(true)
+            },
+        )?;
+        Ok(())
     }
 }
 impl RocksEngine {
@@ -171,21 +191,29 @@ impl RaftEngine for RocksEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        mut first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
-        let seek_key = keys::raft_log_key(raft_group_id, 0);
-        let prefix = keys::raft_log_prefix(raft_group_id);
-        if let Some((key, _)) = self.seek(&seek_key)? {
-            if !key.starts_with(&prefix) {
-                // No raft logs for the raft group.
+        if first_index == 0 {
+            let seek_key = keys::raft_log_key(raft_group_id, 0);
+            let prefix = keys::raft_log_prefix(raft_group_id);
+            fail::fail_point!("engine_rocks_raft_engine_clean_seek", |_| Ok(()));
+            if let Some((key, _)) = self.seek(&seek_key)? {
+                if !key.starts_with(&prefix) {
+                    // No raft logs for the raft group.
+                    return Ok(());
+                }
+                first_index = match keys::raft_log_index(&key) {
+                    Ok(index) => index,
+                    Err(_) => return Ok(()),
+                };
+            } else {
                 return Ok(());
             }
-            let first_index = match keys::raft_log_index(&key) {
-                Ok(index) => index,
-                Err(_) => return Ok(()),
-            };
+        }
+        if first_index <= state.last_index {
             for index in first_index..=state.last_index {
                 let key = keys::raft_log_key(raft_group_id, index);
                 batch.delete(&key)?;

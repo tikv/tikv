@@ -18,8 +18,8 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
+    HandlerBuilder, PollHandler, Priority,
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -1504,6 +1504,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1550,6 +1551,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &Request,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
@@ -1599,6 +1601,7 @@ where
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
         let notify_only = req.get_delete_range().get_notify_only();
@@ -1670,6 +1673,7 @@ where
         req: &Request,
         ssts: &mut Vec<SSTMetaInfo>,
     ) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
@@ -3257,6 +3261,7 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
+        fail_point!("on_handle_apply_store_1", apply_ctx.store_id == 1, |_| {});
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
@@ -3451,7 +3456,7 @@ where
         }
     }
 
-    #[allow(unused_mut)]
+    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn handle_snapshot<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
@@ -3466,7 +3471,6 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
@@ -3761,7 +3765,10 @@ where
     EK: KvEngine,
     W: WriteBatch<EK> + 'static,
 {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a BatchSystemConfig),
+    {
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
                 CmpOrdering::Greater => {
@@ -3774,6 +3781,7 @@ where
                 }
                 _ => {}
             }
+            update_cfg(&incoming.apply_batch_system);
         }
         self.apply_ctx.perf_context.start_observe();
     }
@@ -4795,9 +4803,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct ApplyObserver {
-        pre_admin_count: Arc<AtomicUsize>,
         pre_query_count: Arc<AtomicUsize>,
-        post_admin_count: Arc<AtomicUsize>,
         post_query_count: Arc<AtomicUsize>,
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
     }

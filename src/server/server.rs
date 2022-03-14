@@ -374,18 +374,20 @@ pub mod test_router {
         }
     }
 
-    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
-            Ok(())
-        }
-
+    impl SignificantRouter<RocksEngine> for TestRaftStoreRouter {
         fn significant_send(
             &self,
             _: u64,
             msg: SignificantMsg<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
             let _ = self.significant_msg_sender.send(msg);
+            Ok(())
+        }
+    }
+
+    impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+            let _ = self.tx.send(1);
             Ok(())
         }
 
@@ -419,6 +421,7 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
+    use tikv_util::quota_limiter::QuotaLimiter;
     use tokio::runtime::Builder as TokioBuilder;
 
     #[derive(Clone)]
@@ -503,6 +506,7 @@ mod tests {
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(

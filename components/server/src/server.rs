@@ -89,7 +89,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, VersionTrack},
+    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     quota_limiter::QuotaLimiter,
     sys::{disk, register_memory_usage_high_water, SysQuota},
@@ -99,7 +99,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::raft_engine_switch::{check_and_dump_raft_db, check_and_dump_raft_engine};
+use crate::raft_engine_switch::*;
 use crate::{memory::*, setup::*, signal_handler};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -128,7 +128,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let mut tikv = TiKVServer::<$ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
-            let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+            let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
             let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
             register_memory_usage_high_water(high_water);
 
@@ -261,6 +261,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let quota_limiter = Arc::new(QuotaLimiter::new(
             config.quota.cpu,
             config.quota.write_kvs,
+            config.quota.total_qps,
             config.quota.write_bandwidth,
             config.quota.read_bandwidth,
         ));
@@ -686,6 +687,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             pd_sender.clone(),
             resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
+            self.pd_client.feature_gate().clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -785,6 +787,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
                 resource_tag_factory,
+                Arc::clone(&self.quota_limiter),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
@@ -1077,18 +1080,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {
-        let io_snooper_on = self.config.enable_io_snoop
-            && file_system::init_io_snooper()
-                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
-                .is_ok();
+        let stats_collector_enabled = file_system::init_io_stats_collector()
+            .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
+            .is_ok();
+
         let limiter = Arc::new(
             self.config
                 .storage
                 .io_rate_limit
-                .build(!io_snooper_on /*enable_statistics*/),
+                .build(!stats_collector_enabled /*enable_statistics*/),
         );
-        let fetcher = if io_snooper_on {
-            BytesFetcher::FromIOSnooper()
+        let fetcher = if stats_collector_enabled {
+            BytesFetcher::FromIOStatsCollector()
         } else {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
@@ -1269,21 +1272,42 @@ impl TiKVServer<RocksEngine> {
         &mut self,
         flow_listener: engine_rocks::FlowListener,
     ) -> (Engines<RocksEngine, RocksEngine>, Arc<EnginesResourceInfo>) {
-        let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
+        let shared_block_cache = block_cache.is_some();
+        let env = self
+            .config
+            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .unwrap();
 
-        // Create raft engine.
-        let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &self.config.raft_engine.config().dir,
+            &self.config.raft_store.raftdb_path,
+        );
+        let dump_source = raft_data_state_machine.before_open_target();
+
+        let raft_db_path = &self.config.raft_store.raftdb_path;
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
-        let raft_engine = engine_rocks::raw_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+        let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+        let raftdb =
+            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+                .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
+        let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
+        raftdb.set_shared_block_cache(shared_block_cache);
+
+        if let Some(source) = dump_source {
+            let mut raft_engine_config = self.config.raft_engine.config();
+            raft_engine_config.dir = source.to_str().unwrap().to_owned();
+            let raft_engine = RaftLogEngine::new(
+                raft_engine_config,
+                self.encryption_key_manager.clone(),
+                None,
+            )
+            .expect("open raft engine");
+            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            raft_data_state_machine.after_dump_data();
+        }
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();
@@ -1304,19 +1328,8 @@ impl TiKVServer<RocksEngine> {
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
-        let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
-        let shared_block_cache = block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
-        raft_engine.set_shared_block_cache(shared_block_cache);
-        let engines = Engines::new(kv_engine, raft_engine);
-
-        check_and_dump_raft_engine(
-            &self.config,
-            self.encryption_key_manager.clone(),
-            get_io_rate_limiter(),
-            &engines.raft,
-            8,
-        );
+        let engines = Engines::new(kv_engine, raftdb);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -1357,17 +1370,35 @@ impl TiKVServer<RaftLogEngine> {
         let env = get_env(self.encryption_key_manager.clone(), get_io_rate_limiter()).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
-        // Create raft engine.
+        let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &self.config.raft_store.raftdb_path,
+            &self.config.raft_engine.config().dir,
+        );
+        let dump_source = raft_data_state_machine.before_open_target();
+
         let raft_config = self.config.raft_engine.config();
         let raft_engine = RaftLogEngine::new(
             raft_config,
             self.encryption_key_manager.clone(),
             get_io_rate_limiter(),
         )
-        .unwrap_or_else(|e| fatal!("failed to create raft engine: {}", e));
+        .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
 
-        // Try to dump and recover raft data.
-        check_and_dump_raft_db(&self.config, &raft_engine, &env, 8);
+        if let Some(source) = dump_source {
+            let config_raftdb = &self.config.raftdb;
+            let mut raft_db_opts = config_raftdb.build_opt();
+            raft_db_opts.set_env(env.clone());
+            let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
+            let raftdb = engine_rocks::raw_util::new_engine_opt(
+                source.to_str().unwrap(),
+                raft_db_opts,
+                raft_cf_opts,
+            )
+            .unwrap_or_else(|e| fatal!("Failed to create raftdb: {}", e));
+            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            raft_data_state_machine.after_dump_data();
+        }
 
         // Create kv engine.
         let mut kv_db_opts = self.config.rocksdb.build_opt();

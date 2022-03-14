@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# This script checks if all cargo targets have path specifications.
+set -euo pipefail
+
+for i in $(find . -type f -name 'Cargo.toml'); do
+  # These folders are excluded from docker build.
+  if echo $i | grep -q "./fuzz/\|./profiler/"; then
+    continue
+  fi
+  for target in "test" "bench" "bin" "example"; do
+    matches=$(sed -n "/\[\[$target\]\]/,/^$/ p" $i)
+    if [ $(echo "$matches" | grep -c "[[$target]]") != $(echo "$matches" | grep -c "^path =") ]; then
+      echo "Path has not been specified for a $target target in $i, this will break docker build."
+      exit 1
+    fi
+  done
+done
+
+echo "Docker build check passed."

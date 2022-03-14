@@ -49,7 +49,6 @@ pub mod txn;
 mod read_pool;
 mod types;
 
-use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -62,6 +61,7 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
+use self::{kv::SnapContext, test_util::latest_feature_gate};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -91,10 +91,12 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
+use std::time::Duration;
 use std::{
     borrow::Cow,
     iter,
@@ -105,7 +107,7 @@ use std::{
 };
 use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::{duration_to_ms, duration_to_sec, Instant, ThreadReadId};
+use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
@@ -227,6 +229,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
+        feature_gate: FeatureGate,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -238,6 +241,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             reporter,
             resource_tag_factory.clone(),
             Arc::clone(&quota_limiter),
+            feature_gate,
         );
 
         info!("Storage started.");
@@ -530,7 +534,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(key.as_encoded().to_vec(), key.as_encoded().to_vec())],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -576,7 +583,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
-                    let (result, delta) = {
+                    let (result, delta, cost_time) = {
+                        let start_time = quota_limiter.get_now_time();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -588,24 +596,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             false,
                         );
                         let result = snap_store
-                            .get(&key, &mut statistics)
-                            // map storage::txn::Error -> storage::Error
-                            .map_err(Error::from)
-                            .map(|r| {
-                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                                r
-                            });
+                        .get(&key, &mut statistics)
+                        // map storage::txn::Error -> storage::Error
+                        .map_err(Error::from)
+                        .map(|r| {
+                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                            r
+                        });
 
                         let delta = perf_statistics.delta();
-                        (result, delta)
+                        let cost_time = start_time.elapsed();
+                        (result, delta, cost_time)
                     };
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_perf_stats(CMD, &delta);
-                    let cost_time = begin_instant.saturating_elapsed();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
-                        .observe(duration_to_sec(cost_time));
+                        .observe(begin_instant.saturating_elapsed_secs());
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
@@ -617,8 +625,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .as_ref()
                             .map_or(0, |v| v.len());
                     let wait =
-                        quota_limiter.consume_read(cost_time.as_micros() as usize, 1, read_bytes);
-
+                        quota_limiter.consume_read(1, read_bytes, cost_time.as_micros() as usize);
+                    KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                        .get(CMD)
+                        .inc_by(wait.as_micros() as u64);
                     if !wait.is_zero() {
                         GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + wait)
@@ -683,9 +693,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
+        let rand_ctx = requests[rand_index].get_context();
+        let rand_key = requests[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag(requests[rand_index].get_context());
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -838,10 +850,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = keys
+            .iter()
+            .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-
+        let quota_limiter = Arc::clone(&self.quota_limiter);
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now_coarse();
@@ -885,41 +903,49 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
+
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
-                    let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                        bypass_locks,
-                        access_locks,
-                        false,
-                    );
-                    let result = snap_store
-                        .batch_get(&keys, &mut statistics)
-                        .map_err(Error::from)
-                        .map(|v| {
-                            let kv_pairs: Vec<_> = v
-                                .into_iter()
-                                .zip(keys)
-                                .filter(|&(ref v, ref _k)| {
-                                    !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                })
-                                .map(|(v, k)| match v {
-                                    Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                    Err(e) => Err(Error::from(e)),
-                                    _ => unreachable!(),
-                                })
-                                .collect();
-                            KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                .get(CMD)
-                                .observe(kv_pairs.len() as f64);
-                            kv_pairs
-                        });
+                    let (result, delta, cost_time, key_bytes, key_len) = {
+                        let start_time = quota_limiter.get_now_time();
+                        let perf_statistics = PerfStatisticsInstant::new();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                            bypass_locks,
+                            access_locks,
+                            false,
+                        );
+                        let key_bytes = keys.iter().fold(0, |acc, v| acc + v.len());
+                        let key_len = keys.len();
+                        let result = snap_store
+                            .batch_get(&keys, &mut statistics)
+                            .map_err(Error::from)
+                            .map(|v| {
+                                let kv_pairs: Vec<_> = v
+                                    .into_iter()
+                                    .zip(keys)
+                                    .filter(|&(ref v, ref _k)| {
+                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                    })
+                                    .map(|(v, k)| match v {
+                                        Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                        Err(e) => Err(Error::from(e)),
+                                        _ => unreachable!(),
+                                    })
+                                    .collect();
+                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                    .get(CMD)
+                                    .observe(kv_pairs.len() as f64);
+                                kv_pairs
+                            });
 
-                    let delta = perf_statistics.delta();
+                        let delta = perf_statistics.delta();
+                        let cost_time = start_time.elapsed();
+                        (result, delta, cost_time, key_bytes, key_len)
+                    };
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     metrics::tls_collect_perf_stats(CMD, &delta);
@@ -929,6 +955,33 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
+
+                    let result_len = result
+                        .as_ref()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .fold(0, |acc, v| {
+                            acc + v.as_ref().unwrap_or(&(Vec::new(), Vec::new())).1.len()
+                        });
+
+                    let read_bytes = key_bytes + result_len;
+                    let cost_time =
+                        Duration::from_micros((cost_time.as_micros() as f64 * 1.1_f64) as u64);
+                    let wait = quota_limiter.consume_read(
+                        key_len,
+                        read_bytes,
+                        cost_time.as_micros() as usize,
+                    );
+                    KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                        .get(CMD)
+                        .inc_by(wait.as_micros() as u64);
+                    if !wait.is_zero() {
+                        GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + wait)
+                            .compat()
+                            .await
+                            .unwrap();
+                    }
 
                     let stage_finished_ts = Instant::now_coarse();
                     let schedule_wait_time =
@@ -985,7 +1038,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(
+                start_key.as_encoded().to_vec(),
+                match &end_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+            )],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -1138,7 +1200,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
+            &ctx,
+            vec![(
+                match &start_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+                match &end_key {
+                    Some(k) => k.as_encoded().to_vec(),
+                    None => vec![],
+                },
+            )],
+        );
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         // Do not allow replica read for scan_lock.
@@ -1370,7 +1444,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1444,9 +1520,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // The resource tags of these batched requests are not the same, and it is quite expensive
         // to distinguish them, so we can find random one of them as a representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
+        let rand_ctx = gets[rand_index].get_context();
+        let rand_key = gets[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
-            .new_tag(gets[rand_index].get_context());
+            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1550,7 +1628,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -1655,6 +1736,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let raw_value = RawValue {
                         user_value: value,
                         expire_ts: ttl_to_expire_ts(ttl),
+                        is_delete: false,
                     };
                     Modify::Put(
                         Self::rawkv_cf(&cf, self.api_version)?,
@@ -1720,6 +1802,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let raw_value = RawValue {
                                 user_value: v,
                                 expire_ts: ttl_to_expire_ts(ttl),
+                                is_delete: false,
                             };
                             Modify::Put(
                                 cf,
@@ -1982,7 +2065,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = ranges
+            .iter()
+            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2105,7 +2194,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2280,7 +2371,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+        let key_ranges = ranges
+            .iter()
+            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
         let api_version = self.api_version;
 
         let res = self.read_pool.spawn_handle(
@@ -2631,6 +2728,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             DummyReporter,
             self.resource_tag_factory,
             Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         )
     }
 
@@ -2658,6 +2756,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         )
     }
 }
@@ -2856,6 +2955,12 @@ pub mod test_util {
         fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
+    }
+
+    pub fn latest_feature_gate() -> FeatureGate {
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version(env!("CARGO_PKG_VERSION")).unwrap();
+        feature_gate
     }
 }
 
@@ -6529,6 +6634,7 @@ mod tests {
         test_pessimistic_lock_impl(true);
     }
 
+    #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
             start_ts: TimeStamp,
@@ -8205,7 +8311,7 @@ mod tests {
 
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            let lock = pessimistic_locks.map.get(&k1).unwrap();
+            let lock = pessimistic_locks.get(&k1).unwrap();
             assert_eq!(
                 lock,
                 &(
@@ -8266,7 +8372,7 @@ mod tests {
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
-            assert!(!pessimistic_locks.map.contains_key(&k1));
+            assert!(pessimistic_locks.get(&k1).is_none());
         }
     }
 
@@ -8295,7 +8401,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         // When disabling in-memory pessimistic lock, the lock map should remain unchanged.
-        assert!(txn_ext.pessimistic_locks.read().map.is_empty());
+        assert!(txn_ext.pessimistic_locks.read().is_empty());
 
         let (tx, rx) = channel();
         storage
