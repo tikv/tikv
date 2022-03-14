@@ -1024,7 +1024,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if !ctx.get_stale_read() {
                     concurrency_manager.update_max_ts(start_ts);
                 }
-                if ctx.get_isolation_level() == IsolationLevel::Si {
+                if matches!(
+                    ctx.get_isolation_level(),
+                    IsolationLevel::Si | IsolationLevel::RcCheckTs
+                ) {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
