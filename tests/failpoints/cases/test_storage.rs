@@ -28,6 +28,7 @@ use tikv::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 use tikv_util::future::paired_future_callback;
+use tikv_util::sys::SysQuota;
 use tikv_util::worker::dummy_scheduler;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
@@ -228,7 +229,7 @@ fn test_raftkv_early_error_report() {
 #[test]
 fn test_scale_scheduler_pool() {
     let snapshot_fp = "scheduler_start_execute";
-    let mut cluster = new_server_cluster(0, 2);
+    let mut cluster = new_server_cluster(0, 1);
     cluster.run();
 
     let engine = cluster
@@ -304,31 +305,58 @@ fn test_scale_scheduler_pool() {
         prewrite_rx.recv_timeout(Duration::from_secs(2))
     };
 
-    cfg_controller
-        .update_config("storage.scheduler-worker-pool-size", "1")
-        .unwrap();
-    assert_eq!(
-        scheduler
+    let check_scale_pool_size = |size: usize, ok: bool| {
+        let origin_pool_size = scheduler
             .get_sched_pool(CommandPri::Normal)
             .pool
-            .get_pool_size(),
-        1
-    );
+            .get_pool_size();
+        let origin_pool_size_high = scheduler
+            .get_sched_pool(CommandPri::High)
+            .pool
+            .get_pool_size();
+        let res = cfg_controller
+            .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
+        let (expected_size, expected_size_high) = if ok {
+            res.unwrap();
+            (size, std::cmp::max(size / 2, 1))
+        } else {
+            assert!(res.is_err());
+            (origin_pool_size, origin_pool_size_high)
+        };
+        assert_eq!(
+            scheduler
+                .get_sched_pool(CommandPri::Normal)
+                .pool
+                .get_pool_size(),
+            expected_size
+        );
+        assert_eq!(
+            scheduler
+                .get_sched_pool(CommandPri::High)
+                .pool
+                .get_pool_size(),
+            expected_size_high
+        );
+    };
 
+    let max_pool_size = std::cmp::max(SysQuota::cpu_cores_quota() as usize, 1);
+
+    // check invalid pool size
+    check_scale_pool_size(0, false);
+    check_scale_pool_size(max_pool_size + 1, false);
+    check_scale_pool_size(max_pool_size, true);
+
+    // if the env only allow 1 thread, skip following test.
+    if max_pool_size < 2 {
+        return;
+    }
+
+    check_scale_pool_size(1, true);
     fail::cfg(snapshot_fp, "1*pause").unwrap();
     // propose one prewrite to block the only worker
     assert!(do_prewrite(b"k1", b"v1").is_err());
 
-    cfg_controller
-        .update_config("storage.scheduler-worker-pool-size", "2")
-        .unwrap();
-    assert_eq!(
-        scheduler
-            .get_sched_pool(CommandPri::Normal)
-            .pool
-            .get_pool_size(),
-        2
-    );
+    check_scale_pool_size(2, true);
 
     // do prewrite again, as we scale another worker, this request should success
     do_prewrite(b"k2", b"v2").unwrap().unwrap();

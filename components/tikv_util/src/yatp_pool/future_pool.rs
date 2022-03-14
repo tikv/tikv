@@ -26,23 +26,9 @@ struct Env {
     metrics_pool_schedule_duration: Histogram,
 }
 
+#[derive(Clone)]
 pub struct FuturePool {
-    pool: Arc<ThreadPool>,
-    env: Env,
-    // for accessing pool_size config since yatp doesn't offer such getter.
-    pool_size: AtomicUsize,
-    max_tasks: usize,
-}
-
-impl Clone for FuturePool {
-    fn clone(&self) -> Self {
-        Self {
-            pool: self.pool.clone(),
-            env: self.env.clone(),
-            pool_size: AtomicUsize::new(self.pool_size.load(Ordering::Relaxed)),
-            max_tasks: self.max_tasks,
-        }
-    }
+    inner: Arc<PoolInner>,
 }
 
 impl std::fmt::Debug for FuturePool {
@@ -65,27 +51,72 @@ impl FuturePool {
                 .with_label_values(&[name]),
         };
         FuturePool {
-            pool: Arc::new(pool),
-            env,
-            pool_size: AtomicUsize::new(pool_size),
-            max_tasks,
+            inner: Arc::new(PoolInner {
+                pool,
+                env,
+                pool_size: AtomicUsize::new(pool_size),
+                max_tasks,
+            }),
         }
     }
 
     /// Gets inner thread pool size.
     #[inline]
     pub fn get_pool_size(&self) -> usize {
-        self.pool_size.load(Ordering::Relaxed)
+        self.inner.pool_size.load(Ordering::Relaxed)
     }
 
     pub fn scale_pool_size(&self, thread_count: usize) {
-        self.pool.scale_workers(thread_count);
-        self.pool_size.store(thread_count, Ordering::Release);
+        self.inner.scale_pool_size(thread_count)
     }
 
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
+        // As long as different future pool has different name prefix, we can safely use the value
+        // in metrics.
+        self.inner.get_running_task_count()
+    }
+
+    /// Spawns a future in the pool.
+    pub fn spawn<F>(&self, future: F) -> Result<(), Full>
+    where
+        F: Future + Send + 'static,
+    {
+        self.inner.spawn(future)
+    }
+
+    /// Spawns a future in the pool and returns a handle to the result of the future.
+    ///
+    /// The future will not be executed if the handle is not polled.
+    pub fn spawn_handle<F>(
+        &self,
+        future: F,
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send,
+    {
+        self.inner.spawn_handle(future)
+    }
+}
+
+struct PoolInner {
+    pool: ThreadPool,
+    env: Env,
+    // for accessing pool_size config since yatp doesn't offer such getter.
+    pool_size: AtomicUsize,
+    max_tasks: usize,
+}
+
+impl PoolInner {
+    #[inline]
+    fn scale_pool_size(&self, thread_count: usize) {
+        self.pool.scale_workers(thread_count);
+        self.pool_size.store(thread_count, Ordering::Release);
+    }
+
+    fn get_running_task_count(&self) -> usize {
         // As long as different future pool has different name prefix, we can safely use the value
         // in metrics.
         self.env.metrics_running_task_count.get() as usize
@@ -112,8 +143,7 @@ impl FuturePool {
         }
     }
 
-    /// Spawns a future in the pool.
-    pub fn spawn<F>(&self, future: F) -> Result<(), Full>
+    fn spawn<F>(&self, future: F) -> Result<(), Full>
     where
         F: Future + Send + 'static,
     {
@@ -135,10 +165,7 @@ impl FuturePool {
         Ok(())
     }
 
-    /// Spawns a future in the pool and returns a handle to the result of the future.
-    ///
-    /// The future will not be executed if the handle is not polled.
-    pub fn spawn_handle<F>(
+    fn spawn_handle<F>(
         &self,
         future: F,
     ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
@@ -456,5 +483,23 @@ mod tests {
 
         // no more results
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    }
+
+    #[test]
+    fn test_scale_pool_size() {
+        let pool = Builder::new(DefaultTicker {})
+            .thread_count(1, 4, 8)
+            .build_future_pool();
+
+        assert_eq!(pool.get_pool_size(), 4);
+        let cloned = pool.clone();
+
+        pool.scale_pool_size(8);
+        assert_eq!(pool.get_pool_size(), 8);
+        assert_eq!(cloned.get_pool_size(), 8);
+
+        pool.scale_pool_size(1);
+        assert_eq!(pool.get_pool_size(), 1);
+        assert_eq!(cloned.get_pool_size(), 1);
     }
 }
