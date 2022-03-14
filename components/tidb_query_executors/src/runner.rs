@@ -17,13 +17,12 @@ use yatp::task::future::reschedule;
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 
-use futures::compat::Future01CompatExt;
 use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tikv_util::{quota_limiter::QuotaLimiter, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::quota_limiter::QuotaLimiter;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -453,11 +452,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             )?;
 
             if !quota_delay.is_zero() {
-                GLOBAL_TIMER_HANDLE
-                    .delay(std::time::Instant::now() + quota_delay)
-                    .compat()
-                    .await
-                    .unwrap();
+                std::thread::sleep(quota_delay);
             }
             if record_len > 0 {
                 chunks.push(chunk);
