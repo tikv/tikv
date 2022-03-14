@@ -3537,6 +3537,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_kv::RocksEngine as RocksDBEngine;
+    use tikv_util::sys::SysQuota;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -4199,28 +4200,48 @@ mod tests {
         cfg.storage.scheduler_worker_pool_size = 4;
         cfg.validate().unwrap();
         let (storage, cfg_controller, ..) = new_engines(cfg);
-
         let scheduler = storage.get_scheduler();
-        assert_eq!(
-            scheduler
+
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
+
+        let check_scale_pool_size = |size: usize, ok: bool| {
+            let origin_pool_size = scheduler
                 .get_sched_pool(CommandPri::Normal)
                 .pool
-                .get_pool_size(),
-            4
-        );
-
-        cfg_controller
-            .update_config("storage.scheduler-worker-pool-size", "1")
-            .unwrap();
-
-        let scheduler = storage.get_scheduler();
-        assert_eq!(
-            scheduler
-                .get_sched_pool(CommandPri::Normal)
+                .get_pool_size();
+            let origin_pool_size_high = scheduler
+                .get_sched_pool(CommandPri::High)
                 .pool
-                .get_pool_size(),
-            1
-        );
+                .get_pool_size();
+            let res = cfg_controller
+                .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
+            let (expected_size, expected_size_high) = if ok {
+                res.unwrap();
+                (size, std::cmp::max(size / 2, 1))
+            } else {
+                assert!(res.is_err());
+                (origin_pool_size, origin_pool_size_high)
+            };
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::Normal)
+                    .pool
+                    .get_pool_size(),
+                expected_size
+            );
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::High)
+                    .pool
+                    .get_pool_size(),
+                expected_size_high
+            );
+        };
+
+        check_scale_pool_size(0, false);
+        check_scale_pool_size(max_pool_size + 1, false);
+        check_scale_pool_size(1, true);
+        check_scale_pool_size(max_pool_size, true);
     }
 
     #[test]
