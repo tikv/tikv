@@ -3099,13 +3099,12 @@ mod tests {
         test_util::*,
         *,
     };
-    use raw::encoded::RawEncodeSnapshot;
-    use raw::raw_mvcc::RawMvccSnapshot;
-
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::lock_manager::DiagnosticContext;
     use crate::storage::mvcc::LockType;
+    use crate::storage::raw::encoded::RawEncodeSnapshot;
+    use crate::storage::raw::raw_mvcc::RawMvccSnapshot;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::txn::tests::must_rollback;
     use crate::storage::{
@@ -3133,9 +3132,6 @@ mod tests {
         },
         time::Duration,
     };
-
-    use crate::storage::raw::encoded::RawEncodeSnapshot;
-    use crate::storage::raw::raw_mvcc::RawMvccSnapshot;
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, PessimisticLock, WriteType};
 
@@ -8990,6 +8986,7 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
+        use tikv_kv::Iterator;
         let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
             .build()
             .unwrap();

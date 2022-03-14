@@ -9,7 +9,7 @@ use raft::StateRole;
 use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxRegionChangeObserver,
     BoxRoleObserver, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
-    ObserverContext, RegionChangeObserver, RoleObserver,
+    ObserverContext, RegionChangeObserver, RoleChange, RoleObserver,
 };
 use std::cmp;
 use tikv_util::HandyRwLock;
@@ -173,8 +173,8 @@ impl CausalObserver {
 
 impl RoleObserver for CausalObserver {
     /// Observe becoming leader, to advance CausalTsProvider not less than this region.
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
-        if role == StateRole::Leader {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        if role_change.state == StateRole::Leader {
             let region_id = ctx.region().get_id();
             let max_ts = self.causal_manager.max_ts(region_id);
             self.causal_ts.advance(max_ts.next()).unwrap();
