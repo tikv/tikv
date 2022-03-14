@@ -244,6 +244,7 @@ fn test_scale_scheduler_pool() {
         DummyLockManager {},
         ApiVersion::V1,
     )
+    .config(cluster.cfg.tikv.storage.clone())
     .build()
     .unwrap();
 
