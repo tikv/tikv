@@ -216,9 +216,11 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
             Task::InitDownstream {
+                ref region_id,
                 ref downstream_id, ..
             } => de
                 .field("type", &"init_downstream")
+                .field("region_id", &region_id)
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
@@ -1144,6 +1146,7 @@ impl<E: KvEngine> Initializer<E> {
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
+        let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
         let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
@@ -1159,6 +1162,7 @@ impl<E: KvEngine> Initializer<E> {
                 region_epoch,
                 callback: Callback::Read(Box::new(move |resp| {
                     if let Err(e) = sched.schedule(Task::InitDownstream {
+                        region_id,
                         downstream_id,
                         downstream_state,
                         sink,

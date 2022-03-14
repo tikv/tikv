@@ -255,7 +255,6 @@ fn test_no_resolved_ts_before_downstream_initialized() {
     // Create 2 changefeeds and the second will be blocked in initialization.
     let mut req_txs = Vec::with_capacity(2);
     let mut event_feeds = Vec::with_capacity(2);
-    let mut receive_events = Vec::with_capacity(2);
     for i in 0..2 {
         if i == 1 {
             fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
