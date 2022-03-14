@@ -5599,6 +5599,7 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "cc",
  "cdc",
  "chrono",
  "clap",
@@ -5681,6 +5682,7 @@ dependencies = [
 name = "tikv-server"
 version = "0.0.1"
 dependencies = [
+ "cc",
  "clap",
  "server",
  "tikv",
