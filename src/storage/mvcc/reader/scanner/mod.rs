@@ -18,6 +18,7 @@ use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
+use crate::storage::need_check_locks;
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
 pub use self::forward::{test_util, DeltaScanner, EntryScanner};
@@ -204,11 +205,10 @@ impl<S: Snapshot> ScannerBuilder<S> {
     }
 
     fn build_lock_cursor(&mut self) -> Result<Option<Cursor<S::Iter>>> {
-        Ok(match self.0.isolation_level {
-            IsolationLevel::Si | IsolationLevel::RcCheckTs => {
-                Some(self.0.create_cf_cursor(CF_LOCK)?)
-            }
-            IsolationLevel::Rc => None,
+        Ok(if need_check_locks(self.0.isolation_level) {
+            Some(self.0.create_cf_cursor(CF_LOCK)?)
+        } else {
+            None
         })
     }
 }
