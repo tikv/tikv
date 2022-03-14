@@ -36,6 +36,7 @@ use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRoute
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
+use std::sync::mpsc::channel;
 use tikv::server::Result as ServerResult;
 use tikv_util::thread_group::GroupProperties;
 use tikv_util::time::Instant;
@@ -1648,13 +1649,15 @@ impl<T: Simulator> Cluster<T> {
         buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
         expect_buckets: Buckets,
-    ) {
+    ) -> u64 {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let (tx, rx) = channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
                 assert_eq!(expect_buckets.get_keys(), stat.buckets.get_keys());
                 assert_eq!(expect_buckets.get_keys().len() - 1, stat.buckets_size.len());
+                tx.send(stat.buckets.version).unwrap();
             }),
         };
         CasualRouter::send(
@@ -1668,6 +1671,7 @@ impl<T: Simulator> Cluster<T> {
             },
         )
         .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap()
     }
 }
 

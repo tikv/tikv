@@ -45,7 +45,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::time::{duration_to_sec, monotonic_raw_now, timespec_to_ns, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
@@ -4706,6 +4706,22 @@ where
                 cb(peer_stat);
             }
         };
+
+        // bucket version layout
+        //   term       logical counter
+        // |-----------|-----------|
+        //  high bits     low bits
+        // term: given 10s election timeout, the 32 bit means 1362 year running time
+        let gen_bucket_version = |term, current_version| {
+            let current_version_term = current_version >> 32;
+            let bucket_version: u64 = if current_version_term == term {
+                current_version + 1
+            } else {
+                (term << 32)
+            };
+            bucket_version
+        };
+
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
             info!(
@@ -4729,7 +4745,8 @@ where
             let mut region_buckets_keys = self.fsm.peer.region_buckets.keys.to_vec();
             let mut region_buckets_size = self.fsm.peer.buckets_size.clone();
             let mut region_buckets = Buckets::default();
-            region_buckets.version = timespec_to_ns(monotonic_raw_now());
+            region_buckets.version =
+                gen_bucket_version(self.fsm.peer.term(), self.fsm.peer.region_buckets.version);
             let mut i = 0;
             let mut j = 0;
             let buckets = buckets.drain(..);
@@ -4783,7 +4800,8 @@ where
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
             let mut region_buckets = Buckets::default();
-            region_buckets.version = timespec_to_ns(monotonic_raw_now());
+            region_buckets.version =
+                gen_bucket_version(self.fsm.peer.term(), self.fsm.peer.region_buckets.version);
             region_buckets.set_keys(bucket_keys.into());
             // add region's start/end key
             region_buckets
