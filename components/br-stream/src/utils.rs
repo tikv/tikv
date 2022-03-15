@@ -228,8 +228,7 @@ impl<K: Ord, V> SegmentMap<K, V> {
         self.get_by_point(point).map(|(k, v, _)| (k, v))
     }
 
-    /// Check whether the range is overlapping with any range in the segment tree.
-    pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
+    pub fn find_overlapping<R>(&self, range: (&R, &R)) -> Option<(&K, &K, &V)>
     where
         K: Borrow<R>,
         R: Ord + ?Sized,
@@ -240,7 +239,9 @@ impl<K: Ord, V> SegmentMap<K, V> {
         // |------+-s----+----e----|
         // Firstly, we check whether the start point is in some range.
         // if true, it must be overlapping.
-        let overlap_with_start = self.get_interval_by_point(range.0).is_some();
+        if let Some(overlap_with_start) = self.get_by_point(range.0) {
+            return Some(overlap_with_start);
+        }
         // |--s----+-----+----e----|
         // Otherwise, the possibility of being overlapping would be there are some sub range
         // of the queried range...
@@ -257,9 +258,17 @@ impl<K: Ord, V> SegmentMap<K, V> {
              .filter(|(start, end)| {
                  <K as Borrow<R>>::borrow(&end.range_end) > range.1
                      || <K as Borrow<R>>::borrow(start) > range.0
-             })
-             .is_some();
-        overlap_with_start || covered_by_the_range
+             });
+        covered_by_the_range.map(|(k, v)| (k, &v.range_end, &v.item))
+    }
+
+    /// Check whether the range is overlapping with any range in the segment tree.
+    pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
+    where
+        K: Borrow<R>,
+        R: Ord + ?Sized,
+    {
+        self.find_overlapping(range).is_some()
     }
 
     pub fn get_inner(&mut self) -> &mut BTreeMap<K, SegmentValue<K, V>> {

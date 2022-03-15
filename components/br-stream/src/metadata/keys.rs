@@ -99,11 +99,15 @@ impl MetaKey {
 
     /// The key of next backup ts of some region in some store.
     pub fn next_backup_ts_of(name: &str, store_id: u64) -> Self {
-        let base = format!("{}{}/{}", PREFIX, PATH_NEXT_BACKUP_TS, name);
-        let mut buf = bytes::BytesMut::from(base);
-        buf.put(b'/');
+        let base = Self::next_backup_ts(name);
+        let mut buf = bytes::BytesMut::from(base.0);
         buf.put_u64_be(store_id);
         Self(buf.to_vec())
+    }
+
+    // The prefix for next backup ts.
+    pub fn next_backup_ts(name: &str) -> Self {
+        Self(format!("{}{}/{}/", PREFIX, PATH_NEXT_BACKUP_TS, name).into_bytes())
     }
 
     /// The key for pausing some task.

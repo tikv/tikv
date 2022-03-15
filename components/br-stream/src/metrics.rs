@@ -53,4 +53,11 @@ lazy_static! {
         &["task"],
     )
     .unwrap();
+    pub static ref FLUSH_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_stream_flush_duration_sec",
+        "The time cost of flushing a task.",
+        &["stage"],
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }

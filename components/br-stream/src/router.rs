@@ -18,7 +18,7 @@ use crate::{
     errors::Error,
     metadata::StreamTask,
     metrics::SKIP_KV_COUNTER,
-    utils::{self, SegmentMap, SlotMap},
+    utils::{self, SegmentMap, SlotMap, StopWatch},
 };
 
 use super::errors::Result;
@@ -49,9 +49,10 @@ use tikv_util::{
     worker::Scheduler,
     Either, HandyRwLock,
 };
+use tokio::fs::{remove_file, File};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
-use tokio::{fs::remove_file, fs::File};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use txn_types::{Key, Lock, TimeStamp};
 
 pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
@@ -303,6 +304,18 @@ impl RouterInner {
             scheduler,
             temp_file_size_limit,
         }
+    }
+
+    /// Find the task for a region. If `end_key` is empty, search from start_key to +inf.
+    /// It simply search for a random possible overlapping range and get its task.
+    /// FIXME: If a region crosses many tasks, this can only find one of them.
+    pub fn find_task_by_range(&self, start_key: &[u8], mut end_key: &[u8]) -> Option<String> {
+        let r = self.ranges.rl();
+        if end_key.is_empty() {
+            end_key = &[0xffu8; 32];
+        }
+        r.find_overlapping((start_key, end_key))
+            .map(|x| x.2.clone())
     }
 
     /// Register some ranges associated to some task.
@@ -558,7 +571,7 @@ impl TempFileKey {
 pub struct StreamTaskInfo {
     task: StreamTask,
     /// support external storage. eg local/s3.
-    storage: Box<dyn ExternalStorage>,
+    storage: Arc<dyn ExternalStorage>,
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
@@ -597,7 +610,10 @@ impl StreamTaskInfo {
     /// Create a new temporary file set at the `temp_dir`.
     pub async fn new(temp_dir: PathBuf, task: StreamTask) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
-        let storage = create_storage(task.info.get_storage(), BackendConfig::default())?;
+        let storage = Arc::from(create_storage(
+            task.info.get_storage(),
+            BackendConfig::default(),
+        )?);
         Ok(Self {
             task,
             storage,
@@ -729,35 +745,46 @@ impl StreamTaskInfo {
         }
     }
 
-    pub async fn flush_log(&self) -> Result<()> {
-        // if failed to write storage, we should retry write flushing_files.
-        for (_, v) in self.flushing_files.write().await.iter() {
-            let data_file = v.lock().await;
-            // to do: limiter to storage
-            let limiter = Limiter::builder(std::f64::INFINITY).build();
-            let reader = std::fs::File::open(data_file.local_path.clone()).unwrap();
-            let reader = UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader))));
-            let filepath = &data_file.storage_path;
+    async fn flush_log_file_to(
+        storage: Arc<dyn ExternalStorage>,
+        file: &Mutex<DataFile>,
+    ) -> Result<()> {
+        let data_file = file.lock().await;
+        // to do: limiter to storage
+        let limiter = Limiter::builder(std::f64::INFINITY).build();
+        let reader = File::open(data_file.local_path.clone()).await?;
+        let stat = reader.metadata().await?;
+        let reader = UnpinReader(Box::new(limiter.limit(reader.compat())));
+        let filepath = &data_file.storage_path;
 
-            let ret = self.storage.write(filepath, reader, 1024).await;
-            match ret {
-                Ok(_) => {
-                    debug!(
-                        "backup stream flush success";
-                        "tmp file" => ?data_file.local_path,
-                        "storage file" => ?filepath,
-                    );
-                }
-                Err(e) => {
-                    warn!("backup stream flush failed";
-                        "file" => ?data_file.local_path,
-                        "err" => ?e,
-                    );
-                    return Err(Error::Io(e));
-                }
+        let ret = storage.write(filepath, reader, stat.len().max(4096)).await;
+        match ret {
+            Ok(_) => {
+                debug!(
+                    "backup stream flush success";
+                    "tmp file" => ?data_file.local_path,
+                    "storage file" => ?filepath,
+                );
+            }
+            Err(e) => {
+                warn!("backup stream flush failed";
+                    "file" => ?data_file.local_path,
+                    "err" => ?e,
+                );
+                return Err(Error::Io(e));
             }
         }
+        Ok(())
+    }
 
+    pub async fn flush_log(&self) -> Result<()> {
+        // if failed to write storage, we should retry write flushing_files.
+        let storage = self.storage.clone();
+        let files = self.flushing_files.write().await;
+        let futs = files
+            .values()
+            .map(|v| Self::flush_log_file_to(storage.clone(), v));
+        futures::future::try_join_all(futs).await?;
         Ok(())
     }
 
@@ -789,6 +816,7 @@ impl StreamTaskInfo {
         if !self.is_flushing() {
             return Ok(None);
         }
+        let mut sw = StopWatch::new();
 
         // generate meta data and prepare to flush to storage
         let mut metadata_info = self
@@ -800,6 +828,9 @@ impl StreamTaskInfo {
             .min_resolved_ts
             .max(Some(resolved_ts_provided.into_inner()));
         let rts = metadata_info.min_resolved_ts;
+        crate::metrics::FLUSH_DURATION
+            .with_label_values(&["generate_metadata"])
+            .observe(sw.lap().as_secs_f64());
 
         // There is no file to flush, don't write the meta file.
         if metadata_info.files.is_empty() {
@@ -811,9 +842,15 @@ impl StreamTaskInfo {
 
         // flush meta file to storage.
         self.flush_meta(metadata_info).await?;
+        crate::metrics::FLUSH_DURATION
+            .with_label_values(&["save_files"])
+            .observe(sw.lap().as_secs_f64());
 
         // clear flushing files
         self.clear_flushing_files().await;
+        crate::metrics::FLUSH_DURATION
+            .with_label_values(&["clear_temp_files"])
+            .observe(sw.lap().as_secs_f64());
         Ok(rts)
     }
 }

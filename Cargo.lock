@@ -581,6 +581,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-stream",
+ "tokio-util 0.7.0",
  "txn_types",
  "uuid",
 ]
@@ -1543,7 +1544,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.6",
  "url",
 ]
 
@@ -1583,7 +1584,7 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.6",
  "url",
 ]
 
@@ -2119,7 +2120,7 @@ dependencies = [
  "indexmap",
  "slab",
  "tokio",
- "tokio-util",
+ "tokio-util 0.6.6",
  "tracing",
 ]
 
@@ -6116,6 +6117,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-util"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64910e1b9c1901aaf5375561e35b9c057d95ff41a44ede043a03e09279eabaf1"
+dependencies = [
+ "bytes 1.1.0",
+ "futures-core",
+ "futures-io",
+ "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "toml"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6147,7 +6163,7 @@ dependencies = [
  "prost-derive 0.8.0",
  "tokio",
  "tokio-stream",
- "tokio-util",
+ "tokio-util 0.6.6",
  "tower",
  "tower-layer",
  "tower-service",
@@ -6181,7 +6197,7 @@ dependencies = [
  "slab",
  "tokio",
  "tokio-stream",
- "tokio-util",
+ "tokio-util 0.6.6",
  "tower-layer",
  "tower-service",
  "tracing",

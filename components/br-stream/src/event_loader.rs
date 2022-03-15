@@ -77,6 +77,8 @@ impl<S: Snapshot> EventLoader<S> {
                     default: (key, value),
                     ..
                 } => {
+                    // FIXME: we also need to update the information for the `resolver` in the endpoint,
+                    //        otherwise we may advance the resolved ts too far in some conditions?
                     if !key.is_empty() {
                         result.push(ApplyEvent {
                             key,
@@ -196,16 +198,12 @@ where
         Ok(snap)
     }
 
-    /// Initialize the region: register it to the raftstore and the observer.
-    /// At the same time, perform the initial scanning, (an incremental scanning from `start_ts`)
-    /// and generate the corresponding ApplyEvent to the sink directly.
-    pub fn initialize_region(
+    pub fn do_initial_scan(
         &self,
         region: &Region,
         start_ts: TimeStamp,
-        cmd: ChangeObserver,
+        snap: impl Snapshot,
     ) -> Result<Statistics> {
-        let snap = self.observe_over(region, cmd)?;
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let mut event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let mut stats = StatisticsSummary::default();
@@ -226,6 +224,19 @@ where
             });
         }
         Ok(stats.stat)
+    }
+
+    /// Initialize the region: register it to the raftstore and the observer.
+    /// At the same time, perform the initial scanning, (an incremental scanning from `start_ts`)
+    /// and generate the corresponding ApplyEvent to the sink directly.
+    pub fn initialize_region(
+        &self,
+        region: &Region,
+        start_ts: TimeStamp,
+        cmd: ChangeObserver,
+    ) -> Result<Statistics> {
+        let snap = self.observe_over(region, cmd)?;
+        self.do_initial_scan(region, start_ts, snap)
     }
 
     /// initialize a range: it simply scan the regions with leader role and send them to [`initialize_region`].

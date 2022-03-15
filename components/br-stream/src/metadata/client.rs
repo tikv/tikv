@@ -10,8 +10,9 @@ use super::{
 
 use kvproto::brpb::StreamBackupTaskInfo;
 
-use tikv_util::{defer, time::Instant};
+use tikv_util::{defer, time::Instant, warn};
 use tokio_stream::StreamExt;
+
 
 use crate::errors::{Error, Result};
 
@@ -257,7 +258,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         let task = self.get_task(task_name).await?;
         let timestamp = self.meta_store.snapshot().await?;
-        let mut items = timestamp
+        let items = timestamp
             .get(Keys::Key(MetaKey::next_backup_ts_of(
                 task_name,
                 self.store_id,
@@ -266,18 +267,42 @@ impl<Store: MetaStore> MetadataClient<Store> {
         if items.is_empty() {
             Ok(task.info.start_ts)
         } else {
-            assert!(items.len() == 1, "{:?}", items);
-            let next_backup_ts = std::mem::take(&mut items[0].1);
-            if next_backup_ts.len() != 8 {
-                return Err(Error::MalformedMetadata(format!(
-                    "the length of next_backup_ts is {} bytes, require 8 bytes",
-                    next_backup_ts.len()
-                )));
-            }
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(next_backup_ts.as_slice());
-            Ok(u64::from_be_bytes(buf))
+            assert_eq!(items.len(), 1);
+            Self::parse_ts_from_bytes(items[0].1.as_slice())
         }
+    }
+
+    /// get the global progress (the min next_backup_ts among all stores).
+    pub async fn global_progress_of_task(&self, task_name: &str) -> Result<u64> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get_global"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        let task = self.get_task(task_name).await?;
+        let snap = self.meta_store.snapshot().await?;
+        let global_ts = snap.get(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
+            .await?
+            .iter()
+            .filter_map(|kv| {
+                Self::parse_ts_from_bytes(kv.1.as_slice())
+                    .map_err(|err| warn!("br-stream: failed to parse next_backup_ts."; "key" => ?kv.0, "err" => %err))
+                    .ok()
+            })
+            .min()
+            .unwrap_or(task.info.start_ts);
+        Ok(global_ts)
+    }
+
+    fn parse_ts_from_bytes(next_backup_ts: &[u8]) -> Result<u64> {
+        if next_backup_ts.len() != 8 {
+            return Err(Error::MalformedMetadata(format!(
+                "the length of next_backup_ts is {} bytes, require 8 bytes",
+                next_backup_ts.len()
+            )));
+        }
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(next_backup_ts);
+        Ok(u64::from_be_bytes(buf))
     }
 
     /// insert a task with ranges into the metadata store.
