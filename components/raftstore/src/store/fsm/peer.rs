@@ -1094,7 +1094,6 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "err" => %e,
             );
-            return;
         }
     }
 
@@ -1609,8 +1608,8 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
-                if let Some(delta) = res.bucket_stat {
-                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                let buckets = self.fsm.peer.region_buckets.as_mut();
+                if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
                     merge_bucket_stats(
                         &buckets.meta.keys,
                         &mut buckets.stats,
@@ -4957,19 +4956,22 @@ where
             return;
         }
 
-        let region_buckets = self.fsm.peer.region_buckets.as_ref().unwrap().clone();
+        let region_id = self.region_id();
+        let peer_id = self.fsm.peer_id();
+        let region_buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
         if let Err(e) = self
             .ctx
             .pd_scheduler
-            .schedule(PdTask::ReportBuckets(region_buckets))
+            .schedule(PdTask::ReportBuckets(region_buckets.clone()))
         {
             error!(
                 "failed to report region buckets";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
+                "region_id" => region_id,
+                "peer_id" => peer_id,
                 "err" => ?e,
             );
         }
+        region_buckets.stats = new_bucket_stats(&region_buckets.meta);
 
         self.register_report_region_buckets_tick();
     }

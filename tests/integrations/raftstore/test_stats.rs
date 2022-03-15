@@ -703,24 +703,3 @@ fn batch_commands(
     });
     rx.recv_timeout(Duration::from_secs(10)).unwrap();
 }
-
-#[test]
-fn test_bucket_stats() {
-    let mut cluster = new_node_cluster(1, 1);
-    cluster.cfg.coprocessor.enable_region_bucket = true;
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.report_region_buckets_tick_interval = ReadableDuration::millis(100);
-    cluster.run();
-
-    for i in 0..50u8 {
-        let mut key = vec![b'k'];
-        key.push(i);
-        cluster.must_put(&key, &vec![b' '; 4 * 1024 * 1024]);
-    }
-    sleep_ms(500);
-    let buckets = cluster.must_get_buckets(1);
-    println!("keys {:?}", buckets.meta.keys);
-    println!("write_bytes {:?}", buckets.stats.get_write_bytes());
-    // assert_eq!(buckets.meta.keys.len(), 2);
-    // assert_eq!(buckets.stats.get_write_bytes()[0], 2);
-}

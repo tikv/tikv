@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
-use std::{cmp, io};
+use std::{cmp, io, mem};
 
 use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
 #[cfg(feature = "failpoints")]
@@ -1463,6 +1463,9 @@ where
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
         }
+        for (_, region_buckets) in mem::take(&mut read_stats.region_buckets) {
+            self.merge_buckets(region_buckets);
+        }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
                 if sender.send(read_stats).is_err() {
@@ -1608,38 +1611,10 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_region_buckets(&mut self, mut buckets: BucketStat) {
-        use std::cmp::Ordering;
-
-        let region_id = buckets.meta.region_id;
-        let buckets = match self.region_buckets.get_mut(&region_id) {
-            Some(current) => {
-                match current.meta.cmp(&buckets.meta) {
-                    Ordering::Equal | Ordering::Greater => {
-                        merge_bucket_stats(
-                            &current.meta.keys,
-                            &mut current.stats,
-                            &buckets.meta.keys,
-                            &buckets.stats,
-                        );
-                    }
-                    Ordering::Less => {
-                        merge_bucket_stats(
-                            &buckets.meta.keys,
-                            &mut buckets.stats,
-                            &current.meta.keys,
-                            &current.stats,
-                        );
-                        *current = buckets;
-                    }
-                }
-                current
-            }
-            None => {
-                self.region_buckets.insert(region_id, buckets);
-                self.region_buckets.get_mut(&region_id).unwrap()
-            }
-        };
+    fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
+        let region_id = region_buckets.meta.region_id;
+        self.merge_buckets(region_buckets);
+        let buckets = self.region_buckets.get_mut(&region_id).unwrap();
         let now = TiInstant::now();
         let period = now.duration_since(buckets.last_report_time);
         buckets.last_report_time = now;
@@ -1657,6 +1632,34 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn merge_buckets(&mut self, mut buckets: BucketStat) {
+        use std::cmp::Ordering;
+
+        let region_id = buckets.meta.region_id;
+        self.region_buckets
+            .entry(region_id)
+            .and_modify(|current| match current.meta.cmp(&buckets.meta) {
+                Ordering::Equal | Ordering::Greater => {
+                    merge_bucket_stats(
+                        &current.meta.keys,
+                        &mut current.stats,
+                        &buckets.meta.keys,
+                        &buckets.stats,
+                    );
+                }
+                Ordering::Less => {
+                    merge_bucket_stats(
+                        &buckets.meta.keys,
+                        &mut buckets.stats,
+                        &current.meta.keys,
+                        &current.stats,
+                    );
+                    mem::swap(current, &mut buckets);
+                }
+            })
+            .or_insert_with(|| buckets);
     }
 }
 
@@ -1885,7 +1888,7 @@ where
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
             Task::ReportBuckets(buckets) => {
-                self.handle_region_buckets(buckets);
+                self.handle_report_region_buckets(buckets);
             }
         };
     }

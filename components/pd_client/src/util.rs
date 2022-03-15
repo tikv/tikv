@@ -864,24 +864,29 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
                 }
             }
         };
-        let end = match find_bucket_index(range.1, keys) {
-            Some(idx) => {
-                // If end key is the start key of a bucket, this bucket should not be included.
-                if range.1 == keys[idx].as_ref() {
-                    if idx == 0 {
+
+        let end = if range.1.is_empty() {
+            last_bucket_idx
+        } else {
+            match find_bucket_index(range.1, keys) {
+                Some(idx) => {
+                    // If end key is the start key of a bucket, this bucket should not be included.
+                    if range.1 == keys[idx].as_ref() {
+                        if idx == 0 {
+                            return None;
+                        }
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                }
+                None => {
+                    if range.1 >= keys[keys.len() - 1].as_ref() {
+                        last_bucket_idx
+                    } else {
+                        // Not in the bucket range.
                         return None;
                     }
-                    idx - 1
-                } else {
-                    idx
-                }
-            }
-            None => {
-                if range.1 >= keys[keys.len() - 1].as_ref() {
-                    last_bucket_idx
-                } else {
-                    // Not in the bucket range.
-                    return None;
                 }
             }
         };
@@ -922,7 +927,8 @@ mod test {
 
     #[test]
     fn test_merge_bucket_stats() {
-        let cases = [
+        #[allow(clippy::type_complexity)]
+        let cases: &[((Vec<&[u8]>, _), (Vec<&[u8]>, _), _)] = &[
             (
                 (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
                 (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
@@ -954,15 +960,55 @@ mod test {
                 (vec![b"k4", b"k5"], vec![1]),
                 vec![2, 1],
             ),
+            (
+                (vec![b"", b""], vec![1]),
+                (vec![b"", b""], vec![1]),
+                vec![2],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"", b"k2", b""], vec![1, 1]),
+                vec![2, 3],
+            ),
+            (
+                (vec![b"", b""], vec![1]),
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                vec![3],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"", b""], vec![1]),
+                vec![2, 2],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"k2", b"k3"], vec![1]),
+                vec![1, 2],
+            ),
+            (
+                (vec![b"", b"k3", b""], vec![1, 1]),
+                (vec![b"k1", b"k2"], vec![1]),
+                vec![2, 1],
+            ),
+            (
+                (vec![b"", b"k3"], vec![1]),
+                (vec![b"k1", b""], vec![1]),
+                vec![2],
+            ),
+            (
+                (vec![b"", b"k3"], vec![1]),
+                (vec![b"k4", b""], vec![1]),
+                vec![1],
+            ),
         ];
         for (current, incoming, expected) in cases {
-            let cur_keys = current.0;
-            let incoming_keys = incoming.0;
+            let cur_keys = &current.0;
+            let incoming_keys = &incoming.0;
             let mut cur_stats = BucketStats::default();
-            cur_stats.set_read_qps(current.1);
+            cur_stats.set_read_qps(current.1.to_vec());
             let mut incoming_stats = BucketStats::default();
-            incoming_stats.set_read_qps(incoming.1);
-            merge_bucket_stats(&cur_keys, &mut cur_stats, &incoming_keys, &incoming_stats);
+            incoming_stats.set_read_qps(incoming.1.to_vec());
+            merge_bucket_stats(cur_keys, &mut cur_stats, incoming_keys, &incoming_stats);
             assert_eq!(cur_stats.get_read_qps(), expected);
         }
     }
