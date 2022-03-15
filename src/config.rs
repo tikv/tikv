@@ -1687,13 +1687,16 @@ pub mod log_level_serde {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnifiedReadPoolConfig {
+    #[online_config(skip)]
     pub min_thread_count: usize,
     pub max_thread_count: usize,
+    #[online_config(skip)]
     pub stack_size: ReadableSize,
+    #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
@@ -1711,6 +1714,14 @@ impl UnifiedReadPoolConfig {
                     .to_string()
                     .into(),
             );
+        }
+        let limit = SysQuota::cpu_cores_quota() as usize;
+        if self.max_thread_count > limit {
+            return Err(format!(
+                "readpool.unified.max-thread-count should be smaller than {}",
+                limit
+            )
+            .into());
         }
         if self.stack_size.0 < ReadableSize::mb(2).0 {
             return Err("readpool.unified.stack-size should be >= 2mb"
@@ -2030,12 +2041,15 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    #[online_config(submodule)]
     pub unified: UnifiedReadPoolConfig,
+    #[online_config(skip)]
     pub storage: StorageReadPoolConfig,
+    #[online_config(skip)]
     pub coprocessor: CoprReadPoolConfig,
 }
 
@@ -2510,7 +2524,7 @@ pub struct TiKvConfig {
     #[online_config(skip)]
     pub quota: QuotaConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
     #[online_config(submodule)]

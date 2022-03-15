@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use futures::channel::oneshot;
 use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
+use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::IntGauge;
 use thiserror::Error;
 use yatp::pool::Remote;
@@ -13,6 +14,7 @@ use yatp::queue::Extras;
 use yatp::task::future::TaskCell;
 
 use file_system::{set_io_type, IOType};
+use tikv_util::sys::SysQuota;
 use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use self::metrics::*;
@@ -178,6 +180,15 @@ impl ReadPoolHandle {
             } => running_tasks.get() as usize / *pool_size,
         }
     }
+
+    pub fn scale_pool_size(&self, max_thread_count: usize) {
+        match self {
+            ReadPoolHandle::FuturePools { .. } => {
+                unreachable!()
+            }
+            ReadPoolHandle::Yatp { remote, .. } => remote.scale_workers(max_thread_count),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -228,7 +239,10 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .thread_count(
             config.min_thread_count,
             config.max_thread_count,
-            config.max_thread_count,
+            std::cmp::max(
+                config.max_thread_count,
+                SysQuota::cpu_cores_quota() as usize,
+            ),
         )
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
@@ -261,6 +275,23 @@ impl From<Vec<FuturePool>> for ReadPool {
             read_pool_normal,
             read_pool_low,
         }
+    }
+}
+
+pub struct ReadPoolConfigManager(pub ReadPoolHandle);
+
+impl ConfigManager for ReadPoolConfigManager {
+    fn dispatch(&mut self, change: ConfigChange) -> CfgResult<()> {
+        if let Some(ConfigValue::Module(unified)) = change.get("unified") {
+            if let Some(ConfigValue::Usize(max_thread_count)) = unified.get("max_thread_count") {
+                self.0.scale_pool_size(*max_thread_count);
+            }
+        }
+        info!(
+            "readpool config changed";
+            "change" => ?change,
+        );
+        Ok(())
     }
 }
 
