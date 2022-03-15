@@ -1274,7 +1274,7 @@ impl<E: KvEngine> Initializer<E> {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
-                on_cancel()?;
+                return on_cancel();
             }
             let cursors = old_value_cursors.as_mut();
             let resolver = resolver.as_mut();
@@ -1289,7 +1289,7 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         if !post_init_downstream(&self.downstream_state) {
-            on_cancel()?;
+            return on_cancel();
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";

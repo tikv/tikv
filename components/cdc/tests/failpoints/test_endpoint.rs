@@ -15,7 +15,7 @@ use test_raftstore::*;
 use tikv_util::debug;
 use tikv_util::worker::Scheduler;
 
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_double_scan_deregister() {
@@ -252,11 +252,27 @@ fn test_no_resolved_ts_before_downstream_initialized() {
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(b"");
 
+    let recv_resolved_ts = |event_feed: &ClientReceiver| {
+        let mut rx = event_feed.replace(None).unwrap();
+        let timeout = Duration::from_secs(1);
+        for _ in 0..10 {
+            if let Ok(Some(event)) = recv_timeout(&mut rx, timeout) {
+                if event.unwrap().has_resolved_ts() {
+                    event_feed.replace(Some(rx));
+                    return;
+                }
+            }
+        }
+        panic!("must receive a resolved ts");
+    };
+
     // Create 2 changefeeds and the second will be blocked in initialization.
     let mut req_txs = Vec::with_capacity(2);
     let mut event_feeds = Vec::with_capacity(2);
     for i in 0..2 {
         if i == 1 {
+            // Wait the first capture has been initialized.
+            recv_resolved_ts(&event_feeds[0]);
             fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
         }
         let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
@@ -264,8 +280,6 @@ fn test_no_resolved_ts_before_downstream_initialized() {
         block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
         req_txs.push(req_tx);
         event_feeds.push(event_feed);
-        // Sleep a while to wait the capture has been initialized.
-        thread::sleep(Duration::from_secs(1));
     }
 
     let th = thread::spawn(move || {
@@ -273,7 +287,7 @@ fn test_no_resolved_ts_before_downstream_initialized() {
         let mut rx = event_feeds[0].replace(None).unwrap();
         assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_ok());
         let mut rx = event_feeds[1].replace(None).unwrap();
-        assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_err());
+        assert!(recv_timeout(&mut rx, Duration::from_secs(3)).is_err());
     });
 
     th.join().unwrap();
