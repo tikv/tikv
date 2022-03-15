@@ -797,10 +797,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
         let quota_delay = quota_limiter.consume_write(write_bytes, cost_time.as_micros() as usize);
-        KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-            .get(tag)
-            .inc_by(quota_delay.as_micros() as u64);
         if !quota_delay.is_zero() {
+            TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(tag)
+                .inc_by(quota_delay.as_micros() as u64);
             GLOBAL_TIMER_HANDLE
                 .delay(std::time::Instant::now() + quota_delay)
                 .compat()

@@ -34,6 +34,7 @@ num_cpus = "1"
 num-traits = "0.2"
 openssl = "0.10"
 prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 rand = "0.8"
 rusoto_core = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }

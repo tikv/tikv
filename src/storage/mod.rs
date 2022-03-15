@@ -624,14 +624,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .unwrap_or(&None)
                             .as_ref()
                             .map_or(0, |v| v.len());
-                    let wait =
+                    let quota_delay =
                         quota_limiter.consume_read(read_bytes, cost_time.as_micros() as usize);
-                    KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                        .get(CMD)
-                        .inc_by(wait.as_micros() as u64);
-                    if !wait.is_zero() {
+                    if !quota_delay.is_zero() {
+                        TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                            .get(CMD)
+                            .inc_by(quota_delay.as_micros() as u64);
                         GLOBAL_TIMER_HANDLE
-                            .delay(std::time::Instant::now() + wait)
+                            .delay(std::time::Instant::now() + quota_delay)
                             .compat()
                             .await
                             .unwrap();
@@ -966,14 +966,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let read_bytes = key_bytes + result_len;
                     let cost_time =
                         Duration::from_micros((cost_time.as_micros() as f64 * 1.1_f64) as u64);
-                    let wait =
+                    let quota_delay =
                         quota_limiter.consume_read(read_bytes, cost_time.as_micros() as usize);
-                    KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                        .get(CMD)
-                        .inc_by(wait.as_micros() as u64);
-                    if !wait.is_zero() {
+                    if !quota_delay.is_zero() {
+                        TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                            .get(CMD)
+                            .inc_by(quota_delay.as_micros() as u64);
                         GLOBAL_TIMER_HANDLE
-                            .delay(std::time::Instant::now() + wait)
+                            .delay(std::time::Instant::now() + quota_delay)
                             .compat()
                             .await
                             .unwrap();

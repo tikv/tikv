@@ -359,7 +359,6 @@ impl Default for Config {
             inspect_interval: ReadableDuration::millis(500),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
-            // TODO: add comments @tonyxuqqi
             max_batch_size: 256,
         }
     }

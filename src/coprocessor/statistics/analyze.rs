@@ -25,6 +25,7 @@ use tidb_query_executors::{
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
+use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::Instant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -431,11 +432,13 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 (start_time.elapsed(), read_bytes)
             };
 
-            // TODO: how to determine req_cnt
             let quota_delay = self
                 .quota_limiter
                 .consume_read(read_bytes, cost_time.as_micros() as usize);
             if !quota_delay.is_zero() {
+                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                    .get(ThrottleType::analyze_full_sampling)
+                    .inc_by(quota_delay.as_micros() as u64);
                 GLOBAL_TIMER_HANDLE
                     .delay(std::time::Instant::now() + quota_delay)
                     .compat()

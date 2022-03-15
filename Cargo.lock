@@ -5744,6 +5744,7 @@ dependencies = [
  "procfs",
  "procinfo",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "rand 0.8.3",
  "regex",

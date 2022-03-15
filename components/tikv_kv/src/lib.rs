@@ -57,6 +57,7 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::ThreadReadId;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -480,6 +481,9 @@ pub fn snapshot<E: Engine>(
     // make engine not cross yield point
     async move {
         if !quota_delay.is_zero() {
+            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(ThrottleType::kv_snapshot)
+                .inc_by(quota_delay.as_micros() as u64);
             GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + quota_delay)
                 .compat()

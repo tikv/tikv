@@ -23,6 +23,7 @@ use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
+use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
 use tikv_util::{quota_limiter::QuotaLimiter, timer::GLOBAL_TIMER_HANDLE};
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
@@ -453,6 +454,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             )?;
 
             if !quota_delay.is_zero() {
+                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                    .get(ThrottleType::dag)
+                    .inc_by(quota_delay.as_micros() as u64);
                 GLOBAL_TIMER_HANDLE
                     .delay(std::time::Instant::now() + quota_delay)
                     .compat()
