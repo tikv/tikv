@@ -53,7 +53,6 @@ impl CommandExt for CheckTxnStatus {
     tag!(check_txn_status);
     ts!(lock_ts);
     write_bytes!(primary_key);
-    write_kvs!(primary_key);
     gen_lock!(primary_key);
 }
 

@@ -2437,20 +2437,16 @@ impl LogConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
     pub cpu: usize,
-    pub write_kvs: usize,
     pub write_bandwidth: ReadableSize,
     pub read_bandwidth: ReadableSize,
-    pub total_qps: usize,
 }
 
 impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
             cpu: 0,
-            write_kvs: 0,
             write_bandwidth: ReadableSize(0),
             read_bandwidth: ReadableSize(0),
-            total_qps: 0,
         }
     }
 }
@@ -2459,11 +2455,6 @@ impl QuotaConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.cpu > 96_000 {
             return Err("Max cpu quota is limited to 96000, it means 96vCPU"
-                .to_string()
-                .into());
-        }
-        if self.write_kvs > 10_000_000 {
-            return Err("Max write kv ops is limited to 10 Millions"
                 .to_string()
                 .into());
         }

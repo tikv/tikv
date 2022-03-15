@@ -492,8 +492,6 @@ pub trait CommandExt: Display {
 
     fn write_bytes(&self) -> usize;
 
-    fn write_kvs(&self) -> usize;
-
     fn gen_lock(&self) -> latch::Lock;
 }
 
@@ -652,10 +650,6 @@ impl Command {
 
     pub fn write_bytes(&self) -> usize {
         self.command_ext().write_bytes()
-    }
-
-    pub fn write_kvs(&self) -> usize {
-        self.command_ext().write_kvs()
     }
 
     pub fn gen_lock(&self) -> latch::Lock {

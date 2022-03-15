@@ -621,11 +621,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
 
         warnings.merge(&mut result.warnings);
-        let wait = self.quota_limiter.consume_read(
-            1,
-            record_len,
-            (start_time.elapsed().as_micros()) as usize,
-        );
+        let wait = self
+            .quota_limiter
+            .consume_read(record_len, (start_time.elapsed().as_micros()) as usize);
         Ok((is_drained, record_len, wait))
     }
 

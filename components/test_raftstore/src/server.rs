@@ -346,8 +346,6 @@ impl Simulator for ServerCluster {
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let quota_limiter = Arc::new(QuotaLimiter::new(
             cfg.quota.cpu,
-            cfg.quota.total_qps,
-            cfg.quota.write_kvs,
             cfg.quota.write_bandwidth,
             cfg.quota.read_bandwidth,
         ));

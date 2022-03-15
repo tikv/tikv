@@ -39,7 +39,6 @@ impl CommandExt for TxnHeartBeat {
     tag!(txn_heart_beat);
     ts!(start_ts);
     write_bytes!(primary_key);
-    write_kvs!(primary_key);
     gen_lock!(primary_key);
 }
 

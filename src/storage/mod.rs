@@ -625,7 +625,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .as_ref()
                             .map_or(0, |v| v.len());
                     let wait =
-                        quota_limiter.consume_read(1, read_bytes, cost_time.as_micros() as usize);
+                        quota_limiter.consume_read(read_bytes, cost_time.as_micros() as usize);
                     KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                         .get(CMD)
                         .inc_by(wait.as_micros() as u64);
@@ -906,7 +906,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
-                    let (result, delta, cost_time, key_bytes, key_len) = {
+                    let (result, delta, cost_time, key_bytes) = {
                         let start_time = quota_limiter.get_now_time();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
@@ -919,7 +919,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             false,
                         );
                         let key_bytes = keys.iter().fold(0, |acc, v| acc + v.len());
-                        let key_len = keys.len();
                         let result = snap_store
                             .batch_get(&keys, &mut statistics)
                             .map_err(Error::from)
@@ -944,7 +943,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                         let delta = perf_statistics.delta();
                         let cost_time = start_time.elapsed();
-                        (result, delta, cost_time, key_bytes, key_len)
+                        (result, delta, cost_time, key_bytes)
                     };
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
@@ -967,11 +966,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let read_bytes = key_bytes + result_len;
                     let cost_time =
                         Duration::from_micros((cost_time.as_micros() as f64 * 1.1_f64) as u64);
-                    let wait = quota_limiter.consume_read(
-                        key_len,
-                        read_bytes,
-                        cost_time.as_micros() as usize,
-                    );
+                    let wait =
+                        quota_limiter.consume_read(read_bytes, cost_time.as_micros() as usize);
                     KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                         .get(CMD)
                         .inc_by(wait.as_micros() as u64);

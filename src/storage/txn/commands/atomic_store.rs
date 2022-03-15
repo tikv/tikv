@@ -51,10 +51,6 @@ impl CommandExt for RawAtomicStore {
         }
         bytes
     }
-
-    fn write_kvs(&self) -> usize {
-        self.mutations.len()
-    }
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {

@@ -13,20 +13,16 @@ const CPU_TIME_FACTOR: f64 = 0.9;
 #[derive(Debug)]
 pub struct QuotaLimiter {
     cputime_limiter: Limiter,
-    write_kvs_limiter: Limiter,
     write_bandwidth_limiter: Limiter,
     read_bandwidth_limiter: Limiter,
-    req_rate_limiter: Limiter,
 }
 
 impl Default for QuotaLimiter {
     fn default() -> Self {
         Self {
             cputime_limiter: Limiter::new(f64::INFINITY),
-            write_kvs_limiter: Limiter::new(f64::INFINITY),
             write_bandwidth_limiter: Limiter::new(f64::INFINITY),
             read_bandwidth_limiter: Limiter::new(f64::INFINITY),
-            req_rate_limiter: Limiter::new(f64::INFINITY),
         }
     }
 }
@@ -35,8 +31,6 @@ impl QuotaLimiter {
     // 1000 millicpu equals to 1vCPU, 0 means unlimited
     pub fn new(
         cpu_quota: usize,
-        req_rate: usize,
-        write_kvs: usize,
         write_bandwidth: ReadableSize,
         read_bandwidth: ReadableSize,
     ) -> Self {
@@ -47,12 +41,6 @@ impl QuotaLimiter {
             // taken into account, so it needs to be multiplied by a factor.
             // transfer milli cpu to micro cpu
             Limiter::new(cpu_quota as f64 * CPU_TIME_FACTOR * 1000_f64)
-        };
-
-        let write_kvs_limiter = if write_kvs == 0 {
-            Limiter::new(f64::INFINITY)
-        } else {
-            Limiter::new(write_kvs as f64)
         };
 
         let write_bandwidth_limiter = if write_bandwidth.0 == 0 {
@@ -67,35 +55,15 @@ impl QuotaLimiter {
             Limiter::new(read_bandwidth.0 as f64)
         };
 
-        let total_qps_limiter = if req_rate == 0 {
-            Limiter::new(f64::INFINITY)
-        } else {
-            Limiter::new(req_rate as f64)
-        };
-
         Self {
             cputime_limiter,
-            write_kvs_limiter,
             write_bandwidth_limiter,
             read_bandwidth_limiter,
-            req_rate_limiter: total_qps_limiter,
         }
     }
 
-    pub fn consume_write(
-        &self,
-        req_cnt: usize,
-        kv_cnt: usize,
-        bytes: usize,
-        cpu_micro_secs: usize,
-    ) -> Duration {
+    pub fn consume_write(&self, bytes: usize, cpu_micro_secs: usize) -> Duration {
         let cpu_dur = self.cputime_limiter.consume_duration(cpu_micro_secs);
-
-        let kv_dur = if kv_cnt > 0 {
-            self.write_kvs_limiter.consume_duration(kv_cnt)
-        } else {
-            Duration::ZERO
-        };
 
         let bw_dur = if bytes > 0 {
             self.write_bandwidth_limiter.consume_duration(bytes)
@@ -103,35 +71,19 @@ impl QuotaLimiter {
             Duration::ZERO
         };
 
-        let req_rate_dur = if req_cnt > 0 {
-            self.req_rate_limiter.consume_duration(req_cnt)
-        } else {
-            Duration::ZERO
-        };
-
-        std::cmp::max(
-            req_rate_dur,
-            std::cmp::max(std::cmp::max(cpu_dur, kv_dur), bw_dur),
-        )
+        std::cmp::max(cpu_dur, bw_dur)
     }
 
-    pub fn consume_read(
-        &self,
-        req_cnt: usize,
-        read_bytes: usize,
-        cpu_micro_secs: usize,
-    ) -> Duration {
+    pub fn consume_read(&self, bytes: usize, cpu_micro_secs: usize) -> Duration {
         let cpu_dur = self.cputime_limiter.consume_duration(cpu_micro_secs);
 
-        let bw_dur = if read_bytes > 0 {
-            self.read_bandwidth_limiter.consume_duration(read_bytes)
+        let bw_dur = if bytes > 0 {
+            self.read_bandwidth_limiter.consume_duration(bytes)
         } else {
             Duration::ZERO
         };
 
-        let req_rate_dur = self.req_rate_limiter.consume_duration(req_cnt);
-
-        std::cmp::max(req_rate_dur, std::cmp::max(cpu_dur, bw_dur))
+        std::cmp::max(cpu_dur, bw_dur)
     }
 
     // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC` to save cost.
@@ -169,8 +121,6 @@ mod tests {
         // consume write
         let quota_limiter = QuotaLimiter::new(
             1100, /*1.1vCPU*/
-            64,
-            1024,
             ReadableSize::kb(1),
             ReadableSize::kb(1),
         );
@@ -178,24 +128,24 @@ mod tests {
         let thread_start_time = quota_limiter.get_now_time();
 
         // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms
-        let delay = quota_limiter.consume_write(0, 0, 0, 495000);
+        let delay = quota_limiter.consume_write(0, 495000);
         assert_eq!(delay, Duration::from_millis(500));
-        // only write_kvs_limiter take effect
-        let delay = quota_limiter.consume_write(32, 1536, 0, 0);
-        assert_eq!(delay, Duration::from_millis(1500));
-        let delay = quota_limiter.consume_write(0, 0, 0, 0);
+
+        // only bytes take effect
+        let delay = quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, 99000);
+        assert_eq!(delay, Duration::from_millis(1000));
+
         // when all set to zero, only cpu time limiter take effect
-        assert_eq!(delay, Duration::from_millis(500));
+        let delay = quota_limiter.consume_write(0, 0);
+        assert!(delay <= Duration::from_millis(600));
+        assert!(delay > Duration::ZERO);
 
         // need to sleep to refresh cpu time limiter
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(600));
 
-        // refill is 0.1 so 98999 will not trigger delay (98999 < 990000/10)
-        let delay = quota_limiter.consume_read(0, 0, 98999);
+        // refill is 0.1
+        let delay = quota_limiter.consume_read(0, 98999);
         assert_eq!(delay, Duration::from_secs(0));
-
-        let delay = quota_limiter.consume_read(0, 128, 0);
-        assert_eq!(delay, Duration::from_millis(125));
 
         // `get_now_time` must return ThreadTime so elapsed time is not long.
         assert!(thread_start_time.elapsed() < Duration::from_millis(500));

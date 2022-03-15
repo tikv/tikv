@@ -432,9 +432,9 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             };
 
             // TODO: how to determine req_cnt
-            let quota_delay =
-                self.quota_limiter
-                    .consume_read(1, read_bytes, cost_time.as_micros() as usize);
+            let quota_delay = self
+                .quota_limiter
+                .consume_read(read_bytes, cost_time.as_micros() as usize);
             if !quota_delay.is_zero() {
                 GLOBAL_TIMER_HANDLE
                     .delay(std::time::Instant::now() + quota_delay)

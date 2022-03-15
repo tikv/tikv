@@ -473,7 +473,7 @@ pub fn snapshot<E: Engine>(
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
     let quota_delay = if let Some(quota_limiter) = quota_limiter {
-        quota_limiter.consume_read(0, 0, start_time.elapsed().as_micros() as usize)
+        quota_limiter.consume_read(0, start_time.elapsed().as_micros() as usize)
     } else {
         Duration::ZERO
     };

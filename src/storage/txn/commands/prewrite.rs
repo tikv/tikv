@@ -208,10 +208,6 @@ impl CommandExt for Prewrite {
         bytes
     }
 
-    fn write_kvs(&self) -> usize {
-        self.mutations.len()
-    }
-
     gen_lock!(mutations: multiple(|x| x.key()));
 }
 
@@ -350,10 +346,6 @@ impl CommandExt for PrewritePessimistic {
             }
         }
         bytes
-    }
-
-    fn write_kvs(&self) -> usize {
-        self.mutations.len()
     }
 
     gen_lock!(mutations: multiple(|(x, _)| x.key()));

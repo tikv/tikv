@@ -47,9 +47,7 @@
 ## gain predictable stable performance.
 ## CPU quota for these front requests can use, default value is 0, it means unlimited.
 ## The unit is millicpu which 1000 means 1vCPU and this config is approximate.
-# cpu = 0
-## Write kv pairs limitation for this TiKV instance, default value is 0 which means unlimited.
-# write-kvs = 0
+# forefront-cpu-time = 0
 ## Write bandwidth limitation for this TiKV instance, default value is 0 which means unlimited.
 # write-bandwidth = "0B"
 ## Read bandwidth limitation for this TiKV instance, default value is 0 which means unlimited

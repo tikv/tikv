@@ -34,10 +34,6 @@ impl CommandExt for ResolveLockReadPhase {
         0
     }
 
-    fn write_kvs(&self) -> usize {
-        0
-    }
-
     gen_lock!(empty);
 }
 

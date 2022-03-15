@@ -1950,12 +1950,11 @@ fn test_storage_with_quota_limiter_enable() {
         // kvs is limited to 1, which means that every write request will trigger the limit.
         let quota_config = QuotaConfig {
             cpu: 0,
-            write_kvs: 1,
-            write_bandwidth: ReadableSize::kb(0),
-            read_bandwidth: ReadableSize::kb(0),
-            total_qps: 0,
+            write_bandwidth: ReadableSize(10),
+            read_bandwidth: ReadableSize(0),
         };
         cluster.cfg.quota = quota_config;
+        cluster.cfg.storage.scheduler_worker_pool_size = 1;
     });
 
     let env = Arc::new(Environment::new(1));
@@ -1974,29 +1973,9 @@ fn test_storage_with_quota_limiter_enable() {
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
     mutation.set_value(v);
-    must_kv_prewrite(
-        &client,
-        ctx.clone(),
-        vec![mutation],
-        k.clone(),
-        prewrite_start_version,
-    );
+    must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
     assert!(begin.elapsed() > Duration::from_secs(1));
-
-    // Commit
-    ts += 1;
-    let commit_version = ts;
-    must_kv_commit(
-        &client,
-        ctx,
-        vec![k],
-        prewrite_start_version,
-        commit_version,
-        commit_version,
-    );
-
-    assert!(begin.elapsed() > Duration::from_secs(2));
 }
 
 #[test]
@@ -2005,12 +1984,11 @@ fn test_storage_with_quota_limiter_disable() {
         // all limit set to 0, which means quota limiter not work.
         let quota_config = QuotaConfig {
             cpu: 0,
-            write_kvs: 0,
-            write_bandwidth: ReadableSize::kb(0),
-            read_bandwidth: ReadableSize::kb(0),
-            total_qps: 0,
+            write_bandwidth: ReadableSize(0),
+            read_bandwidth: ReadableSize(0),
         };
         cluster.cfg.quota = quota_config;
+        cluster.cfg.storage.scheduler_worker_pool_size = 1;
     });
 
     let env = Arc::new(Environment::new(1));
@@ -2029,25 +2007,7 @@ fn test_storage_with_quota_limiter_disable() {
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
     mutation.set_value(v);
-    must_kv_prewrite(
-        &client,
-        ctx.clone(),
-        vec![mutation],
-        k.clone(),
-        prewrite_start_version,
-    );
-
-    // Commit
-    ts += 1;
-    let commit_version = ts;
-    must_kv_commit(
-        &client,
-        ctx,
-        vec![k],
-        prewrite_start_version,
-        commit_version,
-        commit_version,
-    );
+    must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
     assert!(begin.elapsed() < Duration::from_secs(1));
 }
