@@ -58,7 +58,7 @@ pub enum Error {
     #[error("store ids {0:?}, errmsg {1}")]
     DiskFull(Vec<u64>, String),
 
-    #[error("region {0} is the recovery progress")]
+    #[error("region {0} is in the recovery progress")]
     RecoveryInProgress(u64),
 
     #[error(

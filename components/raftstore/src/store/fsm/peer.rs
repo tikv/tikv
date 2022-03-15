@@ -65,7 +65,8 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{
-    ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+    TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
@@ -1260,9 +1261,63 @@ where
             SignificantMsg::RaftlogFetched { context, res } => {
                 self.on_raft_log_fetched(context, res);
             }
-            SignificantMsg::EnterForceLeaderState => self.on_enter_force_leader(),
+            SignificantMsg::EnterForceLeaderState {
+                expected_alive_voter_count,
+            } => self.on_enter_pre_force_leader(expected_alive_voter_count),
             SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
         }
+    }
+
+    fn on_enter_pre_force_leader(&mut self, expected_alive_voter_count: usize) {
+        if self.fsm.peer.force_leader.is_some() {
+            return;
+        }
+
+        info!(
+            "enter pre force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "alive_voter" => expected_alive_voter_count,
+        );
+
+        if self.fsm.peer.is_leader() {
+            // expire the lease of previous leader.
+            self.fsm.peer.leader_lease.expire();
+        }
+
+        // become candidate first to increase term
+        self.fsm.peer.raft_group.raft.become_candidate();
+        self.reset_raft_tick(GroupState::Ordered);
+
+        // trigger vote request to all voters, will check the vote result in `check_force_leader`
+        self.fsm.peer.raft_group.campaign().unwrap();
+        assert!(
+            self.fsm.peer.raft_group.raft.state == StateRole::PreCandidate
+                || self.fsm.peer.raft_group.raft.state == StateRole::Candidate
+        );
+        if !self
+            .fsm
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .votes()
+            .get(&self.fsm.peer.peer_id())
+            .unwrap()
+        {
+            warn!(
+                "pre force leader failed to campaign";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
+        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader {
+            term: self.fsm.peer.term(),
+            expected_alive_voter_count,
+        });
+        self.fsm.has_ready = true;
     }
 
     fn on_enter_force_leader(&mut self) {
@@ -1271,33 +1326,33 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
-        self.fsm.peer.force_leader = true;
+        assert!(!self.fsm.peer.is_leader());
 
-        if !self.fsm.peer.is_leader() {
-            // become candidate first to increase term
-            self.fsm.peer.raft_group.raft.become_candidate();
-            // trigger candidate twice to increase term by 2, to avoid there is
-            // a existing leader by accident.
-            self.fsm.peer.raft_group.raft.become_candidate();
-            self.fsm.peer.raft_group.raft.become_leader();
-        }
+        self.fsm.peer.raft_group.raft.become_leader();
         assert!(self.fsm.peer.is_leader());
         self.fsm.peer.raft_group.raft.set_check_quorum(false);
 
         // forward commit index
-        self.fsm.peer.raft_group.raft.raft_log.committed =
-            self.fsm.peer.raft_group.raft.raft_log.persisted;
+        self.fsm.peer.raft_group.raft.raft_log.committed = std::cmp::max(
+            self.fsm.peer.raft_group.raft.raft_log.committed,
+            self.fsm.peer.raft_group.raft.raft_log.persisted,
+        );
 
+        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader);
         self.fsm.has_ready = true;
     }
 
     fn on_exit_force_leader(&mut self) {
+        if self.fsm.peer.force_leader.is_none() {
+            return;
+        }
+
         info!(
             "exit force leader state";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
-        self.fsm.peer.force_leader = false;
+        self.fsm.peer.force_leader = None;
         self.fsm
             .peer
             .raft_group
@@ -1423,12 +1478,16 @@ where
                 self.register_check_leader_lease_tick();
             }
 
-            if self.fsm.peer.force_leader && r == StateRole::Follower {
-                // for some reason, it's not leader anymore
-                panic!(
-                    "{} step to follower in force leader state",
-                    self.fsm.peer.tag
-                );
+            if let Some(ForceLeaderState::ForceLeader) = self.fsm.peer.force_leader {
+                if r != StateRole::Leader {
+                    // for some reason, it's not leader anymore
+                    info!(
+                        "step down in force leader state";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "state" => ?r,
+                    );
+                }
             }
         }
     }
@@ -1553,6 +1612,8 @@ where
         }
 
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
+
+        self.check_force_leader();
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
@@ -1861,9 +1922,7 @@ where
             Either::Right(v) => v,
         };
 
-        if util::is_vote_msg(msg.get_message())
-            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
-        {
+        if util::is_vote_msg(msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
             if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
                 self.fsm.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
@@ -1875,7 +1934,7 @@ where
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
-        let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+        let result = if msg_type == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
@@ -1970,6 +2029,49 @@ where
             return;
         }
         self.fsm.hibernate_state.count_vote(from.get_id());
+    }
+
+    #[inline]
+    fn check_force_leader(&mut self) {
+        if let Some(ForceLeaderState::PreForceLeader {
+            term,
+            expected_alive_voter_count,
+        }) = self.fsm.peer.force_leader
+        {
+            let err = {
+                if term != self.fsm.peer.term() {
+                    format!(
+                        "unexpected term {}, expected {}",
+                        self.fsm.peer.term(),
+                        term
+                    )
+                } else if self.fsm.peer.raft_group.raft.state != StateRole::Candidate
+                    && self.fsm.peer.raft_group.raft.state != StateRole::PreCandidate
+                {
+                    format!("unexpected role {:?}", self.fsm.peer.raft_group.raft.state)
+                } else {
+                    let (granted, rejected, _) = self.fsm.peer.raft_group.raft.prs().tally_votes();
+                    if rejected != 0 {
+                        format!("receive reject response")
+                    } else if granted > expected_alive_voter_count {
+                        format!("unexpected granted count")
+                    } else if granted == expected_alive_voter_count {
+                        self.on_enter_force_leader();
+                        return;
+                    } else {
+                        return;
+                    }
+                }
+            };
+
+            warn!(
+                "pre force leader check failed";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "reason" => err,
+            );
+            self.fsm.peer.force_leader = None;
+        }
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
@@ -4146,10 +4248,11 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
-        if self.fsm.peer.force_leader {
+        if self.fsm.peer.force_leader.is_some() {
             // in force leader state, forbid requests to make the recovery progress less error-prone
             if !(msg.has_admin_request()
-                && msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer)
+                && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }

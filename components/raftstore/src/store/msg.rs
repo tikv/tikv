@@ -310,7 +310,9 @@ where
         context: GetEntriesContext,
         res: Box<RaftlogFetchResult>,
     },
-    EnterForceLeaderState,
+    EnterForceLeaderState {
+        expected_alive_voter_count: usize,
+    },
     ExitForceLeaderState,
 }
 

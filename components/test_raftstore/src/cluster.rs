@@ -1309,10 +1309,20 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
     }
 
-    pub fn enter_force_leader(&mut self, region_id: u64, store_id: u64) {
+    pub fn enter_force_leader(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        expected_alive_voter_count: usize,
+    ) {
         let router = self.sim.rl().get_router(store_id).unwrap();
         router
-            .significant_send(region_id, SignificantMsg::EnterForceLeaderState)
+            .significant_send(
+                region_id,
+                SignificantMsg::EnterForceLeaderState {
+                    expected_alive_voter_count,
+                },
+            )
             .unwrap();
     }
 

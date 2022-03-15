@@ -454,6 +454,14 @@ pub struct ReadyResult {
     pub has_write_ready: bool,
 }
 
+pub enum ForceLeaderState {
+    PreForceLeader {
+        term: u64,
+        expected_alive_voter_count: usize,
+    },
+    ForceLeader,
+}
+
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -493,10 +501,17 @@ where
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader out
-    /// of accordance with Raft election rule.
+    /// of accordance with Raft election rule, and forbids any read/write proposals.
     /// With that, we can further propose remove failed-nodes conf-change, to make
     /// the Raft group forms majority and works normally later on.
-    pub force_leader: bool,
+    ///
+    /// ForceLeader process would be:
+    /// 1. Enter pre force leader state, become candidate and send request vote to all peers
+    /// 2. Wait for the responses of the request vote, no reject should be received.
+    /// 3. Enter force leader state, become leader without leader lease
+    /// 4. Execute recovery plan(some remove-peer commands)
+    /// 5. After the plan steps are all applied, exit force leader state
+    pub force_leader: Option<ForceLeaderState>,
 
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
@@ -687,7 +702,7 @@ where
             leader_unreachable: false,
             pending_remove: false,
             should_wake_up: false,
-            force_leader: false,
+            force_leader: None,
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
@@ -2523,7 +2538,7 @@ where
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
-        if self.force_leader {
+        if let Some(ForceLeaderState::ForceLeader) = self.force_leader {
             // forward commit index
             self.raft_group.raft.raft_log.committed = persist_index;
         }
@@ -3146,7 +3161,7 @@ where
 
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-            || promoted_commit_index >= self.get_store().truncated_index() || self.force_leader
+            || promoted_commit_index >= self.get_store().truncated_index() || self.force_leader.is_some()
         {
             return Ok(());
         }
@@ -3772,7 +3787,7 @@ where
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         // Should not propose normal in force leader state.
-        assert!(!self.force_leader);
+        assert!(self.force_leader.is_none());
 
         if (self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)
