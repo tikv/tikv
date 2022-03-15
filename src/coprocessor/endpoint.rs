@@ -11,8 +11,7 @@ use futures::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tokio::sync::Semaphore;
 
-use kvproto::kvrpcpb::{self};
-use kvproto::{coprocessor as coppb, errorpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::CodedInputStream;
 use protobuf::Message;
 use tikv_kv::SnapshotExt;

@@ -395,7 +395,7 @@ impl Lock {
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,
-        iso_level: kvproto::kvrpcpb::IsolationLevel,
+        iso_level: IsolationLevel,
     ) -> Result<()> {
         match iso_level {
             IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks),
@@ -857,6 +857,50 @@ mod tests {
             IsolationLevel::Si,
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_check_ts_conflict_rc_check_ts() {
+        let k1 = Key::from_raw(b"k1");
+        let mut lock = Lock::new(
+            LockType::Put,
+            vec![],
+            100.into(),
+            3,
+            None,
+            100.into(),
+            1,
+            TimeStamp::zero(),
+        );
+
+        let empty = Default::default();
+
+        // Ignore locks that occurs in the `bypass_locks` set.
+        Lock::check_ts_conflict_rc_check_ts(
+            Cow::Borrowed(&lock),
+            &k1,
+            50.into(),
+            &TsSet::from_u64s(vec![100]),
+        )
+        .unwrap();
+
+        // Ignore locks if the lock type are Pessimistic or Lock.
+        lock.lock_type = LockType::Pessimistic;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty).unwrap();
+        lock.lock_type = LockType::Lock;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty).unwrap();
+
+        // Report error even if read ts is less than the lock version.
+        lock.lock_type = LockType::Put;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty)
+            .unwrap_err();
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 110.into(), &empty)
+            .unwrap_err();
+
+        // Report error if for other lock types.
+        lock.lock_type = LockType::Delete;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty)
+            .unwrap_err();
     }
 
     #[test]
