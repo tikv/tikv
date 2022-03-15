@@ -5,13 +5,15 @@ use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::slice::Iter;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rand::Rng;
 
 use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb::Peer;
+use kvproto::metapb::{self, Peer};
 use kvproto::pdpb::QueryKind;
+use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use tikv_util::config::Tracker;
 use tikv_util::{debug, error, info};
 
@@ -339,12 +341,14 @@ pub struct ReadStats {
     // RegionID -> RegionInfo
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
+    pub region_buckets: HashMap<u64, BucketStat>,
 }
 
 impl ReadStats {
     pub fn with_sample_num(sample_num: usize) -> Self {
         ReadStats {
             region_infos: HashMap::default(),
+            region_buckets: HashMap::default(),
             sample_num,
         }
     }
@@ -379,7 +383,15 @@ impl ReadStats {
         region_info.add_query_num(kind, query_num);
     }
 
-    pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
+    pub fn add_flow(
+        &mut self,
+        region_id: u64,
+        buckets: Option<&Arc<BucketMeta>>,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        write: &FlowStatistics,
+        data: &FlowStatistics,
+    ) {
         let num = self.sample_num;
         let region_info = self
             .region_infos
@@ -387,6 +399,34 @@ impl ReadStats {
             .or_insert_with(|| RegionInfo::new(num));
         region_info.flow.add(write);
         region_info.flow.add(data);
+        if let Some(buckets) = buckets {
+            let bucket_stat = self.region_buckets.entry(region_id).or_insert_with(|| {
+                let stats = new_bucket_stats(buckets);
+                BucketStat::new(buckets.clone(), stats)
+            });
+            if bucket_stat.meta < *buckets {
+                let stats = new_bucket_stats(buckets);
+                let mut new = BucketStat::new(buckets.clone(), stats);
+                merge_bucket_stats(
+                    &new.meta.keys,
+                    &mut new.stats,
+                    &bucket_stat.meta.keys,
+                    &bucket_stat.stats,
+                );
+                *bucket_stat = new;
+            }
+            let mut delta = metapb::BucketStats::default();
+            delta.set_write_bytes(vec![write.read_bytes as u64]);
+            delta.set_read_bytes(vec![data.read_bytes as u64]);
+            let start = start.unwrap_or_default();
+            let end = end.unwrap_or_default();
+            merge_bucket_stats(
+                &bucket_stat.meta.keys,
+                &mut bucket_stat.stats,
+                &[start, end],
+                &delta,
+            );
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -399,6 +439,7 @@ impl Default for ReadStats {
         ReadStats {
             sample_num: DEFAULT_SAMPLE_NUM,
             region_infos: HashMap::default(),
+            region_buckets: HashMap::default(),
         }
     }
 }
