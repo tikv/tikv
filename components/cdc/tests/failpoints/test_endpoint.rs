@@ -15,6 +15,13 @@ use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use test_raftstore::*;
+<<<<<<< HEAD
+=======
+use tikv_util::debug;
+use tikv_util::worker::Scheduler;
+
+use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
+>>>>>>> b5572fcd1... cdc: don't emit resolved timestamps before scan (#12156)
 
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
@@ -163,20 +170,40 @@ fn test_no_resolved_ts_before_downstream_initialized() {
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(b"");
-    let lead_client = PeerClient::new(&suite.cluster, region.id, new_peer(1, 1));
+
+    let recv_resolved_ts = |event_feed: &ClientReceiver| {
+        let mut rx = event_feed.replace(None).unwrap();
+        let timeout = Duration::from_secs(1);
+        for _ in 0..10 {
+            if let Ok(Some(event)) = recv_timeout(&mut rx, timeout) {
+                if event.unwrap().has_resolved_ts() {
+                    event_feed.replace(Some(rx));
+                    return;
+                }
+            }
+        }
+        panic!("must receive a resolved ts");
+    };
 
     // Create 2 changefeeds and the second will be blocked in initialization.
     let mut req_txs = Vec::with_capacity(2);
     let mut event_feeds = Vec::with_capacity(2);
     for i in 0..2 {
         if i == 1 {
-            fail::cfg("cdc_before_initialize", "pause").unwrap();
+            // Wait the first capture has been initialized.
+            recv_resolved_ts(&event_feeds[0]);
+            fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
         }
+<<<<<<< HEAD
         let (mut req_tx, event_feed) = suite.get_region_cdc_client(region.id).event_feed().unwrap();
+=======
+        let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
+>>>>>>> b5572fcd1... cdc: don't emit resolved timestamps before scan (#12156)
         let req = suite.new_changedata_request(region.id);
         block_send(&mut req_tx, req);
         req_txs.push(req_tx);
         event_feeds.push(event_feed);
+<<<<<<< HEAD
         // Sleep a while to wait the capture has been initialized.
         thread::sleep(Duration::from_secs(1));
     }
@@ -200,10 +227,20 @@ fn test_no_resolved_ts_before_downstream_initialized() {
             let _ = must_recv(&mut event_feeds[0], false);
             assert!(block_recv(&mut event_feeds[1], Duration::from_secs(1)).is_err());
         }
+=======
+    }
+
+    let th = thread::spawn(move || {
+        // The first downstream can receive timestamps but the second should receive nothing.
+        let mut rx = event_feeds[0].replace(None).unwrap();
+        assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_ok());
+        let mut rx = event_feeds[1].replace(None).unwrap();
+        assert!(recv_timeout(&mut rx, Duration::from_secs(3)).is_err());
+>>>>>>> b5572fcd1... cdc: don't emit resolved timestamps before scan (#12156)
     });
 
     th.join().unwrap();
-    fail::cfg("cdc_before_initialize", "off").unwrap();
+    fail::cfg("cdc_incremental_scan_start", "off").unwrap();
     suite.stop();
 }
 

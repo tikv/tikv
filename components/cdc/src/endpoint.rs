@@ -47,7 +47,9 @@ use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
-use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
+use crate::delegate::{
+    on_init_downstream, post_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState,
+};
 use crate::metrics::*;
 use crate::service::{Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
@@ -146,6 +148,7 @@ pub enum Task {
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
+        region_id: u64,
         downstream_id: DownstreamID,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
@@ -208,9 +211,12 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
             Task::InitDownstream {
-                ref downstream_id, ..
+                ref region_id,
+                ref downstream_id,
+                ..
             } => de
                 .field("type", &"init_downstream")
+                .field("region_id", &region_id)
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::Validate(validate) => match validate {
@@ -711,9 +717,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
             // Only send region ids that are captured by the connection.
             for (region_id, (_, downstream_state)) in conn.get_downstreams() {
-                if regions.contains(region_id)
-                    && matches!(downstream_state.load(), DownstreamState::Normal)
-                {
+                if regions.contains(region_id) && downstream_state.load().ready_for_advancing_ts() {
                     resolved_ts.regions.push(*region_id);
                 }
             }
@@ -933,6 +937,7 @@ impl Initializer {
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
+        let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
         let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
@@ -948,6 +953,7 @@ impl Initializer {
                 region_epoch,
                 callback: Callback::Read(Box::new(move |resp| {
                     if let Err(e) = sched.schedule(Task::InitDownstream {
+                        region_id,
                         downstream_id,
                         downstream_state,
                         sink,
@@ -1000,6 +1006,7 @@ impl Initializer {
     ) -> Result<()> {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
+        let observe_id = self.observe_id;
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -1023,16 +1030,30 @@ impl Initializer {
             .unwrap();
         let conn_id = self.conn_id;
         let mut done = false;
+<<<<<<< HEAD
+=======
+        let start = Instant::now_coarse();
+
+        let curr_state = self.downstream_state.load();
+        assert!(matches!(
+            curr_state,
+            DownstreamState::Initializing | DownstreamState::Stopped
+        ));
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
+
+>>>>>>> b5572fcd1... cdc: don't emit resolved timestamps before scan (#12156)
         while !done {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
-                info!("cdc async incremental scan canceled";
-                    "region_id" => region_id,
-                    "downstream_id" => ?downstream_id,
-                    "observe_id" => ?self.observe_id,
-                    "conn_id" => ?conn_id);
-                return Err(box_err!("scan canceled"));
+                return on_cancel();
             }
             let entries = self.scan_batch(&mut scanner, resolver.as_mut()).await?;
             // If the last element is None, it means scanning is finished.
@@ -1044,9 +1065,19 @@ impl Initializer {
             self.sink_scan_events(entries, done).await?;
         }
 
+        if !post_init_downstream(&self.downstream_state) {
+            return on_cancel();
+        }
         let takes = start.saturating_elapsed();
+        info!("cdc async incremental scan finished";
+            "region_id" => region.get_id(),
+            "conn_id" => ?self.conn_id,
+            "downstream_id" => ?self.downstream_id,
+            "takes" => ?takes,
+        );
+
         if let Some(resolver) = resolver {
-            self.finish_building_resolver(resolver, region, takes);
+            self.finish_building_resolver(resolver, region);
         }
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
@@ -1124,7 +1155,7 @@ impl Initializer {
         Ok(())
     }
 
-    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
+    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
         resolver.init();
         let rts = resolver.resolve(TimeStamp::zero());
@@ -1136,7 +1167,6 @@ impl Initializer {
             "resolved_ts" => rts,
             "lock_count" => resolver.locks().len(),
             "observe_id" => ?observe_id,
-            "takes" => ?takes,
         );
 
         fail_point!("before_schedule_resolver_ready");
@@ -1201,6 +1231,7 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
             Task::InitDownstream {
+                region_id,
                 downstream_id,
                 downstream_state,
                 sink,
@@ -1208,23 +1239,19 @@ impl<T: 'static + RaftStoreRouter> Runnable<Task> for Endpoint<T> {
                 cb,
             } => {
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
-                    error!(
-                        "cdc failed to schedule barrier for delta before delta scan";
-                        "error" => ?e
-                    );
+                    error!("cdc failed to schedule barrier for delta before delta scan";
+                        "region_id" => region_id,
+                        "error" => ?e);
                     return;
                 }
-                match downstream_state
-                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal)
-                {
-                    Ok(_) => {
-                        info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
-                    }
-                    Err(state) => {
-                        warn!("cdc downstream fails to initialize";
-                            "downstream_id" => ?downstream_id,
-                            "state" => ?state);
-                    }
+                if on_init_downstream(&downstream_state) {
+                    info!("cdc downstream starts to initialize";
+                        "region_id" => region_id,
+                        "downstream_id" => ?downstream_id);
+                } else {
+                    warn!("cdc downstream fails to initialize";
+                        "region_id" => region_id,
+                        "downstream_id" => ?downstream_id);
                 }
                 cb();
             }
@@ -1341,7 +1368,7 @@ mod tests {
             .core_threads(4)
             .build()
             .unwrap();
-        let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
+        let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
             sched: receiver_worker.scheduler(),
             sink,
@@ -1457,10 +1484,14 @@ mod tests {
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
         initializer.max_scan_batch_bytes = total_bytes;
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
+<<<<<<< HEAD
         initializer.max_scan_batch_bytes = total_bytes / 3;
         let start_1_3 = Instant::now();
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
@@ -1483,6 +1514,11 @@ mod tests {
             start_1_6.saturating_elapsed()
         );
 
+=======
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
+>>>>>>> b5572fcd1... cdc: don't emit resolved timestamps before scan (#12156)
         initializer.build_resolver = false;
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
 
@@ -1513,7 +1549,9 @@ mod tests {
 
         // Disconnect sink by dropping runtime (it also drops drain).
         drop(pool);
-        initializer.downstream_state.store(DownstreamState::Normal);
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
         block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
 
         worker.stop();
