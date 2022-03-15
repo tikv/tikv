@@ -12,6 +12,7 @@ use super::metrics::*;
 use crate::coprocessor::*;
 use crate::storage::Statistics;
 
+use tikv_util::deadline::DeadlineError;
 use txn_types::Key;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,6 +54,7 @@ pub struct Tracker {
     snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
     handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
     req_lifetime: Duration,
+    is_expired: bool, // Whether the task has exceeded Deadline
 
     // Suspend time between processing two items
     //
@@ -86,6 +88,7 @@ impl Tracker {
             snapshot_wait_time: Duration::default(),
             handler_build_time: Duration::default(),
             req_lifetime: Duration::default(),
+            is_expired: false,
             item_process_time: Duration::default(),
             item_suspend_time: Duration::default(),
             total_suspend_time: Duration::default(),
@@ -243,10 +246,14 @@ impl Tracker {
         if self.current_stage != TrackerState::AllItemFinished {
             return;
         }
+        self.collect_metrics();
+        self.current_stage = TrackerState::Tracked;
+    }
 
+    pub fn collect_metrics(&mut self) {
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
-        if self.total_process_time > self.slow_log_threshold {
+        if self.is_expired || self.total_process_time > self.slow_log_threshold {
             let first_range = self.req_ctx.ranges.first();
             let some_table_id = first_range.as_ref().map(|range| {
                 tidb_query_datatype::codec::table::decode_table_id(range.get_start())
@@ -346,7 +353,14 @@ impl Tracker {
             Key::from_raw(end_key).as_encoded(),
             reverse_scan,
         );
-        self.current_stage = TrackerState::Tracked;
+    }
+
+    pub fn check_deadline(&mut self) -> std::result::Result<(), DeadlineError> {
+        if let Err(e) = self.req_ctx.deadline.check() {
+            self.is_expired = true;
+            return Err(e);
+        }
+        Ok(())
     }
 }
 
