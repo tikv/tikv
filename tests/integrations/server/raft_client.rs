@@ -372,8 +372,11 @@ fn test_store_whitelist() {
     let pd_server = test_pd::Server::new(1);
     let eps = pd_server.bind_addrs();
     let pd_client = Arc::new(test_pd::util::new_client(eps, None));
-    let bg_worker = WorkerBuilder::new(thd_name!("background")).thread_count(2).create();
-    let resolver = resolve::new_resolver::<_,_,RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
+    let bg_worker = WorkerBuilder::new(thd_name!("background"))
+        .thread_count(2)
+        .create();
+    let resolver =
+        resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
 
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
