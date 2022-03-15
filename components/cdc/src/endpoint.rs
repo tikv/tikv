@@ -54,7 +54,9 @@ use tokio::sync::{Mutex, Semaphore};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
-use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
+use crate::delegate::{
+    on_init_downstream, post_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState,
+};
 use crate::metrics::*;
 use crate::old_value::{
     near_seek_old_value, new_old_value_cursor, OldValueCache, OldValueCallback, OldValueCursors,
@@ -217,7 +219,8 @@ impl fmt::Debug for Task {
             Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
             Task::InitDownstream {
                 ref region_id,
-                ref downstream_id, ..
+                ref downstream_id,
+                ..
             } => de
                 .field("type", &"init_downstream")
                 .field("region_id", &region_id)
@@ -1218,6 +1221,7 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Result<()> {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
+        let observe_id = self.observe_id;
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -1253,23 +1257,24 @@ impl<E: KvEngine> Initializer<E> {
         let start = Instant::now_coarse();
 
         let curr_state = self.downstream_state.load();
-        assert!([DownstreamState::Initializing, DownstreamState::Stopped].contains(&curr_state));
-        macro_rules! on_cancel {
-            () => {{
-                info!("cdc async incremental scan canceled";
-                    "region_id" => region_id,
-                    "downstream_id" => ?downstream_id,
-                    "observe_id" => ?self.observe_id,
-                    "conn_id" => ?conn_id);
-                return Err(box_err!("scan canceled"));
-            }}
-        }
+        assert!(matches!(
+            curr_state,
+            DownstreamState::Initializing | DownstreamState::Stopped
+        ));
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
 
         while !done {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
-                on_cancel!();
+                on_cancel()?;
             }
             let cursors = old_value_cursors.as_mut();
             let resolver = resolver.as_mut();
@@ -1283,12 +1288,8 @@ impl<E: KvEngine> Initializer<E> {
             self.sink_scan_events(entries, done).await?;
         }
 
-        if self
-            .downstream_state
-            .compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
-            .is_err()
-        {
-            on_cancel!();
+        if !post_init_downstream(&self.downstream_state) {
+            on_cancel()?;
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";
@@ -1576,21 +1577,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                         "error" => ?e);
                     return;
                 }
-                match downstream_state.compare_exchange(
-                    DownstreamState::Uninitialized,
-                    DownstreamState::Initializing,
-                ) {
-                    Ok(_) => {
-                        info!("cdc downstream starts to initialize";
-                            "region_id" => region_id,
-                            "downstream_id" => ?downstream_id);
-                    }
-                    Err(state) => {
-                        warn!("cdc downstream fails to initialize";
-                            "region_id" => region_id,
-                            "downstream_id" => ?downstream_id,
-                            "state" => ?state);
-                    }
+                if on_init_downstream(&downstream_state) {
+                    info!("cdc downstream starts to initialize";
+                        "region_id" => region_id,
+                        "downstream_id" => ?downstream_id);
+                } else {
+                    warn!("cdc downstream fails to initialize";
+                        "region_id" => region_id,
+                        "downstream_id" => ?downstream_id);
                 }
                 cb();
             }
