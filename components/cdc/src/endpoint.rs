@@ -67,7 +67,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 // 10 minutes, it's the default gc life time of TiDB
 // and is long enough for most transactions.
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
-// Suppress repeat resolved ts lag warnning.
+// Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
@@ -198,8 +198,8 @@ impl fmt::Debug for Task {
                 .field("conn_id", &conn.get_id())
                 .finish(),
             Task::MultiBatch { multi, .. } => de
-                .field("type", &"multibatch")
-                .field("multibatch", &multi.len())
+                .field("type", &"multi_batch")
+                .field("multi_batch", &multi.len())
                 .finish(),
             Task::MinTS { ref min_ts, .. } => {
                 de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
@@ -425,7 +425,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             sink_memory_quota,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
             region_read_progress,
-            // Log the first resolved ts warnning.
+            // Log the first resolved ts warning.
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
         };
         ep.register_min_ts_event();
@@ -1126,7 +1126,7 @@ impl<E: KvEngine> Initializer<E> {
         // When downstream_state is Stopped, it means the corresponding delegate
         // is stopped. The initialization can be safely canceled.
         //
-        // Acquiring a permit may take some time, it is possiable that
+        // Acquiring a permit may take some time, it is possible that
         // initialization can be canceled.
         if self.downstream_state.load() == DownstreamState::Stopped {
             info!("cdc async incremental scan canceled";
@@ -1911,7 +1911,7 @@ mod tests {
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
     // Whether `DeltaScanner` emits correct old values or not is already tested by
     // another case `test_old_value_with_hint_min_ts`, so here we only care about
-    // hanlding `OldValue::SeekWrite` with `OldValueReader`.
+    // handling `OldValue::SeekWrite` with `OldValueReader`.
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
         let engine = TestEngineBuilder::new().build_without_cache().unwrap();
