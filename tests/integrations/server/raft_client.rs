@@ -366,3 +366,46 @@ fn test_tombstone_block_list() {
         raft_client.send(message).unwrap_err()
     );
 }
+
+#[test]
+fn test_store_whitelist() {
+    let pd_server = test_pd::Server::new(1);
+    let eps = pd_server.bind_addrs();
+    let pd_client = Arc::new(test_pd::util::new_client(eps, None));
+    let bg_worker = WorkerBuilder::new(thd_name!("background")).thread_count(2).create();
+    let resolver = resolve::new_resolver::<_,_,RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
+
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (_mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
+
+    let mut raft_client = get_raft_client(RaftStoreBlackHole, resolver);
+
+    let mut store1 = metapb::Store::default();
+    store1.set_id(1);
+    store1.set_address(format!("127.0.0.1:{}", port));
+    pd_server.default_handler().add_store(store1.clone());
+
+    for _ in 0..10 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        raft_client.send(raft_m).unwrap();
+    }
+    raft_client.flush();
+    check_msg_count(500, &msg_count, 10);
+
+    raft_client.set_store_whitelist(vec![2, 3]);
+    for _ in 0..3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        raft_client.send(raft_m).unwrap();
+    }
+    for _ in 0..5 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(2);
+        raft_client.send(raft_m).unwrap();
+    }
+    raft_client.flush();
+    check_msg_count(500, &msg_count, 15);
+}
