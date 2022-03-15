@@ -378,6 +378,7 @@ impl<E: Engine> Endpoint<E> {
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
+        tracker.buckets = snapshot.ext().get_buckets();
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
             && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
