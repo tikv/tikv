@@ -1608,6 +1608,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
+        CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
+
         // Reclaim resolved_region_heap memory.
         self.resolved_region_heap
             .reset_and_shrink_to(self.capture_regions.len());
