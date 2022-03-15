@@ -4123,15 +4123,10 @@ where
             }
         }
 
-        let mut resp = ctx.execute(
-            &req,
-            &Arc::new(region),
-            read_index,
-            self.region_buckets.as_ref().map(|b| b.meta.clone()),
-            None,
-        );
+        let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
+            snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
