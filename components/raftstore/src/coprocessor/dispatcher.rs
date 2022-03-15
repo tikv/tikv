@@ -481,8 +481,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         Ok(hashes)
     }
 
-    pub fn on_role_change(&self, region: &Region, role: StateRole) {
-        loop_ob!(region, &self.registry.role_observers, on_role_change, role);
+    pub fn on_role_change(&self, region: &Region, role_change: RoleChange) {
+        loop_ob!(
+            region,
+            &self.registry.role_observers,
+            on_role_change,
+            &role_change
+        );
     }
 
     pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
@@ -620,7 +625,7 @@ mod tests {
     }
 
     impl RoleObserver for TestCoprocessor {
-        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole) {
+        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: &RoleChange) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -721,7 +726,7 @@ mod tests {
         host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
         assert_all!([&ob.called], &[21]);
 
-        host.on_role_change(&region, StateRole::Leader);
+        host.on_role_change(&region, RoleChange::new(StateRole::Leader));
         assert_all!([&ob.called], &[28]);
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);

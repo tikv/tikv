@@ -49,7 +49,6 @@ pub mod txn;
 mod read_pool;
 mod types;
 
-use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -62,6 +61,7 @@ pub use self::{
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
+use self::{kv::SnapContext, test_util::latest_feature_gate};
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
@@ -90,6 +90,7 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
+use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
@@ -220,6 +221,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        feature_gate: FeatureGate,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -230,6 +232,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             flow_controller,
             reporter,
             resource_tag_factory.clone(),
+            feature_gate,
         );
 
         info!("Storage started.");
@@ -2653,6 +2656,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             self.resource_tag_factory,
+            latest_feature_gate(),
         )
     }
 
@@ -2679,6 +2683,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            latest_feature_gate(),
         )
     }
 }
@@ -2878,6 +2883,12 @@ pub mod test_util {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
+
+    pub fn latest_feature_gate() -> FeatureGate {
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version(env!("CARGO_PKG_VERSION")).unwrap();
+        feature_gate
+    }
 }
 
 /// All statistics related to KvGet/KvBatchGet.
@@ -2895,6 +2906,8 @@ mod tests {
         test_util::*,
         *,
     };
+    use raw::encoded::RawEncodeSnapshot;
+    use raw::raw_mvcc::RawMvccSnapshot;
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
@@ -2911,7 +2924,9 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{
+        raw_ttl::ttl_current_ts, IterOptions, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE,
+    };
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -8343,5 +8358,102 @@ mod tests {
             .unwrap();
         // Prewrite still succeeds
         assert!(rx.recv().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_raw_mvcc_snapshot() {
+        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+
+        let raw_test_data = vec![
+            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
+            (b"r\0b".to_vec(), b"bb".to_vec(), 30),
+            (b"r\0bb".to_vec(), b"bbb".to_vec(), 40),
+            (b"r\0c".to_vec(), b"cc".to_vec(), 50),
+            (b"r\0cc".to_vec(), b"ccc".to_vec(), 60),
+            (b"r\0a".to_vec(), b"n_aa".to_vec(), 70),
+            (b"r\0aa".to_vec(), b"n_aaa".to_vec(), 80),
+            (b"r\0b".to_vec(), b"n_bb".to_vec(), 90),
+            (b"r\0bb".to_vec(), b"n_bbb".to_vec(), 100),
+            (b"r\0c".to_vec(), b"n_cc".to_vec(), 110),
+            (b"r\0cc".to_vec(), b"n_ccc".to_vec(), 120),
+        ];
+
+        let test_data: Vec<(Vec<u8>, Vec<u8>, u64)> = raw_test_data
+            .into_iter()
+            .map(|(key, val, ts)| {
+                (
+                    APIV2::encode_raw_key_owned(key, Some(TimeStamp::from(ts))).into_encoded(),
+                    val,
+                    ts,
+                )
+            })
+            .collect();
+        let ttl = 30;
+        // Write key-value pairs one by one
+        for (key, value, _) in test_data.clone() {
+            storage
+                .raw_put(
+                    ctx.clone(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    ttl,
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        let snapshot = storage.get_snapshot();
+        let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snapshot);
+        let encode_snapshot: RawEncodeSnapshot<_, APIV2> =
+            RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
+        for &(ref key, ref value, _) in &test_data[6..12] {
+            let res = encode_snapshot.get_cf(CF_DEFAULT, &Key::from_encoded_slice(key));
+            assert_eq!(res.unwrap().unwrap(), value.to_owned());
+        }
+        let iter_opt = IterOptions::default();
+        let mut iter = encode_snapshot.iter_cf(CF_DEFAULT, iter_opt).unwrap();
+        let mut pairs = vec![];
+        let raw_key = APIV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
+        iter.seek(&raw_key).unwrap();
+        while iter.valid().unwrap() {
+            pairs.push((iter.key().to_owned(), iter.value().to_owned()));
+            iter.next().unwrap();
+        }
+
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .map(|(key, val, _)| (key, val))
+            .collect();
+
+        assert_eq!(pairs, ret_data);
+        let raw_key = APIV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
+        iter.seek_for_prev(&raw_key).unwrap();
+        pairs.clear();
+        while iter.valid().unwrap() {
+            pairs.push((iter.key().to_owned(), iter.value().to_owned()));
+            iter.prev().unwrap();
+        }
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .into_iter()
+            .skip(6)
+            .rev()
+            .map(|(key, val, _)| (key, val))
+            .collect();
+        assert_eq!(pairs, ret_data);
+
+        // two way direction scan is not supported.
+        assert_eq!(iter.next().is_err(), true);
     }
 }

@@ -389,6 +389,9 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Try renew leader lease
     RenewLease,
+
+    // Snapshot is applied
+    SnapshotApplied,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -446,6 +449,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             }
             CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
+            CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
         }
     }
 }

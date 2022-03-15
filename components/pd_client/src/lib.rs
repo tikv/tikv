@@ -288,6 +288,11 @@ pub trait PdClient: Send + Sync {
     fn feature_gate(&self) -> &FeatureGate {
         unimplemented!()
     }
+
+    // Report min resolved_ts to PD.
+    fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
+        unimplemented!()
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

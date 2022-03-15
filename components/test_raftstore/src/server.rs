@@ -353,6 +353,7 @@ impl Simulator for ServerCluster {
             Arc::new(FlowController::empty()),
             pd_sender,
             res_tag_factory.clone(),
+            self.pd_client.feature_gate().clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 

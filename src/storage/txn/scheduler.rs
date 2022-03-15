@@ -35,6 +35,7 @@ use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
+use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
@@ -70,6 +71,8 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 // The default limit is set to be very large. Then, requests without `max_exectuion_duration`
 // will not be aborted unexpectedly.
 pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+
+const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 
 /// Task is a running command.
 pub(super) struct Task {
@@ -202,6 +205,8 @@ struct SchedulerInner<L: LockManager> {
     enable_async_apply_prewrite: bool,
 
     resource_tag_factory: ResourceTagFactory,
+
+    feature_gate: FeatureGate,
 }
 
 #[inline]
@@ -313,6 +318,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        feature_gate: FeatureGate,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -346,6 +352,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
             resource_tag_factory,
+            feature_gate,
         });
 
         slow_log!(
@@ -1040,8 +1047,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return false;
         }
         match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
-            Ok(()) => true,
+            Ok(()) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.success.inc();
+                true
+            }
             Err(modifies) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.full.inc();
                 to_be_write.modifies = modifies;
                 false
             }
@@ -1068,7 +1079,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let in_memory = self
             .inner
             .in_memory_pessimistic_lock
-            .load(Ordering::Relaxed);
+            .load(Ordering::Relaxed)
+            && self
+                .inner
+                .feature_gate
+                .can_enable(IN_MEMORY_PESSIMISTIC_LOCK);
         if pipelined && in_memory {
             PessimisticLockMode::InMemory
         } else if pipelined {
@@ -1097,6 +1112,7 @@ mod tests {
     use crate::storage::{
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
+        test_util::latest_feature_gate,
         txn::commands::TypedCommand,
         TxnStatus,
     };
@@ -1257,6 +1273,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            latest_feature_gate(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1313,6 +1330,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            latest_feature_gate(),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1369,6 +1387,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            latest_feature_gate(),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1433,6 +1452,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            latest_feature_gate(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1476,6 +1496,9 @@ mod tests {
             enable_async_apply_prewrite: false,
             ..Default::default()
         };
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.0.0").unwrap();
+
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
@@ -1488,6 +1511,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            feature_gate.clone(),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
@@ -1506,6 +1530,13 @@ mod tests {
             scheduler.pessimistic_lock_mode(),
             PessimisticLockMode::InMemory
         );
+        // Test the feature gate. The feature should not work under 6.0.0.
+        unsafe { feature_gate.reset_version("5.4.0").unwrap() };
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::Pipelined
+        );
+        feature_gate.set_version("6.0.0").unwrap();
         // Mode is Pipelined when only pipelined is true.
         scheduler
             .inner
