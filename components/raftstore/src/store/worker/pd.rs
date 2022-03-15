@@ -424,7 +424,7 @@ where
                 interval,
             ),
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
-            collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
+            collect_tick_interval: cmp::min(default_collect_tick_interval(), interval),
         }
     }
 
