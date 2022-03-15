@@ -67,7 +67,7 @@ impl Default for DownstreamState {
 }
 
 /// Shold only be called when it's uninitialized or stopped. Return false if it's stopped.
-pub fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(
         DownstreamState::Uninitialized,
         DownstreamState::Initializing,
@@ -76,7 +76,7 @@ pub fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
 }
 
 /// Shold only be called when it's initializing or stopped. Return false if it's stopped.
-pub fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+pub(crate) fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
         .is_ok()
 }
