@@ -834,6 +834,7 @@ pub struct RaftClient<S, R, E> {
     builder: ConnectionBuilder<S, R>,
     engine: PhantomData<E>,
     last_hash: (u64, u64),
+    store_whitelist: Vec<u64>,
 }
 
 impl<S, R, E> RaftClient<S, R, E>
@@ -857,6 +858,7 @@ where
             builder,
             engine: PhantomData::<E>,
             last_hash: (0, 0),
+            store_whitelist: vec![],
         }
     }
 
@@ -924,6 +926,11 @@ where
             };
             self.last_hash.1 as usize
         };
+
+        if !self.store_whitelist.is_empty() && !self.store_whitelist.contains(&store_id) {
+            return Err(DiscardReason::StoreIsBlocked);
+        }
+
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -965,6 +972,7 @@ where
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
+                    Err(DiscardReason::StoreIsBlocked) => panic!("unreachable"),
                     Err(DiscardReason::Filtered) => return Err(DiscardReason::Filtered),
                 }
             }
@@ -1027,6 +1035,10 @@ where
         }
         RAFT_MESSAGE_FLUSH_COUNTER.wake.inc_by(counter);
     }
+
+    pub fn set_store_whitelist(&mut self, stores: Vec<u64>) {
+        self.store_whitelist = stores;
+    }
 }
 
 impl<S, R, E> Clone for RaftClient<S, R, E>
@@ -1044,6 +1056,7 @@ where
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
             last_hash: (0, 0),
+            store_whitelist: self.store_whitelist.clone(),
         }
     }
 }

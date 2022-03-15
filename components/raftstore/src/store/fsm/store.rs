@@ -2628,9 +2628,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 return;
             }
         }
+        let store_whitelist = match status.get_mode() {
+            ReplicationMode::DrAutoSync => {
+                status.get_dr_auto_sync().get_available_stores().to_vec()
+            }
+            _ => vec![],
+        };
+
         info!("updating replication mode"; "status" => ?status);
         state.set_status(status);
         drop(state);
+        self.ctx.trans.set_store_whitelist(store_whitelist);
         self.ctx.router.report_status_update()
     }
 
