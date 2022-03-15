@@ -259,7 +259,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         let quota_limiter = Arc::new(QuotaLimiter::new(
-            config.quota.cpu,
+            config.quota.forefront_cpu_time,
             config.quota.write_bandwidth,
             config.quota.read_bandwidth,
         ));

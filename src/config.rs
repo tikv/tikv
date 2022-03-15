@@ -2436,7 +2436,7 @@ impl LogConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
-    pub cpu: usize,
+    pub forefront_cpu_time: usize,
     pub write_bandwidth: ReadableSize,
     pub read_bandwidth: ReadableSize,
 }
@@ -2444,7 +2444,7 @@ pub struct QuotaConfig {
 impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
-            cpu: 0,
+            forefront_cpu_time: 0,
             write_bandwidth: ReadableSize(0),
             read_bandwidth: ReadableSize(0),
         }
@@ -2453,7 +2453,7 @@ impl Default for QuotaConfig {
 
 impl QuotaConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.cpu > 96_000 {
+        if self.forefront_cpu_time > 96_000 {
             return Err("Max cpu quota is limited to 96000, it means 96vCPU"
                 .to_string()
                 .into());

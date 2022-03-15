@@ -1947,9 +1947,9 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // kvs is limited to 1, which means that every write request will trigger the limit.
+        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
         let quota_config = QuotaConfig {
-            cpu: 0,
+            forefront_cpu_time: 0,
             write_bandwidth: ReadableSize(10),
             read_bandwidth: ReadableSize(0),
         };
@@ -1983,7 +1983,7 @@ fn test_storage_with_quota_limiter_disable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
         // all limit set to 0, which means quota limiter not work.
         let quota_config = QuotaConfig {
-            cpu: 0,
+            forefront_cpu_time: 0,
             write_bandwidth: ReadableSize(0),
             read_bandwidth: ReadableSize(0),
         };

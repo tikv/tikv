@@ -6,6 +6,11 @@ use cpu_time::ThreadTime;
 use std::time::Duration;
 use std::time::Instant;
 
+// The cpu time is not a real statistics, only part of the processing logic is
+// taken into account, so it needs to be multiplied by a factor.
+// transfer milli cpu to micro cpu
+//
+// TODO: Don't adjusted based on experience.
 const CPU_TIME_FACTOR: f64 = 0.9;
 
 // Quota limiter allows users to obtain stable performance by increasing the
@@ -37,9 +42,6 @@ impl QuotaLimiter {
         let cputime_limiter = if cpu_quota == 0 {
             Limiter::new(f64::INFINITY)
         } else {
-            // The cpu time is not a real statistics, only part of the processing logic is
-            // taken into account, so it needs to be multiplied by a factor.
-            // transfer milli cpu to micro cpu
             Limiter::new(cpu_quota as f64 * CPU_TIME_FACTOR * 1000_f64)
         };
 
@@ -62,6 +64,7 @@ impl QuotaLimiter {
         }
     }
 
+    // record info after write requests finished and return the suggested delay duration.
     pub fn consume_write(&self, bytes: usize, cpu_micro_secs: usize) -> Duration {
         let cpu_dur = self.cputime_limiter.consume_duration(cpu_micro_secs);
 
@@ -74,6 +77,7 @@ impl QuotaLimiter {
         std::cmp::max(cpu_dur, bw_dur)
     }
 
+    // record info after read requests finished and return the suggested delay duration.
     pub fn consume_read(&self, bytes: usize, cpu_micro_secs: usize) -> Duration {
         let cpu_dur = self.cputime_limiter.consume_duration(cpu_micro_secs);
 

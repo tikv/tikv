@@ -49,6 +49,8 @@ pub fn dump() -> String {
 }
 
 make_auto_flush_static_metric! {
+    // Some non-txn related types are placed here.
+    // ref `TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC`.
     pub label_enum ThrottleType {
         dag,
         analyze_full_sampling,
