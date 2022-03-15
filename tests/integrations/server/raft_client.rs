@@ -377,18 +377,27 @@ fn test_store_whitelist() {
         .create();
     let resolver =
         resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
-
-    let msg_count = Arc::new(AtomicUsize::new(0));
-    let batch_msg_count = Arc::new(AtomicUsize::new(0));
-    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
-    let (_mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
-
     let mut raft_client = get_raft_client(RaftStoreBlackHole, resolver);
+
+    let msg_count1 = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count1 = Arc::new(AtomicUsize::new(0));
+    let service1 = MockKvForRaft::new(Arc::clone(&msg_count1), Arc::clone(&batch_msg_count1), true);
+    let (_mock_server1, port1) = create_mock_server(service1, 60200, 60300).unwrap();
+
+    let msg_count2 = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count2 = Arc::new(AtomicUsize::new(0));
+    let service2 = MockKvForRaft::new(Arc::clone(&msg_count2), Arc::clone(&batch_msg_count2), true);
+    let (_mock_server2, port2) = create_mock_server(service2, 60300, 60400).unwrap();
 
     let mut store1 = metapb::Store::default();
     store1.set_id(1);
-    store1.set_address(format!("127.0.0.1:{}", port));
+    store1.set_address(format!("127.0.0.1:{}", port1));
     pd_server.default_handler().add_store(store1.clone());
+
+    let mut store2 = metapb::Store::default();
+    store2.set_id(2);
+    store2.set_address(format!("127.0.0.1:{}", port2));
+    pd_server.default_handler().add_store(store2.clone());
 
     for _ in 0..10 {
         let mut raft_m = RaftMessage::default();
@@ -396,13 +405,13 @@ fn test_store_whitelist() {
         raft_client.send(raft_m).unwrap();
     }
     raft_client.flush();
-    check_msg_count(500, &msg_count, 10);
+    check_msg_count(500, &msg_count1, 10);
 
     raft_client.set_store_whitelist(vec![2, 3]);
     for _ in 0..3 {
         let mut raft_m = RaftMessage::default();
         raft_m.mut_to_peer().set_store_id(1);
-        raft_client.send(raft_m).unwrap();
+        assert!(raft_client.send(raft_m).is_err());
     }
     for _ in 0..5 {
         let mut raft_m = RaftMessage::default();
@@ -410,5 +419,6 @@ fn test_store_whitelist() {
         raft_client.send(raft_m).unwrap();
     }
     raft_client.flush();
-    check_msg_count(500, &msg_count, 15);
+    check_msg_count(500, &msg_count1, 10);
+    check_msg_count(500, &msg_count2, 5);
 }
