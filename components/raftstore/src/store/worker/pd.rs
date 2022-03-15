@@ -492,7 +492,7 @@ where
                             &scheduler,
                         );
                     }
-                    timer_cnt = timer_cnt + 1;
+                    timer_cnt += 1;
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;

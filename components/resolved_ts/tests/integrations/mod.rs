@@ -156,4 +156,3 @@ fn test_report_min_resolved_ts_disable() {
     fail::remove("mock_collect_tick_interval");
     suite.stop();
 }
-
