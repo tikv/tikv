@@ -64,7 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1647338428560,
+  "iteration": 1647348950423,
   "links": [],
   "panels": [
     {
@@ -17582,7 +17582,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
+          "description": "Throttle time for txn storage commands in 1 minute.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -17596,7 +17596,7 @@
             "y": 52
           },
           "hiddenSeries": false,
-          "id": 23763572308,
+          "id": 23763572363,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -17626,7 +17626,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_storage_command_throttle_time_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "expr": "sum(rate(tikv_txn_command_throttle_time_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
@@ -17638,7 +17638,106 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Forefront storage throttled duration",
+          "title": "Txn command throttled duration",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "µs",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Throttle time for non-txn related processing like analyze or dag in 1 minute.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 52
+          },
+          "hiddenSeries": false,
+          "id": 23763572365,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "total": true,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.11",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(rate(tikv_non_txn_command_throttle_time_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type) ",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}",
+              "queryType": "randomWalk",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Non-txn command throttled duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -38757,7 +38856,7 @@
       "type": "row"
     }
   ],
-  "refresh": "30s",
+  "refresh": "1m",
   "schemaVersion": 27,
   "style": "dark",
   "tags": [],
@@ -38958,6 +39057,6 @@
   },
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
-  "uid": "sMrtHvPnk",
+  "uid": "RDVQiEzZz",
   "version": 1
 }
