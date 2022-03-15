@@ -10,6 +10,7 @@ use engine_rocks::PerfLevel;
 use futures::executor::block_on;
 use futures::StreamExt;
 use kvproto::kvrpcpb::Context;
+use std::time::{Duration, Instant};
 use test_coprocessor::{DAGSelect, Insert, ProductTable, Store};
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
@@ -25,7 +26,7 @@ pub fn test_prewrite() {
     let tag = "tag_prewrite";
 
     let (test_suite, mut store, _) = setup_test_suite();
-    fail::cfg_callback("scheduler_process", cpu_load).unwrap();
+    fail::cfg_callback("scheduler_process", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!(fail::remove("scheduler_process"));
 
     let jh = test_suite
@@ -46,7 +47,7 @@ pub fn test_commit() {
     let tag = "tag_commit";
 
     let (test_suite, mut store, _) = setup_test_suite();
-    fail::cfg_callback("scheduler_process", cpu_load).unwrap();
+    fail::cfg_callback("scheduler_process", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!(fail::remove("scheduler_process"));
 
     let jh = test_suite
@@ -70,7 +71,7 @@ pub fn test_reschedule_coprocessor() {
 
     let (test_suite, mut store, endpoint) = setup_test_suite();
     fail::cfg("copr_reschedule", "return").unwrap();
-    fail::cfg_callback("scanner_next", cpu_load).unwrap();
+    fail::cfg_callback("scanner_next", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!({
         fail::remove("scanner_next");
         fail::remove("copr_reschedule");
@@ -104,7 +105,7 @@ fn test_get() {
     let tag = "tag_get";
 
     let (test_suite, mut store, _) = setup_test_suite();
-    fail::cfg_callback("point_getter_get", cpu_load).unwrap();
+    fail::cfg_callback("point_getter_get", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!(fail::remove("point_getter_get"));
 
     let jh = test_suite
@@ -139,7 +140,7 @@ fn test_batch_get() {
     let tag = "tag_batch_get";
 
     let (test_suite, mut store, _) = setup_test_suite();
-    fail::cfg_callback("point_getter_get", cpu_load).unwrap();
+    fail::cfg_callback("point_getter_get", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!(fail::remove("point_getter_get"));
 
     let jh = test_suite
@@ -175,7 +176,7 @@ fn test_batch_get_command() {
     let tag = "tag_batch_get_command";
 
     let (test_suite, mut store, _) = setup_test_suite();
-    fail::cfg_callback("point_getter_get", cpu_load).unwrap();
+    fail::cfg_callback("point_getter_get", || cpu_load(Duration::from_millis(100))).unwrap();
     defer!(fail::remove("point_getter_get"));
 
     let jh = test_suite
@@ -269,9 +270,13 @@ fn require_cpu_time_not_zero(
     }
 }
 
-fn cpu_load() {
+fn cpu_load(duration: Duration) {
     static A: AtomicU64 = AtomicU64::new(0);
-    for _ in 0..4000000 {
-        A.fetch_add(1, Ordering::SeqCst);
+
+    let now = Instant::now();
+    while now.elapsed() < duration {
+        for _ in 0..100000 {
+            A.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
