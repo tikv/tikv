@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]
 use super::encoded::RawEncodeSnapshot;
+// use super::raw_mvcc::RawMvccSnapshot;
 
 use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
@@ -22,6 +22,8 @@ pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S>),
     V1TTL(RawStoreInner<RawEncodeSnapshot<S, APIV1TTL>>),
     V2(RawStoreInner<RawEncodeSnapshot<S, APIV2>>),
+    // TODO: after ts encoded in rawkv interface, RawMvccSnapshot should be used.
+    // V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, APIV2>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
@@ -34,6 +36,10 @@ impl<'a, S: Snapshot> RawStore<S> {
             ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 snapshot,
             ))),
+            // TODO: after ts encoded in raw interface, RawMvccSnapshot should be used.
+            /*ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
+                RawMvccSnapshot::from_snapshot(snapshot),
+            ))),*/
         }
     }
 

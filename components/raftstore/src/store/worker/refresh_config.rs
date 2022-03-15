@@ -103,26 +103,39 @@ where
     }
 }
 
-#[derive(Debug)]
-pub enum ThreadPool {
+#[derive(Debug, Clone, Copy)]
+pub enum BatchComponent {
     Store,
     Apply,
 }
 
+impl Display for BatchComponent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            BatchComponent::Store => {
+                write!(f, "raft")
+            }
+            BatchComponent::Apply => {
+                write!(f, "apply")
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Task {
-    ScalePool(ThreadPool, usize),
+    ScalePool(BatchComponent, usize),
+    ScaleBatchSize(BatchComponent, usize),
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self {
             Task::ScalePool(pool, size) => {
-                write!(f, "Scale pool ")?;
-                match pool {
-                    ThreadPool::Store => write!(f, "ajusts apply: {} ", size),
-                    ThreadPool::Apply => write!(f, "ajusts raft: {} ", size),
-                }
+                write!(f, "Scale pool ajusts {}: {} ", pool, size)
+            }
+            Task::ScaleBatchSize(component, size) => {
+                write!(f, "Scale max_batch_size adjusts {}: {} ", component, size)
             }
         }
     }
@@ -205,9 +218,17 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
-            Task::ScalePool(pool, size) => match pool {
-                ThreadPool::Store => self.resize_raft_pool(size),
-                ThreadPool::Apply => self.resize_apply_pool(size),
+            Task::ScalePool(component, size) => match component {
+                BatchComponent::Store => self.resize_raft_pool(size),
+                BatchComponent::Apply => self.resize_apply_pool(size),
+            },
+            Task::ScaleBatchSize(component, size) => match component {
+                BatchComponent::Store => {
+                    self.raft_pool.state.max_batch_size = size;
+                }
+                BatchComponent::Apply => {
+                    self.apply_pool.state.max_batch_size = size;
+                }
             },
         }
     }

@@ -11,8 +11,7 @@ use futures::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tokio::sync::Semaphore;
 
-use kvproto::kvrpcpb::{self, IsolationLevel};
-use kvproto::{coprocessor as coppb, errorpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::CodedInputStream;
 use protobuf::Message;
 use tikv_kv::SnapshotExt;
@@ -22,7 +21,9 @@ use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore};
+use crate::storage::{
+    self, need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+};
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -112,7 +113,7 @@ impl<E: Engine> Endpoint<E> {
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager.update_max_ts(start_ts);
         }
-        if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+        if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();
             for range in &req_ctx.ranges {
                 let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
@@ -124,6 +125,7 @@ impl<E: Engine> Endpoint<E> {
                             key,
                             start_ts,
                             &req_ctx.bypass_locks,
+                            req_ctx.context.get_isolation_level(),
                         )
                     })
                     .map_err(|e| {
@@ -666,6 +668,7 @@ mod tests {
     use std::vec;
 
     use futures::executor::{block_on, block_on_stream};
+    use kvproto::kvrpcpb::IsolationLevel;
 
     use tipb::Executor;
     use tipb::Expr;

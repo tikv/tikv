@@ -1048,7 +1048,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if !ctx.get_stale_read() {
                     concurrency_manager.update_max_ts(start_ts);
                 }
-                if ctx.get_isolation_level() == IsolationLevel::Si {
+                if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
@@ -1057,6 +1057,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 key,
                                 start_ts,
                                 &bypass_locks,
+                                ctx.get_isolation_level(),
                             )
                         })
                         .map_err(|e| {
@@ -2484,14 +2485,20 @@ fn prepare_snap_ctx<'a>(
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
-    if isolation_level == IsolationLevel::Si {
+    if need_check_locks(isolation_level) {
         let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(key, |lock| {
                     // No need to check access_locks because they are committed which means they
                     // can't be in memory lock table.
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), key, start_ts, bypass_locks)
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        key,
+                        start_ts,
+                        bypass_locks,
+                        isolation_level,
+                    )
                 })
                 .map_err(|e| {
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -2523,6 +2530,11 @@ fn prepare_snap_ctx<'a>(
 
 pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
     ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+}
+
+// checks whether the current isolation level needs to check related locks.
+pub fn need_check_locks(iso_level: IsolationLevel) -> bool {
+    matches!(iso_level, IsolationLevel::Si | IsolationLevel::RcCheckTs)
 }
 
 pub fn point_key_range(key: Key) -> KeyRange {
@@ -2996,6 +3008,8 @@ mod tests {
         test_util::*,
         *,
     };
+    use raw::encoded::RawEncodeSnapshot;
+    use raw::raw_mvcc::RawMvccSnapshot;
 
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
@@ -3012,7 +3026,9 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{
+        raw_ttl::ttl_current_ts, IterOptions, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE,
+    };
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -8444,5 +8460,102 @@ mod tests {
             .unwrap();
         // Prewrite still succeeds
         assert!(rx.recv().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_raw_mvcc_snapshot() {
+        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context {
+            api_version: ApiVersion::V2,
+            ..Default::default()
+        };
+
+        let raw_test_data = vec![
+            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
+            (b"r\0b".to_vec(), b"bb".to_vec(), 30),
+            (b"r\0bb".to_vec(), b"bbb".to_vec(), 40),
+            (b"r\0c".to_vec(), b"cc".to_vec(), 50),
+            (b"r\0cc".to_vec(), b"ccc".to_vec(), 60),
+            (b"r\0a".to_vec(), b"n_aa".to_vec(), 70),
+            (b"r\0aa".to_vec(), b"n_aaa".to_vec(), 80),
+            (b"r\0b".to_vec(), b"n_bb".to_vec(), 90),
+            (b"r\0bb".to_vec(), b"n_bbb".to_vec(), 100),
+            (b"r\0c".to_vec(), b"n_cc".to_vec(), 110),
+            (b"r\0cc".to_vec(), b"n_ccc".to_vec(), 120),
+        ];
+
+        let test_data: Vec<(Vec<u8>, Vec<u8>, u64)> = raw_test_data
+            .into_iter()
+            .map(|(key, val, ts)| {
+                (
+                    APIV2::encode_raw_key_owned(key, Some(TimeStamp::from(ts))).into_encoded(),
+                    val,
+                    ts,
+                )
+            })
+            .collect();
+        let ttl = 30;
+        // Write key-value pairs one by one
+        for (key, value, _) in test_data.clone() {
+            storage
+                .raw_put(
+                    ctx.clone(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    ttl,
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        let snapshot = storage.get_snapshot();
+        let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snapshot);
+        let encode_snapshot: RawEncodeSnapshot<_, APIV2> =
+            RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
+        for &(ref key, ref value, _) in &test_data[6..12] {
+            let res = encode_snapshot.get_cf(CF_DEFAULT, &Key::from_encoded_slice(key));
+            assert_eq!(res.unwrap().unwrap(), value.to_owned());
+        }
+        let iter_opt = IterOptions::default();
+        let mut iter = encode_snapshot.iter_cf(CF_DEFAULT, iter_opt).unwrap();
+        let mut pairs = vec![];
+        let raw_key = APIV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
+        iter.seek(&raw_key).unwrap();
+        while iter.valid().unwrap() {
+            pairs.push((iter.key().to_owned(), iter.value().to_owned()));
+            iter.next().unwrap();
+        }
+
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .map(|(key, val, _)| (key, val))
+            .collect();
+
+        assert_eq!(pairs, ret_data);
+        let raw_key = APIV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
+        iter.seek_for_prev(&raw_key).unwrap();
+        pairs.clear();
+        while iter.valid().unwrap() {
+            pairs.push((iter.key().to_owned(), iter.value().to_owned()));
+            iter.prev().unwrap();
+        }
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .into_iter()
+            .skip(6)
+            .rev()
+            .map(|(key, val, _)| (key, val))
+            .collect();
+        assert_eq!(pairs, ret_data);
+
+        // two way direction scan is not supported.
+        assert_eq!(iter.next().is_err(), true);
     }
 }
