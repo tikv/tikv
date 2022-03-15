@@ -31,7 +31,7 @@ pub trait Store: Send {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>>;
 
     /// Retrieve a scanner over the bounds.
@@ -324,10 +324,11 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
         if keys.len() == 1 {
-            return Ok(vec![self.get(&keys[0], statistics)]);
+            statistics.push(Statistics::default());
+            return Ok(vec![self.get(&keys[0], statistics.last_mut().unwrap())]);
         }
 
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -341,9 +342,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let mut values = Vec::with_capacity(keys.len());
         for key in keys {
             let value = point_getter.get(key).map_err(Error::from);
-            values.push(value)
+            values.push(value);
+            statistics.push(point_getter.take_statistics());
         }
-        statistics.add(&point_getter.take_statistics());
         Ok(values)
     }
 
@@ -537,9 +538,15 @@ impl Store for FixtureStore {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Vec<u8>>>>> {
-        Ok(keys.iter().map(|key| self.get(key, statistics)).collect())
+        Ok(keys
+            .iter()
+            .map(|key| {
+                statistics.push(Statistics::default());
+                self.get(key, statistics.last_mut().unwrap())
+            })
+            .collect())
     }
 
     #[inline]
@@ -847,7 +854,7 @@ mod tests {
         let key_num = 100;
         let store = TestStore::new(key_num);
         let snapshot_store = store.store();
-        let mut statistics = Statistics::default();
+        let mut statistics = Vec::default();
         let mut keys_list = Vec::new();
         for key in &store.keys {
             keys_list.push(Key::from_raw(key.as_bytes()));
@@ -1425,7 +1432,7 @@ mod benches {
         let store = FixtureStore::new(data);
         b.iter(|| {
             let store = test::black_box(&store);
-            let mut statistics = Statistics::default();
+            let mut statistics = Vec::default();
             let value = store.batch_get(test::black_box(&batch_get_keys), &mut statistics);
             test::black_box(value.unwrap());
         })
