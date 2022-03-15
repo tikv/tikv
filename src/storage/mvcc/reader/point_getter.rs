@@ -192,6 +192,8 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// If `multi == false`, this function must be called only once. Future calls return nothing.
     pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
+        fail_point!("point_getter_get");
+
         if !self.multi {
             // Protect from calling `get()` multiple times when `multi == false`.
             if self.drained {

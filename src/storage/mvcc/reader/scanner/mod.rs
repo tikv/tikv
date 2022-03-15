@@ -220,6 +220,8 @@ pub enum Scanner<S: Snapshot> {
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
+        fail_point!("scanner_next");
+
         match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
