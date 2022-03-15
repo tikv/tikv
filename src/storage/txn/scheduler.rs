@@ -803,7 +803,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .get(tag)
             .inc_by(quota_delay.as_micros() as u64);
         if !quota_delay.is_zero() {
-            std::thread::sleep(quota_delay);
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + quota_delay)
+                .compat()
+                .await
+                .unwrap();
         }
 
         if let Some(lock_info) = lock_info {

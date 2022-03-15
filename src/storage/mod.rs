@@ -83,6 +83,7 @@ use crate::storage::{
 use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -107,6 +108,7 @@ use std::{
 use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -622,13 +624,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .unwrap_or(&None)
                             .as_ref()
                             .map_or(0, |v| v.len());
-                    let quota_delay =
+                    let wait =
                         quota_limiter.consume_read(1, read_bytes, cost_time.as_micros() as usize);
                     KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                         .get(CMD)
-                        .inc_by(quota_delay.as_micros() as u64);
-                    if !quota_delay.is_zero() {
-                        std::thread::sleep(quota_delay);
+                        .inc_by(wait.as_micros() as u64);
+                    if !wait.is_zero() {
+                        GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + wait)
+                            .compat()
+                            .await
+                            .unwrap();
                     }
 
                     let stage_finished_ts = Instant::now_coarse();
@@ -961,16 +967,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let read_bytes = key_bytes + result_len;
                     let cost_time =
                         Duration::from_micros((cost_time.as_micros() as f64 * 1.1_f64) as u64);
-                    let quota_delay = quota_limiter.consume_read(
+                    let wait = quota_limiter.consume_read(
                         key_len,
                         read_bytes,
                         cost_time.as_micros() as usize,
                     );
                     KV_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                         .get(CMD)
-                        .inc_by(quota_delay.as_micros() as u64);
-                    if !quota_delay.is_zero() {
-                        std::thread::sleep(quota_delay);
+                        .inc_by(wait.as_micros() as u64);
+                    if !wait.is_zero() {
+                        GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + wait)
+                            .compat()
+                            .await
+                            .unwrap();
                     }
 
                     let stage_finished_ts = Instant::now_coarse();

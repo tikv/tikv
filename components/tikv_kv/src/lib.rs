@@ -37,6 +37,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_LOCK};
 use engine_traits::{
     IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
 };
+use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
@@ -58,6 +59,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::ThreadReadId;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -470,15 +472,20 @@ pub fn snapshot<E: Engine>(
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
-    if let Some(quota_limiter) = quota_limiter {
-        let delay_quota =
-            quota_limiter.consume_read(0, 0, start_time.elapsed().as_micros() as usize);
-        if !delay_quota.is_zero() {
-            std::thread::sleep(delay_quota);
-        }
-    }
+    let quota_delay = if let Some(quota_limiter) = quota_limiter {
+        quota_limiter.consume_read(0, 0, start_time.elapsed().as_micros() as usize)
+    } else {
+        Duration::ZERO
+    };
     // make engine not cross yield point
     async move {
+        if !quota_delay.is_zero() {
+            GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + quota_delay)
+                .compat()
+                .await
+                .unwrap();
+        }
         val?; // propagate error
         let result = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))

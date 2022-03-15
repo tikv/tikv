@@ -17,12 +17,13 @@ use yatp::task::future::reschedule;
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
 
+use futures::compat::Future01CompatExt;
 use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
-use tikv_util::quota_limiter::QuotaLimiter;
+use tikv_util::{quota_limiter::QuotaLimiter, timer::GLOBAL_TIMER_HANDLE};
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -452,7 +453,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             )?;
 
             if !quota_delay.is_zero() {
-                std::thread::sleep(quota_delay);
+                GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + quota_delay)
+                    .compat()
+                    .await
+                    .unwrap();
             }
             if record_len > 0 {
                 chunks.push(chunk);
@@ -519,15 +524,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // record count less than batch size and is not drained
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
-            let (drained, len, quota_delay) = self.internal_handle_request(
+            let (drained, len, _quota_delay) = self.internal_handle_request(
                 true,
                 batch_size.min(self.stream_row_limit - record_len),
                 &mut current_chunk,
                 &mut warnings,
                 &mut ctx,
             )?;
-
-            std::thread::sleep(quota_delay);
 
             chunk
                 .mut_rows_data()
