@@ -358,7 +358,7 @@ impl<E: Engine> Endpoint<E> {
                 snap_ctx.key_ranges.push(key_range);
             }
         }
-        kv::snapshot(engine, snap_ctx, None).map_err(Error::from)
+        kv::snapshot(engine, snap_ctx).map_err(Error::from)
     }
 
     /// The real implementation of handling a unary request.

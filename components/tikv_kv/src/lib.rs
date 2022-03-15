@@ -157,6 +157,7 @@ pub struct SnapContext<'a> {
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
+    pub quota_limiter: Option<Arc<QuotaLimiter>>,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -458,8 +459,8 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
-    quota_limiter: Option<Arc<QuotaLimiter>>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
+    let quota_limiter = ctx.quota_limiter.clone();
     let start_time = if let Some(quota_limiter) = &quota_limiter {
         quota_limiter.get_now_time()
     } else {

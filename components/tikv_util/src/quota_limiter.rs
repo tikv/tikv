@@ -10,6 +10,7 @@ const CPU_TIME_FACTOR: f64 = 0.9;
 
 // Quota limiter allows users to obtain stable performance by increasing the
 // completion time of tasks through restrictions of different metrics.
+#[derive(Debug)]
 pub struct QuotaLimiter {
     cputime_limiter: Limiter,
     write_kvs_limiter: Limiter,
@@ -134,8 +135,8 @@ impl QuotaLimiter {
     }
 
     // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC` to save cost.
-    pub fn get_now_time(&self) -> Box<dyn QuotaTimer> {
-        if self.cputime_limiter.speed_limit() == f64::INFINITY {
+    pub fn get_now_time(&self) -> Box<dyn Timer> {
+        if self.cputime_limiter.speed_limit().is_infinite() {
             Box::new(Instant::now())
         } else {
             Box::new(ThreadTime::now())
@@ -143,17 +144,17 @@ impl QuotaLimiter {
     }
 }
 
-pub trait QuotaTimer {
+pub trait Timer {
     fn elapsed(&self) -> Duration;
 }
 
-impl QuotaTimer for Instant {
+impl Timer for Instant {
     fn elapsed(&self) -> Duration {
         self.elapsed()
     }
 }
 
-impl QuotaTimer for ThreadTime {
+impl Timer for ThreadTime {
     fn elapsed(&self) -> Duration {
         self.elapsed()
     }

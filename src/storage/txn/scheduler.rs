@@ -490,16 +490,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                 let snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
+                    quota_limiter: Some(quota_limiter),
                     ..Default::default()
                 };
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe {
-                    with_tls_engine(|engine: &E| {
-                        kv::snapshot(engine, snap_ctx, Some(quota_limiter))
-                    })
-                }
-                .await
+                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
                 {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();

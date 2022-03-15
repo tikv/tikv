@@ -360,7 +360,7 @@ impl Default for Config {
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             // TODO: add comments @tonyxuqqi
-            max_batch_size: 64,
+            max_batch_size: 256,
         }
     }
 }
@@ -1005,14 +1005,14 @@ mod tests {
         cfg = Config::new();
         cfg.hibernate_regions = true;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(64));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(64));
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
         cfg = Config::new();
         cfg.hibernate_regions = false;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(64));
-        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(64));
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
         cfg = Config::new();
         cfg.hibernate_regions = true;
