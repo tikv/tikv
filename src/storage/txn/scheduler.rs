@@ -694,6 +694,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 _ => {}
             }
 
+            fail_point!("scheduler_process");
             if task.cmd.readonly() {
                 self.process_read(snapshot, task, &mut statistics);
             } else {
