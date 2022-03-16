@@ -40,6 +40,7 @@ use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
 use kvproto::raft_cmdpb;
+use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
@@ -386,6 +387,10 @@ pub trait SnapshotExt {
     }
 
     fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
+        None
+    }
+
+    fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
     }
 }

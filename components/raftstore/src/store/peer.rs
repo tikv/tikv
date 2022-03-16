@@ -19,7 +19,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, Buckets, PeerRole};
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
@@ -66,7 +66,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
-use pd_client::INVALID_ID;
+use pd_client::{BucketStat, INVALID_ID};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk::DiskUsage;
@@ -607,8 +607,7 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub region_buckets: Buckets,
-
+    pub region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
 }
@@ -735,7 +734,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
-            region_buckets: Buckets::default(),
+            region_buckets: None,
             lead_transferee: raft::INVALID_ID,
         };
 
@@ -2383,6 +2382,7 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
+                self.region_buckets.as_ref().map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
@@ -4130,6 +4130,7 @@ where
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
+            snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
