@@ -68,6 +68,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
                                 let raw_value = RawValue {
                                     user_value: value,
                                     expire_ts: ttl_to_expire_ts(ttl),
+                                    is_delete: false,
                                 };
                                 let m =
                                     Modify::Put(cf, key, API::encode_raw_value_owned(raw_value));

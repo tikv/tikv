@@ -38,6 +38,7 @@ fn test_ttl_checker_impl<API: APIVersion>() {
     let value1 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(10),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key1, &API::encode_raw_value_owned(value1))
         .unwrap();
@@ -46,6 +47,7 @@ fn test_ttl_checker_impl<API: APIVersion>() {
     let value2 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(120),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key2, &API::encode_raw_value_owned(value2))
         .unwrap();
@@ -53,6 +55,7 @@ fn test_ttl_checker_impl<API: APIVersion>() {
     let value3 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(20),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key3, &API::encode_raw_value_owned(value3))
         .unwrap();
@@ -61,6 +64,7 @@ fn test_ttl_checker_impl<API: APIVersion>() {
     let value4 = RawValue {
         user_value: vec![0; 10],
         expire_ts: None,
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key4, &API::encode_raw_value_owned(value4))
         .unwrap();
@@ -69,6 +73,7 @@ fn test_ttl_checker_impl<API: APIVersion>() {
     let value5 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(10),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key5, &API::encode_raw_value_owned(value5))
         .unwrap();
@@ -116,6 +121,7 @@ fn test_ttl_compaction_filter_impl<API: APIVersion>() {
     let value1 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(10),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key1, &API::encode_raw_value_owned(value1))
         .unwrap();
@@ -131,6 +137,7 @@ fn test_ttl_compaction_filter_impl<API: APIVersion>() {
     let value2 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(120),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key2, &API::encode_raw_value_owned(value2))
         .unwrap();
@@ -138,6 +145,7 @@ fn test_ttl_compaction_filter_impl<API: APIVersion>() {
     let value3 = RawValue {
         user_value: vec![0; 10],
         expire_ts: Some(20),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key3, &API::encode_raw_value_owned(value3))
         .unwrap();
@@ -147,6 +155,7 @@ fn test_ttl_compaction_filter_impl<API: APIVersion>() {
     let value4 = RawValue {
         user_value: vec![0; 10],
         expire_ts: None,
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key4, &API::encode_raw_value_owned(value4))
         .unwrap();
@@ -178,12 +187,14 @@ fn test_ttl_snapshot_impl<API: APIVersion>() {
     let value1 = RawValue {
         user_value: b"value1".to_vec(),
         expire_ts: Some(90),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key1, &API::encode_raw_value_owned(value1))
         .unwrap();
     let value10 = RawValue {
         user_value: b"value1".to_vec(),
         expire_ts: Some(110),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key1, &API::encode_raw_value_owned(value10))
         .unwrap();
@@ -192,12 +203,14 @@ fn test_ttl_snapshot_impl<API: APIVersion>() {
     let value2 = RawValue {
         user_value: b"value2".to_vec(),
         expire_ts: Some(90),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key2, &API::encode_raw_value_owned(value2))
         .unwrap();
     let value20 = RawValue {
         user_value: b"value2".to_vec(),
         expire_ts: Some(90),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key2, &API::encode_raw_value_owned(value20))
         .unwrap();
@@ -206,6 +219,7 @@ fn test_ttl_snapshot_impl<API: APIVersion>() {
     let value3 = RawValue {
         user_value: b"value3".to_vec(),
         expire_ts: None,
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key3, &API::encode_raw_value_owned(value3))
         .unwrap();
@@ -271,12 +285,14 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
     let value1 = RawValue {
         user_value: b"value1".to_vec(),
         expire_ts: Some(90),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key1, &API::encode_raw_value_owned(value1))
         .unwrap();
     let value10 = RawValue {
         user_value: b"value1".to_vec(),
         expire_ts: Some(110),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key1, &API::encode_raw_value_owned(value10))
         .unwrap();
@@ -285,12 +301,14 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
     let value2 = RawValue {
         user_value: b"value2".to_vec(),
         expire_ts: Some(110),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key2, &API::encode_raw_value_owned(value2))
         .unwrap();
     let value20 = RawValue {
         user_value: b"value2".to_vec(),
         expire_ts: Some(90),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key2, &API::encode_raw_value_owned(value20))
         .unwrap();
@@ -299,6 +317,7 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
     let value3 = RawValue {
         user_value: b"value3".to_vec(),
         expire_ts: None,
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key3, &API::encode_raw_value_owned(value3))
         .unwrap();
@@ -307,6 +326,7 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
     let value4 = RawValue {
         user_value: b"value4".to_vec(),
         expire_ts: Some(10),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key4, &API::encode_raw_value_owned(value4))
         .unwrap();
@@ -315,12 +335,14 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
     let value5 = RawValue {
         user_value: b"value5".to_vec(),
         expire_ts: None,
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key5, &API::encode_raw_value_owned(value5))
         .unwrap();
     let value50 = RawValue {
         user_value: b"value5".to_vec(),
         expire_ts: Some(90),
+        is_delete: false,
     };
     kvdb.put_cf(CF_DEFAULT, key5, &API::encode_raw_value_owned(value50))
         .unwrap();

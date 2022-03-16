@@ -1508,7 +1508,7 @@ fn test_node_merge_long_isolated() {
 
     // Now peer(1, 1010) should probably created in memory but not persisted.
     pd_client.must_remove_peer(right.get_id(), new_peer(1, 1010));
-    cluster.wait_tombstone(right.get_id(), new_peer(1, 1010));
+    cluster.wait_tombstone(right.get_id(), new_peer(1, 1010), true);
     cluster.clear_send_filters();
     // Source peer should discover it's impossible to proceed and cleanup itself.
     must_get_none(&cluster.get_engine(1), b"k1");
