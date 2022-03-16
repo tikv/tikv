@@ -525,11 +525,8 @@ where
             Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
             _ => {
                 if self.get_must_track_version_changed_failpoint() {
-                    match self.delegates.get(&region_id) {
-                        Some(d) => {
-                            info!("must_track_version_changed: {}", d.track_ver.any_new());
-                        }
-                        _ => {}
+                    if let Some(d) = self.delegates.get(&region_id) {
+                        info!("must_track_version_changed: {}", d.track_ver.any_new());
                     }
                 }
                 debug!("update local read delegate"; "region_id" => region_id);

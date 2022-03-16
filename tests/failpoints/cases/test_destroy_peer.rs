@@ -55,8 +55,8 @@ fn test_meta_lock_when_destroy_peer() {
     let t = Instant::now();
     let ch = async_read_on_peer(
         &mut cluster,
-        peer_1_1.clone(),
-        region_1.clone(),
+        peer_1_1,
+        region_1,
         b"k1",
         true,
         false, // both true or false are tested, and the results are the same.
