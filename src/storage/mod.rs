@@ -582,6 +582,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let stage_snap_recv_ts = begin_instant;
+                    let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
                     let (result, delta, cost_time) = {
                         let start_time = quota_limiter.get_now_timer();
@@ -609,7 +610,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         (result, delta, cost_time)
                     };
                     metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key.as_encoded()),
+                        Some(key.as_encoded()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -782,6 +789,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     ) = req_snap;
                     match snap.await {
                         Ok(snapshot) => {
+                            let buckets = snapshot.ext().get_buckets();
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
@@ -795,7 +803,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     let v = point_getter.get(&key);
                                     let stat = point_getter.take_statistics();
                                     let delta = perf_statistics.delta();
-                                    metrics::tls_collect_read_flow(region_id, &stat);
+                                    metrics::tls_collect_read_flow(
+                                        region_id,
+                                        Some(key.as_encoded()),
+                                        Some(key.as_encoded()),
+                                        &stat,
+                                        buckets.as_ref(),
+                                    );
                                     metrics::tls_collect_perf_stats(CMD, &delta);
                                     statistics.add(&stat);
                                     consumer.consume(
@@ -904,7 +918,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
 
                     let stage_snap_recv_ts = begin_instant;
-                    let mut statistics = Statistics::default();
+                    let mut statistics = Vec::with_capacity(keys.len());
+                    let buckets = snapshot.ext().get_buckets();
                     let (result, delta, cost_time, key_bytes) = {
                         let start_time = quota_limiter.get_now_timer();
                         let perf_statistics = PerfStatisticsInstant::new();
@@ -917,7 +932,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             access_locks,
                             false,
                         );
-                        let key_bytes = keys.iter().fold(0, |acc, v| acc + v.len());
+                        let mut stats = Statistics::default();
                         let result = snap_store
                             .batch_get(&keys, &mut statistics)
                             .map_err(Error::from)
@@ -925,10 +940,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 let kv_pairs: Vec<_> = v
                                     .into_iter()
                                     .zip(keys)
-                                    .filter(|&(ref v, ref _k)| {
+                                    .enumerate()
+                                    .filter(|&(i, (ref v, ref k))| {
+                                        metrics::tls_collect_read_flow(
+                                            ctx.get_region_id(),
+                                            Some(k.as_encoded()),
+                                            Some(k.as_encoded()),
+                                            &statistics[i],
+                                            buckets.as_ref(),
+                                        );
+                                        stats.add(&statistics[i]);
                                         !(v.is_ok() && v.as_ref().unwrap().is_none())
                                     })
-                                    .map(|(v, k)| match v {
+                                    .map(|(_, (v, k))| match v {
                                         Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
                                         Err(e) => Err(Error::from(e)),
                                         _ => unreachable!(),
@@ -939,13 +963,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     .observe(kv_pairs.len() as f64);
                                 kv_pairs
                             });
-
                         let delta = perf_statistics.delta();
                         let cost_time = start_time.elapsed();
                         (result, delta, cost_time, key_bytes)
                     };
-                    metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_scan_details(CMD, &stats);
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -995,7 +1017,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     Ok((
                         result?,
                         KvGetStatistics {
-                            stats: statistics,
+                            stats,
                             perf_stats: delta,
                             latency_stats,
                         },
@@ -1089,7 +1111,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 if !ctx.get_stale_read() {
                     concurrency_manager.update_max_ts(start_ts);
                 }
-                if ctx.get_isolation_level() == IsolationLevel::Si {
+                if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
@@ -1098,6 +1120,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 key,
                                 start_ts,
                                 &bypass_locks,
+                                ctx.get_isolation_level(),
                             )
                         })
                         .map_err(|e| {
@@ -1118,15 +1141,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     start_ts,
                     ..Default::default()
                 };
+                let mut key_range = KeyRange::default();
+                if let Some(start_key) = &start_key {
+                    key_range.set_start_key(start_key.as_encoded().to_vec());
+                }
+                if let Some(end_key) = &end_key {
+                    key_range.set_end_key(end_key.as_encoded().to_vec());
+                }
                 if need_check_locks_in_replica_read(&ctx) {
-                    let mut key_range = KeyRange::default();
-                    if let Some(start_key) = &start_key {
-                        key_range.set_start_key(start_key.as_encoded().to_vec());
-                    }
-                    if let Some(end_key) = &end_key {
-                        key_range.set_end_key(end_key.as_encoded().to_vec());
-                    }
-                    snap_ctx.key_ranges = vec![key_range];
+                    snap_ctx.key_ranges = vec![key_range.clone()];
                 }
 
                 let snapshot =
@@ -1134,6 +1157,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let perf_statistics = PerfStatisticsInstant::new();
+                    let buckets = snapshot.ext().get_buckets();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -1152,7 +1176,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let statistics = scanner.take_statistics();
                     let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key_range.get_start_key()),
+                        Some(key_range.get_end_key()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1286,6 +1316,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
+                    let buckets = snapshot.ext().get_buckets();
                     let mut reader = MvccReader::new(
                         snapshot,
                         Some(ScanMode::Forward),
@@ -1310,7 +1341,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     let delta = perf_statistics.delta();
                     metrics::tls_collect_scan_details(CMD, &statistics);
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        start_key.as_ref().map(|key| key.as_encoded().as_slice()),
+                        end_key.as_ref().map(|key| key.as_encoded().as_slice()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     metrics::tls_collect_perf_stats(CMD, &delta);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
@@ -1468,16 +1505,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
+                    let key = Key::from_encoded(key);
                     let r = store
-                        .raw_get_key_value(cf, &Key::from_encoded(key), &mut stats)
+                        .raw_get_key_value(cf, &key, &mut stats)
                         .map_err(Error::from);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key.as_encoded()),
+                        Some(key.as_encoded()),
+                        &stats,
+                        buckets.as_ref(),
+                    );
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -1567,21 +1612,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
+                            let buckets = snapshot.ext().get_buckets();
                             let store = RawStore::new(snapshot, api_version);
+                            let key = Key::from_encoded(key);
                             match Self::rawkv_cf(&cf, api_version) {
                                 Ok(cf) => {
                                     consumer.consume(
                                         id,
                                         store
-                                            .raw_get_key_value(
-                                                cf,
-                                                &Key::from_encoded(key),
-                                                &mut stats,
-                                            )
+                                            .raw_get_key_value(cf, &key, &mut stats)
                                             .map_err(Error::from),
                                         begin_instant,
                                     );
-                                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                    tls_collect_read_flow(
+                                        ctx.get_region_id(),
+                                        Some(key.as_encoded()),
+                                        Some(key.as_encoded()),
+                                        &stats,
+                                        buckets.as_ref(),
+                                    );
                                 }
                                 Err(e) => {
                                     consumer.consume(id, Err(e), begin_instant);
@@ -1637,7 +1686,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 tls_collect_query_batch(
                     ctx.get_region_id(),
                     ctx.get_peer(),
-                    key_ranges,
+                    key_ranges.clone(),
                     QueryKind::Get,
                 );
 
@@ -1655,6 +1704,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 {
                     let begin_instant = Instant::now_coarse();
@@ -1666,9 +1716,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .into_iter()
                         .map(Key::from_encoded)
                         .map(|k| {
-                            let v = store
-                                .raw_get_key_value(cf, &k, &mut stats)
-                                .map_err(Error::from);
+                            let mut s = Statistics::default();
+                            let v = store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
+                            tls_collect_read_flow(
+                                ctx.get_region_id(),
+                                Some(k.as_encoded()),
+                                Some(k.as_encoded()),
+                                &s,
+                                buckets.as_ref(),
+                            );
+                            stats.add(&s);
                             (k, v)
                         })
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
@@ -1681,7 +1738,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(stats.data.flow_stats.read_keys as f64);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -1980,6 +2036,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let store = RawStore::new(snapshot, api_version);
@@ -2020,7 +2077,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     })
                     .map_err(Error::from);
 
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    metrics::tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(start_key.as_encoded()),
+                        end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                        &statistics,
+                        buckets.as_ref(),
+                    );
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(statistics.data.flow_stats.read_keys as f64);
@@ -2091,6 +2154,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let store = RawStore::new(snapshot, api_version);
@@ -2121,6 +2185,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
+                        let mut stats = Statistics::default();
                         let pairs = if reverse_scan {
                             store
                                 .reverse_raw_scan(
@@ -2128,7 +2193,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     &start_key,
                                     end_key.as_ref(),
                                     each_limit,
-                                    &mut statistics,
+                                    &mut stats,
                                     key_only,
                                 )
                                 .await
@@ -2139,12 +2204,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     &start_key,
                                     end_key.as_ref(),
                                     each_limit,
-                                    &mut statistics,
+                                    &mut stats,
                                     key_only,
                                 )
                                 .await
                         }
                         .map_err(Error::from)?;
+                        metrics::tls_collect_read_flow(
+                            ctx.get_region_id(),
+                            Some(start_key.as_encoded()),
+                            end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                            &stats,
+                            buckets.as_ref(),
+                        );
+                        statistics.add(&stats);
                         result.extend(pairs.into_iter().map(|res| res.map_err(Error::from)));
                     }
                     tls_collect_query_batch(
@@ -2153,7 +2226,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         key_ranges,
                         QueryKind::Scan,
                     );
-                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(statistics.data.flow_stats.read_keys as f64);
@@ -2218,16 +2290,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
+                    let key = Key::from_encoded(key);
                     let r = store
-                        .raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats)
+                        .raw_get_key_ttl(cf, &key, &mut stats)
                         .map_err(Error::from);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(key.as_encoded()),
+                        Some(key.as_encoded()),
+                        &stats,
+                        buckets.as_ref(),
+                    );
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(begin_instant.saturating_elapsed_secs());
@@ -2401,16 +2481,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf("", api_version)?;
 
                 let begin_instant = tikv_util::time::Instant::now_coarse();
-                let mut stats = Statistics::default();
+                let mut stats = Vec::with_capacity(ranges.len());
                 let ret = store
-                    .raw_checksum_ranges(cf, ranges, &mut stats)
+                    .raw_checksum_ranges(cf, &ranges, &mut stats)
                     .await
                     .map_err(Error::from);
-                tls_collect_read_flow(ctx.get_region_id(), &stats);
+                stats.iter().zip(ranges.iter()).for_each(|(stats, range)| {
+                    tls_collect_read_flow(
+                        ctx.get_region_id(),
+                        Some(range.get_start_key()),
+                        Some(range.get_end_key()),
+                        stats,
+                        buckets.as_ref(),
+                    );
+                });
                 SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                     .get(CMD)
                     .observe(begin_instant.saturating_elapsed().as_secs_f64());
@@ -2459,14 +2548,20 @@ fn prepare_snap_ctx<'a>(
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
-    if isolation_level == IsolationLevel::Si {
+    if need_check_locks(isolation_level) {
         let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(key, |lock| {
                     // No need to check access_locks because they are committed which means they
                     // can't be in memory lock table.
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), key, start_ts, bypass_locks)
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        key,
+                        start_ts,
+                        bypass_locks,
+                        isolation_level,
+                    )
                 })
                 .map_err(|e| {
                     CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
@@ -2498,6 +2593,11 @@ fn prepare_snap_ctx<'a>(
 
 pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
     ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+}
+
+// checks whether the current isolation level needs to check related locks.
+pub fn need_check_locks(iso_level: IsolationLevel) -> bool {
+    matches!(iso_level, IsolationLevel::Si | IsolationLevel::RcCheckTs)
 }
 
 pub fn point_key_range(key: Key) -> KeyRange {

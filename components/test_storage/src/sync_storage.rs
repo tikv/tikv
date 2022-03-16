@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{atomic::AtomicU64, Arc};
+
 use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{
@@ -7,7 +9,6 @@ use kvproto::kvrpcpb::{
 };
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
-use std::sync::{atomic::AtomicU64, Arc};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
@@ -84,20 +85,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             builder = builder.config(config);
         }
         builder = builder.set_api_version(self.api_version);
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let mut gc_worker = GcWorker::new(
-            self.engine,
-            RaftStoreBlackHole,
-            tx,
-            self.gc_config.unwrap_or_default(),
-            Default::default(),
-        );
-        gc_worker.start()?;
-
-        Ok(SyncTestStorage {
-            store: builder.build()?,
-            gc_worker,
-        })
+        SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
     }
 }
 
@@ -111,6 +99,22 @@ pub struct SyncTestStorage<E: Engine> {
 }
 
 impl<E: Engine> SyncTestStorage<E> {
+    pub fn from_storage(storage: Storage<E, DummyLockManager>, config: GcConfig) -> Result<Self> {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            RaftStoreBlackHole,
+            tx,
+            config,
+            Default::default(),
+        );
+        gc_worker.start()?;
+        Ok(Self {
+            gc_worker,
+            store: storage,
+        })
+    }
+
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
