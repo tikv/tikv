@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::config::ReadableSize;
-use super::time::Instant;
 use super::time::Limiter;
 use cpu_time::ThreadTime;
 use std::time::Duration;
@@ -108,29 +107,26 @@ impl QuotaLimiter {
         std::cmp::min(MAX_QUOTA_DELAY, should_delay)
     }
 
-    // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC_COARSE` to save cost.
-    pub fn get_now_timer(&self) -> Box<dyn Timer> {
+    pub fn get_now_timer(&self) -> QuotaTimer {
         if self.cputime_limiter.speed_limit().is_infinite() {
-            Box::new(Instant::now_coarse())
+            QuotaTimer::Zero
         } else {
-            Box::new(ThreadTime::now())
+            QuotaTimer::Thread(ThreadTime::now())
         }
     }
 }
 
-pub trait Timer {
-    fn elapsed(&self) -> Duration;
+pub enum QuotaTimer {
+    Thread(ThreadTime),
+    Zero,
 }
 
-impl Timer for Instant {
-    fn elapsed(&self) -> Duration {
-        self.saturating_elapsed()
-    }
-}
-
-impl Timer for ThreadTime {
-    fn elapsed(&self) -> Duration {
-        self.elapsed()
+impl QuotaTimer {
+    pub fn elapsed(&self) -> Duration {
+        match self {
+            QuotaTimer::Thread(t) => t.elapsed(),
+            QuotaTimer::Zero => Duration::ZERO,
+        }
     }
 }
 

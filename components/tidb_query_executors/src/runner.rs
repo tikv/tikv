@@ -528,7 +528,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // record count less than batch size and is not drained
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
-            // for now `handle_streaming_request` don't take up significant cpu resources.
+            // TODO: Streaming coprocessor on TiKV is just not enabled in TiDB now.
             let (drained, len, _quota_delay) = self.internal_handle_request(
                 true,
                 batch_size.min(self.stream_row_limit - record_len),

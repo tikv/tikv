@@ -919,7 +919,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
-                    let key_bytes = keys.iter().fold(0, |acc, v| acc + v.len());
                     let buckets = snapshot.ext().get_buckets();
                     let (result, delta, stats, cost_time) = {
                         let start_time = quota_limiter.get_now_timer();
@@ -977,15 +976,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.saturating_elapsed_secs());
 
-                    let result_len = result
-                        .as_ref()
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .fold(0, |acc, v| {
-                            acc + v.as_ref().unwrap_or(&(Vec::new(), Vec::new())).1.len()
-                        });
-
-                    let read_bytes = key_bytes + result_len;
+                    let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+                        + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
+                        + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
                     let cost_time =
                         Duration::from_micros((cost_time.as_micros() as f64 * 1.1_f64) as u64);
                     let quota_delay = quota_limiter.consume_read(read_bytes, cost_time);

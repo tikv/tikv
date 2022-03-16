@@ -2451,23 +2451,6 @@ impl Default for QuotaConfig {
     }
 }
 
-impl QuotaConfig {
-    fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.forefront_cpu_time > 96_000 {
-            return Err("Max cpu quota is limited to 96000, it means 96vCPU"
-                .to_string()
-                .into());
-        }
-        if self.write_bandwidth.0 > ReadableSize::mb(200).0 {
-            return Err("Max write bandwidth is limited to 200MB".to_string().into());
-        }
-        if self.read_bandwidth.0 > ReadableSize::gb(2).0 {
-            return Err("Max read bandwidth is limited to 2GB".to_string().into());
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2657,7 +2640,6 @@ impl TiKvConfig {
     // TODO: change to validate(&self)
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.log.validate()?;
-        self.quota.validate()?;
         self.readpool.validate()?;
         self.storage.validate()?;
 

@@ -738,7 +738,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
-        let quota_limiter = Arc::clone(&self.inner.quota_limiter);
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
@@ -752,7 +751,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let deadline = task.cmd.deadline();
         let (write_result, cost_time) = {
-            let start_time = quota_limiter.get_now_timer();
+            let start_time = &self.inner.quota_limiter.get_now_timer();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
@@ -795,7 +794,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-        let quota_delay = quota_limiter.consume_write(write_bytes, cost_time);
+        let quota_delay = self
+            .inner
+            .quota_limiter
+            .consume_write(write_bytes, cost_time);
         if !quota_delay.is_zero() {
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)
