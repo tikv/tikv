@@ -1,8 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::i64;
-use std::thread;
+use std::{cmp, thread, time::Duration};
 
 use kvproto::coprocessor::{Request, Response};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -195,7 +193,6 @@ fn test_select_after_lease() {
     let (cluster, raft_engine, ctx) = new_raft_engine(1, "");
     let (_, endpoint) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
-
     // Sleep until the leader lease is expired.
     thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     let req = DAGSelect::from(&product).build_with(ctx, &[0]);
@@ -1957,4 +1954,36 @@ fn test_rc_read() {
         row_count += 1;
     }
     assert_eq!(row_count, expected_data.len());
+}
+
+#[test]
+fn test_buckets() {
+    let product = ProductTable::new();
+    let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
+
+    let (_, endpoint) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    let req = DAGSelect::from(&product).build_with(ctx, &[0]);
+    let resp = handle_request(&endpoint, req.clone());
+    assert_eq!(resp.get_latest_buckets_version(), 0);
+
+    let mut bucket_key = product.get_record_range_all().get_start().to_owned();
+    bucket_key.push(0);
+    let region = cluster.get_region(&bucket_key);
+    cluster.refresh_region_bucket_keys(&region, vec![bucket_key]);
+
+    let wait_refresh_buckets = |old_buckets_ver| {
+        let mut resp = Default::default();
+        for _ in 0..10 {
+            resp = handle_request(&endpoint, req.clone());
+            if resp.get_latest_buckets_version() != old_buckets_ver {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert_ne!(resp.get_latest_buckets_version(), old_buckets_ver);
+    };
+
+    wait_refresh_buckets(0);
 }
