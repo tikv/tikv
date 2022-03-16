@@ -16,6 +16,7 @@ pub trait Transport: Send + Clone {
     fn need_flush(&self) -> bool;
 
     fn flush(&mut self);
+    fn check_heavy_connection(&self) {}
 }
 
 /// Routes message to target region.

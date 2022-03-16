@@ -1263,13 +1263,15 @@ where
 
             let to_peer_id = msg.get_to_peer().get_id();
             let to_store_id = msg.get_to_peer().get_store_id();
+            let msg_size = msg.get_message().compute_size();
+            ctx.msg_stats.add_message_size(msg_size);
 
             debug!(
                 "send raft msg";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "msg_type" => ?msg_type,
-                "msg_size" => msg.get_message().compute_size(),
+                "msg_size" => msg_size,
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
             );

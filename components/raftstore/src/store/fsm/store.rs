@@ -406,6 +406,7 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
+    pub msg_stats: MessageStats,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -799,6 +800,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 *skip_end = true;
             }
         }
+        if self.poll_ctx.msg_stats.message_size_too_large() {
+            info!("This poll has processed {} peer", self.poll_ctx.ready_count);
+        }
+        self.poll_ctx.trans.check_heavy_connection();
 
         handle_result
     }
@@ -807,6 +812,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         for peer in peers.iter_mut().flatten() {
             peer.update_memory_trace(&mut self.trace_event);
         }
+        self.poll_ctx.msg_stats.clear();
 
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.trans.need_flush() && !write_worker.is_empty() {
@@ -1193,6 +1199,7 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
+            msg_stats: MessageStats::new(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

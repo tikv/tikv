@@ -5,6 +5,7 @@ use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, register_histogram, Histogram};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use tikv_util::warn;
 
 use crate::store::QueryStats;
 
@@ -116,5 +117,44 @@ impl LocalStoreStat {
             self.global.stat.is_busy.store(true, Ordering::Relaxed);
             self.is_busy = false;
         }
+    }
+}
+
+const WARN_MESSAGE_SIZE: u64 = 100 * 1024 * 1204; // 100MB
+
+#[derive(Clone, Default)]
+pub struct MessageStats {
+    current_size: u64,
+    total_size: u64,
+    total_count: usize,
+}
+
+impl MessageStats {
+    pub fn new() -> MessageStats {
+        MessageStats {
+            current_size: 0,
+            total_size: 0,
+            total_count: 0,
+        }
+    }
+
+    pub fn add_message_size(&mut self, msg_size: u32) {
+        self.current_size += msg_size as u64;
+        self.total_size += msg_size as u64;
+        self.total_count += 1;
+        if self.current_size > WARN_MESSAGE_SIZE {
+            self.current_size = 0;
+            warn!("There are too many messages waiting to be flushed."; "message_count" => self.total_count, "message_size" => self.total_size);
+        }
+    }
+
+    pub fn message_size_too_large(&self) -> bool {
+        self.total_size > WARN_MESSAGE_SIZE
+    }
+
+    pub fn clear(&mut self) {
+        self.total_count = 0;
+        self.total_size = 0;
+        self.current_size = 0;
     }
 }

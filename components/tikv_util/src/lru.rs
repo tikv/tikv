@@ -280,6 +280,11 @@ where
     }
 
     #[inline]
+    pub fn get_readonly(&self, key: &K) -> Option<&V> {
+        self.map.get(key).map(|v| &v.value)
+    }
+
+    #[inline]
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         match self.map.get_mut(key) {
             Some(v) => {
