@@ -83,7 +83,7 @@ use tikv::{
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
-        self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
+        self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::FlowController, Engine,
     },
 };
@@ -567,15 +567,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
-                self.config.storage.block_cache.shared,
-                ttl_scheduler,
-                flow_controller.clone(),
-            )),
-        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -672,12 +663,22 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            flow_controller,
+            flow_controller.clone(),
             pd_sender.clone(),
             resource_tag_factory.clone(),
             self.pd_client.feature_gate().clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+        cfg_controller.register(
+            tikv::config::Module::Storage,
+            Box::new(StorageConfigManger::new(
+                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.config.storage.block_cache.shared,
+                ttl_scheduler,
+                flow_controller,
+                storage.get_scheduler(),
+            )),
+        );
 
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
