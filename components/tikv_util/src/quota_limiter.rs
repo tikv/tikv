@@ -132,11 +132,7 @@ impl QuotaLimiter {
             read_bytes: 0,
             write_bytes: 0,
             cpu_time: Duration::ZERO,
-            enable_cpu_limit: if self.cputime_limiter.speed_limit().is_infinite() {
-                false
-            } else {
-                true
-            },
+            enable_cpu_limit: !self.cputime_limiter.speed_limit().is_infinite(),
         }
     }
 
