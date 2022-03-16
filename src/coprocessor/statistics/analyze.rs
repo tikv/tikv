@@ -374,10 +374,8 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            let (cost_time, read_bytes) = {
+            let cost_time = {
                 let start_time = self.quota_limiter.get_now_timer();
-                let mut read_bytes: usize = 0;
-
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
                 is_drained = result.is_drained?;
 
@@ -415,7 +413,6 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                         } else {
                             collation_key_vals.push(Vec::new());
                         }
-                        read_bytes += val.len();
                         column_vals.push(val);
                     }
                     collector.mut_base().count += 1;
@@ -427,10 +424,11 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                     );
                     collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
                 }
-                (start_time.elapsed(), read_bytes)
+                start_time.elapsed()
             };
 
-            let throttle = self.quota_limiter.consume_read(read_bytes, cost_time);
+            // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
+            let throttle = self.quota_limiter.consume_read(0, cost_time);
             if throttle.is_throttled() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)
