@@ -1715,7 +1715,10 @@ impl UnifiedReadPoolConfig {
                     .into(),
             );
         }
-        let limit = SysQuota::cpu_cores_quota() as usize;
+        let limit = cmp::max(
+            UNIFIED_READPOOL_MIN_CONCURRENCY,
+            SysQuota::cpu_cores_quota() as usize,
+        );
         if self.max_thread_count > limit {
             return Err(format!(
                 "readpool.unified.max-thread-count should be smaller than {}",
@@ -1767,6 +1770,15 @@ mod unified_read_pool_tests {
             max_tasks_per_worker: 2000,
         };
         assert!(cfg.validate().is_ok());
+        let cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ),
+            ..cfg
+        };
+        assert!(cfg.validate().is_ok());
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -1789,6 +1801,15 @@ mod unified_read_pool_tests {
 
         let invalid_cfg = UnifiedReadPoolConfig {
             max_tasks_per_worker: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ) + 1,
             ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
