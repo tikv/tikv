@@ -1063,7 +1063,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     cm.update_max_ts(20.into());
 
     let guard = lock_key(b"a", 80);
-    suite.set_tso(100);
+    suite.set_tso(99);
 
     let mut req = suite.new_changedata_request(1);
     req.set_checkpoint_ts(100);

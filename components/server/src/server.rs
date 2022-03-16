@@ -669,15 +669,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Create causal timestamp provider
         let causal_ts_provider: Option<Arc<dyn CausalTsProvider>> =
             if let ApiVersion::V2 = self.config.storage.api_version() {
-                let hlc = block_on(causal_ts::HlcProvider::new_opt(
+                let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
-                    self.config.causal_ts.physical_clock_interval.0,
+                    self.config.causal_ts.renew_interval.0,
+                    self.config.causal_ts.renew_batch_init_size,
                 ));
-                if let Err(e) = hlc {
+                if let Err(e) = tso {
                     panic!("Causal timestamp provider initialize failed: {:?}", e);
                 }
                 info!("Causal timestamp startup.");
-                Some(Arc::new(hlc.unwrap()))
+                Some(Arc::new(tso.unwrap()))
             } else {
                 None
             };

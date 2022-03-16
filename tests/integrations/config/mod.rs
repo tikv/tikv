@@ -753,7 +753,8 @@ fn test_serde_custom_tikv_config() {
         scan_lock_pool_size: 1,
     };
     value.causal_ts = CausalTsConfig {
-        physical_clock_interval: ReadableDuration::millis(500),
+        renew_interval: ReadableDuration::millis(100),
+        renew_batch_init_size: 100,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

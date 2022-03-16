@@ -870,11 +870,11 @@ impl PdClient for RpcClient {
         Ok(resp)
     }
 
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
         let begin = Instant::now();
         let executor = move |client: &Client, _| {
             // Remove Box::pin and Compat when GLOBAL_TIMER_HANDLE supports futures 0.3
-            let ts_fut = Compat::new(Box::pin(client.inner.rl().tso.get_timestamp()));
+            let ts_fut = Compat::new(Box::pin(client.inner.rl().tso.get_timestamp(count)));
             let with_timeout = GLOBAL_TIMER_HANDLE
                 .timeout(
                     ts_fut,
@@ -954,7 +954,7 @@ impl Default for DummyPdClient {
 }
 
 impl PdClient for DummyPdClient {
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
         Box::pin(future::ok(self.next_ts))
     }
 }

@@ -361,6 +361,13 @@ pub trait PdClient: Send + Sync {
 
     /// Gets a timestamp from PD.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+        self.batch_get_tso(1)
+    }
+
+    /// Gets a batch of timestamps from PD.
+    /// Return a timestamp with (physical, logical), indicating that timestamps allocated are:
+    /// [Timestamp(physical, logical - count + 1), Timestamp(physical, logical)]
+    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
         unimplemented!()
     }
 

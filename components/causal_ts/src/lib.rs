@@ -4,13 +4,11 @@
 extern crate tikv_util;
 
 mod errors;
+
 pub use errors::*;
 
 mod tso;
 pub use tso::*;
-
-mod hlc;
-pub use hlc::*;
 
 mod observer;
 pub use observer::*;
@@ -20,9 +18,29 @@ use txn_types::TimeStamp;
 
 /// Trait of causal timestamp provider.
 pub trait CausalTsProvider: Send + Sync {
-    /// Get a new ts
+    /// Get a new timestamp.
     fn get_ts(&self) -> Result<TimeStamp>;
 
-    /// Advance to not less than `ts`, to make following events "happen-after" this timestamp.
-    fn advance(&self, ts: TimeStamp) -> Result<()>;
+    /// Flush (cached) timestamps to keep causality on some event, such as "leader transfer".
+    fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    /// for TEST purpose.
+    #[derive(Default)]
+    pub struct TestProvider {
+        ts: Arc<AtomicU64>,
+    }
+
+    impl CausalTsProvider for TestProvider {
+        fn get_ts(&self) -> Result<TimeStamp> {
+            Ok(self.ts.fetch_add(1, Ordering::Relaxed).into())
+        }
+    }
 }

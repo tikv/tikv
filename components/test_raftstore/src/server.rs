@@ -345,7 +345,7 @@ impl Simulator for ServerCluster {
         // Create causal timestamp provider.
         let causal_ts_provider: Option<Arc<dyn causal_ts::CausalTsProvider>> =
             if let ApiVersion::V2 = cfg.storage.api_version() {
-                Some(Arc::new(causal_ts::TestHlcProvider::default()))
+                Some(Arc::new(causal_ts::tests::TestProvider::default()))
             } else {
                 None
             };

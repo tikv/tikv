@@ -2437,13 +2437,17 @@ impl LogConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CausalTsConfig {
-    pub physical_clock_interval: ReadableDuration,
+    pub renew_interval: ReadableDuration,
+    pub renew_batch_init_size: u32,
 }
 
 impl CausalTsConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.physical_clock_interval.is_zero() {
-            return Err("causal-ts.refresh-interval can't be zero".into());
+        if self.renew_interval.is_zero() {
+            return Err("causal-ts.renew_interval can't be zero".into());
+        }
+        if self.renew_batch_init_size == 0 {
+            return Err("causal-ts.renew_batch_init_size should be greater than 0".into());
         }
         Ok(())
     }
@@ -2452,7 +2456,8 @@ impl CausalTsConfig {
 impl Default for CausalTsConfig {
     fn default() -> Self {
         Self {
-            physical_clock_interval: ReadableDuration::millis(500),
+            renew_interval: ReadableDuration::millis(100),
+            renew_batch_init_size: 100,
         }
     }
 }

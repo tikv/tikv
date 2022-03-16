@@ -2785,7 +2785,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
     fn new_causal_ts_provider(&self) -> Option<Arc<dyn CausalTsProvider>> {
         if let ApiVersion::V2 = self.config.api_version() {
-            Some(Arc::new(causal_ts::TestHlcProvider::default()))
+            Some(Arc::new(causal_ts::tests::TestProvider::default()))
         } else {
             None
         }

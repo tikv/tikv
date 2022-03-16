@@ -176,7 +176,7 @@ impl RoleObserver for CausalObserver {
         if role_change.state == StateRole::Leader {
             let region_id = ctx.region().get_id();
             let max_ts = self.causal_manager.max_ts(region_id);
-            self.causal_ts.advance(max_ts.next()).unwrap();
+            self.causal_ts.flush().unwrap();
             debug!("CausalObserver::on_role_change: become leader & advance timestamp"; "region" => region_id, "max_ts" => max_ts);
         }
     }
@@ -208,7 +208,7 @@ impl RegionChangeObserver for CausalObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TsoSimpleProvider;
+    use crate::SimpleTsoProvider;
     use api_version::{APIVersion, APIV2};
     use engine_rocks::util::new_temp_engine;
     use engine_rocks::RocksEngine;
@@ -226,7 +226,7 @@ mod tests {
         Engines<RocksEngine, RocksEngine>,
     ) {
         let pd_client = TestPdClient::new(0, true);
-        let causal_ts = Arc::new(TsoSimpleProvider::new(Arc::new(pd_client)));
+        let causal_ts = Arc::new(SimpleTsoProvider::new(Arc::new(pd_client)));
         let manager = Arc::new(RegionsCausalManager::default());
         let ob = CausalObserver::new(manager.clone(), causal_ts);
 
