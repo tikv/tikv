@@ -264,8 +264,6 @@ pub struct Config {
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
 
-    pub max_batch_size: usize,
-
     /// Interval to check whether to reactivate in-memory pessimistic lock after being disabled
     /// before transferring leader.
     pub reactive_memory_lock_tick_interval: ReadableDuration,
@@ -359,7 +357,6 @@ impl Default for Config {
             inspect_interval: ReadableDuration::millis(500),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
-            max_batch_size: 256,
         }
     }
 }
@@ -558,7 +555,7 @@ impl Config {
                 ));
             }
         } else {
-            self.apply_batch_system.max_batch_size = Some(self.max_batch_size);
+            self.apply_batch_system.max_batch_size = Some(256);
         }
         if self.store_batch_system.pool_size == 0 || self.store_batch_system.pool_size > limit {
             return Err(box_err!(
@@ -576,8 +573,10 @@ impl Config {
                     "store-max-batch-size should be greater than 0 and less than or equal to 10240"
                 ));
             }
+        } else if self.hibernate_regions {
+            self.store_batch_system.max_batch_size = Some(256);
         } else {
-            self.store_batch_system.max_batch_size = Some(self.max_batch_size);
+            self.store_batch_system.max_batch_size = Some(1024);
         }
         if self.store_io_notify_capacity == 0 {
             return Err(box_err!(
@@ -1010,7 +1009,7 @@ mod tests {
         cfg = Config::new();
         cfg.hibernate_regions = false;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
         assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
 
         cfg = Config::new();
