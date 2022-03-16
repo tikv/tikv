@@ -22,7 +22,7 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
+use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
@@ -34,6 +34,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
+use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
@@ -71,7 +72,7 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask,
+    Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
     SplitCheckBucketRange, SplitCheckTask,
 };
 use crate::store::PdTask;
@@ -1593,6 +1594,15 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
+                if let Some(delta) = res.bucket_stat {
+                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                    merge_bucket_stats(
+                        &buckets.meta.keys,
+                        &mut buckets.stats,
+                        &delta.meta.keys,
+                        &delta.stats,
+                    );
+                }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
@@ -4799,20 +4809,27 @@ where
         } else {
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
-            let mut region_buckets = Buckets::default();
-            region_buckets.version =
-                gen_bucket_version(self.fsm.peer.term(), self.fsm.peer.region_buckets.version);
-            region_buckets.set_keys(bucket_keys.into());
-            // add region's start/end key
-            region_buckets
-                .keys
-                .insert(0, region.get_start_key().to_vec());
-            region_buckets.keys.push(region.get_end_key().to_vec());
-            self.fsm.peer.region_buckets = region_buckets;
             self.fsm.peer.buckets_size = vec![
                 self.ctx.coprocessor_host.cfg.region_bucket_size.0;
                 self.fsm.peer.region_buckets.keys.len() - 1
             ];
+          
+            let mut meta = BucketMeta {
+                region_id: self.fsm.region_id(),
+                region_epoch,
+                version: gen_bucket_version(self.fsm.peer.term(), self.fsm.peer.region_buckets.version);,
+                keys: bucket_keys,
+            };
+            meta.keys.insert(0, region.get_start_key().to_vec());
+            meta.keys.push(region.get_end_key().to_vec());
+            let stats = new_bucket_stats(&meta);
+            let meta = Arc::new(meta);
+            let region_buckets = BucketStat::new(meta.clone(), stats);
+            self.fsm.peer.region_buckets = Some(region_buckets);
+            let mut store_meta = self.ctx.store_meta.lock().unwrap();
+            if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+                reader.update(ReadProgress::region_buckets(meta));
+            }
         }
         debug!(
             "finished on_refresh_region_buckets";
