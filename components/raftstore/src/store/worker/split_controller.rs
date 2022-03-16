@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::slice::Iter;
+use std::slice::{Iter, IterMut};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Peer};
 use kvproto::pdpb::QueryKind;
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use tikv_util::config::Tracker;
-use tikv_util::{debug, error, info};
+use tikv_util::{debug, info};
 
 use crate::store::metrics::*;
 use crate::store::worker::query_stats::{is_read_query, QueryStats};
@@ -55,12 +55,23 @@ where
     .collect()
 }
 
+#[inline(always)]
+fn prefix_sum_mut<F, T>(iter: IterMut<'_, T>, read: F) -> Vec<usize>
+where
+    F: Fn(&mut T) -> usize,
+{
+    let mut sum = 0;
+    iter.map(|item| {
+        sum += read(item);
+        sum
+    })
+    .collect()
+}
+
 // This function uses the distributed/parallel reservoir sampling algorithm.
 // It will sample min(sample_num, all_key_ranges_num) key ranges from multiple `key_ranges_provider` with the same possibility.
-// NOTICE: `prefix_sum` should be calculated from the `key_ranges_providers`, so they should have the same length too.
 fn sample<F, T>(
     sample_num: usize,
-    prefix_sum: &[usize],
     mut key_ranges_providers: Vec<T>,
     key_ranges_getter: F,
 ) -> Vec<KeyRange>
@@ -68,18 +79,27 @@ where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
     let mut sampled_key_ranges = vec![];
-    if prefix_sum.len() != key_ranges_providers.len() {
-        error!("failed to sample, prefix_sum length is not equal to key_ranges_providers length";
-            "prefix_sum_len" => prefix_sum.len(),
-            "key_ranges_providers_len" => key_ranges_providers.len(),
-        );
+    if key_ranges_providers.is_empty() {
         return sampled_key_ranges;
     }
-
-    let mut rng = rand::thread_rng();
-    // The last sum of the QPS is the number of all the key ranges.
+    let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges| {
+        key_ranges_getter(key_ranges).len()
+    });
+    // The last sum is the number of all the key ranges.
     let all_key_ranges_num = *prefix_sum.last().unwrap();
-    let sample_num = std::cmp::min(sample_num, all_key_ranges_num);
+    // If the number of key ranges is less than the sample number,
+    // we will return them directly without sampling.
+    if all_key_ranges_num <= sample_num {
+        key_ranges_providers
+            .iter_mut()
+            .for_each(|key_ranges_provider| {
+                sampled_key_ranges.append(key_ranges_getter(key_ranges_provider));
+            });
+        return sampled_key_ranges;
+    }
+    let mut rng = rand::thread_rng();
+    // If the number of key ranges is greater than the sample number,
+    // we will randomly sample the key ranges.
     while sampled_key_ranges.len() < sample_num {
         let i = prefix_sum
             .binary_search(&rng.gen_range(0..=all_key_ranges_num))
@@ -258,12 +278,7 @@ impl Recorder {
     // This will start a second-level sampling on the previous sampled key ranges,
     // evaluate the samples according to the given key range, and compute the split keys finally.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let sampled_key_ranges = sample(
-            config.sample_num,
-            &prefix_sum(self.key_ranges.iter(), Vec::len),
-            self.key_ranges.clone(),
-            |x| x,
-        );
+        let sampled_key_ranges = sample(config.sample_num, self.key_ranges.clone(), |x| x);
         let mut samples = Samples::from(sampled_key_ranges);
         let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
         // Because we need to observe the number of `no_enough_key` of all the actual keys,
@@ -547,7 +562,6 @@ impl AutoSplitController {
 
             let key_ranges = sample(
                 self.cfg.sample_num,
-                &qps_prefix_sum,
                 region_infos,
                 RegionInfo::get_key_ranges_mut,
             );
@@ -864,9 +878,8 @@ mod tests {
 
     fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
         for _ in 0..100 {
-            let prefix_sum = prefix_sum(key_ranges.iter(), Vec::len);
-            let sampled_key_ranges = sample(sample_num, &prefix_sum, key_ranges.clone(), |x| x);
-            let all_key_ranges_num = *prefix_sum.last().unwrap();
+            let sampled_key_ranges = sample(sample_num, key_ranges.clone(), |x| x);
+            let all_key_ranges_num = *prefix_sum(key_ranges.iter(), Vec::len).last().unwrap();
             assert_eq!(
                 sampled_key_ranges.len(),
                 std::cmp::min(sample_num, all_key_ranges_num)
@@ -876,7 +889,7 @@ mod tests {
 
     #[test]
     fn test_sample_length() {
-        // Test the sample_num <= all_key_ranges_length.
+        // Test the sample_num = key range number.
         let sample_num = 20;
         let mut key_ranges = vec![];
         for _ in 0..sample_num {
@@ -884,14 +897,15 @@ mod tests {
         }
         check_sample_length(sample_num, key_ranges);
 
+        // Test the sample_num < key range number.
         let mut key_ranges = vec![];
-        let num = 100;
-        for _ in 0..num {
+        for _ in 0..sample_num + 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
         check_sample_length(sample_num, key_ranges);
 
         let mut key_ranges = vec![];
+        let num = 100;
         for _ in 0..num {
             let mut ranges = vec![];
             for _ in 0..num {
@@ -901,30 +915,14 @@ mod tests {
         }
         check_sample_length(sample_num, key_ranges);
 
-        // Test the sample_num > all_key_ranges_length.
-        let sample_num = 20;
+        // Test the sample_num > key range number.
+        check_sample_length(sample_num, vec![vec![build_key_range(b"a", b"b", false)]]);
+
         let mut key_ranges = vec![];
         for _ in 0..sample_num - 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges.clone());
-
-        // Test the wrong length of prefix_sum or key_ranges_providers.
-        let prefix_sum = prefix_sum(key_ranges.clone().iter(), Vec::len);
-        let sampled_key_ranges = sample(
-            sample_num,
-            &prefix_sum[..prefix_sum.len() - 1],
-            key_ranges.clone(),
-            |x| x,
-        );
-        assert!(sampled_key_ranges.is_empty());
-        let sampled_key_ranges = sample(
-            sample_num,
-            &prefix_sum,
-            key_ranges.clone()[..key_ranges.len() - 1].to_vec(),
-            |x| x,
-        );
-        assert!(sampled_key_ranges.is_empty());
+        check_sample_length(sample_num, key_ranges);
     }
 
     #[test]
