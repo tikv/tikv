@@ -446,14 +446,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let mut throttle = self.quota_limiter.new_throttle();
             let (drained, record_len) = {
                 let _guard = throttle.observe_cpu();
-                let result = self.internal_handle_request(
+                self.internal_handle_request(
                     false,
                     batch_size,
                     &mut chunk,
                     &mut warnings,
                     &mut ctx,
-                )?;
-                result
+                )?
             };
 
             let quota_delay = self.quota_limiter.async_consume(throttle).await;

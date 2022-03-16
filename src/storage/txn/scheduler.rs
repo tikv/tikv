@@ -762,11 +762,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
             };
 
-            let result = task
-                .cmd
+            task.cmd
                 .process_write(snapshot, context)
-                .map_err(StorageError::from);
-            result
+                .map_err(StorageError::from)
         };
 
         throttle.add_write_bytes(write_bytes);
