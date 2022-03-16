@@ -124,7 +124,7 @@ impl Transport for ChannelTransport {
         }
     }
 
-    fn set_store_whitelist(&mut self, _whitelist: Vec<u64>) {}
+    fn set_store_allowlist(&mut self, _whitelist: Vec<u64>) {}
 
     fn need_flush(&self) -> bool {
         false

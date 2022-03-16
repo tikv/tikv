@@ -61,8 +61,8 @@ where
         }
     }
 
-    fn set_store_whitelist(&mut self, stores: Vec<u64>) {
-        self.raft_client.set_store_whitelist(stores)
+    fn set_store_allowlist(&mut self, stores: Vec<u64>) {
+        self.raft_client.set_store_allowlist(stores)
     }
 
     fn need_flush(&self) -> bool {

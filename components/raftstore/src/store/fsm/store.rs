@@ -2638,7 +2638,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         info!("updating replication mode"; "status" => ?status);
         state.set_status(status);
         drop(state);
-        self.ctx.trans.set_store_whitelist(store_whitelist);
+        self.ctx.trans.set_store_allowlist(store_whitelist);
         self.ctx.router.report_status_update()
     }
 

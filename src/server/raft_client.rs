@@ -813,7 +813,7 @@ struct ConnectionPool {
 }
 
 impl ConnectionPool {
-    fn set_store_whitelist(&mut self, stores: Vec<u64>) {
+    fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_whitelist = stores;
         for (&(store_id, _), q) in self.connections.iter() {
             q.set_paused(self.need_pause(store_id));
@@ -1057,9 +1057,9 @@ where
         RAFT_MESSAGE_FLUSH_COUNTER.wake.inc_by(counter);
     }
 
-    pub fn set_store_whitelist(&mut self, stores: Vec<u64>) {
+    pub fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         let mut p = self.pool.lock().unwrap();
-        p.set_store_whitelist(stores);
+        p.set_store_allowlist(stores);
     }
 }
 

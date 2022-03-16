@@ -407,7 +407,7 @@ fn test_store_whitelist() {
     raft_client.flush();
     check_msg_count(500, &msg_count1, 10);
 
-    raft_client.set_store_whitelist(vec![2, 3]);
+    raft_client.set_store_allowlist(vec![2, 3]);
     for _ in 0..3 {
         let mut raft_m = RaftMessage::default();
         raft_m.mut_to_peer().set_store_id(1);
