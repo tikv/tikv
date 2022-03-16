@@ -13,6 +13,7 @@ use std::{
 };
 
 use raft::eraftpb::{self, MessageType};
+use raft::StateRole;
 use thiserror::Error;
 
 use concurrency_manager::ConcurrencyManager;
@@ -20,6 +21,7 @@ use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_L
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
+    kvrpcpb::IsolationLevel,
     metapb,
     raft_cmdpb::{
         CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -508,8 +510,10 @@ impl ReplicaReadLockChecker {
 impl Coprocessor for ReplicaReadLockChecker {}
 
 impl ReadIndexObserver for ReplicaReadLockChecker {
-    fn on_step(&self, msg: &mut eraftpb::Message) {
-        if msg.get_msg_type() != MessageType::MsgReadIndex {
+    fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
+        // Only check and return result if the current peer is a leader.
+        // If it's not a leader, the read index request will be redirected to the leader later.
+        if msg.get_msg_type() != MessageType::MsgReadIndex || role != StateRole::Leader {
             return;
         }
         assert_eq!(msg.get_entries().len(), 1);
@@ -529,6 +533,9 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
+                // The replica read is not compatible with `RcCheckTs` isolation level yet.
+                // It's ensured in the tidb side when `RcCheckTs` is enabled for read requests,
+                // the replica read would not be enabled at the same time.
                 let res = self.concurrency_manager.read_range_check(
                     start_key.as_ref(),
                     end_key.as_ref(),
@@ -538,6 +545,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             key,
                             start_ts,
                             &Default::default(),
+                            IsolationLevel::Si,
                         )
                     },
                 );
@@ -608,6 +616,7 @@ pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvproto::raft_cmdpb;
     use uuid::Uuid;
 
     // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
@@ -622,7 +631,28 @@ mod tests {
         e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m);
+        checker.on_step(&mut m, StateRole::Leader);
         assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
+    }
+
+    #[test]
+    fn test_replica_read_lock_check_when_not_leader() {
+        let cm = ConcurrencyManager::new(1.into());
+        let checker = ReplicaReadLockChecker::new(cm);
+        let mut m = eraftpb::Message::default();
+        m.set_msg_type(MessageType::MsgReadIndex);
+        let mut request = raft_cmdpb::ReadIndexRequest::default();
+        request.set_start_ts(100);
+        let rctx = ReadIndexContext {
+            id: Uuid::new_v4(),
+            request: Some(request),
+            locked: None,
+        };
+        let mut e = eraftpb::Entry::default();
+        e.set_data(rctx.to_bytes().into());
+        m.mut_entries().push(e);
+
+        checker.on_step(&mut m, StateRole::Follower);
+        assert_eq!(m.get_entries()[0].get_data(), rctx.to_bytes());
     }
 }

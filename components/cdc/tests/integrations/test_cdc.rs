@@ -239,12 +239,13 @@ fn test_cdc_not_leader() {
         .into_iter()
         .find(|p| *p != leader)
         .unwrap();
-    suite.cluster.must_transfer_leader(1, peer);
+    suite.cluster.must_transfer_leader(1, peer.clone());
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -278,6 +279,7 @@ fn test_cdc_not_leader() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
             assert!(err.has_not_leader(), "{:?}", err);
+            assert_eq!(*err.get_not_leader().get_leader(), peer, "{:?}", err);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -1428,7 +1430,11 @@ fn test_old_value_cache_hit() {
 
 #[test]
 fn test_old_value_cache_hit_pessimistic() {
-    let mut suite = TestSuite::new(1);
+    let mut cluster = new_server_cluster(1, 1);
+    // Increase the Raft tick interval to make this test case running reliably.
+    configure_for_lease_read(&mut cluster, Some(100), None);
+    cluster.cfg.pessimistic_txn.in_memory = false;
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);

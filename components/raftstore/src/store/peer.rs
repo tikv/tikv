@@ -19,7 +19,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, Buckets, PeerRole};
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
@@ -44,7 +44,7 @@ use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
 
-use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange};
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
@@ -66,7 +66,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
-use pd_client::INVALID_ID;
+use pd_client::{BucketStat, INVALID_ID};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk::DiskUsage;
@@ -607,7 +607,9 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub region_buckets: Buckets,
+    pub region_buckets: Option<BucketStat>,
+    /// lead_transferee if the peer is in a leadership transferring.
+    pub lead_transferee: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -732,7 +734,8 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
-            region_buckets: Buckets::default(),
+            region_buckets: None,
+            lead_transferee: raft::INVALID_ID,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1335,7 +1338,8 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            ctx.coprocessor_host.on_step_read_index(&mut m);
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -1693,16 +1697,22 @@ where
                 _ => {}
             }
             self.on_leader_changed(ss.leader_id, self.term());
-            // TODO: it may possible that only the `leader_id` change and the role
-            // didn't change
-            ctx.coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: self.lead_transferee,
+                    vote: self.raft_group.raft.vote,
+                },
+            );
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
                 self.on_leader_changed(self.leader_id(), hs.get_term());
             }
         }
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
     /// Correctness depends on the order between calling this function and notifying other peers
@@ -2372,6 +2382,7 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
+                self.region_buckets.as_ref().map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
@@ -2959,6 +2970,7 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
@@ -4114,6 +4126,7 @@ where
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
+            snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
@@ -4712,6 +4725,7 @@ where
             }
             self.raft_max_inflight_msgs = raft_max_inflight_msgs;
         }
+        self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
     }
 
     fn maybe_inject_propose_error(
@@ -4746,6 +4760,11 @@ where
             })
         });
         Ok(())
+    }
+
+    /// Update states of the peer which can be changed in the previous raft tick.
+    pub fn post_raft_group_tick(&mut self) {
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 }
 

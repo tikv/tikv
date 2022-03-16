@@ -107,7 +107,10 @@ impl Handler {
 }
 
 impl PollHandler<Runner, Runner> for Handler {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin<F>(&mut self, _batch_size: usize, _update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a Config),
+    {
         self.local.begin += 1;
     }
 

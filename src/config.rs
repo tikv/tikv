@@ -44,14 +44,13 @@ use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
-use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+    self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
 };
 use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -1628,10 +1627,6 @@ fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(Str
                     let s: ReadableSize = s.into();
                     Some(s.0.to_string())
                 }
-                s @ ConfigValue::OptionSize(_) => {
-                    let s: OptionReadableSize = s.into();
-                    s.0.map(|v| v.0.to_string())
-                }
                 ConfigValue::Module(_) => unreachable!(),
                 v => Some(format!("{}", v)),
             };
@@ -2240,8 +2235,9 @@ pub struct BackupConfig {
 
 impl BackupConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.num_threads == 0 {
-            return Err("backup.num_threads cannot be 0".into());
+        let limit = SysQuota::cpu_cores_quota() as usize;
+        if self.num_threads == 0 || self.num_threads > limit {
+            return Err(format!("backup.num_threads cannot be 0 or larger than {}", limit).into());
         }
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
@@ -2483,7 +2479,7 @@ pub struct TiKvConfig {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    pub memory_usage_limit: OptionReadableSize,
+    pub memory_usage_limit: Option<ReadableSize>,
 
     #[doc(hidden)]
     #[online_config(skip)]
@@ -2568,7 +2564,7 @@ impl Default for TiKvConfig {
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
-            memory_usage_limit: OptionReadableSize(None),
+            memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
             readpool: ReadPoolConfig::default(),
@@ -2659,18 +2655,8 @@ impl TiKvConfig {
             return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
-        if RocksEngine::exists(&kv_db_path)
-            && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            && !RaftLogEngine::exists(&self.raft_engine.config.dir)
-        {
-            return Err("default rocksdb exists, but raftdb and raft engine doesn't exist".into());
-        }
-        if !RocksEngine::exists(&kv_db_path)
-            && (RocksEngine::exists(&self.raft_store.raftdb_path)
-                || RaftLogEngine::exists(&self.raft_engine.config.dir))
-        {
-            return Err("default rocksdb doesn't exist, but raftdb or raft engine exists".into());
-        }
+        RaftDataStateMachine::new(&self.raft_store.raftdb_path, &self.raft_engine.config.dir)
+            .validate(RocksEngine::exists(&kv_db_path))?;
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
@@ -2780,7 +2766,7 @@ impl TiKvConfig {
                 .hard_pending_compaction_bytes_limit;
         }
 
-        if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
+        if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
             if memory_usage_limit.0 > total {
                 // Explicitly exceeds system memory capacity is not allowed.
@@ -2793,12 +2779,11 @@ impl TiKvConfig {
         } else {
             // Adjust `memory_usage_limit` if necessary.
             if self.storage.block_cache.shared {
-                if let Some(cap) = self.storage.block_cache.capacity.0 {
+                if let Some(cap) = self.storage.block_cache.capacity {
                     let limit = (cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                    self.memory_usage_limit.0 = Some(ReadableSize(limit));
+                    self.memory_usage_limit = Some(ReadableSize(limit));
                 } else {
-                    self.memory_usage_limit =
-                        OptionReadableSize(Some(Self::suggested_memory_usage_limit()));
+                    self.memory_usage_limit = Some(Self::suggested_memory_usage_limit());
                 }
             } else {
                 let cap = self.rocksdb.defaultcf.block_cache_size.0
@@ -2806,18 +2791,18 @@ impl TiKvConfig {
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0;
                 let limit = (cap as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                self.memory_usage_limit.0 = Some(ReadableSize(limit));
+                self.memory_usage_limit = Some(ReadableSize(limit));
             }
         }
 
-        let mut limit = self.memory_usage_limit.0.unwrap();
+        let mut limit = self.memory_usage_limit.unwrap();
         let total = ReadableSize(SysQuota::memory_limit_in_bytes());
         if limit.0 > total.0 {
             warn!(
                 "memory_usage_limit:{:?} > total:{:?}, fallback to total",
                 limit, total,
             );
-            self.memory_usage_limit.0 = Some(total);
+            self.memory_usage_limit = Some(total);
             limit = total;
         }
 
@@ -2972,8 +2957,8 @@ impl TiKvConfig {
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
-        if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
-            cache_cfg.capacity.0 = Some(ReadableSize(
+        if cache_cfg.shared && cache_cfg.capacity.is_none() {
+            cache_cfg.capacity = Some(ReadableSize(
                 self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
@@ -3232,24 +3217,15 @@ lazy_static! {
 }
 
 fn serde_to_online_config(name: String) -> String {
-    match name.as_ref() {
-        "raftstore.store-pool-size" => name.replace(
-            "raftstore.store-pool-size",
-            "raft_store.store_batch_system.pool_size",
-        ),
-        "raftstore.apply-pool-size" => name.replace(
-            "raftstore.apply-pool-size",
-            "raft_store.apply_batch_system.pool_size",
-        ),
-        "raftstore.store_pool_size" => name.replace(
-            "raftstore.store_pool_size",
-            "raft_store.store_batch_system.pool_size",
-        ),
-        "raftstore.apply_pool_size" => name.replace(
-            "raftstore.apply_pool_size",
-            "raft_store.apply_batch_system.pool_size",
-        ),
-        _ => name.replace("raftstore", "raft_store").replace('-', "_"),
+    let res = name.replace("raftstore", "raft_store").replace('-', "_");
+    match res.as_ref() {
+        "raft_store.store_pool_size" | "raft_store.store_max_batch_size" => {
+            res.replace("store_", "store_batch_system.")
+        }
+        "raft_store.apply_pool_size" | "raft_store.apply_max_batch_size" => {
+            res.replace("apply_", "apply_batch_system.")
+        }
+        _ => res,
     }
 }
 
@@ -3311,9 +3287,6 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
-        ConfigValue::OptionSize(_) => {
-            ConfigValue::from(OptionReadableSize(Some(v.parse::<ReadableSize>()?)))
-        }
         ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
         ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
         ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
@@ -3347,10 +3320,13 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                     match c {
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
-                        | ConfigValue::OptionSize(_)
                         | ConfigValue::String(_)
                         | ConfigValue::BlobRunMode(_)
                         | ConfigValue::IOPriority(_) => Ok(true),
+                        ConfigValue::None => Err(Box::new(IoError::new(
+                            ErrorKind::Other,
+                            format!("unexpect none field: {:?}", c),
+                        ))),
                         _ => Ok(false),
                     }
                 }
@@ -3474,14 +3450,17 @@ impl ConfigController {
 
     fn update_impl(
         &self,
-        diff: HashMap<String, ConfigValue>,
+        mut diff: HashMap<String, ConfigValue>,
         change: Option<HashMap<String, String>>,
     ) -> CfgResult<()> {
-        {
-            let mut incoming = self.get_current();
-            incoming.update(diff.clone());
-            incoming.validate()?;
-        }
+        diff = {
+            let incoming = self.get_current();
+            let mut updated = incoming.clone();
+            updated.update(diff);
+            // Config might be adjusted in `validate`.
+            updated.validate()?;
+            incoming.diff(&updated)
+        };
         let mut inner = self.inner.write().unwrap();
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -4349,21 +4328,21 @@ mod tests {
         );
 
         // Test validating memory_usage_limit when it's greater than max.
-        cfg.memory_usage_limit.0 = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
+        cfg.memory_usage_limit = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
         assert!(cfg.validate().is_err());
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
-        cfg.memory_usage_limit = OptionReadableSize(None);
-        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(3 * GIB));
+        cfg.memory_usage_limit = None;
+        cfg.storage.block_cache.capacity = Some(ReadableSize(3 * GIB));
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(5 * GIB));
+        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
 
         // Test memory_usage_limit will fallback to system memory capacity with huge block cache.
-        cfg.memory_usage_limit = OptionReadableSize(None);
+        cfg.memory_usage_limit = None;
         let system = SysQuota::memory_limit_in_bytes();
-        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(system * 3 / 4));
+        cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(system));
+        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
     }
 
     #[test]
@@ -4602,8 +4581,8 @@ mod tests {
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
-        cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
-        cfg.memory_usage_limit = OptionReadableSize(None);
+        cfg.storage.block_cache.capacity = None; // Either `None` and a value is computed or `Some(_)` fixed value.
+        cfg.memory_usage_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
@@ -4758,5 +4737,67 @@ mod tests {
                 .unwrap()
                 .contains("rate-limiter-mode = 1")
         );
+    }
+
+    #[test]
+    fn test_serde_to_online_config() {
+        let cases = vec![
+            (
+                "raftstore.store_pool_size",
+                "raft_store.store_batch_system.pool_size",
+            ),
+            (
+                "raftstore.store-pool-size",
+                "raft_store.store_batch_system.pool_size",
+            ),
+            (
+                "raftstore.store_max_batch_size",
+                "raft_store.store_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.store-max-batch-size",
+                "raft_store.store_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.apply_pool_size",
+                "raft_store.apply_batch_system.pool_size",
+            ),
+            (
+                "raftstore.apply-pool-size",
+                "raft_store.apply_batch_system.pool_size",
+            ),
+            (
+                "raftstore.apply_max_batch_size",
+                "raft_store.apply_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.apply-max-batch-size",
+                "raft_store.apply_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.store_io_pool_size",
+                "raft_store.store_io_pool_size",
+            ),
+            (
+                "raftstore.store-io-pool-size",
+                "raft_store.store_io_pool_size",
+            ),
+            (
+                "raftstore.apply_yield_duration",
+                "raft_store.apply_yield_duration",
+            ),
+            (
+                "raftstore.apply-yield-duration",
+                "raft_store.apply_yield_duration",
+            ),
+            (
+                "raftstore.raft_store_max_leader_lease",
+                "raft_store.raft_store_max_leader_lease",
+            ),
+        ];
+
+        for (name, res) in cases {
+            assert_eq!(serde_to_online_config(name.into()).as_str(), res);
+        }
     }
 }

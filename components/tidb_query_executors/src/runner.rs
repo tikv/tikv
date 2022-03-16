@@ -120,6 +120,11 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                ExecType::TypeProjection => {
+                    let descriptor = ed.get_projection();
+                    BatchProjectionExecutor::check_supported(descriptor)
+                        .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
+                }
                 ExecType::TypeJoin => {
                     other_err!("Join executor not implemented");
                 }
@@ -131,9 +136,6 @@ impl BatchExecutorsRunner<()> {
                 }
                 ExecType::TypeExchangeReceiver => {
                     other_err!("ExchangeReceiver executor not implemented");
-                }
-                ExecType::TypeProjection => {
-                    other_err!("Projection executor not implemented");
                 }
                 ExecType::TypePartitionTableScan => {
                     other_err!("PartitionTableScan executor not implemented");
@@ -234,6 +236,18 @@ pub fn build_executors<S: Storage + 'static>(
                         config.clone(),
                         executor,
                         ed.take_selection().take_conditions().into(),
+                    )?
+                    .collect_summary(summary_slot_index),
+                )
+            }
+            ExecType::TypeProjection => {
+                EXECUTOR_COUNT_METRICS.batch_projection.inc();
+
+                Box::new(
+                    BatchProjectionExecutor::new(
+                        config.clone(),
+                        executor,
+                        ed.take_projection().take_exprs().into(),
                     )?
                     .collect_summary(summary_slot_index),
                 )
@@ -416,9 +430,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
-            if time_slice_len > MAX_TIME_SLICE {
+            if need_reschedule(time_slice_start) {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
@@ -639,4 +652,10 @@ fn grow_batch_size(batch_size: &mut usize) {
             *batch_size = BATCH_MAX_SIZE
         }
     }
+}
+
+#[inline]
+fn need_reschedule(time_slice_start: Instant) -> bool {
+    fail_point!("copr_reschedule", |_| true);
+    time_slice_start.saturating_elapsed() > MAX_TIME_SLICE
 }
