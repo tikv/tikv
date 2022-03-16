@@ -143,6 +143,10 @@ impl<T: Display + Send> Scheduler<T> {
     pub fn stop(&self) {
         self.sender.close_channel();
     }
+
+    pub fn pending_tasks(&self) -> usize {
+        self.counter.load(Ordering::Acquire)
+    }
 }
 
 impl<T: Display + Send> Clone for Scheduler<T> {

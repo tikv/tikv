@@ -2076,7 +2076,6 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::fsm::StoreMeta;
     use kvproto::{kvrpcpb, pdpb::QueryKind};
     use std::thread::sleep;
 
@@ -2087,6 +2086,8 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_collect_stats() {
+        use crate::store::fsm::StoreMeta;
+
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
         use std::sync::Mutex;
         use std::time::Instant;
