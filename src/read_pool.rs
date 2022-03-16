@@ -225,7 +225,11 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     let pool = builder
         .name_prefix(&unified_read_pool_name)
         .stack_size(config.stack_size.0 as usize)
-        .thread_count(config.min_thread_count, config.max_thread_count)
+        .thread_count(
+            config.min_thread_count,
+            config.max_thread_count,
+            config.max_thread_count,
+        )
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);

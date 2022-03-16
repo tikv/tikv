@@ -3526,15 +3526,19 @@ mod tests {
 
     use super::*;
     use crate::server::ttl::TTLCheckerTask;
-    use crate::storage::config::StorageConfigManger;
+    use crate::storage::config_manager::StorageConfigManger;
+    use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
+    use crate::storage::{Storage, TestStorageBuilder};
     use case_macros::*;
-    use engine_rocks::raw_util::new_engine_opt;
-    use engine_traits::DBOptions as DBOptionsTrait;
+    use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
+    use tikv_kv::RocksEngine as RocksDBEngine;
+    use tikv_util::sys::SysQuota;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -3849,23 +3853,33 @@ mod tests {
     fn new_engines(
         cfg: TiKvConfig,
     ) -> (
-        RocksEngine,
+        Storage<RocksDBEngine, DummyLockManager>,
         ConfigController,
         ReceiverWrapper<TTLCheckerTask>,
         Arc<FlowController>,
     ) {
-        let engine = RocksEngine::from_db(Arc::new(
-            new_engine_opt(
-                &cfg.storage.data_dir,
-                cfg.rocksdb.build_opt(),
-                cfg.rocksdb.build_cf_opts(
-                    &cfg.storage.block_cache.build_shared_cache(),
-                    None,
-                    cfg.storage.api_version(),
-                ),
-            )
-            .unwrap(),
-        ));
+        let engine = RocksDBEngine::new(
+            &cfg.storage.data_dir,
+            ALL_CFS,
+            Some(cfg.rocksdb.build_cf_opts(
+                &cfg.storage.block_cache.build_shared_cache(),
+                None,
+                cfg.storage.api_version(),
+            )),
+            true,
+            None,
+            Some(cfg.rocksdb.build_opt()),
+        )
+        .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .config(cfg.storage.clone())
+        .build()
+        .unwrap();
+        let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::new(
             &cfg.storage.flow_control,
@@ -3882,13 +3896,14 @@ mod tests {
         cfg_controller.register(
             Module::Storage,
             Box::new(StorageConfigManger::new(
-                engine.clone(),
+                engine,
                 shared,
                 scheduler,
                 flow_controller.clone(),
+                storage.get_scheduler(),
             )),
         );
-        (engine, cfg_controller, receiver, flow_controller)
+        (storage, cfg_controller, receiver, flow_controller)
     }
 
     #[test]
@@ -3896,8 +3911,8 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
-
+        let (storage, cfg_controller, _, flow_controller) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
@@ -4025,7 +4040,8 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
         assert_eq!(db.get_db_options().get_max_background_jobs(), 4);
@@ -4098,7 +4114,8 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
         assert_eq!(
@@ -4120,7 +4137,8 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
         assert!(
@@ -4175,6 +4193,56 @@ mod tests {
             None => unreachable!(),
             Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
+    }
+
+    #[test]
+    fn test_change_store_scheduler_worker_pool_size() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.scheduler_worker_pool_size = 4;
+        cfg.validate().unwrap();
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let scheduler = storage.get_scheduler();
+
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
+
+        let check_scale_pool_size = |size: usize, ok: bool| {
+            let origin_pool_size = scheduler
+                .get_sched_pool(CommandPri::Normal)
+                .pool
+                .get_pool_size();
+            let origin_pool_size_high = scheduler
+                .get_sched_pool(CommandPri::High)
+                .pool
+                .get_pool_size();
+            let res = cfg_controller
+                .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
+            let (expected_size, expected_size_high) = if ok {
+                res.unwrap();
+                (size, std::cmp::max(size / 2, 1))
+            } else {
+                assert!(res.is_err());
+                (origin_pool_size, origin_pool_size_high)
+            };
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::Normal)
+                    .pool
+                    .get_pool_size(),
+                expected_size
+            );
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::High)
+                    .pool
+                    .get_pool_size(),
+                expected_size_high
+            );
+        };
+
+        check_scale_pool_size(0, false);
+        check_scale_pool_size(max_pool_size + 1, false);
+        check_scale_pool_size(1, true);
+        check_scale_pool_size(max_pool_size, true);
     }
 
     #[test]
