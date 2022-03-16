@@ -2235,8 +2235,9 @@ pub struct BackupConfig {
 
 impl BackupConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.num_threads == 0 {
-            return Err("backup.num_threads cannot be 0".into());
+        let limit = SysQuota::cpu_cores_quota() as usize;
+        if self.num_threads == 0 || self.num_threads > limit {
+            return Err(format!("backup.num_threads cannot be 0 or larger than {}", limit).into());
         }
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
