@@ -960,7 +960,7 @@ impl PdClient for RpcClient {
                 let resp = inner.buckets_resp.take().unwrap();
                 inner.client_stub.spawn(async {
                     let res = resp.await;
-                    warn!("region stats stream exited: {:?}", res);
+                    warn!("region buckets stream exited: {:?}", res);
                 });
                 inner.client_stub.spawn(async move {
                     let mut sender = sender.sink_map_err(Error::Grpc);
