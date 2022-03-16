@@ -297,7 +297,7 @@ impl<S: Into<String>> Builder<S> {
     pub fn create(self) -> Worker {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
-            .thread_count(self.thread_count, self.thread_count)
+            .thread_count(self.thread_count, self.thread_count, self.thread_count)
             .build_single_level_pool();
         let remote = pool.remote().clone();
         let pool = Arc::new(Mutex::new(Some(pool)));
