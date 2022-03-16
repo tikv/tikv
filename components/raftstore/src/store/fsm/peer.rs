@@ -1490,19 +1490,11 @@ where
 
     fn on_raft_base_tick(&mut self) {
         fail_point!(
-            "on_raft_base_tick_idle_with_missing_ticks",
-            self.fsm.hibernate_state.group_state() == GroupState::Idle
-                && self.fsm.missing_ticks == 1,
-            |_| {
-                fail::remove("on_raft_base_tick_idle_with_missing_ticks");
-                self.on_check_peer_stale_state_tick();
-                self.on_raft_base_tick_inner()
-            }
+            "on_raft_base_tick_idle",
+            self.fsm.hibernate_state.group_state() == GroupState::Idle,
+            |_| {}
         );
-        self.on_raft_base_tick_inner()
-    }
 
-    fn on_raft_base_tick_inner(&mut self) {
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
