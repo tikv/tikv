@@ -13,6 +13,8 @@ use std::time::Duration;
 // TODO: Don't adjusted based on experience.
 const CPU_TIME_FACTOR: f64 = 0.9;
 
+const MAX_QUOTA_DELAY: Duration = Duration::from_secs(1);
+
 // Quota limiter allows users to obtain stable performance by increasing the
 // completion time of tasks through restrictions of different metrics.
 #[derive(Debug)]
@@ -74,7 +76,8 @@ impl QuotaLimiter {
             Duration::ZERO
         };
 
-        std::cmp::max(cpu_dur, bw_dur)
+        let max_dur = std::cmp::max(cpu_dur, bw_dur);
+        std::cmp::min(MAX_QUOTA_DELAY, max_dur)
     }
 
     // record info after read requests finished and return the suggested delay duration.
@@ -87,7 +90,8 @@ impl QuotaLimiter {
             Duration::ZERO
         };
 
-        std::cmp::max(cpu_dur, bw_dur)
+        let max_dur = std::cmp::max(cpu_dur, bw_dur);
+        std::cmp::min(MAX_QUOTA_DELAY, max_dur)
     }
 
     // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC_COARSE` to save cost.
