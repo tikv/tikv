@@ -46,6 +46,7 @@ struct Queue {
     buf: ArrayQueue<RaftMessage>,
     /// A flag indicates whether the queue can still accept messages.
     connected: AtomicBool,
+    paused: AtomicBool,
     waker: Mutex<Option<Waker>>,
 }
 
@@ -55,6 +56,7 @@ impl Queue {
         Queue {
             buf: ArrayQueue::new(cap),
             connected: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
             waker: Mutex::new(None),
         }
     }
@@ -68,6 +70,9 @@ impl Queue {
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
         // Another way is pop the old messages, but it makes things
         // complicated.
+        if self.paused.load(Ordering::SeqCst) {
+            return Err(DiscardReason::Paused);
+        }
         if self.connected.load(Ordering::Relaxed) {
             match self.buf.push(msg) {
                 Ok(()) => (),
@@ -85,6 +90,10 @@ impl Queue {
 
     fn disconnect(&self) {
         self.connected.store(false, Ordering::SeqCst);
+    }
+
+    fn set_paused(&self, v: bool) {
+        self.paused.store(v, Ordering::SeqCst);
     }
 
     /// Wakes up consumer to retrive message.
@@ -800,6 +809,20 @@ async fn start<S, R, E>(
 struct ConnectionPool {
     connections: HashMap<(u64, usize), Arc<Queue>>,
     tombstone_stores: HashSet<u64>,
+    store_whitelist: Vec<u64>,
+}
+
+impl ConnectionPool {
+    fn set_store_whitelist(&mut self, stores: Vec<u64>) {
+        self.store_whitelist = stores;
+        for (&(store_id, _), q) in self.connections.iter() {
+            q.set_paused(self.need_pause(store_id));
+        }
+    }
+
+    fn need_pause(&self, store_id: u64) -> bool {
+        !self.store_whitelist.is_empty() && !self.store_whitelist.contains(&store_id)
+    }
 }
 
 /// Queue in cache.
@@ -834,7 +857,6 @@ pub struct RaftClient<S, R, E> {
     builder: ConnectionBuilder<S, R>,
     engine: PhantomData<E>,
     last_hash: (u64, u64),
-    store_whitelist: Vec<u64>,
 }
 
 impl<S, R, E> RaftClient<S, R, E>
@@ -858,7 +880,6 @@ where
             builder,
             engine: PhantomData::<E>,
             last_hash: (0, 0),
-            store_whitelist: vec![],
         }
     }
 
@@ -875,6 +896,7 @@ where
                 self.cache.resize(pool_len);
                 return false;
             }
+            let need_pause = pool.need_pause(store_id);
             let conn = pool
                 .connections
                 .entry((store_id, conn_id))
@@ -882,6 +904,9 @@ where
                     let queue = Arc::new(Queue::with_capacity(
                         self.builder.cfg.raft_client_queue_size,
                     ));
+                    if need_pause {
+                        queue.set_paused(true);
+                    }
                     let back_end = StreamBackEnd {
                         store_id,
                         queue: queue.clone(),
@@ -927,10 +952,6 @@ where
             self.last_hash.1 as usize
         };
 
-        if !self.store_whitelist.is_empty() && !self.store_whitelist.contains(&store_id) {
-            return Err(DiscardReason::StoreIsBlocked);
-        }
-
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -972,7 +993,7 @@ where
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
-                    Err(DiscardReason::StoreIsBlocked) => panic!("unreachable"),
+                    Err(DiscardReason::Paused) => break,
                     Err(DiscardReason::Filtered) => return Err(DiscardReason::Filtered),
                 }
             }
@@ -1037,7 +1058,8 @@ where
     }
 
     pub fn set_store_whitelist(&mut self, stores: Vec<u64>) {
-        self.store_whitelist = stores;
+        let mut p = self.pool.lock().unwrap();
+        p.set_store_whitelist(stores);
     }
 }
 
@@ -1056,7 +1078,6 @@ where
             builder: self.builder.clone(),
             engine: PhantomData::<E>,
             last_hash: (0, 0),
-            store_whitelist: self.store_whitelist.clone(),
         }
     }
 }
