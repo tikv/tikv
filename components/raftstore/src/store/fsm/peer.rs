@@ -22,7 +22,7 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
+use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
@@ -34,6 +34,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
+use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
@@ -71,7 +72,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
+    SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::RaftlogFetchResult;
@@ -1029,6 +1031,9 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
+            CasualMessage::SnapshotApplied => {
+                self.fsm.has_ready = true;
+            }
         }
     }
 
@@ -1587,6 +1592,15 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
+                if let Some(delta) = res.bucket_stat {
+                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                    merge_bucket_stats(
+                        &buckets.meta.keys,
+                        &mut buckets.stats,
+                        &delta.meta.keys,
+                        &delta.stats,
+                    );
+                }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
@@ -2462,6 +2476,11 @@ where
                     if self.propose_locks_before_transfer_leader(msg) {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
+                        info!("propose transfer leader command";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "to" => ?from,
+                        );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
                             self.fsm.peer.peer.clone(),
@@ -2564,6 +2583,7 @@ where
         cmd.mut_header()
             .set_region_epoch(self.region().get_region_epoch().clone());
         cmd.mut_header().set_peer(self.fsm.peer.peer.clone());
+        info!("propose {} locks before transferring leader", cmd.get_requests().len(); "region_id" => self.fsm.region_id());
         self.propose_raft_command(cmd, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
         true
     }
@@ -3033,6 +3053,7 @@ where
         // to the old region will stay in the original map.
         let region_locks = {
             let mut pessimistic_locks = self.fsm.peer.txn_ext.pessimistic_locks.write();
+            info!("moving {} locks to new regions", pessimistic_locks.len(); "region_id" => region_id);
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived.get_region_epoch().get_version();
@@ -4688,15 +4709,22 @@ where
             );
             return;
         }
-        let mut region_buckets = Buckets::default();
-        region_buckets.version = timespec_to_ns(monotonic_raw_now());
-        region_buckets.set_keys(bucket_keys.into());
-        // add region's start/end key
-        region_buckets
-            .keys
-            .insert(0, region.get_start_key().to_vec());
-        region_buckets.keys.push(region.get_end_key().to_vec());
-        self.fsm.peer.region_buckets = region_buckets;
+        let mut meta = BucketMeta {
+            region_id: self.fsm.region_id(),
+            region_epoch,
+            version: timespec_to_ns(monotonic_raw_now()),
+            keys: bucket_keys,
+        };
+        meta.keys.insert(0, region.get_start_key().to_vec());
+        meta.keys.push(region.get_end_key().to_vec());
+        let stats = new_bucket_stats(&meta);
+        let meta = Arc::new(meta);
+        let region_buckets = BucketStat::new(meta.clone(), stats);
+        self.fsm.peer.region_buckets = Some(region_buckets);
+        let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+            reader.update(ReadProgress::region_buckets(meta));
+        }
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {

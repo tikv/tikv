@@ -830,6 +830,7 @@ dependencies = [
  "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
+ "kvproto",
  "parking_lot 0.12.0",
  "rand 0.8.3",
  "tikv_alloc",
@@ -2390,7 +2391,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#ccd676426a272d42b9f64fb9d7f82bf88cbfd81b"
+source = "git+https://github.com/pingcap/kvproto.git#e22d8864c9579660424f83b62ca196c03ef85927"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5559,6 +5560,7 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "cc",
  "cdc",
  "chrono",
  "clap",
@@ -5641,6 +5643,7 @@ dependencies = [
 name = "tikv-server"
 version = "0.0.1"
 dependencies = [
+ "cc",
  "clap",
  "server",
  "tikv",
@@ -5682,6 +5685,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "raftstore",

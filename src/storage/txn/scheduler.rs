@@ -694,6 +694,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 _ => {}
             }
 
+            fail_point!("scheduler_process");
             if task.cmd.readonly() {
                 self.process_read(snapshot, task, &mut statistics);
             } else {
@@ -1047,8 +1048,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return false;
         }
         match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
-            Ok(()) => true,
+            Ok(()) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.success.inc();
+                true
+            }
             Err(modifies) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.full.inc();
                 to_be_write.modifies = modifies;
                 false
             }
