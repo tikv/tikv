@@ -993,7 +993,7 @@ where
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
-                    Err(DiscardReason::Paused) => break,
+                    Err(DiscardReason::Paused) => return Err(DiscardReason::Paused),
                     Err(DiscardReason::Filtered) => return Err(DiscardReason::Filtered),
                 }
             }
