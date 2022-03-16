@@ -1,10 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::config::ReadableSize;
+use super::time::Instant;
 use super::time::Limiter;
 use cpu_time::ThreadTime;
 use std::time::Duration;
-use std::time::Instant;
 
 // The cpu time is not a real statistics, only part of the processing logic is
 // taken into account, so it needs to be multiplied by a factor.
@@ -90,10 +90,10 @@ impl QuotaLimiter {
         std::cmp::max(cpu_dur, bw_dur)
     }
 
-    // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC` to save cost.
-    pub fn get_now_time(&self) -> Box<dyn Timer> {
+    // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC_COARSE` to save cost.
+    pub fn get_now_timer(&self) -> Box<dyn Timer> {
         if self.cputime_limiter.speed_limit().is_infinite() {
-            Box::new(Instant::now())
+            Box::new(Instant::now_coarse())
         } else {
             Box::new(ThreadTime::now())
         }
@@ -106,7 +106,7 @@ pub trait Timer {
 
 impl Timer for Instant {
     fn elapsed(&self) -> Duration {
-        self.elapsed()
+        self.saturating_elapsed()
     }
 }
 
@@ -129,7 +129,7 @@ mod tests {
             ReadableSize::kb(1),
         );
 
-        let thread_start_time = quota_limiter.get_now_time();
+        let thread_start_time = quota_limiter.get_now_timer();
 
         // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms
         let delay = quota_limiter.consume_write(0, 495000);
@@ -151,7 +151,7 @@ mod tests {
         let delay = quota_limiter.consume_read(0, 98999);
         assert_eq!(delay, Duration::from_secs(0));
 
-        // `get_now_time` must return ThreadTime so elapsed time is not long.
+        // `get_now_timer` must return ThreadTime so elapsed time is not long.
         assert!(thread_start_time.elapsed() < Duration::from_millis(500));
     }
 }

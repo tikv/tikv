@@ -584,7 +584,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
                     let (result, delta, cost_time) = {
-                        let start_time = quota_limiter.get_now_time();
+                        let start_time = quota_limiter.get_now_timer();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -907,7 +907,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Statistics::default();
                     let (result, delta, cost_time, key_bytes) = {
-                        let start_time = quota_limiter.get_now_time();
+                        let start_time = quota_limiter.get_now_timer();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,

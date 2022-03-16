@@ -30,14 +30,12 @@ use std::cell::UnsafeCell;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 use std::{error, ptr, result};
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK};
 use engine_traits::{
     IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
 };
-use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
@@ -57,10 +55,7 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
-use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
-use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::ThreadReadId;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -160,7 +155,6 @@ pub struct SnapContext<'a> {
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
-    pub quota_limiter: Option<Arc<QuotaLimiter>>,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -463,33 +457,11 @@ pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
-    let quota_limiter = ctx.quota_limiter.clone();
-    let start_time = if let Some(quota_limiter) = &quota_limiter {
-        quota_limiter.get_now_time()
-    } else {
-        Box::new(Instant::now())
-    };
-
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
-    let quota_delay = if let Some(quota_limiter) = quota_limiter {
-        quota_limiter.consume_read(0, start_time.elapsed().as_micros() as usize)
-    } else {
-        Duration::ZERO
-    };
     // make engine not cross yield point
     async move {
-        if !quota_delay.is_zero() {
-            NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                .get(ThrottleType::kv_snapshot)
-                .inc_by(quota_delay.as_micros() as u64);
-            GLOBAL_TIMER_HANDLE
-                .delay(Instant::now() + quota_delay)
-                .compat()
-                .await
-                .unwrap();
-        }
         val?; // propagate error
         let result = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))

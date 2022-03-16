@@ -575,7 +575,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
     ) -> Result<(bool, usize, Duration)> {
-        let start_time = self.quota_limiter.get_now_time();
+        let start_time = self.quota_limiter.get_now_timer();
         let mut record_len = 0;
 
         self.deadline.check()?;

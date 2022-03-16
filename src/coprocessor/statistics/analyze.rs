@@ -377,7 +377,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             }
 
             let (cost_time, read_bytes) = {
-                let start_time = self.quota_limiter.get_now_time();
+                let start_time = self.quota_limiter.get_now_timer();
                 let mut read_bytes: usize = 0;
 
                 let result = self.data.next_batch(BATCH_MAX_SIZE);

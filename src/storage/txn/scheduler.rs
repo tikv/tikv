@@ -477,7 +477,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
         let sched = self.clone();
-        let quota_limiter = self.inner.quota_limiter.clone();
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
@@ -490,7 +489,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                 let snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
-                    quota_limiter: Some(quota_limiter),
                     ..Default::default()
                 };
                 // The program is currently in scheduler worker threads.
@@ -753,7 +751,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let deadline = task.cmd.deadline();
         let (write_result, cost_time) = {
-            let start_time = quota_limiter.get_now_time();
+            let start_time = quota_limiter.get_now_timer();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),

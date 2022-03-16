@@ -54,7 +54,6 @@ make_auto_flush_static_metric! {
     pub label_enum ThrottleType {
         dag,
         analyze_full_sampling,
-        kv_snapshot,
     }
 
     pub struct NonTxnCommandThrottleTimeCounterVec: LocalIntCounter {
