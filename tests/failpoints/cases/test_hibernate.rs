@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::*;
 use std::sync::*;
@@ -73,13 +73,9 @@ fn test_break_leadership_on_restart() {
     cluster.add_send_filter(CloneFilterFactory(filter));
     cluster.run_node(2).unwrap();
 
-    if rx.recv_timeout(Duration::from_secs(1)).is_ok() {
-        // Peer 3 starts a new election, which can be rejected by peer 1 and 2 because both of them
-        // are in lease. Then peer 1 will step down because heartbeat responses from peer 3 can
-        // carry a higher term. So there will be at least 1 election timeout that the region loses
-        // its leader. We need to resolve the problem.
-        return;
-    } else {
-        panic!("the bug hasn't been fixed")
-    }
+    // If peer 3 starts a new election, it can be rejected by peer 1 and 2 because both of them
+    // are in lease. Then peer 1 will step down because heartbeat responses from peer 3 can
+    // carry a higher term. So there will be at least 1 election timeout that the region loses
+    // its leader.
+    assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
 }
