@@ -538,7 +538,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
-        let quota_limiter = Arc::clone(&self.quota_limiter);
+        let quota_limiter = self.quota_limiter.clone();
+        let mut throttle = quota_limiter.new_throttle();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -581,8 +582,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
-                    let (result, delta, cost_time) = {
-                        let start_time = quota_limiter.get_now_timer();
+                    let (result, delta) = {
+                        let _guard = throttle.observe_cpu();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -603,8 +604,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         });
 
                         let delta = perf_statistics.delta();
-                        let cost_time = start_time.elapsed();
-                        (result, delta, cost_time)
+                        (result, delta)
                     };
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
@@ -628,12 +628,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .unwrap_or(&None)
                             .as_ref()
                             .map_or(0, |v| v.len());
-                    let throttle = quota_limiter.consume_read(read_bytes, cost_time);
-                    if throttle.is_throttled() {
+                    throttle.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.async_consume(throttle).await;
+                    if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
-                            .inc_by(throttle.ref_delay().as_micros() as u64);
-                        throttle.delay().await;
+                            .inc_by(quota_delay.as_micros() as u64);
                     }
 
                     let stage_finished_ts = Instant::now_coarse();
@@ -865,7 +865,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .new_tag_with_key_ranges(&ctx, key_ranges);
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
-        let quota_limiter = Arc::clone(&self.quota_limiter);
+        let quota_limiter = self.quota_limiter.clone();
+        let mut throttle = quota_limiter.new_throttle();
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now_coarse();
@@ -913,8 +914,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
-                    let (result, delta, stats, cost_time) = {
-                        let start_time = quota_limiter.get_now_timer();
+                    let (result, delta, stats) = {
+                        let _guard = throttle.observe_cpu();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -957,8 +958,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 kv_pairs
                             });
                         let delta = perf_statistics.delta();
-                        let cost_time = start_time.elapsed();
-                        (result, delta, stats, cost_time)
+                        (result, delta, stats)
                     };
                     metrics::tls_collect_scan_details(CMD, &stats);
                     metrics::tls_collect_perf_stats(CMD, &delta);
@@ -972,12 +972,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
                         + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
                         + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
-                    let throttle = quota_limiter.consume_read(read_bytes, cost_time);
-                    if throttle.is_throttled() {
+                    throttle.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.async_consume(throttle).await;
+                    if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
-                            .inc_by(throttle.ref_delay().as_micros() as u64);
-                        throttle.delay().await;
+                            .inc_by(quota_delay.as_micros() as u64);
                     }
 
                     let stage_finished_ts = Instant::now_coarse();

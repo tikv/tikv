@@ -374,8 +374,9 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            let cost_time = {
-                let start_time = self.quota_limiter.get_now_timer();
+            let mut throttle = self.quota_limiter.new_throttle();
+            {
+                let _guard = throttle.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
                 is_drained = result.is_drained?;
 
@@ -424,16 +425,14 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                     );
                     collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
                 }
-                start_time.elapsed()
-            };
+            }
 
             // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
-            let throttle = self.quota_limiter.consume_read(0, cost_time);
-            if throttle.is_throttled() {
+            let quota_delay = self.quota_limiter.async_consume(throttle).await;
+            if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)
-                    .inc_by(throttle.ref_delay().as_micros() as u64);
-                throttle.delay().await;
+                    .inc_by(quota_delay.as_micros() as u64);
             }
         }
         Ok(AnalyzeSamplingResult::new(collector))

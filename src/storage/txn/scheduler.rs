@@ -744,14 +744,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
+        let quota_limiter = self.inner.quota_limiter.clone();
+        let mut throttle = quota_limiter.new_throttle();
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
 
         let deadline = task.cmd.deadline();
-        let (write_result, cost_time) = {
-            let start_time = &self.inner.quota_limiter.get_now_timer();
+        let write_result = {
+            let _guard = throttle.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
@@ -764,9 +766,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .cmd
                 .process_write(snapshot, context)
                 .map_err(StorageError::from);
-            let cost_time = start_time.elapsed();
-            (result, cost_time)
+            result
         };
+
+        throttle.add_write_bytes(write_bytes);
+        let quota_delay = quota_limiter.async_consume(throttle).await;
+        if !quota_delay.is_zero() {
+            TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(tag)
+                .inc_by(quota_delay.as_micros() as u64);
+        }
+
         let WriteResult {
             ctx,
             mut to_be_write,
@@ -793,17 +803,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             Ok(res) => res,
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-
-        let throttle = self
-            .inner
-            .quota_limiter
-            .consume_write(write_bytes, cost_time);
-        if throttle.is_throttled() {
-            TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
-                .get(tag)
-                .inc_by(throttle.ref_delay().as_micros() as u64);
-            throttle.delay().await;
-        }
 
         if let Some(lock_info) = lock_info {
             let WriteResultLockInfo {

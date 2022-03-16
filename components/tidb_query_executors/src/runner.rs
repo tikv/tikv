@@ -22,7 +22,7 @@ use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
 use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
-use tikv_util::quota_limiter::{QuotaLimiter, Throttle};
+use tikv_util::quota_limiter::QuotaLimiter;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -443,20 +443,26 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             let mut chunk = Chunk::default();
 
-            let (drained, record_len, throttle) = self.internal_handle_request(
-                false,
-                batch_size,
-                &mut chunk,
-                &mut warnings,
-                &mut ctx,
-            )?;
+            let mut throttle = self.quota_limiter.new_throttle();
+            let (drained, record_len) = {
+                let _guard = throttle.observe_cpu();
+                let result = self.internal_handle_request(
+                    false,
+                    batch_size,
+                    &mut chunk,
+                    &mut warnings,
+                    &mut ctx,
+                )?;
+                result
+            };
 
-            if throttle.is_throttled() {
+            let quota_delay = self.quota_limiter.async_consume(throttle).await;
+            if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::dag)
-                    .inc_by(throttle.ref_delay().as_micros() as u64);
-                throttle.delay().await;
+                    .inc_by(quota_delay.as_micros() as u64);
             }
+
             if record_len > 0 {
                 chunks.push(chunk);
                 record_all += record_len;
@@ -523,7 +529,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
             // TODO: Streaming coprocessor on TiKV is just not enabled in TiDB now.
-            let (drained, len, _throttle) = self.internal_handle_request(
+            let (drained, len) = self.internal_handle_request(
                 true,
                 batch_size.min(self.stream_row_limit - record_len),
                 &mut current_chunk,
@@ -568,8 +574,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         chunk: &mut Chunk,
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
-    ) -> Result<(bool, usize, Throttle)> {
-        let start_time = self.quota_limiter.get_now_timer();
+    ) -> Result<(bool, usize)> {
         let mut record_len = 0;
 
         self.deadline.check()?;
@@ -619,10 +624,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
 
         warnings.merge(&mut result.warnings);
-        let throttle = self
-            .quota_limiter
-            .consume_read(record_len, start_time.elapsed());
-        Ok((is_drained, record_len, throttle))
+        Ok((is_drained, record_len))
     }
 
     fn make_stream_response(

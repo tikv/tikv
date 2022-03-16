@@ -28,24 +28,59 @@ pub struct QuotaLimiter {
     read_bandwidth_limiter: Limiter,
 }
 
-// Throttle should be used by method `delay()` after `QuotaLimiter` consume.
-pub struct Throttle(Duration);
+// Throttle must be consumed in quota limiter.
+pub struct Throttle {
+    read_bytes: usize,
+    write_bytes: usize,
+    cpu_time: Duration,
+    enable_cpu_limit: bool,
+}
 
-impl Throttle {
-    pub fn is_throttled(&self) -> bool {
-        !self.0.is_zero()
+impl<'a> Throttle {
+    pub fn add_read_bytes(&mut self, bytes: usize) {
+        self.read_bytes += bytes;
     }
 
-    pub fn ref_delay(&self) -> &Duration {
-        &self.0
+    pub fn add_write_bytes(&mut self, bytes: usize) {
+        self.write_bytes += bytes;
     }
 
-    pub async fn delay(&self) {
-        GLOBAL_TIMER_HANDLE
-            .delay(std::time::Instant::now() + self.0)
-            .compat()
-            .await
-            .unwrap();
+    // Record the cpu time in the lifetime. Use this function inside code block.
+    // If `cputime_limiter` is not enabled, guard will do nothing when dropped.
+    pub fn observe_cpu(&'a mut self) -> CpuObserveGuard<'a> {
+        if self.enable_cpu_limit {
+            CpuObserveGuard {
+                timer: None,
+                throttle: self,
+            }
+        } else {
+            CpuObserveGuard {
+                timer: Some(ThreadTime::now()),
+                throttle: self,
+            }
+        }
+    }
+
+    fn add_cpu_time(&mut self, time: Duration) {
+        self.cpu_time += time;
+    }
+
+    #[cfg(test)]
+    pub fn get_cpu_time(&self) -> Duration {
+        self.cpu_time
+    }
+}
+
+pub struct CpuObserveGuard<'a> {
+    timer: Option<ThreadTime>,
+    throttle: &'a mut Throttle,
+}
+
+impl<'a> Drop for CpuObserveGuard<'a> {
+    fn drop(&mut self) {
+        if let Some(timer) = self.timer {
+            self.throttle.add_cpu_time(timer.elapsed());
+        }
     }
 }
 
@@ -91,76 +126,64 @@ impl QuotaLimiter {
         }
     }
 
-    // record info after write requests finished and return the suggested delay duration.
-    pub fn consume_write(&self, bytes: usize, cpu_time: Duration) -> Throttle {
-        let cpu_dur = self
-            .cputime_limiter
-            .consume_duration(cpu_time.as_micros() as usize);
-
-        let bw_dur = if bytes > 0 {
-            self.write_bandwidth_limiter.consume_duration(bytes)
-        } else {
-            Duration::ZERO
-        };
-
-        let max_dur = std::cmp::max(cpu_dur, bw_dur);
-        let should_delay = if max_dur > cpu_time {
-            max_dur - cpu_time
-        } else {
-            Duration::ZERO
-        };
-
-        Throttle(std::cmp::min(MAX_QUOTA_DELAY, should_delay))
-    }
-
-    // record info after read requests finished and return the suggested delay duration.
-    pub fn consume_read(&self, bytes: usize, cpu_time: Duration) -> Throttle {
-        let cpu_dur = self
-            .cputime_limiter
-            .consume_duration(cpu_time.as_micros() as usize);
-
-        let bw_dur = if bytes > 0 {
-            self.read_bandwidth_limiter.consume_duration(bytes)
-        } else {
-            Duration::ZERO
-        };
-
-        let max_dur = std::cmp::max(cpu_dur, bw_dur);
-        let should_delay = if max_dur > cpu_time {
-            max_dur - cpu_time
-        } else {
-            Duration::ZERO
-        };
-
-        Throttle(std::cmp::min(MAX_QUOTA_DELAY, should_delay))
-    }
-
-    pub fn get_now_timer(&self) -> QuotaTimer {
-        if self.cputime_limiter.speed_limit().is_infinite() {
-            QuotaTimer::Zero
-        } else {
-            QuotaTimer::Thread(ThreadTime::now())
+    // To generate a sampler.
+    pub fn new_throttle(&self) -> Throttle {
+        Throttle {
+            read_bytes: 0,
+            write_bytes: 0,
+            cpu_time: Duration::ZERO,
+            enable_cpu_limit: if self.cputime_limiter.speed_limit().is_infinite() {
+                false
+            } else {
+                true
+            },
         }
     }
-}
 
-pub enum QuotaTimer {
-    Thread(ThreadTime),
-    Zero,
-}
+    // To consume a sampler and return delayed duration.
+    // If the sampler is null, the speed limiter will just return ZERO.
+    pub async fn async_consume(&self, th: Throttle) -> Duration {
+        let cpu_dur = self
+            .cputime_limiter
+            .consume_duration(th.cpu_time.as_micros() as usize);
 
-impl QuotaTimer {
-    pub fn elapsed(&self) -> Duration {
-        match self {
-            QuotaTimer::Thread(t) => t.elapsed(),
-            QuotaTimer::Zero => Duration::ZERO,
+        let w_bw_dur = if th.write_bytes > 0 {
+            self.write_bandwidth_limiter
+                .consume_duration(th.write_bytes)
+        } else {
+            Duration::ZERO
+        };
+
+        let r_bw_dur = if th.read_bytes > 0 {
+            self.read_bandwidth_limiter.consume_duration(th.read_bytes)
+        } else {
+            Duration::ZERO
+        };
+
+        let max_dur = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
+        let should_delay = if max_dur > th.cpu_time {
+            max_dur - th.cpu_time
+        } else {
+            Duration::ZERO
+        };
+        let exec_delay = std::cmp::min(MAX_QUOTA_DELAY, should_delay);
+
+        if !exec_delay.is_zero() {
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + exec_delay)
+                .compat()
+                .await
+                .unwrap();
         }
+
+        exec_delay
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
 
     #[test]
     fn test_quota_limiter() {
@@ -171,30 +194,36 @@ mod tests {
             ReadableSize::kb(1),
         );
 
-        let thread_start_time = quota_limiter.get_now_timer();
+        let thread_start_time = ThreadTime::now();
 
         // (1250 * CPU_TIME_FACTOR) * 1 sec = 1000 millis
-        let throttle = quota_limiter.consume_write(0, Duration::from_millis(200));
-        assert_eq!(throttle.ref_delay(), &Duration::from_millis(0));
+        let mut th = quota_limiter.new_throttle();
+        th.add_cpu_time(Duration::from_millis(200));
+        let begin_instant = std::time::Instant::now();
+        block_on(quota_limiter.async_consume(th));
+        // 50ms represents fast
+        assert!(begin_instant.elapsed() < Duration::from_millis(50));
 
-        // only bytes take effect (1000ms - 100ms used by cpu)
-        let throttle =
-            quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, Duration::from_millis(100));
-        assert_eq!(throttle.ref_delay(), &Duration::from_millis(900));
+        // only bytes take effect (1000ms - 300ms used by cpu)
+        // (1250 * CPU_TIME_FACTOR) * 1 sec = 1000 millis
+        let mut th = quota_limiter.new_throttle();
+        th.add_cpu_time(Duration::from_millis(300));
+        th.add_write_bytes(ReadableSize::kb(1).0 as usize);
+        let begin_instant = std::time::Instant::now();
+        block_on(quota_limiter.async_consume(th));
+        assert!(begin_instant.elapsed() > Duration::from_millis(700));
+        assert!(begin_instant.elapsed() < Duration::from_millis(800));
 
-        // when all set to zero, only cpu time limiter take effect
-        let throttle = quota_limiter.consume_write(0, Duration::ZERO);
-        assert!(throttle.ref_delay() <= &Duration::from_millis(300));
-        assert!(throttle.ref_delay() > &Duration::ZERO);
+        // test max delay
+        let mut th = quota_limiter.new_throttle();
+        th.add_cpu_time(Duration::from_millis(100));
+        th.add_read_bytes(ReadableSize::kb(100).0 as usize);
+        let begin_instant = std::time::Instant::now();
+        block_on(quota_limiter.async_consume(th));
+        assert!(begin_instant.elapsed() < Duration::from_millis(1100));
+        assert!(begin_instant.elapsed() > Duration::from_millis(1000));
 
-        // need to sleep to refresh cpu time limiter
-        std::thread::sleep(Duration::from_millis(300));
-
-        // refill is 0.1
-        let throttle = quota_limiter.consume_read(0, Duration::from_millis(99));
-        assert_eq!(throttle.ref_delay(), &Duration::from_secs(0));
-
-        // `get_now_timer` must return ThreadTime so elapsed time is not long.
-        assert!(thread_start_time.elapsed() < Duration::from_millis(300));
+        // ThreadTime elapsed time is not long.
+        assert!(thread_start_time.elapsed() < Duration::from_millis(100));
     }
 }
