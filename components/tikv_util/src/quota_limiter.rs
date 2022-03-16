@@ -166,35 +166,35 @@ mod tests {
     fn test_quota_limiter() {
         // consume write
         let quota_limiter = QuotaLimiter::new(
-            1100, /*1.1vCPU*/
+            1250, /*1.1vCPU*/
             ReadableSize::kb(1),
             ReadableSize::kb(1),
         );
 
         let thread_start_time = quota_limiter.get_now_timer();
 
-        // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms, and 500 - 495 = 5
-        let throttle = quota_limiter.consume_write(0, Duration::from_millis(495));
-        assert_eq!(throttle.ref_delay(), &Duration::from_millis(5));
+        // (1250 * CPU_TIME_FACTOR) * 1 sec = 1000 millis
+        let throttle = quota_limiter.consume_write(0, Duration::from_millis(200));
+        assert_eq!(throttle.ref_delay(), &Duration::from_millis(0));
 
-        // only bytes take effect
+        // only bytes take effect (1000ms - 100ms used by cpu)
         let throttle =
-            quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, Duration::from_millis(99));
-        assert_eq!(throttle.ref_delay(), &Duration::from_millis(901));
+            quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, Duration::from_millis(100));
+        assert_eq!(throttle.ref_delay(), &Duration::from_millis(900));
 
         // when all set to zero, only cpu time limiter take effect
         let throttle = quota_limiter.consume_write(0, Duration::ZERO);
-        assert!(throttle.ref_delay() <= &Duration::from_millis(600));
+        assert!(throttle.ref_delay() <= &Duration::from_millis(300));
         assert!(throttle.ref_delay() > &Duration::ZERO);
 
         // need to sleep to refresh cpu time limiter
-        std::thread::sleep(Duration::from_millis(600));
+        std::thread::sleep(Duration::from_millis(300));
 
         // refill is 0.1
-        let throttle = quota_limiter.consume_read(0, Duration::from_micros(98999));
+        let throttle = quota_limiter.consume_read(0, Duration::from_millis(99));
         assert_eq!(throttle.ref_delay(), &Duration::from_secs(0));
 
         // `get_now_timer` must return ThreadTime so elapsed time is not long.
-        assert!(thread_start_time.elapsed() < Duration::from_millis(500));
+        assert!(thread_start_time.elapsed() < Duration::from_millis(300));
     }
 }
