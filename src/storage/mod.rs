@@ -919,8 +919,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
+                    let key_bytes = keys.iter().fold(0, |acc, v| acc + v.len());
                     let buckets = snapshot.ext().get_buckets();
-                    let (result, delta, cost_time, key_bytes) = {
+                    let (result, delta, stats, cost_time) = {
                         let start_time = quota_limiter.get_now_timer();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
@@ -965,7 +966,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             });
                         let delta = perf_statistics.delta();
                         let cost_time = start_time.elapsed();
-                        (result, delta, cost_time, key_bytes)
+                        (result, delta, stats, cost_time)
                     };
                     metrics::tls_collect_scan_details(CMD, &stats);
                     metrics::tls_collect_perf_stats(CMD, &delta);

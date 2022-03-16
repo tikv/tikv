@@ -149,14 +149,14 @@ mod tests {
 
         let thread_start_time = quota_limiter.get_now_timer();
 
-        // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms
+        // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms, and 500 - 495 = 5
         let delay = quota_limiter.consume_write(0, Duration::from_millis(495));
-        assert_eq!(delay, Duration::from_millis(500));
+        assert_eq!(delay, Duration::from_millis(5));
 
         // only bytes take effect
         let delay =
             quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, Duration::from_millis(99));
-        assert_eq!(delay, Duration::from_millis(1000));
+        assert_eq!(delay, Duration::from_millis(901));
 
         // when all set to zero, only cpu time limiter take effect
         let delay = quota_limiter.consume_write(0, Duration::ZERO);
