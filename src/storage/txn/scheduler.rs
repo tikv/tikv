@@ -794,7 +794,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-        let quota_delay = quota_limiter.consume_write(write_bytes, cost_time.as_micros() as usize);
+        let quota_delay = quota_limiter.consume_write(write_bytes, cost_time);
         if !quota_delay.is_zero() {
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)

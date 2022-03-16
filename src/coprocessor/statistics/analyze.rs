@@ -432,9 +432,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 (start_time.elapsed(), read_bytes)
             };
 
-            let quota_delay = self
-                .quota_limiter
-                .consume_read(read_bytes, cost_time.as_micros() as usize);
+            let quota_delay = self.quota_limiter.consume_read(read_bytes, cost_time);
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)

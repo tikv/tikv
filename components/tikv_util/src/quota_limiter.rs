@@ -67,8 +67,10 @@ impl QuotaLimiter {
     }
 
     // record info after write requests finished and return the suggested delay duration.
-    pub fn consume_write(&self, bytes: usize, cpu_micro_secs: usize) -> Duration {
-        let cpu_dur = self.cputime_limiter.consume_duration(cpu_micro_secs);
+    pub fn consume_write(&self, bytes: usize, cpu_time: Duration) -> Duration {
+        let cpu_dur = self
+            .cputime_limiter
+            .consume_duration(cpu_time.as_micros() as usize);
 
         let bw_dur = if bytes > 0 {
             self.write_bandwidth_limiter.consume_duration(bytes)
@@ -77,12 +79,19 @@ impl QuotaLimiter {
         };
 
         let max_dur = std::cmp::max(cpu_dur, bw_dur);
-        std::cmp::min(MAX_QUOTA_DELAY, max_dur)
+        let should_delay = if max_dur > cpu_time {
+            max_dur - cpu_time
+        } else {
+            Duration::ZERO
+        };
+        std::cmp::min(MAX_QUOTA_DELAY, should_delay)
     }
 
     // record info after read requests finished and return the suggested delay duration.
-    pub fn consume_read(&self, bytes: usize, cpu_micro_secs: usize) -> Duration {
-        let cpu_dur = self.cputime_limiter.consume_duration(cpu_micro_secs);
+    pub fn consume_read(&self, bytes: usize, cpu_time: Duration) -> Duration {
+        let cpu_dur = self
+            .cputime_limiter
+            .consume_duration(cpu_time.as_micros() as usize);
 
         let bw_dur = if bytes > 0 {
             self.read_bandwidth_limiter.consume_duration(bytes)
@@ -91,7 +100,12 @@ impl QuotaLimiter {
         };
 
         let max_dur = std::cmp::max(cpu_dur, bw_dur);
-        std::cmp::min(MAX_QUOTA_DELAY, max_dur)
+        let should_delay = if max_dur > cpu_time {
+            max_dur - cpu_time
+        } else {
+            Duration::ZERO
+        };
+        std::cmp::min(MAX_QUOTA_DELAY, should_delay)
     }
 
     // If `cputime_limiter` is set to INFINITY, use `CLOCK_MONOTONIC_COARSE` to save cost.
@@ -136,15 +150,16 @@ mod tests {
         let thread_start_time = quota_limiter.get_now_timer();
 
         // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms
-        let delay = quota_limiter.consume_write(0, 495000);
+        let delay = quota_limiter.consume_write(0, Duration::from_millis(495));
         assert_eq!(delay, Duration::from_millis(500));
 
         // only bytes take effect
-        let delay = quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, 99000);
+        let delay =
+            quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, Duration::from_millis(99));
         assert_eq!(delay, Duration::from_millis(1000));
 
         // when all set to zero, only cpu time limiter take effect
-        let delay = quota_limiter.consume_write(0, 0);
+        let delay = quota_limiter.consume_write(0, Duration::ZERO);
         assert!(delay <= Duration::from_millis(600));
         assert!(delay > Duration::ZERO);
 
@@ -152,7 +167,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(600));
 
         // refill is 0.1
-        let delay = quota_limiter.consume_read(0, 98999);
+        let delay = quota_limiter.consume_read(0, Duration::from_micros(98999));
         assert_eq!(delay, Duration::from_secs(0));
 
         // `get_now_timer` must return ThreadTime so elapsed time is not long.

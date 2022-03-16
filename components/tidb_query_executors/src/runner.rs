@@ -627,7 +627,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         warnings.merge(&mut result.warnings);
         let wait = self
             .quota_limiter
-            .consume_read(record_len, (start_time.elapsed().as_micros()) as usize);
+            .consume_read(record_len, start_time.elapsed());
         Ok((is_drained, record_len, wait))
     }
 
