@@ -43,8 +43,8 @@ fn test_break_leadership_on_restart() {
     // 1. steps a heartbeat message from its leader and then ticks 1 time.
     // 2. ticks a peer_stale_state_check, which will change state from Idle to PreChaos.
     // 3. continues to tick until it hibernates totally.
-    fail::cfg("on_raft_base_tick_idle", "pause").unwrap();
-    let router = cluster.sim.rl().get_router(3).unwrap();
+    let (tx, rx) = mpsc::sync_channel(128);
+    fail::cfg_callback("on_raft_base_tick_idle", move || tx.send(0).unwrap()).unwrap();
     let mut raft_msg = RaftMessage::default();
     raft_msg.region_id = 1;
     raft_msg.set_from_peer(new_peer(1, 1));
@@ -55,13 +55,14 @@ fn test_break_leadership_on_restart() {
     raft_msg.mut_message().from = 1;
     raft_msg.mut_message().to = 3;
     raft_msg.mut_message().term = 6;
+    let router = cluster.sim.rl().get_router(3).unwrap();
     router.send_raft_message(raft_msg).unwrap();
 
-    thread::sleep(Duration::from_millis(base_tick_ms * 3));
+    rx.recv_timeout(Duration::from_millis(200)).unwrap();
+    fail::remove("on_raft_base_tick_idle");
     router
         .send(1, PeerMsg::Tick(PeerTick::CheckPeerStaleState))
         .unwrap();
-    fail::remove("on_raft_base_tick_idle");
 
     // Wait until the peer 3 hibernates again.
     // Until here, peer 3 will be like `election_elapsed=3 && missing_ticks=6`.
