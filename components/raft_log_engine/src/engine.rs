@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask,
-    Result,
+    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineReadOnly,
+    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
@@ -159,9 +159,13 @@ impl FileSystem for ManagedFileSystem {
     type Writer = ManagedWriter;
 
     fn create<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
+        let base = Arc::new(self.base_level_file_system.create(path.as_ref())?);
+        if let Some(ref manager) = self.key_manager {
+            manager.new_file(path.as_ref().to_str().unwrap())?;
+        }
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_level_file_system.create(path.as_ref())?),
+            base,
         })
     }
 
