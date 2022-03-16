@@ -14,8 +14,9 @@ use futures::compat::Future01CompatExt;
 // transfer milli cpu to micro cpu
 //
 // TODO: Don't adjusted based on experience.
-const CPU_TIME_FACTOR: f64 = 0.9;
+const CPU_TIME_FACTOR: f64 = 0.8;
 
+// To avoid long tail latency.
 const MAX_QUOTA_DELAY: Duration = Duration::from_secs(1);
 
 // Quota limiter allows users to obtain stable performance by increasing the
