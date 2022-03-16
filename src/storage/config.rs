@@ -109,7 +109,8 @@ impl Config {
                     .into(),
             );
         };
-        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        // max worker pool size should be at least 4.
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
         if self.scheduler_worker_pool_size == 0 || self.scheduler_worker_pool_size > max_pool_size {
             return Err(
                 format!(
