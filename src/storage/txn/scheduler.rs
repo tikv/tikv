@@ -794,19 +794,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-        let quota_delay = self
+        let throttle = self
             .inner
             .quota_limiter
             .consume_write(write_bytes, cost_time);
-        if !quota_delay.is_zero() {
+        if throttle.is_throttled() {
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)
-                .inc_by(quota_delay.as_micros() as u64);
-            GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + quota_delay)
-                .compat()
-                .await
-                .unwrap();
+                .inc_by(throttle.ref_delay().as_micros() as u64);
+            throttle.delay().await;
         }
 
         if let Some(lock_info) = lock_info {

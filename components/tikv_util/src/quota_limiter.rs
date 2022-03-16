@@ -1,9 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use super::config::ReadableSize;
 use super::time::Limiter;
+use super::timer::GLOBAL_TIMER_HANDLE;
+
 use cpu_time::ThreadTime;
-use std::time::Duration;
+use futures::compat::Future01CompatExt;
 
 // The cpu time is not a real statistics, only part of the processing logic is
 // taken into account, so it needs to be multiplied by a factor.
@@ -21,6 +25,27 @@ pub struct QuotaLimiter {
     cputime_limiter: Limiter,
     write_bandwidth_limiter: Limiter,
     read_bandwidth_limiter: Limiter,
+}
+
+// Throttle should be used by method `delay()` after `QuotaLimiter` consume.
+pub struct Throttle(Duration);
+
+impl Throttle {
+    pub fn is_throttled(&self) -> bool {
+        !self.0.is_zero()
+    }
+
+    pub fn ref_delay(&self) -> &Duration {
+        &self.0
+    }
+
+    pub async fn delay(&self) {
+        GLOBAL_TIMER_HANDLE
+            .delay(std::time::Instant::now() + self.0)
+            .compat()
+            .await
+            .unwrap();
+    }
 }
 
 impl Default for QuotaLimiter {
@@ -66,7 +91,7 @@ impl QuotaLimiter {
     }
 
     // record info after write requests finished and return the suggested delay duration.
-    pub fn consume_write(&self, bytes: usize, cpu_time: Duration) -> Duration {
+    pub fn consume_write(&self, bytes: usize, cpu_time: Duration) -> Throttle {
         let cpu_dur = self
             .cputime_limiter
             .consume_duration(cpu_time.as_micros() as usize);
@@ -83,11 +108,12 @@ impl QuotaLimiter {
         } else {
             Duration::ZERO
         };
-        std::cmp::min(MAX_QUOTA_DELAY, should_delay)
+
+        Throttle(std::cmp::min(MAX_QUOTA_DELAY, should_delay))
     }
 
     // record info after read requests finished and return the suggested delay duration.
-    pub fn consume_read(&self, bytes: usize, cpu_time: Duration) -> Duration {
+    pub fn consume_read(&self, bytes: usize, cpu_time: Duration) -> Throttle {
         let cpu_dur = self
             .cputime_limiter
             .consume_duration(cpu_time.as_micros() as usize);
@@ -104,7 +130,8 @@ impl QuotaLimiter {
         } else {
             Duration::ZERO
         };
-        std::cmp::min(MAX_QUOTA_DELAY, should_delay)
+
+        Throttle(std::cmp::min(MAX_QUOTA_DELAY, should_delay))
     }
 
     pub fn get_now_timer(&self) -> QuotaTimer {
@@ -146,25 +173,25 @@ mod tests {
         let thread_start_time = quota_limiter.get_now_timer();
 
         // delay = 495 / (1100 * CPU_TIME_FACTOR) * 1 sec = 500ms, and 500 - 495 = 5
-        let delay = quota_limiter.consume_write(0, Duration::from_millis(495));
-        assert_eq!(delay, Duration::from_millis(5));
+        let throttle = quota_limiter.consume_write(0, Duration::from_millis(495));
+        assert_eq!(throttle.ref_delay(), &Duration::from_millis(5));
 
         // only bytes take effect
-        let delay =
+        let throttle =
             quota_limiter.consume_write(ReadableSize::kb(1).0 as usize, Duration::from_millis(99));
-        assert_eq!(delay, Duration::from_millis(901));
+        assert_eq!(throttle.ref_delay(), &Duration::from_millis(901));
 
         // when all set to zero, only cpu time limiter take effect
-        let delay = quota_limiter.consume_write(0, Duration::ZERO);
-        assert!(delay <= Duration::from_millis(600));
-        assert!(delay > Duration::ZERO);
+        let throttle = quota_limiter.consume_write(0, Duration::ZERO);
+        assert!(throttle.ref_delay() <= &Duration::from_millis(600));
+        assert!(throttle.ref_delay() > &Duration::ZERO);
 
         // need to sleep to refresh cpu time limiter
         std::thread::sleep(Duration::from_millis(600));
 
         // refill is 0.1
-        let delay = quota_limiter.consume_read(0, Duration::from_micros(98999));
-        assert_eq!(delay, Duration::from_secs(0));
+        let throttle = quota_limiter.consume_read(0, Duration::from_micros(98999));
+        assert_eq!(throttle.ref_delay(), &Duration::from_secs(0));
 
         // `get_now_timer` must return ThreadTime so elapsed time is not long.
         assert!(thread_start_time.elapsed() < Duration::from_millis(500));

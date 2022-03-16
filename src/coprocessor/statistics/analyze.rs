@@ -6,7 +6,6 @@ use std::mem;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::compat::Future01CompatExt;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use rand::rngs::StdRng;
@@ -28,7 +27,6 @@ use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
 use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::Instant;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
@@ -432,16 +430,12 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 (start_time.elapsed(), read_bytes)
             };
 
-            let quota_delay = self.quota_limiter.consume_read(read_bytes, cost_time);
-            if !quota_delay.is_zero() {
+            let throttle = self.quota_limiter.consume_read(read_bytes, cost_time);
+            if throttle.is_throttled() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)
-                    .inc_by(quota_delay.as_micros() as u64);
-                GLOBAL_TIMER_HANDLE
-                    .delay(std::time::Instant::now() + quota_delay)
-                    .compat()
-                    .await
-                    .unwrap();
+                    .inc_by(throttle.ref_delay().as_micros() as u64);
+                throttle.delay().await;
             }
         }
         Ok(AnalyzeSamplingResult::new(collector))

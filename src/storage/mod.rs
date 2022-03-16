@@ -83,7 +83,6 @@ use crate::storage::{
 use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
@@ -96,7 +95,6 @@ use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
-use std::time::Duration;
 use std::{
     borrow::Cow,
     iter,
@@ -108,7 +106,6 @@ use std::{
 use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -631,16 +628,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .unwrap_or(&None)
                             .as_ref()
                             .map_or(0, |v| v.len());
-                    let quota_delay = quota_limiter.consume_read(read_bytes, cost_time);
-                    if !quota_delay.is_zero() {
+                    let throttle = quota_limiter.consume_read(read_bytes, cost_time);
+                    if throttle.is_throttled() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
-                            .inc_by(quota_delay.as_micros() as u64);
-                        GLOBAL_TIMER_HANDLE
-                            .delay(std::time::Instant::now() + quota_delay)
-                            .compat()
-                            .await
-                            .unwrap();
+                            .inc_by(throttle.ref_delay().as_micros() as u64);
+                        throttle.delay().await;
                     }
 
                     let stage_finished_ts = Instant::now_coarse();
@@ -979,18 +972,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
                         + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
                         + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
-                    let cost_time =
-                        Duration::from_micros((cost_time.as_micros() as f64 * 1.1_f64) as u64);
-                    let quota_delay = quota_limiter.consume_read(read_bytes, cost_time);
-                    if !quota_delay.is_zero() {
+                    let throttle = quota_limiter.consume_read(read_bytes, cost_time);
+                    if throttle.is_throttled() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
-                            .inc_by(quota_delay.as_micros() as u64);
-                        GLOBAL_TIMER_HANDLE
-                            .delay(std::time::Instant::now() + quota_delay)
-                            .compat()
-                            .await
-                            .unwrap();
+                            .inc_by(throttle.ref_delay().as_micros() as u64);
+                        throttle.delay().await;
                     }
 
                     let stage_finished_ts = Instant::now_coarse();
