@@ -230,6 +230,7 @@ fn test_scale_scheduler_pool() {
     let snapshot_fp = "scheduler_start_execute";
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
+    let origin_pool_size = cluster.cfg.storage.scheduler_worker_pool_size;
 
     let engine = cluster
         .sim
@@ -327,6 +328,8 @@ fn test_scale_scheduler_pool() {
     // do prewrite again, as we scale another worker, this request should success
     do_prewrite(b"k2", b"v2").unwrap().unwrap();
 
+    // restore to original config.
+    scale_pool(origin_pool_size);
     fail::remove(snapshot_fp);
 }
 

@@ -30,7 +30,7 @@ raft-client-backoff-step = "5ms"
 
 [storage]
 scheduler-concurrency = 10
-scheduler-worker-pool-size = 2
+scheduler-worker-pool-size = 1
 
 [storage.block-cache]
 shared = true

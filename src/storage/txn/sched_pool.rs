@@ -62,7 +62,11 @@ impl SchedPool {
         name_prefix: &str,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        let max_pool_size = std::cmp::max(pool_size, SysQuota::cpu_cores_quota() as usize);
+        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases that we need more thread than cpu num.
+        let max_pool_size = std::cmp::max(
+            pool_size,
+            std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
+        );
         let pool = YatpPoolBuilder::new(SchedTicker {reporter:reporter.clone()})
             .thread_count(1, pool_size, max_pool_size)
             .name_prefix(name_prefix)
