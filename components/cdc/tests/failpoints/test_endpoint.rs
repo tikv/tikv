@@ -15,7 +15,7 @@ use test_raftstore::*;
 use tikv_util::debug;
 use tikv_util::worker::Scheduler;
 
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_double_scan_deregister() {
@@ -251,52 +251,47 @@ fn test_no_resolved_ts_before_downstream_initialized() {
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(b"");
-    let lead_client = PeerClient::new(&suite.cluster, region.id, new_peer(1, 1));
+
+    let recv_resolved_ts = |event_feed: &ClientReceiver| {
+        let mut rx = event_feed.replace(None).unwrap();
+        let timeout = Duration::from_secs(1);
+        for _ in 0..10 {
+            if let Ok(Some(event)) = recv_timeout(&mut rx, timeout) {
+                if event.unwrap().has_resolved_ts() {
+                    event_feed.replace(Some(rx));
+                    return;
+                }
+            }
+        }
+        panic!("must receive a resolved ts");
+    };
 
     // Create 2 changefeeds and the second will be blocked in initialization.
     let mut req_txs = Vec::with_capacity(2);
     let mut event_feeds = Vec::with_capacity(2);
-    let mut receive_events = Vec::with_capacity(2);
     for i in 0..2 {
         if i == 1 {
-            fail::cfg("cdc_before_initialize", "pause").unwrap();
+            // Wait the first capture has been initialized.
+            recv_resolved_ts(&event_feeds[0]);
+            fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
         }
-        let (mut req_tx, event_feed, receive_event) =
-            new_event_feed(suite.get_region_cdc_client(region.id));
+        let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
         let req = suite.new_changedata_request(region.id);
         block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
         req_txs.push(req_tx);
         event_feeds.push(event_feed);
-        receive_events.push(receive_event);
-        // Sleep a while to wait the capture has been initialized.
-        thread::sleep(Duration::from_secs(1));
-    }
-
-    for version in 0..10 {
-        let value = format!("value-{:0>6}", version);
-        let start_ts = get_tso(&suite.cluster.pd_client);
-        lead_client.must_kv_prewrite(
-            vec![new_mutation(Op::Put, b"key", value.as_bytes())],
-            b"key".to_vec(),
-            start_ts,
-        );
-        let commit_ts = get_tso(&suite.cluster.pd_client);
-        lead_client.must_kv_commit(vec![b"key".to_vec()], start_ts, commit_ts);
     }
 
     let th = thread::spawn(move || {
-        // The first downstream can receive all real-time changes,
-        // but the second can't receive nothing.
-        for _ in 0..10 {
-            let _ = receive_events[0](false);
-            let mut rx = event_feeds[1].replace(None).unwrap();
-            assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_err());
-            event_feeds[1].replace(Some(rx));
-        }
+        // The first downstream can receive timestamps but the second should receive nothing.
+        let mut rx = event_feeds[0].replace(None).unwrap();
+        assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_ok());
+        let mut rx = event_feeds[1].replace(None).unwrap();
+        assert!(recv_timeout(&mut rx, Duration::from_secs(3)).is_err());
     });
 
     th.join().unwrap();
-    fail::cfg("cdc_before_initialize", "off").unwrap();
+    fail::cfg("cdc_incremental_scan_start", "off").unwrap();
     suite.stop();
 }
 
