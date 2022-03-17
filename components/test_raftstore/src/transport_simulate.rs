@@ -200,6 +200,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
         filter_send(&self.filters, m, |m| ch.send(m))
     }
 
+    fn set_store_allowlist(&mut self, allowlist: Vec<u64>) {
+        self.ch.set_store_allowlist(allowlist);
+    }
+
     fn need_flush(&self) -> bool {
         self.ch.need_flush()
     }
