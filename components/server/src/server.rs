@@ -68,7 +68,7 @@ use tikv::{
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSSTService, SSTImporter},
-    read_pool::{build_yatp_read_pool, ReadPool},
+    read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::raftkv::ReplicaReadLockChecker,
     server::{
         config::Config as ServerConfig,
@@ -721,6 +721,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ));
             cop_read_pools.handle()
         };
+
+        if self.config.readpool.is_unified_pool_enabled() {
+            cfg_controller.register(
+                tikv::config::Module::Readpool,
+                Box::new(ReadPoolConfigManager(
+                    unified_read_pool.as_ref().unwrap().handle(),
+                )),
+            );
+        }
 
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
