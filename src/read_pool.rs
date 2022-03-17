@@ -18,7 +18,7 @@ use tikv_util::sys::SysQuota;
 use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use self::metrics::*;
-use crate::config::UnifiedReadPoolConfig;
+use crate::config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY};
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
 
 pub enum ReadPool {
@@ -251,7 +251,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
             config.min_thread_count,
             config.max_thread_count,
             std::cmp::max(
-                config.max_thread_count,
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
                 SysQuota::cpu_cores_quota() as usize,
             ),
         )

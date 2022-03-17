@@ -1740,7 +1740,7 @@ impl UnifiedReadPoolConfig {
     }
 }
 
-const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+pub const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
