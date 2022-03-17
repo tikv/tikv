@@ -59,3 +59,4 @@ path = "tests/integrations/mod.rs"
 [[test]]
 name = "failpoints"
 path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
