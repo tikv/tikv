@@ -780,6 +780,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .map_err(StorageError::from)
         };
 
+        // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
         sample.add_write_bytes(write_bytes);
         let quota_delay = quota_limiter.async_consume(sample).await;
         if !quota_delay.is_zero() {

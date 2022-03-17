@@ -133,27 +133,28 @@ impl QuotaLimiter {
 
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
-    pub async fn async_consume(&self, th: Sample) -> Duration {
+    pub async fn async_consume(&self, sample: Sample) -> Duration {
         let cpu_dur = self
             .cputime_limiter
-            .consume_duration(th.cpu_time.as_micros() as usize);
+            .consume_duration(sample.cpu_time.as_micros() as usize);
 
-        let w_bw_dur = if th.write_bytes > 0 {
+        let w_bw_dur = if sample.write_bytes > 0 {
             self.write_bandwidth_limiter
-                .consume_duration(th.write_bytes)
+                .consume_duration(sample.write_bytes)
         } else {
             Duration::ZERO
         };
 
-        let r_bw_dur = if th.read_bytes > 0 {
-            self.read_bandwidth_limiter.consume_duration(th.read_bytes)
+        let r_bw_dur = if sample.read_bytes > 0 {
+            self.read_bandwidth_limiter
+                .consume_duration(sample.read_bytes)
         } else {
             Duration::ZERO
         };
 
         let max_dur = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
-        let should_delay = if max_dur > th.cpu_time {
-            max_dur - th.cpu_time
+        let should_delay = if max_dur > sample.cpu_time {
+            max_dur - sample.cpu_time
         } else {
             Duration::ZERO
         };

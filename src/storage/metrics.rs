@@ -634,7 +634,7 @@ lazy_static! {
 
     pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_txn_command_throttle_time_total",
-        "Total throttle time of txn commands.",
+        "Total throttle time (microsecond) of txn commands.",
         &["type"]
     )
     .unwrap();

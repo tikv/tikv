@@ -71,7 +71,7 @@ lazy_static! {
     pub static ref NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_non_txn_command_throttle_time_total",
-            "Total throttle time of non txn processing.",
+            "Total throttle time (microsecond) of non txn processing.",
             &["type"]
         )
         .unwrap();
