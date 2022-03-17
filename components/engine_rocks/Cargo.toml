@@ -51,8 +51,7 @@ fail = "0.5"
 case_macros = { path = "../case_macros" }
 
 [dependencies.rocksdb]
-git = "https://github.com/Little-Wallace/rust-rocksdb.git"
-branch = "commit-pipeline"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption"]
 
