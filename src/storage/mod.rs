@@ -38,6 +38,7 @@
 //! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
 
 pub mod config;
+pub mod config_manager;
 pub mod errors;
 pub mod kv;
 pub mod lock_manager;
@@ -259,6 +260,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn get_scheduler(&self) -> TxnScheduler<E, L> {
+        self.sched.clone()
     }
 
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
@@ -3617,6 +3622,7 @@ mod tests {
                 Some(cfs_opts),
                 cache.is_some(),
                 None, /*io_rate_limiter*/
+                None, /* CFOptions */
             )
         }
         .unwrap();
