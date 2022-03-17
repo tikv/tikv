@@ -2,6 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
+use prometheus_static_metric::*;
 
 #[cfg(target_os = "linux")]
 mod threads_linux;
@@ -47,6 +48,19 @@ pub fn dump() -> String {
     String::from_utf8(buffer).unwrap()
 }
 
+make_auto_flush_static_metric! {
+    // Some non-txn related types are placed here.
+    // ref `TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC`.
+    pub label_enum ThrottleType {
+        dag,
+        analyze_full_sampling,
+    }
+
+    pub struct NonTxnCommandThrottleTimeCounterVec: LocalIntCounter {
+        "type" => ThrottleType,
+    }
+}
+
 lazy_static! {
     pub static ref CRITICAL_ERROR: IntCounterVec = register_int_counter_vec!(
         "tikv_critical_error_total",
@@ -54,6 +68,17 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_non_txn_command_throttle_time_total",
+            "Total throttle time (microsecond) of non txn processing.",
+            &["type"]
+        )
+        .unwrap();
+    pub static ref NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC: NonTxnCommandThrottleTimeCounterVec = auto_flush_from!(
+        NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC,
+        NonTxnCommandThrottleTimeCounterVec
+    );
 }
 
 pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
