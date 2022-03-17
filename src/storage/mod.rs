@@ -1471,21 +1471,28 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                tls_collect_query(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    &key,
-                    &key,
-                    false,
-                    QueryKind::Get,
-                );
-
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+
+                let key: Key = match_template_api_version!(
+                    API,
+                    match api_version {
+                        ApiVersion::API => API::encode_raw_key_owned(key, None),
+                    }
+                );
+
+                tls_collect_query(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key.as_encoded(),
+                    key.as_encoded(),
+                    false,
+                    QueryKind::Get,
+                );
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -1497,16 +1504,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
-                let key: Key = match_template_api_version!(
-                    API,
-                    match api_version {
-                        ApiVersion::API => API::encode_raw_key_owned(key, None),
-                    }
-                );
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let key = Key::from_encoded(key);
                     let r = store
                         .raw_get_key_value(cf, &key, &mut stats)
                         .map_err(Error::from);
