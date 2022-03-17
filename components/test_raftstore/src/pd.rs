@@ -316,6 +316,7 @@ struct PdCluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+    min_resolved_ts: u64,
 
     replication_status: Option<ReplicationStatus>,
     region_replication_status: HashMap<u64, RegionReplicationStatus>,
@@ -354,6 +355,7 @@ impl PdCluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            min_resolved_ts: 0,
             replication_status: None,
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
@@ -715,6 +717,14 @@ impl PdCluster {
 
     fn get_gc_safe_point(&self) -> u64 {
         self.gc_safe_point
+    }
+
+    fn set_min_resolved_ts(&mut self, min_resolved_ts: u64) {
+        self.min_resolved_ts = min_resolved_ts;
+    }
+
+    fn get_min_resolved_ts(&self) -> u64 {
+        self.min_resolved_ts
     }
 
     fn handle_store_heartbeat(&mut self) -> Result<pdpb::StoreHeartbeatResponse> {
@@ -1256,6 +1266,10 @@ impl TestPdClient {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
 
+    pub fn get_min_resolved_ts(&self) -> u64 {
+        self.cluster.rl().get_min_resolved_ts()
+    }
+
     pub fn trigger_tso_failure(&self) {
         self.trigger_tso_failure.store(true, Ordering::SeqCst);
     }
@@ -1656,5 +1670,13 @@ impl PdClient for TestPdClient {
 
     fn feature_gate(&self) -> &FeatureGate {
         &self.feature_gate
+    }
+
+    fn report_min_resolved_ts(&self, _store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        self.cluster.wl().set_min_resolved_ts(min_resolved_ts);
+        Box::pin(ok(()))
     }
 }

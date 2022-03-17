@@ -10,6 +10,7 @@ use crate::{
 use engine_traits::CfName;
 use engine_traits::{IterOptions, Peekable, ReadOptions, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use pd_client::BucketMeta;
 use raftstore::store::{RegionIterator, RegionSnapshot, TxnExt};
 use raftstore::Error as RaftServerError;
 use txn_types::{Key, Value};
@@ -48,6 +49,10 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
 
     fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
         self.snapshot.txn_ext.as_ref()
+    }
+
+    fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
+        self.snapshot.bucket_meta.clone()
     }
 }
 
