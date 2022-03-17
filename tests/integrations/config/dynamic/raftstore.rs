@@ -29,6 +29,9 @@ impl Transport for MockTransport {
     fn send(&mut self, _: RaftMessage) -> Result<()> {
         unimplemented!()
     }
+    fn set_store_allowlist(&mut self, _: Vec<u64>) {
+        unimplemented!();
+    }
     fn need_flush(&self) -> bool {
         false
     }
