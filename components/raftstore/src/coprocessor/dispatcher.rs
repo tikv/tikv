@@ -500,24 +500,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn on_region_split(&self, region: &Region, new_region_ids: &[u64]) {
-        loop_ob! {
-            region,
-            &self.registry.region_change_observers,
-            on_region_split,
-            new_region_ids
-        }
-    }
-
-    pub fn on_region_merge(&self, region: &Region, source_region_id: u64) {
-        loop_ob! {
-            region,
-            &self.registry.region_change_observers,
-            on_region_merge,
-            source_region_id
-        }
-    }
-
     pub fn on_flush_applied_cmd_batch(
         &self,
         max_level: ObserveLevel,

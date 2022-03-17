@@ -655,7 +655,6 @@ dependencies = [
  "raftstore",
  "slog",
  "slog-global",
- "tempfile",
  "test_raftstore",
  "test_util",
  "thiserror",

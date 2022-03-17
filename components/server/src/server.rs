@@ -672,7 +672,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     self.config.causal_ts.renew_interval.0,
-                    self.config.causal_ts.renew_batch_init_size,
+                    self.config.causal_ts.renew_batch_min_size,
                 ));
                 if let Err(e) = tso {
                     panic!("Causal timestamp provider initialize failed: {:?}", e);
@@ -732,8 +732,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         // Register causal timestamp observer.
         if let Some(causal_ts_provider) = causal_ts_provider {
-            let causal_manager = Arc::new(causal_ts::RegionsCausalManager::default());
-            let causal_ob = causal_ts::CausalObserver::new(causal_manager, causal_ts_provider);
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         }
 

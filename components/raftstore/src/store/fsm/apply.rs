@@ -2351,7 +2351,6 @@ where
         }
 
         let kv_wb_mut = ctx.kv_wb_mut();
-        let mut new_region_ids = Vec::with_capacity(regions.len() - 1);
         for new_region in &regions {
             if new_region.get_id() == derived.get_id() {
                 continue;
@@ -2376,7 +2375,6 @@ where
                         self.tag, new_region, e
                     )
                 });
-            new_region_ids.push(new_region.get_id());
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
@@ -2384,8 +2382,6 @@ where
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
-
-        ctx.host.on_region_split(&derived, &new_region_ids);
 
         fail_point!(
             "apply_after_split_1_3",
@@ -2598,8 +2594,6 @@ where
                     self.tag, region, e
                 )
             });
-
-        ctx.host.on_region_merge(&self.region, source_region_id);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 

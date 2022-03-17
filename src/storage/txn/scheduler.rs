@@ -1013,14 +1013,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // Safety: `self.sched_pool` ensures a TLS engine exists.
         unsafe {
             with_tls_engine(|engine: &E| {
-                if let Err(e) = engine.async_write_ext(
-                    &ctx,
-                    to_be_write,
-                    engine_cb,
-                    None,
-                    proposed_cb,
-                    committed_cb,
-                ) {
+                if let Err(e) =
+                    engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb, committed_cb)
+                {
                     SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                     info!("engine async_write failed"; "cid" => cid, "err" => ?e);

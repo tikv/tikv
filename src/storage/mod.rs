@@ -91,7 +91,6 @@ use kvproto::kvrpcpb::{
     RawGetRequest,
 };
 use kvproto::pdpb::QueryKind;
-use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
@@ -1704,39 +1703,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    /// Build `pre_propose_cb` for API V2 raw write requests.
-    /// `pre_propose_cb` ingests causal timestamp into key in Raft pre-propose phase in Raftstore.
-    /// For a key, Raft pre-propose phase is single-threaded,
-    /// which will ensure that order of timestamp is consistent with sequence of Raft commands,
-    /// and maintain the "causality consistency" of the timestamp.
-    /// See https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
-    fn _build_raw_write_pre_propose_cb(
-        &self,
-    ) -> Option<Box<dyn FnOnce(&mut [RaftRequest]) + Send>> {
-        if let ApiVersion::V2 = self.api_version {
-            let causal_ts_provider = self.causal_ts_provider.as_ref().unwrap().clone();
-            Some(Box::new(move |requests: &mut [RaftRequest]| {
-                for req in requests {
-                    debug_assert!(matches!(req.get_cmd_type(), CmdType::Put));
-                    let ts = causal_ts_provider.get_ts().unwrap(); // `get_ts()` must not fail.
-                    api_version::APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts);
-
-                    debug!(
-                        "raw_write::pre_propose_cb";
-                        "ts" => ts,
-                        "key" => &log_wrappers::Value::key(req.get_put().get_key()),
-                    );
-                }
-            }))
-        } else {
-            None
-        }
-    }
-
     /// Write a raw key to the storage.
-    // RawKV API V2 TODO:
-    // 1. Invoke API::encode_raw_key_owned(key) to get encoded key
-    // 2. Build "pre_propose_cb" (= self.build_raw_write_pre_propose_cb()) and pass to "async_write_ext"
     pub fn raw_put(
         &self,
         ctx: Context,
@@ -1778,14 +1745,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb = None;
-        self.engine.async_write_ext(
+        self.engine.async_write(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
-            pre_propose_cb,
-            None,
-            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())

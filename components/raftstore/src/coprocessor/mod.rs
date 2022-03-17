@@ -180,10 +180,6 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
-
-    fn on_region_split(&self, _: &mut ObserverContext<'_>, _new_region_ids: &[u64]) {}
-
-    fn on_region_merge(&self, _: &mut ObserverContext<'_>, _source_region_id: u64) {}
 }
 
 #[derive(Clone, Debug, Default)]

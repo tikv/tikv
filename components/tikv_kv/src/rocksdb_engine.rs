@@ -26,7 +26,6 @@ use super::{
 };
 
 pub use engine_rocks::RocksSnapshot;
-use raftstore::store::msg::RaftRequestCallback;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -180,15 +179,14 @@ impl Engine for RocksEngine {
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None, None)
+        self.async_write_ext(ctx, batch, cb, None, None)
     }
 
     fn async_write_ext(
         &self,
         _: &Context,
-        mut batch: WriteData,
+        batch: WriteData,
         cb: Callback<()>,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -197,15 +195,9 @@ impl Engine for RocksEngine {
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        if let Some(cb) = pre_propose_cb {
-            let mut reqs = batch
-                .modifies
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>();
-            cb(&mut reqs);
-            batch.modifies = reqs.into_iter().map(Into::into).collect::<Vec<_>>();
-        }
+
+        // TODO: create CoprocessorHost & invoke "pre_propose" here.
+
         if let Some(cb) = proposed_cb {
             cb();
         }

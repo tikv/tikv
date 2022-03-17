@@ -11,7 +11,7 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Request as RaftRequest};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use kvproto::{import_sstpb::SstMeta, kvrpcpb::DiskFullOpt};
@@ -58,7 +58,6 @@ where
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
-pub type RaftRequestCallback = Box<dyn FnOnce(&mut [RaftRequest]) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -73,10 +72,6 @@ pub enum Callback<S: Snapshot> {
     /// Write callback.
     Write {
         cb: WriteCallback,
-        /// `pre_propose_cb` is called before a request to be proposed.
-        /// It's used to append causal timestamp to keys in raftstore for RawKV API V2 write requests,
-        /// to keep causal consistency between the causal timestamp & raft command sequence.
-        pre_propose_cb: Option<RaftRequestCallback>,
         /// `proposed_cb` is called after a request is proposed to the raft group successfully.
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
@@ -95,18 +90,16 @@ where
     S: Snapshot,
 {
     pub fn write(cb: WriteCallback) -> Self {
-        Self::write_ext(cb, None, None, None)
+        Self::write_ext(cb, None, None)
     }
 
     pub fn write_ext(
         cb: WriteCallback,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
         Callback::Write {
             cb,
-            pre_propose_cb,
             proposed_cb,
             committed_cb,
             request_times: smallvec![Instant::now()],
@@ -134,14 +127,6 @@ where
             Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
                 cb(resp);
-            }
-        }
-    }
-
-    pub fn invoke_pre_propose(&mut self, requests: &mut [RaftRequest]) {
-        if let Callback::Write { pre_propose_cb, .. } = self {
-            if let Some(cb) = pre_propose_cb.take() {
-                cb(requests)
             }
         }
     }

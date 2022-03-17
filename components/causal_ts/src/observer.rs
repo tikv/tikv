@@ -1,97 +1,40 @@
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{APIVersion, KeyMode, APIV2};
-use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::CfName;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::CmdType;
-use parking_lot::RwLock;
+use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
+use raftstore::coprocessor;
 use raftstore::coprocessor::{
-    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxRegionChangeObserver,
-    BoxRoleObserver, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
-    ObserverContext, RegionChangeObserver, RoleChange, RoleObserver,
+    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver,
+    Coprocessor, CoprocessorHost, ObserverContext, QueryObserver, RoleChange, RoleObserver,
 };
-use std::cmp;
 use std::sync::Arc;
-use txn_types::{Key, TimeStamp};
 
 use crate::CausalTsProvider;
 
-#[derive(Debug, Clone)]
-pub(crate) struct RegionCausalInfo {
-    pub(crate) max_ts: TimeStamp,
-}
-
-impl RegionCausalInfo {
-    pub(crate) fn new(max_ts: TimeStamp) -> RegionCausalInfo {
-        RegionCausalInfo { max_ts }
-    }
-}
-
-pub(crate) type RegionsMap = HashMap<u64, RegionCausalInfo>;
-
-#[derive(Debug, Default)]
-pub struct RegionsCausalManager {
-    regions_map: Arc<RwLock<RegionsMap>>,
-}
-
-impl RegionsCausalManager {
-    pub fn new() -> RegionsCausalManager {
-        RegionsCausalManager {
-            regions_map: Arc::new(RwLock::new(RegionsMap::default())),
-        }
-    }
-
-    pub fn update_max_ts(&self, region_id: u64, new_ts: TimeStamp) {
-        let mut m = self.regions_map.write();
-        m.entry(region_id)
-            .and_modify(|r| {
-                if new_ts > r.max_ts {
-                    r.max_ts = new_ts;
-                }
-            })
-            .or_insert_with(|| RegionCausalInfo::new(new_ts));
-    }
-
-    pub fn max_ts(&self, region_id: u64) -> TimeStamp {
-        let m = self.regions_map.read();
-        m.get(&region_id).map_or_else(TimeStamp::zero, |r| r.max_ts)
-    }
-
-    pub fn remove_region(&self, region_id: u64) {
-        let mut m = self.regions_map.write();
-        m.remove(&region_id);
-    }
-}
-
-/// CausalObserver maintains causality of RawKV requests by observer raft commands
+/// CausalObserver append timestamp for RawKV V2 data,
+/// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
 #[derive(Clone)]
 pub struct CausalObserver {
-    causal_manager: Arc<RegionsCausalManager>,
-    causal_ts: Arc<dyn CausalTsProvider>,
+    causal_ts_provider: Arc<dyn CausalTsProvider>,
 }
 
 // Causality is most important and should be done first.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
 impl CausalObserver {
-    pub fn new(
-        causal_manager: Arc<RegionsCausalManager>,
-        causal_ts: Arc<dyn CausalTsProvider>,
-    ) -> Self {
-        Self {
-            causal_manager,
-            causal_ts,
-        }
+    pub fn new(causal_ts_provider: Arc<dyn CausalTsProvider>) -> Self {
+        Self { causal_ts_provider }
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
-        coprocessor_host
-            .registry
-            .register_cmd_observer(CAUSAL_OBSERVER_PRIORITY, BoxCmdObserver::new(self.clone()));
+        coprocessor_host.registry.register_query_observer(
+            CAUSAL_OBSERVER_PRIORITY,
+            BoxQueryObserver::new(self.clone()),
+        );
         coprocessor_host.registry.register_apply_snapshot_observer(
             CAUSAL_OBSERVER_PRIORITY,
             BoxApplySnapshotObserver::new(self.clone()),
@@ -99,51 +42,35 @@ impl CausalObserver {
         coprocessor_host
             .registry
             .register_role_observer(CAUSAL_OBSERVER_PRIORITY, BoxRoleObserver::new(self.clone()));
-        coprocessor_host.registry.register_region_change_observer(
-            CAUSAL_OBSERVER_PRIORITY,
-            BoxRegionChangeObserver::new(self.clone()),
-        );
     }
 }
 
 impl Coprocessor for CausalObserver {}
 
-impl<E> CmdObserver<E> for CausalObserver {
-    /// Observe cmd applied, to maintain maximum causal timestamp for every region.
-    fn on_flush_applied_cmd_batch(&self, _: ObserveLevel, cmd_batches: &mut Vec<CmdBatch>, _: &E) {
-        debug!("CausalObserver::on_flush_applied_cmd_batch");
-        'outer: for batch in cmd_batches.iter() {
-            // Timestamp is always increasing in batches & commands. So iterate reversely.
-            for cmd in batch.cmds.iter().rev() {
-                if cmd.response.get_header().has_error() || cmd.request.has_admin_request() {
-                    continue;
-                }
-                for req in cmd.request.requests.iter().rev() {
-                    let key_slice = req.get_put().get_key();
-                    // RawKV using raft "Put" requests for both put & delete.
-                    if matches!(req.get_cmd_type(), CmdType::Put)
-                        && matches!(APIV2::parse_key_mode(key_slice), KeyMode::Raw)
-                    {
-                        debug_assert!({
-                            // verify key encoding
-                            let key = Key::from_encoded_slice(key_slice);
-                            APIV2::decode_raw_key_owned(key, true).is_ok()
-                        });
-                        let ts = Key::decode_ts_from(key_slice).unwrap();
-                        self.causal_manager.update_max_ts(batch.region_id, ts);
-                        debug!("CausalObserver::on_flush_applied_cmd_batch"; "region" => batch.region_id, "ts" => ?ts);
+impl QueryObserver for CausalObserver {
+    fn pre_propose_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        requests: &mut Vec<RaftRequest>,
+    ) -> coprocessor::Result<()> {
+        let mut ts = None;
 
-                        continue 'outer;
-                    }
-                }
+        for req in requests.iter_mut().filter(|r| {
+            r.get_cmd_type() == CmdType::Put
+                && APIV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
+        }) {
+            if ts.is_none() {
+                ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
+                    coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
+                })?);
             }
-        }
-    }
 
-    fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
+            APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
+        }
+        Ok(())
+    }
 }
 
-/// Observe snapshot applied, to maintain maximum causal timestamp for every region.
 impl ApplySnapshotObserver for CausalObserver {
     fn apply_plain_kvs(
         &self,
@@ -161,104 +88,70 @@ impl ApplySnapshotObserver for CausalObserver {
 
 impl CausalObserver {
     fn handle_snapshot(&self, region_id: u64) {
-        // Simply update to latest timestamp.
-        // As extracting timestamp by snapshot scan will be expensive.
-        // TODO: build and carry max timestamp with snapshot
-        let ts = self.causal_ts.get_ts().unwrap(); // will panic if un-initialized
-        self.causal_manager.update_max_ts(region_id, ts);
-        debug!("CausalObserver::handle_snapshot"; "region" => region_id, "latest-ts" => ts);
+        if let Err(err) = self.causal_ts_provider.flush() {
+            warn!("CausalObserver::handle_snapshot, flush timestamp error"; "region" => region_id, "error" => ?err);
+        } else {
+            debug!("CausalObserver::handle_snapshot, flush timestamp succeed"; "region" => region_id);
+        }
     }
 }
 
 impl RoleObserver for CausalObserver {
-    /// Observe becoming leader, to advance CausalTsProvider not less than this region.
+    /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         if role_change.state == StateRole::Leader {
             let region_id = ctx.region().get_id();
-            let max_ts = self.causal_manager.max_ts(region_id);
-            self.causal_ts.flush().unwrap();
-            debug!("CausalObserver::on_role_change: become leader & advance timestamp"; "region" => region_id, "max_ts" => max_ts);
+            if let Err(err) = self.causal_ts_provider.flush() {
+                warn!("CausalObserver::on_role_change, flush timestamp error"; "region" => region_id, "error" => ?err);
+            } else {
+                debug!("CausalObserver::on_role_change, flush timestamp succeed"; "region" => region_id);
+            }
         }
-    }
-}
-impl RegionChangeObserver for CausalObserver {
-    /// On region split, copy maximum timestamp to new regions.
-    fn on_region_split(&self, ctx: &mut ObserverContext<'_>, new_region_ids: &[u64]) {
-        let region_id = ctx.region().get_id();
-        let max_ts = self.causal_manager.max_ts(region_id);
-        for new_region_id in new_region_ids {
-            self.causal_manager.update_max_ts(*new_region_id, max_ts);
-            debug!("CausalObserver::on_role_split: set timestamp for new region"; "origin region" => region_id, "new region" => new_region_id, "ts" => max_ts);
-        }
-    }
-
-    /// On region merge, set maximum timestamp to larger one of target & source region.
-    fn on_region_merge(&self, ctx: &mut ObserverContext<'_>, source_region_id: u64) {
-        let source_region_ts = self.causal_manager.max_ts(source_region_id);
-        let target_region_id = ctx.region().get_id();
-        let target_region_ts = self.causal_manager.max_ts(target_region_id);
-        let max_ts = cmp::max(source_region_ts, target_region_ts);
-
-        self.causal_manager.update_max_ts(target_region_id, max_ts);
-        self.causal_manager.remove_region(source_region_id);
-        debug!("CausalObserver::on_role_merge: set timestamp for merge"; "source region" => ?source_region_ts, "target region" => ?target_region_ts, "ts" => max_ts);
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
-    use crate::SimpleTsoProvider;
+    use crate::BatchTsoProvider;
     use api_version::{APIVersion, APIV2};
-    use engine_rocks::util::new_temp_engine;
-    use engine_rocks::RocksEngine;
-    use engine_traits::Engines;
-    use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Request};
-    use raftstore::coprocessor::{
-        Cmd, CmdBatch, CmdObserveInfo, CmdObserver, ObserveHandle, ObserveLevel,
-    };
+    use futures::executor::block_on;
+    use kvproto::metapb::Region;
+    use kvproto::raft_cmdpb::{RaftCmdRequest, Request as RaftRequest};
+    use std::mem;
     use std::sync::Arc;
+    use std::time::Duration;
     use test_raftstore::TestPdClient;
+    use txn_types::{Key, TimeStamp};
 
-    fn init() -> (
-        CausalObserver,
-        Arc<RegionsCausalManager>,
-        Engines<RocksEngine, RocksEngine>,
-    ) {
-        let pd_client = TestPdClient::new(0, true);
-        let causal_ts = Arc::new(SimpleTsoProvider::new(Arc::new(pd_client)));
-        let manager = Arc::new(RegionsCausalManager::default());
-        let ob = CausalObserver::new(manager.clone(), causal_ts);
-
-        let path = tempfile::Builder::new()
-            .prefix("test-causal-observer")
-            .tempdir()
-            .unwrap();
-        let engines = new_temp_engine(&path);
-
-        (ob, manager, engines)
+    fn init() -> CausalObserver {
+        let pd_cli = Arc::new(TestPdClient::new(0, true));
+        pd_cli.set_tso(100.into());
+        let causal_ts_provider =
+            Arc::new(block_on(BatchTsoProvider::new_opt(pd_cli, Duration::ZERO, 100)).unwrap());
+        CausalObserver::new(causal_ts_provider)
     }
 
     #[test]
     fn test_causal_observer() {
-        let (ob, manager, engines) = init();
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let testcases: Vec<&[&[u8]]> = vec![
+            &[b"r\0a", b"r\0b"],
+            &[b"r\0c"],
+            &[b"r\0d", b"r\0e", b"r\0f"],
+        ];
 
-        let testcases: Vec<(u64, &[u64])> = vec![(10, &[100, 200]), (20, &[101]), (20, &[102])];
+        let ob = init();
+        let mut region = Region::default();
+        region.set_id(1);
+        let mut ctx = ObserverContext::new(&region);
 
-        let mut expected = RegionsMap::default();
-        for (region_id, ts_list) in testcases.into_iter() {
+        for (i, keys) in testcases.into_iter().enumerate() {
             let mut cmd_req = RaftCmdRequest::default();
 
-            for ts in ts_list {
-                expected
-                    .entry(region_id)
-                    .and_modify(|v| v.max_ts = ts.into())
-                    .or_insert_with(|| RegionCausalInfo::new(ts.into()));
-
-                let key = APIV2::encode_raw_key(b"rkey", Some(ts.into()));
+            for key in keys {
+                let key = APIV2::encode_raw_key(key, None);
                 let value = b"value".to_vec();
-                let mut req = Request::default();
+                let mut req = RaftRequest::default();
                 req.set_cmd_type(CmdType::Put);
                 req.mut_put().set_key(key.into_encoded());
                 req.mut_put().set_value(value);
@@ -266,20 +159,16 @@ mod tests {
                 cmd_req.mut_requests().push(req);
             }
 
-            let cmd = Cmd::new(0, cmd_req, RaftCmdResponse::default());
-            let mut cb = CmdBatch::new(&observe_info, region_id);
-            cb.push(&observe_info, region_id, cmd);
+            let query = cmd_req.mut_requests();
+            let mut vec_query: Vec<RaftRequest> = mem::take(query).into();
+            ob.pre_propose_query(&mut ctx, &mut vec_query).unwrap();
+            *query = vec_query.into();
 
-            <CausalObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
-                &ob,
-                ObserveLevel::All,
-                &mut vec![cb],
-                &engines.kv,
-            );
-        }
-
-        for (k, v) in expected {
-            assert_eq!(v.max_ts, manager.max_ts(k));
+            for req in cmd_req.get_requests() {
+                let key = Key::from_encoded_slice(req.get_put().get_key());
+                let (_, ts) = APIV2::decode_raw_key_owned(key, true).unwrap();
+                assert_eq!(ts, Some(TimeStamp::from(i as u64 + 101)));
+            }
         }
     }
 }

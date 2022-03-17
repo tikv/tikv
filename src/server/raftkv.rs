@@ -25,7 +25,6 @@ use kvproto::{
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
-use raftstore::store::msg::RaftRequestCallback;
 use raftstore::{
     coprocessor::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
@@ -229,7 +228,6 @@ where
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<CmdRes<E::Snapshot>>,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -272,7 +270,6 @@ where
             Box::new(move |resp| {
                 write_cb(on_write_result(resp).map_err(Error::into));
             }),
-            pre_propose_cb,
             proposed_cb,
             committed_cb,
         );
@@ -369,7 +366,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
     ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None, None)
+        self.async_write_ext(ctx, batch, write_cb, None, None)
     }
 
     fn async_write_ext(
@@ -377,7 +374,6 @@ where
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<()>,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> kv::Result<()> {
@@ -410,7 +406,6 @@ where
                     write_cb(Err(e))
                 }
             }),
-            pre_propose_cb,
             proposed_cb,
             committed_cb,
         )

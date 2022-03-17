@@ -57,7 +57,6 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
-use raftstore::store::msg::RaftRequestCallback;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -280,7 +279,6 @@ pub trait Engine: Send + Clone + 'static {
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<()>,
-        _pre_proposed_cb: Option<RaftRequestCallback>,
         _proposed_cb: Option<ExtCallback>,
         _committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
