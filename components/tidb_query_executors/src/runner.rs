@@ -443,9 +443,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             let mut chunk = Chunk::default();
 
-            let mut throttle = self.quota_limiter.new_throttle();
+            let mut sample = self.quota_limiter.new_sample();
             let (drained, record_len) = {
-                let _guard = throttle.observe_cpu();
+                let _guard = sample.observe_cpu();
                 self.internal_handle_request(
                     false,
                     batch_size,
@@ -455,7 +455,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 )?
             };
 
-            let quota_delay = self.quota_limiter.async_consume(throttle).await;
+            let quota_delay = self.quota_limiter.async_consume(sample).await;
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::dag)

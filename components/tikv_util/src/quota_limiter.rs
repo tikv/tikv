@@ -6,6 +6,7 @@ use super::config::ReadableSize;
 use super::time::Limiter;
 use super::timer::GLOBAL_TIMER_HANDLE;
 
+use codec::prelude::BufferWriter;
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
 
@@ -29,14 +30,14 @@ pub struct QuotaLimiter {
 }
 
 // Throttle must be consumed in quota limiter.
-pub struct Throttle {
+pub struct Sample {
     read_bytes: usize,
     write_bytes: usize,
     cpu_time: Duration,
     enable_cpu_limit: bool,
 }
 
-impl<'a> Throttle {
+impl<'a> Sample {
     pub fn add_read_bytes(&mut self, bytes: usize) {
         self.read_bytes += bytes;
     }
@@ -50,13 +51,13 @@ impl<'a> Throttle {
     pub fn observe_cpu(&'a mut self) -> CpuObserveGuard<'a> {
         if self.enable_cpu_limit {
             CpuObserveGuard {
-                timer: None,
-                throttle: self,
+                timer: Some(ThreadTime::now()),
+                sample: self,
             }
         } else {
             CpuObserveGuard {
-                timer: Some(ThreadTime::now()),
-                throttle: self,
+                timer: None,
+                sample: self,
             }
         }
     }
@@ -64,22 +65,17 @@ impl<'a> Throttle {
     fn add_cpu_time(&mut self, time: Duration) {
         self.cpu_time += time;
     }
-
-    #[cfg(test)]
-    pub fn get_cpu_time(&self) -> Duration {
-        self.cpu_time
-    }
 }
 
 pub struct CpuObserveGuard<'a> {
     timer: Option<ThreadTime>,
-    throttle: &'a mut Throttle,
+    sample: &'a mut Sample,
 }
 
 impl<'a> Drop for CpuObserveGuard<'a> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
-            self.throttle.add_cpu_time(timer.elapsed());
+            self.sample.add_cpu_time(timer.elapsed());
         }
     }
 }
@@ -127,8 +123,8 @@ impl QuotaLimiter {
     }
 
     // To generate a sampler.
-    pub fn new_throttle(&self) -> Throttle {
-        Throttle {
+    pub fn new_sample(&self) -> Sample {
+        Sample {
             read_bytes: 0,
             write_bytes: 0,
             cpu_time: Duration::ZERO,
@@ -138,7 +134,7 @@ impl QuotaLimiter {
 
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
-    pub async fn async_consume(&self, th: Throttle) -> Duration {
+    pub async fn async_consume(&self, th: Sample) -> Duration {
         let cpu_dur = self
             .cputime_limiter
             .consume_duration(th.cpu_time.as_micros() as usize);
@@ -193,7 +189,7 @@ mod tests {
         let thread_start_time = ThreadTime::now();
 
         // (1250 * CPU_TIME_FACTOR) * 1 sec = 1000 millis
-        let mut th = quota_limiter.new_throttle();
+        let mut th = quota_limiter.new_sample();
         th.add_cpu_time(Duration::from_millis(200));
         let begin_instant = std::time::Instant::now();
         block_on(quota_limiter.async_consume(th));
@@ -202,7 +198,7 @@ mod tests {
 
         // only bytes take effect (1000ms - 300ms used by cpu)
         // (1250 * CPU_TIME_FACTOR) * 1 sec = 1000 millis
-        let mut th = quota_limiter.new_throttle();
+        let mut th = quota_limiter.new_sample();
         th.add_cpu_time(Duration::from_millis(300));
         th.add_write_bytes(ReadableSize::kb(1).0 as usize);
         let begin_instant = std::time::Instant::now();
@@ -211,7 +207,7 @@ mod tests {
         assert!(begin_instant.elapsed() < Duration::from_millis(800));
 
         // test max delay
-        let mut th = quota_limiter.new_throttle();
+        let mut th = quota_limiter.new_sample();
         th.add_cpu_time(Duration::from_millis(100));
         th.add_read_bytes(ReadableSize::kb(100).0 as usize);
         let begin_instant = std::time::Instant::now();

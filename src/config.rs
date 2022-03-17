@@ -2437,17 +2437,17 @@ impl LogConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
-    pub forefront_cpu_time: usize,
-    pub write_bandwidth: ReadableSize,
-    pub read_bandwidth: ReadableSize,
+    pub foreground_cpu_time: usize,
+    pub foreground_write_bandwidth: ReadableSize,
+    pub foreground_read_bandwidth: ReadableSize,
 }
 
 impl Default for QuotaConfig {
     fn default() -> Self {
         Self {
-            forefront_cpu_time: 0,
-            write_bandwidth: ReadableSize(0),
-            read_bandwidth: ReadableSize(0),
+            foreground_cpu_time: 0,
+            foreground_write_bandwidth: ReadableSize(0),
+            foreground_read_bandwidth: ReadableSize(0),
         }
     }
 }

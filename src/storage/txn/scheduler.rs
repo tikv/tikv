@@ -745,7 +745,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
-        let mut throttle = quota_limiter.new_throttle();
+        let mut sample = quota_limiter.new_sample();
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
@@ -753,7 +753,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let deadline = task.cmd.deadline();
         let write_result = {
-            let _guard = throttle.observe_cpu();
+            let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
@@ -767,8 +767,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .map_err(StorageError::from)
         };
 
-        throttle.add_write_bytes(write_bytes);
-        let quota_delay = quota_limiter.async_consume(throttle).await;
+        sample.add_write_bytes(write_bytes);
+        let quota_delay = quota_limiter.async_consume(sample).await;
         if !quota_delay.is_zero() {
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)

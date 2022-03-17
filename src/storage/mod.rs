@@ -539,7 +539,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let api_version = self.api_version;
 
         let quota_limiter = self.quota_limiter.clone();
-        let mut throttle = quota_limiter.new_throttle();
+        let mut sample = quota_limiter.new_sample();
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -583,7 +583,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let buckets = snapshot.ext().get_buckets();
                     let mut statistics = Statistics::default();
                     let (result, delta) = {
-                        let _guard = throttle.observe_cpu();
+                        let _guard = sample.observe_cpu();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -628,8 +628,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             .unwrap_or(&None)
                             .as_ref()
                             .map_or(0, |v| v.len());
-                    throttle.add_read_bytes(read_bytes);
-                    let quota_delay = quota_limiter.async_consume(throttle).await;
+                    sample.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.async_consume(sample).await;
                     if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
@@ -866,7 +866,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let quota_limiter = self.quota_limiter.clone();
-        let mut throttle = quota_limiter.new_throttle();
+        let mut sample = quota_limiter.new_sample();
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now_coarse();
@@ -915,7 +915,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
                     let (result, delta, stats) = {
-                        let _guard = throttle.observe_cpu();
+                        let _guard = sample.observe_cpu();
                         let perf_statistics = PerfStatisticsInstant::new();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -972,8 +972,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
                         + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
                         + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
-                    throttle.add_read_bytes(read_bytes);
-                    let quota_delay = quota_limiter.async_consume(throttle).await;
+                    sample.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.async_consume(sample).await;
                     if !quota_delay.is_zero() {
                         TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                             .get(CMD)
