@@ -2433,6 +2433,25 @@ impl LogConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct QuotaConfig {
+    pub foreground_cpu_time: usize,
+    pub foreground_write_bandwidth: ReadableSize,
+    pub foreground_read_bandwidth: ReadableSize,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            foreground_cpu_time: 0,
+            foreground_write_bandwidth: ReadableSize(0),
+            foreground_read_bandwidth: ReadableSize(0),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2487,6 +2506,9 @@ pub struct TiKvConfig {
 
     #[online_config(skip)]
     pub log: LogConfig,
+
+    #[online_config(skip)]
+    pub quota: QuotaConfig,
 
     #[online_config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2567,6 +2589,7 @@ impl Default for TiKvConfig {
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
