@@ -22,12 +22,11 @@ use txn_types::{Key, Value};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    modifies_to_requests, write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
-    ExtCallback, Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
+    Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
-use raftstore::store::msg::RaftRequestCallback;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -92,6 +91,7 @@ impl RocksEngine {
         cfs_opts: Option<Vec<CFOptions<'_>>>,
         shared_block_cache: bool,
         io_rate_limiter: Option<Arc<IORateLimiter>>,
+        db_opts: Option<DBOptions>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -102,8 +102,11 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let worker = Worker::new("engine-rocksdb");
-        let mut db_opts = DBOptions::new();
-        db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+        let mut db_opts = db_opts.unwrap_or_else(|| DBOptions::new());
+        if io_rate_limiter.is_some() {
+            db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+        }
+
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
             Some(db_opts),
@@ -232,7 +235,7 @@ impl Engine for RocksEngine {
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None, None)
+        self.async_write_ext(ctx, batch, cb, None, None)
     }
 
     fn async_write_ext(
@@ -240,7 +243,6 @@ impl Engine for RocksEngine {
         _: &Context,
         mut batch: WriteData,
         cb: Callback<()>,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -249,11 +251,9 @@ impl Engine for RocksEngine {
         if batch.modifies.is_empty() {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
-        if let Some(cb) = pre_propose_cb {
-            let mut reqs = modifies_to_requests(batch.modifies.clone());
-            cb(&mut reqs);
-            batch.modifies = requests_to_modifies(reqs);
-        }
+
+        // TODO: create CoprocessorHost & invoke "pre_propose" here.
+
         if let Some(cb) = proposed_cb {
             cb();
         }

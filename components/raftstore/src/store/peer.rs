@@ -19,7 +19,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
-use kvproto::metapb::{self, Buckets, PeerRole};
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
@@ -66,7 +66,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
-use pd_client::INVALID_ID;
+use pd_client::{BucketStat, INVALID_ID};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk::DiskUsage;
@@ -607,8 +607,7 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub region_buckets: Buckets,
-
+    pub region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
 }
@@ -735,7 +734,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
-            region_buckets: Buckets::default(),
+            region_buckets: None,
             lead_transferee: raft::INVALID_ID,
         };
 
@@ -2383,6 +2382,7 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
+                self.region_buckets.as_ref().map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
@@ -2931,7 +2931,7 @@ where
                     &mut stores,
                     &mut maybe_transfer_leader,
                 ) {
-                    self.propose_normal(ctx, req, &mut cb)
+                    self.propose_normal(ctx, req)
                 } else {
                     // If leader node is disk full, try to transfer leader to a node with disk usage normal to
                     // keep write availablity not downback.
@@ -3471,8 +3471,7 @@ where
         // update leader lease.
         if self.leader_lease.is_suspect() {
             let req = RaftCmdRequest::default();
-            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req, &mut Callback::None)
-            {
+            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
                     is_conf_change: false,
                     index,
@@ -3731,7 +3730,7 @@ where
         }
         debug!("propose {} pessimistic locks before prepare merge", cmd.get_requests().len();
             "region_id" => self.region_id);
-        self.propose_normal(ctx, cmd, &mut Callback::None)?;
+        self.propose_normal(ctx, cmd)?;
         Ok(())
     }
 
@@ -3739,9 +3738,7 @@ where
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
-        cb: &mut Callback<EK::Snapshot>,
     ) -> Result<ProposalContext> {
-        cb.invoke_pre_propose(req.mut_requests().as_mut_slice());
         poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
         let mut ctx = ProposalContext::empty();
 
@@ -3774,7 +3771,6 @@ where
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
         mut req: RaftCmdRequest,
-        cb: &mut Callback<EK::Snapshot>,
     ) -> Result<Either<u64, u64>> {
         if (self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)
@@ -3807,7 +3803,7 @@ where
         }
 
         // TODO: validate request for unexpected changes.
-        let ctx = match self.pre_propose(poll_ctx, &mut req, cb) {
+        let ctx = match self.pre_propose(poll_ctx, &mut req) {
             Ok(ctx) => ctx,
             Err(e) => {
                 // Skipping PrepareMerge is logged when the PendingPrepareMerge error is generated.
@@ -4130,6 +4126,7 @@ where
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
+            snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
@@ -5291,9 +5288,9 @@ mod tests {
                 continue;
             }
             let cb = if committed.contains(&(index, term)) {
-                Callback::write_ext(Box::new(|_| {}), None, None, Some(must_call()))
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_call()))
             } else {
-                Callback::write_ext(Box::new(|_| {}), None, None, Some(must_not_call()))
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_not_call()))
             };
             pq.push(Proposal {
                 index,

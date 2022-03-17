@@ -21,10 +21,10 @@ use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
+    kvrpcpb::IsolationLevel,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
-use raftstore::store::msg::RaftRequestCallback;
 use raftstore::{
     coprocessor::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
@@ -36,7 +36,6 @@ use raftstore::{
         RegionSnapshot, WriteResponse,
     },
 };
-use tikv_kv::modifies_to_requests;
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
@@ -229,7 +228,6 @@ where
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<CmdRes<E::Snapshot>>,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -251,7 +249,7 @@ where
             raftkv_early_error_report_fp()?;
         }
 
-        let reqs = modifies_to_requests(batch.modifies);
+        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
@@ -272,7 +270,6 @@ where
             Box::new(move |resp| {
                 write_cb(on_write_result(resp).map_err(Error::into));
             }),
-            pre_propose_cb,
             proposed_cb,
             committed_cb,
         );
@@ -369,7 +366,7 @@ where
         batch: WriteData,
         write_cb: Callback<()>,
     ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None, None)
+        self.async_write_ext(ctx, batch, write_cb, None, None)
     }
 
     fn async_write_ext(
@@ -377,7 +374,6 @@ where
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<()>,
-        pre_propose_cb: Option<RaftRequestCallback>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> kv::Result<()> {
@@ -410,7 +406,6 @@ where
                     write_cb(Err(e))
                 }
             }),
-            pre_propose_cb,
             proposed_cb,
             committed_cb,
         )
@@ -535,6 +530,9 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
+                // The replica read is not compatible with `RcCheckTs` isolation level yet.
+                // It's ensured in the tidb side when `RcCheckTs` is enabled for read requests,
+                // the replica read would not be enabled at the same time.
                 let res = self.concurrency_manager.read_range_check(
                     start_key.as_ref(),
                     end_key.as_ref(),
@@ -544,6 +542,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             key,
                             start_ts,
                             &Default::default(),
+                            IsolationLevel::Si,
                         )
                     },
                 );

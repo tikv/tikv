@@ -41,6 +41,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
+use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
@@ -583,6 +584,7 @@ where
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
+            bucket_stat: delegate.buckets.clone().map(Box::new),
         });
     }
 
@@ -892,6 +894,8 @@ where
     raft_engine: Box<dyn RaftEngineReadOnly>,
 
     trace: ApplyMemoryTrace,
+
+    buckets: Option<BucketStat>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -923,6 +927,7 @@ where
             priority: Priority::Normal,
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
+            buckets: None,
         }
     }
 
@@ -1508,6 +1513,9 @@ where
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, value.len() as u64);
+        }
 
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);
         let key = ctx.key_buffer.as_slice();
@@ -1555,6 +1563,9 @@ where
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, 0);
+        }
 
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);
         let key = ctx.key_buffer.as_slice();
@@ -2340,7 +2351,6 @@ where
         }
 
         let kv_wb_mut = ctx.kv_wb_mut();
-        let mut new_region_ids = Vec::with_capacity(regions.len() - 1);
         for new_region in &regions {
             if new_region.get_id() == derived.get_id() {
                 continue;
@@ -2365,7 +2375,6 @@ where
                         self.tag, new_region, e
                     )
                 });
-            new_region_ids.push(new_region.get_id());
         }
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
@@ -2373,8 +2382,6 @@ where
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
-
-        ctx.host.on_region_split(&derived, &new_region_ids);
 
         fail_point!(
             "apply_after_split_1_3",
@@ -2587,8 +2594,6 @@ where
                     self.tag, region, e
                 )
             });
-
-        ctx.host.on_region_merge(&self.region, source_region_id);
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
@@ -2869,6 +2874,7 @@ where
     pub entries: SmallVec<[CachedEntries; 1]>,
     pub entries_size: usize,
     pub cbs: Vec<Proposal<S>>,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
 }
 
 impl<S: Snapshot> Apply<S> {
@@ -2880,6 +2886,7 @@ impl<S: Snapshot> Apply<S> {
         commit_term: u64,
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
+        buckets: Option<Arc<BucketMeta>>,
     ) -> Apply<S> {
         let mut entries_size = 0;
         for e in &entries {
@@ -2895,6 +2902,7 @@ impl<S: Snapshot> Apply<S> {
             entries: smallvec![cached_entries],
             entries_size,
             cbs,
+            bucket_meta: buckets,
         }
     }
 
@@ -3189,6 +3197,7 @@ where
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
+    pub bucket_stat: Option<Box<BucketStat>>,
 }
 
 #[derive(Debug)]
@@ -3299,6 +3308,14 @@ where
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
+        if let Some(meta) = apply.bucket_meta.clone() {
+            let buckets = self
+                .delegate
+                .buckets
+                .get_or_insert_with(BucketStat::default);
+            buckets.stats = new_bucket_stats(&meta);
+            buckets.meta = meta;
+        }
 
         let prev_state = (
             self.delegate.apply_state.get_commit_index(),
@@ -4517,6 +4534,7 @@ mod tests {
             commit_term,
             entries,
             cbs,
+            None,
         )
     }
 

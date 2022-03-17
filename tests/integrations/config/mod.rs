@@ -228,6 +228,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        report_min_resolved_ts_interval: ReadableDuration::millis(233),
         raft_msg_flush_interval: ReadableDuration::micros(250),
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
@@ -734,7 +735,7 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: false,
-        in_memory: true,
+        in_memory: false,
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
@@ -751,6 +752,10 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+    };
+    value.causal_ts = CausalTsConfig {
+        renew_interval: ReadableDuration::millis(100),
+        renew_batch_min_size: 100,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

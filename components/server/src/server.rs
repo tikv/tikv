@@ -25,7 +25,6 @@ use std::{
     u64,
 };
 
-use causal_ts::CausalTsProvider;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -44,7 +43,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -69,7 +68,7 @@ use tikv::{
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSSTService, SSTImporter},
-    read_pool::{build_yatp_read_pool, ReadPool},
+    read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::raftkv::ReplicaReadLockChecker,
     server::{
         config::Config as ServerConfig,
@@ -84,7 +83,7 @@ use tikv::{
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
-        self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
+        self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::FlowController, Engine,
     },
 };
@@ -92,6 +91,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
+    quota_limiter::QuotaLimiter,
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
@@ -190,6 +190,7 @@ struct TiKVServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
@@ -257,6 +258,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        let quota_limiter = Arc::new(QuotaLimiter::new(
+            config.quota.foreground_cpu_time,
+            config.quota.foreground_write_bandwidth,
+            config.quota.foreground_read_bandwidth,
+        ));
+
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -280,6 +287,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             background_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
+            quota_limiter,
         }
     }
 
@@ -568,15 +576,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
-                self.config.storage.block_cache.shared,
-                ttl_scheduler,
-                flow_controller.clone(),
-            )),
-        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -666,19 +665,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pools.handle()
         };
 
-        // Create causal timestamp provider
-        let causal_ts_provider: Option<Arc<dyn CausalTsProvider>> =
-            if let ApiVersion::V2 = self.config.storage.api_version() {
-                let hlc = causal_ts::HlcProvider::new(self.pd_client.clone());
-                if let Err(e) = block_on(hlc.init()) {
-                    panic!("Causal timestamp provider initialize failed: {:?}", e);
-                }
-                info!("Causal timestamp startup.");
-                Some(Arc::new(hlc))
-            } else {
-                None
-            };
-
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
@@ -686,13 +672,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            flow_controller,
+            flow_controller.clone(),
             pd_sender.clone(),
             resource_tag_factory.clone(),
-            causal_ts_provider.clone(),
+            Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+        cfg_controller.register(
+            tikv::config::Module::Storage,
+            Box::new(StorageConfigManger::new(
+                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.config.storage.block_cache.shared,
+                ttl_scheduler,
+                flow_controller,
+                storage.get_scheduler(),
+            )),
+        );
 
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
@@ -726,12 +722,32 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register causal timestamp observer.
-        if let Some(causal_ts_provider) = causal_ts_provider {
-            let causal_manager = Arc::new(causal_ts::RegionsCausalManager::default());
-            let causal_ob = causal_ts::CausalObserver::new(causal_manager, causal_ts_provider);
-            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        if self.config.readpool.is_unified_pool_enabled() {
+            cfg_controller.register(
+                tikv::config::Module::Readpool,
+                Box::new(ReadPoolConfigManager(
+                    unified_read_pool.as_ref().unwrap().handle(),
+                )),
+            );
         }
+
+        // Register causal observer for RawKV API V2
+        // TODO: uncomment after finish modification of Storage.
+        // if let ApiVersion::V2 = self.config.storage.api_version() {
+        //     let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+        //         self.pd_client.clone(),
+        //         self.config.causal_ts.renew_interval.0,
+        //         self.config.causal_ts.renew_batch_min_size,
+        //     ));
+        //     if let Err(e) = tso {
+        //         panic!("Causal timestamp provider initialize failed: {:?}", e);
+        //     }
+        //     let causal_ts_provider = Arc::new(tso.unwrap());
+        //     info!("Causal timestamp provider startup.");
+        //
+        //     let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        //     causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // }
 
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
@@ -797,6 +813,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
                 resource_tag_factory,
+                Arc::clone(&self.quota_limiter),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),

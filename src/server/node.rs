@@ -15,7 +15,6 @@ use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
-use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::ApiVersion;
@@ -32,6 +31,7 @@ use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager,
 use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -49,7 +49,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     flow_controller: Arc<FlowController>,
     reporter: R,
     resource_tag_factory: ResourceTagFactory,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+    quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
@@ -66,7 +66,7 @@ where
         flow_controller,
         reporter,
         resource_tag_factory,
-        causal_ts_provider,
+        quota_limiter,
         feature_gate,
     )?;
     Ok(store)

@@ -40,6 +40,7 @@ use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange};
 use kvproto::raft_cmdpb;
+use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape};
@@ -56,7 +57,6 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
-use raftstore::store::msg::RaftRequestCallback;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -103,9 +103,8 @@ impl Modify {
     }
 }
 
-pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
-    let mut reqs = Vec::with_capacity(modifies.len());
-    for m in modifies {
+impl From<Modify> for raft_cmdpb::Request {
+    fn from(m: Modify) -> raft_cmdpb::Request {
         let mut req = raft_cmdpb::Request::default();
         match m {
             Modify::Delete(cf, k) => {
@@ -145,10 +144,57 @@ pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<raft_cmdpb::Request> {
                 req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
                 req.set_delete_range(delete_range);
             }
-        }
-        reqs.push(req);
+        };
+        req
     }
-    reqs
+}
+
+impl From<raft_cmdpb::Request> for Modify {
+    fn from(mut req: raft_cmdpb::Request) -> Modify {
+        match req.get_cmd_type() {
+            raft_cmdpb::CmdType::Delete => {
+                let delete = req.mut_delete();
+                Modify::Delete(
+                    engine_traits::name_to_cf(delete.get_cf()).unwrap(),
+                    Key::from_encoded(delete.take_key()),
+                )
+            }
+            raft_cmdpb::CmdType::Put if req.get_put().get_cf() == engine_traits::CF_LOCK => {
+                let put = req.mut_put();
+                let lock = txn_types::Lock::parse(put.get_value()).unwrap();
+                Modify::PessimisticLock(
+                    Key::from_encoded(put.take_key()),
+                    txn_types::PessimisticLock {
+                        primary: lock.primary.into_boxed_slice(),
+                        start_ts: lock.ts,
+                        ttl: lock.ttl,
+                        for_update_ts: lock.for_update_ts,
+                        min_commit_ts: lock.min_commit_ts,
+                    },
+                )
+            }
+            raft_cmdpb::CmdType::Put => {
+                let put = req.mut_put();
+                Modify::Put(
+                    engine_traits::name_to_cf(put.get_cf()).unwrap(),
+                    Key::from_encoded(put.take_key()),
+                    put.take_value(),
+                )
+            }
+            raft_cmdpb::CmdType::DeleteRange => {
+                let delete_range = req.mut_delete_range();
+                Modify::DeleteRange(
+                    engine_traits::name_to_cf(delete_range.get_cf()).unwrap(),
+                    Key::from_encoded(delete_range.take_start_key()),
+                    Key::from_encoded(delete_range.take_end_key()),
+                    delete_range.get_notify_only(),
+                )
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
 }
 
 impl PessimisticLockPair for Modify {
@@ -242,7 +288,6 @@ pub trait Engine: Send + Clone + 'static {
         ctx: &Context,
         batch: WriteData,
         write_cb: Callback<()>,
-        _pre_proposed_cb: Option<RaftRequestCallback>,
         _proposed_cb: Option<ExtCallback>,
         _committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
@@ -349,6 +394,10 @@ pub trait SnapshotExt {
     }
 
     fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
+        None
+    }
+
+    fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
     }
 }
@@ -1073,5 +1122,113 @@ pub mod tests {
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
         assert_eq!(iter.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::raft_cmdpb;
+    use engine_traits::CF_WRITE;
+
+    #[test]
+    fn test_modifies_to_requests() {
+        let modifies = vec![
+            Modify::Delete(CF_DEFAULT, Key::from_encoded_slice(b"k-del")),
+            Modify::Put(
+                CF_WRITE,
+                Key::from_encoded_slice(b"k-put"),
+                b"v-put".to_vec(),
+            ),
+            Modify::PessimisticLock(
+                Key::from_encoded_slice(b"k-lock"),
+                PessimisticLock {
+                    primary: b"primary".to_vec().into_boxed_slice(),
+                    start_ts: 100.into(),
+                    ttl: 200,
+                    for_update_ts: 101.into(),
+                    min_commit_ts: 102.into(),
+                },
+            ),
+            Modify::DeleteRange(
+                CF_DEFAULT,
+                Key::from_encoded_slice(b"kd-start"),
+                Key::from_encoded_slice(b"kd-end"),
+                false,
+            ),
+        ];
+
+        let requests = vec![
+            {
+                let mut delete = raft_cmdpb::DeleteRequest::default();
+                delete.set_key(b"k-del".to_vec());
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::Delete);
+                req.set_delete(delete);
+                req
+            },
+            {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_cf("write".to_string());
+                put.set_key(b"k-put".to_vec());
+                put.set_value(b"v-put".to_vec());
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+                req
+            },
+            {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_cf("lock".to_string());
+                put.set_key(b"k-lock".to_vec());
+                put.set_value(
+                    PessimisticLock {
+                        primary: b"primary".to_vec().into_boxed_slice(),
+                        start_ts: 100.into(),
+                        ttl: 200,
+                        for_update_ts: 101.into(),
+                        min_commit_ts: 102.into(),
+                    }
+                    .into_lock()
+                    .to_bytes(),
+                );
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+                req
+            },
+            {
+                let mut delete_range = raft_cmdpb::DeleteRangeRequest::default();
+                delete_range.set_cf("default".to_string());
+                delete_range.set_start_key(b"kd-start".to_vec());
+                delete_range.set_end_key(b"kd-end".to_vec());
+                delete_range.set_notify_only(false);
+
+                let mut req = raft_cmdpb::Request::default();
+                req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+                req
+            },
+        ];
+
+        assert_eq!(
+            modifies
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<raft_cmdpb::Request>>(),
+            requests
+        );
+
+        assert_eq!(
+            requests
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<Modify>>(),
+            modifies
+        )
     }
 }
