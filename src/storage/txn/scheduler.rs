@@ -780,8 +780,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .map_err(StorageError::from)
         };
 
-        // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
-        sample.add_write_bytes(write_bytes);
+        if !write_result.is_err() {
+            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
+            sample.add_write_bytes(write_bytes);
+        }
         let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
             + statistics.cf_statistics(CF_LOCK).flow_stats.read_bytes
             + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
