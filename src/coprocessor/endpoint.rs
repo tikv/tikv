@@ -35,7 +35,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_util::time::Instant;
+use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
 use txn_types::Lock;
 
 /// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
@@ -71,6 +71,8 @@ pub struct Endpoint<E: Engine> {
     slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
+
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -82,6 +84,7 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         perf_level: PerfLevel,
         resource_tag_factory: ResourceTagFactory,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -105,6 +108,7 @@ impl<E: Engine> Endpoint<E> {
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
+            quota_limiter,
         }
     }
 
@@ -211,6 +215,7 @@ impl<E: Engine> Endpoint<E> {
                 self.check_memory_locks(&req_ctx)?;
 
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
+                let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
                     let store = SnapshotStore::new(
@@ -235,6 +240,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         req.get_is_cache_enabled(),
                         paging_size,
+                        quota_limiter,
                     )
                     .data_version(data_version)
                     .build()
@@ -266,6 +272,7 @@ impl<E: Engine> Endpoint<E> {
                 );
 
                 self.check_memory_locks(&req_ctx)?;
+                let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
                     statistics::analyze::AnalyzeContext::new(
@@ -274,6 +281,7 @@ impl<E: Engine> Endpoint<E> {
                         start_ts,
                         snap,
                         req_ctx,
+                        quota_limiter,
                     )
                     .map(|h| h.into_boxed())
                 });
@@ -839,6 +847,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         // a normal request
@@ -880,6 +889,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
         copr.recursion_limit = 100;
 
@@ -918,6 +928,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let mut req = coppb::Request::default();
@@ -941,6 +952,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let mut req = coppb::Request::default();
@@ -987,6 +999,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1035,6 +1048,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let handler_builder =
@@ -1060,6 +1074,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         // Fail immediately
@@ -1113,6 +1128,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1141,6 +1157,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1240,6 +1257,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1308,6 +1326,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1636,6 +1655,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
 
         {
@@ -1699,6 +1719,7 @@ mod tests {
             cm,
             PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
         );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
