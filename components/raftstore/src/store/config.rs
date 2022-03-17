@@ -212,6 +212,8 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
+    /// Has been abandoned. Currently set to 0 to work around it, related logic will be
+    /// removed later.
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
     /// increasing. For raftstore layer entries will be evicted from entry cache, if they
     /// utilize memory more than `evict_cache_on_memory_ratio` * total.
@@ -344,7 +346,7 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.2,
+            evict_cache_on_memory_ratio: 0.0,
             applys_memory_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,

@@ -8,8 +8,8 @@ use tikv_alloc::{
     mem_trace,
     trace::{Id, MemoryTrace},
 };
+use tikv_util::info;
 use tikv_util::sys::memory_usage_reaches_high_water;
-use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
 
 lazy_static! {
     pub static ref MEMTRACE_ROOT: Arc<MemoryTrace> = mem_trace!(
@@ -58,7 +58,6 @@ lazy_static! {
 }
 
 pub fn needs_evict_entry_cache(evict_cache_on_memory_ratio: f64) -> bool {
-    return false;
     fail_point!("needs_evict_entry_cache", |_| true);
     if evict_cache_on_memory_ratio < f64::EPSILON {
         return false;
