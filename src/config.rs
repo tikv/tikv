@@ -2689,12 +2689,6 @@ impl TiKvConfig {
             }
         }
 
-        if self.rocksdb.enable_multi_batch_write {
-            warn!(
-                "rocksdb.enable_multi_batch_write has been discarded. This configuration will not take effect. "
-            );
-        }
-
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
         if expect_keepalive > self.server.grpc_keepalive_time.0 {
             return Err(format!(

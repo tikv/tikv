@@ -87,11 +87,11 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn pop_save_point(&mut self) -> Result<()> {
-        return self.wb.pop_save_point().map_err(Error::Engine);
+        self.wb.pop_save_point().map_err(Error::Engine)
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
-        return self.wb.rollback_to_save_point().map_err(Error::Engine);
+        self.wb.rollback_to_save_point().map_err(Error::Engine)
     }
 
     fn merge(&mut self, other: Self) {

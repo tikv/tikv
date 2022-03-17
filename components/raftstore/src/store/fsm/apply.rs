@@ -634,10 +634,6 @@ where
         self.committed_count = 0;
         is_synced
     }
-
-    pub fn get_store_id(&self) -> u64 {
-        self.store_id
-    }
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
@@ -3246,11 +3242,7 @@ where
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         fail_point!("on_handle_apply_2", self.delegate.id() == 2, |_| {});
         fail_point!("on_handle_apply", |_| {});
-        fail_point!(
-            "on_handle_apply_store_1",
-            apply_ctx.get_store_id() == 1,
-            |_| {}
-        );
+        fail_point!("on_handle_apply_store_1", apply_ctx.store_id == 1, |_| {});
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
@@ -4205,7 +4197,7 @@ mod tests {
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
     use engine_panic::PanicEngine;
-    use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
+    use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::kvrpcpb::ApiVersion;
     use kvproto::metapb::{self, RegionEpoch};
@@ -4491,7 +4483,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+        let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
             cfg,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
@@ -4500,7 +4492,6 @@ mod tests {
             sender,
             engine,
             router: router.clone(),
-            _phantom: Default::default(),
             store_id: 1,
             pending_create_peers,
         };
@@ -4825,7 +4816,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+        let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -4834,7 +4825,6 @@ mod tests {
             importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
-            _phantom: Default::default(),
             store_id: 1,
             pending_create_peers,
         };
@@ -5169,7 +5159,7 @@ mod tests {
         };
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+        let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -5178,7 +5168,6 @@ mod tests {
             importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
-            _phantom: Default::default(),
             store_id: 1,
             pending_create_peers,
         };
@@ -5346,7 +5335,7 @@ mod tests {
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+        let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
@@ -5355,7 +5344,6 @@ mod tests {
             importer,
             engine,
             router: router.clone(),
-            _phantom: Default::default(),
             store_id: 1,
             pending_create_peers,
         };
@@ -5635,7 +5623,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+        let builder = super::Builder::<KvTestEngine> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -5644,7 +5632,6 @@ mod tests {
             coprocessor_host: host,
             engine: engine.clone(),
             router: router.clone(),
-            _phantom: Default::default(),
             store_id: 2,
             pending_create_peers,
         };

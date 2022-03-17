@@ -565,7 +565,7 @@
 # rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
-# enable-pipelined-write = true
+# enable-pipelined-write = false
 
 ## Allows OS to incrementally sync files to disk while they are being written, asynchronously,
 ## in the background.
