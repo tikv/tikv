@@ -576,7 +576,6 @@
 # rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write. If set false, RocksDB will use a new write mode port from cockroachdb/pebble.
-## User does not need to configure this option unless TiKV crashes because of the bug of the following PR.
 ## See more details in https://github.com/tikv/rocksdb/pull/267 and https://github.com/tikv/tikv/issues/12059.
 # enable-pipelined-write = false
 
