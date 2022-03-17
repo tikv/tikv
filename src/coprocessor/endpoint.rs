@@ -387,6 +387,7 @@ impl<E: Engine> Endpoint<E> {
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
         tracker.buckets = snapshot.ext().get_buckets();
+        let buckets_version = tracker.buckets.as_ref().map_or(0, |b| b.version);
 
         let mut handler = if tracker.req_ctx.cache_match_version.is_some()
             && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
@@ -430,6 +431,7 @@ impl<E: Engine> Endpoint<E> {
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
+        resp.set_latest_buckets_version(buckets_version);
         Ok(resp)
     }
 
