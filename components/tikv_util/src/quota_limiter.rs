@@ -134,9 +134,12 @@ impl QuotaLimiter {
     // To consume a sampler and return delayed duration.
     // If the sampler is null, the speed limiter will just return ZERO.
     pub async fn async_consume(&self, sample: Sample) -> Duration {
-        let cpu_dur = self
-            .cputime_limiter
-            .consume_duration(sample.cpu_time.as_micros() as usize);
+        let cpu_dur = if sample.cpu_time > Duration::ZERO {
+            self.cputime_limiter
+                .consume_duration(sample.cpu_time.as_micros() as usize)
+        } else {
+            Duration::ZERO
+        };
 
         let w_bw_dur = if sample.write_bytes > 0 {
             self.write_bandwidth_limiter
