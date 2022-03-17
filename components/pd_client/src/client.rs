@@ -934,7 +934,7 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn region_buckets(&self, bucket_stat: &BucketStat, period: Duration) -> PdFuture<()> {
+    fn report_region_buckets(&self, bucket_stat: &BucketStat, period: Duration) -> PdFuture<()> {
         PD_BUCKETS_COUNTER_VEC.with_label_values(&["send"]).inc();
 
         let mut buckets = metapb::Buckets::default();

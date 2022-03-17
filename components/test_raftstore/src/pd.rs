@@ -1689,7 +1689,7 @@ impl PdClient for TestPdClient {
         Box::pin(ok(()))
     }
 
-    fn region_buckets(&self, bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+    fn report_region_buckets(&self, bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }

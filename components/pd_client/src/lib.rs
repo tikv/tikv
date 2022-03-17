@@ -376,7 +376,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Region's Leader uses this to report buckets to PD.
-    fn region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+    fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
         unimplemented!();
     }
 }

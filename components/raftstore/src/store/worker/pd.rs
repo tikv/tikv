@@ -1619,7 +1619,7 @@ where
         let period = now.duration_since(buckets.last_report_time);
         buckets.last_report_time = now;
         let meta = buckets.meta.clone();
-        let resp = self.pd_client.region_buckets(buckets, period);
+        let resp = self.pd_client.report_region_buckets(buckets, period);
         let f = async move {
             if let Err(e) = resp.await {
                 debug!(
