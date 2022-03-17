@@ -235,7 +235,7 @@ dependencies = [
  "async-trait",
  "bytes 1.0.1",
  "cloud",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "futures-util",
  "grpcio",
@@ -427,7 +427,7 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "lazy_static",
  "online_config",
@@ -638,6 +638,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 
 [[package]]
+name = "causal_ts"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "collections",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "fail 0.4.0",
+ "futures 0.3.15",
+ "kvproto",
+ "parking_lot 0.12.0",
+ "pd_client",
+ "raft",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "test_raftstore",
+ "test_util",
+ "thiserror",
+ "tikv_util",
+ "txn_types",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -657,7 +682,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "futures-timer",
  "getset",
@@ -804,7 +829,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "futures-io",
  "kvproto",
  "lazy_static",
@@ -856,7 +881,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "crossbeam-skiplist",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "kvproto",
  "parking_lot 0.12.0",
@@ -1287,7 +1312,7 @@ dependencies = [
  "derive_more",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
  "futures-util",
@@ -1355,7 +1380,7 @@ dependencies = [
  "collections",
  "encryption",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "keys",
  "kvproto",
@@ -1399,7 +1424,7 @@ version = "0.0.1"
 dependencies = [
  "case_macros",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "kvproto",
  "log_wrappers",
@@ -1493,7 +1518,7 @@ dependencies = [
  "bytes 1.0.1",
  "encryption",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "ffi-support",
  "file_system",
  "futures 0.3.15",
@@ -1559,6 +1584,17 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+]
+
+[[package]]
+name = "fail"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3c61c59fdc91f5dbc3ea31ee8623122ce80057058be560654c5d410d181a6"
+dependencies = [
+ "lazy_static",
+ "log",
+ "rand 0.7.3",
 ]
 
 [[package]]
@@ -3246,7 +3282,7 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -3665,7 +3701,7 @@ dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
- "fail",
+ "fail 0.5.0",
  "fs2",
  "hashbrown 0.12.0",
  "hex 0.4.2",
@@ -3748,7 +3784,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "fs2",
  "futures 0.3.15",
@@ -4068,7 +4104,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "grpcio",
  "hex 0.4.2",
@@ -4599,6 +4635,7 @@ name = "server"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "causal_ts",
  "cdc",
  "chrono",
  "clap 2.33.0",
@@ -5155,7 +5192,7 @@ name = "test_pd"
 version = "0.0.1"
 dependencies = [
  "collections",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
@@ -5171,13 +5208,14 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "backtrace",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -5238,7 +5276,7 @@ dependencies = [
  "backtrace",
  "collections",
  "encryption_export",
- "fail",
+ "fail 0.5.0",
  "grpcio",
  "kvproto",
  "rand 0.8.3",
@@ -5272,7 +5310,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage_export",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -5471,7 +5509,7 @@ dependencies = [
  "anyhow",
  "codec",
  "collections",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "itertools 0.10.0",
  "kvproto",
@@ -5541,6 +5579,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "case_macros",
+ "causal_ts",
  "chrono",
  "codec",
  "collections",
@@ -5557,7 +5596,7 @@ dependencies = [
  "engine_traits_tests",
  "error_code",
  "example_plugin",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
  "futures-executor",
@@ -5770,7 +5809,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
  "into_other",
@@ -5807,7 +5846,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail",
+ "fail 0.5.0",
  "futures 0.3.15",
  "futures-util",
  "gag",
@@ -6469,7 +6508,7 @@ source = "git+https://github.com/tikv/yatp.git?branch=master#5f3d58002b383bfd001
 dependencies = [
  "crossbeam-deque",
  "dashmap",
- "fail",
+ "fail 0.5.0",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.9.1",
