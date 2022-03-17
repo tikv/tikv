@@ -962,7 +962,9 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
-    // deprecated
+    // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
+    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
+    // in RocksDB has been removed.
     #[online_config(skip)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
