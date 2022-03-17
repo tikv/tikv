@@ -75,6 +75,9 @@ impl Transport for TestTransport {
         self.tx.send(msg).unwrap();
         Ok(())
     }
+    fn set_store_allowlist(&mut self, _: Vec<u64>) {
+        unimplemented!();
+    }
     fn need_flush(&self) -> bool {
         false
     }

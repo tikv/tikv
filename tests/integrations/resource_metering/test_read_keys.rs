@@ -24,6 +24,7 @@ use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::read_pool::ReadPool;
 use tikv::storage::{Engine, RocksEngine};
 use tikv_util::config::ReadableDuration;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::thread_group::GroupProperties;
 use tikv_util::HandyRwLock;
 use tipb::SelectResponse;
@@ -255,6 +256,7 @@ fn init_coprocessor_with_data(
         cm,
         PerfLevel::EnableCount,
         tag_factory,
+        Arc::new(QuotaLimiter::default()),
     )
 }
 

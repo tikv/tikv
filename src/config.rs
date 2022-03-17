@@ -1687,13 +1687,16 @@ pub mod log_level_serde {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnifiedReadPoolConfig {
+    #[online_config(skip)]
     pub min_thread_count: usize,
     pub max_thread_count: usize,
+    #[online_config(skip)]
     pub stack_size: ReadableSize,
+    #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
@@ -1712,6 +1715,17 @@ impl UnifiedReadPoolConfig {
                     .into(),
             );
         }
+        let limit = cmp::max(
+            UNIFIED_READPOOL_MIN_CONCURRENCY,
+            SysQuota::cpu_cores_quota() as usize,
+        );
+        if self.max_thread_count > limit {
+            return Err(format!(
+                "readpool.unified.max-thread-count should be smaller than {}",
+                limit
+            )
+            .into());
+        }
         if self.stack_size.0 < ReadableSize::mb(2).0 {
             return Err("readpool.unified.stack-size should be >= 2mb"
                 .to_string()
@@ -1726,7 +1740,7 @@ impl UnifiedReadPoolConfig {
     }
 }
 
-const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+pub const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
@@ -1756,6 +1770,15 @@ mod unified_read_pool_tests {
             max_tasks_per_worker: 2000,
         };
         assert!(cfg.validate().is_ok());
+        let cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ),
+            ..cfg
+        };
+        assert!(cfg.validate().is_ok());
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -1778,6 +1801,15 @@ mod unified_read_pool_tests {
 
         let invalid_cfg = UnifiedReadPoolConfig {
             max_tasks_per_worker: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ) + 1,
             ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
@@ -2030,12 +2062,15 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    #[online_config(submodule)]
     pub unified: UnifiedReadPoolConfig,
+    #[online_config(skip)]
     pub storage: StorageReadPoolConfig,
+    #[online_config(skip)]
     pub coprocessor: CoprReadPoolConfig,
 }
 
@@ -2462,6 +2497,25 @@ impl Default for CausalTsConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct QuotaConfig {
+    pub foreground_cpu_time: usize,
+    pub foreground_write_bandwidth: ReadableSize,
+    pub foreground_read_bandwidth: ReadableSize,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            foreground_cpu_time: 0,
+            foreground_write_bandwidth: ReadableSize(0),
+            foreground_read_bandwidth: ReadableSize(0),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2518,6 +2572,9 @@ pub struct TiKvConfig {
     pub log: LogConfig,
 
     #[online_config(skip)]
+    pub quota: QuotaConfig,
+
+    #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
     #[online_config(submodule)]
@@ -2599,6 +2656,7 @@ impl Default for TiKvConfig {
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -3560,15 +3618,19 @@ mod tests {
 
     use super::*;
     use crate::server::ttl::TTLCheckerTask;
-    use crate::storage::config::StorageConfigManger;
+    use crate::storage::config_manager::StorageConfigManger;
+    use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
+    use crate::storage::{Storage, TestStorageBuilder};
     use case_macros::*;
-    use engine_rocks::raw_util::new_engine_opt;
-    use engine_traits::DBOptions as DBOptionsTrait;
+    use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
+    use tikv_kv::RocksEngine as RocksDBEngine;
+    use tikv_util::sys::SysQuota;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -3883,23 +3945,33 @@ mod tests {
     fn new_engines(
         cfg: TiKvConfig,
     ) -> (
-        RocksEngine,
+        Storage<RocksDBEngine, DummyLockManager>,
         ConfigController,
         ReceiverWrapper<TTLCheckerTask>,
         Arc<FlowController>,
     ) {
-        let engine = RocksEngine::from_db(Arc::new(
-            new_engine_opt(
-                &cfg.storage.data_dir,
-                cfg.rocksdb.build_opt(),
-                cfg.rocksdb.build_cf_opts(
-                    &cfg.storage.block_cache.build_shared_cache(),
-                    None,
-                    cfg.storage.api_version(),
-                ),
-            )
-            .unwrap(),
-        ));
+        let engine = RocksDBEngine::new(
+            &cfg.storage.data_dir,
+            ALL_CFS,
+            Some(cfg.rocksdb.build_cf_opts(
+                &cfg.storage.block_cache.build_shared_cache(),
+                None,
+                cfg.storage.api_version(),
+            )),
+            true,
+            None,
+            Some(cfg.rocksdb.build_opt()),
+        )
+        .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .config(cfg.storage.clone())
+        .build()
+        .unwrap();
+        let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::new(
             &cfg.storage.flow_control,
@@ -3916,13 +3988,14 @@ mod tests {
         cfg_controller.register(
             Module::Storage,
             Box::new(StorageConfigManger::new(
-                engine.clone(),
+                engine,
                 shared,
                 scheduler,
                 flow_controller.clone(),
+                storage.get_scheduler(),
             )),
         );
-        (engine, cfg_controller, receiver, flow_controller)
+        (storage, cfg_controller, receiver, flow_controller)
     }
 
     #[test]
@@ -3930,8 +4003,8 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
-
+        let (storage, cfg_controller, _, flow_controller) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
@@ -4059,7 +4132,8 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
         assert_eq!(db.get_db_options().get_max_background_jobs(), 4);
@@ -4132,7 +4206,8 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
         assert_eq!(
@@ -4154,7 +4229,8 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
         assert!(
@@ -4209,6 +4285,56 @@ mod tests {
             None => unreachable!(),
             Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
+    }
+
+    #[test]
+    fn test_change_store_scheduler_worker_pool_size() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.scheduler_worker_pool_size = 4;
+        cfg.validate().unwrap();
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let scheduler = storage.get_scheduler();
+
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
+
+        let check_scale_pool_size = |size: usize, ok: bool| {
+            let origin_pool_size = scheduler
+                .get_sched_pool(CommandPri::Normal)
+                .pool
+                .get_pool_size();
+            let origin_pool_size_high = scheduler
+                .get_sched_pool(CommandPri::High)
+                .pool
+                .get_pool_size();
+            let res = cfg_controller
+                .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
+            let (expected_size, expected_size_high) = if ok {
+                res.unwrap();
+                (size, std::cmp::max(size / 2, 1))
+            } else {
+                assert!(res.is_err());
+                (origin_pool_size, origin_pool_size_high)
+            };
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::Normal)
+                    .pool
+                    .get_pool_size(),
+                expected_size
+            );
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::High)
+                    .pool
+                    .get_pool_size(),
+                expected_size_high
+            );
+        };
+
+        check_scale_pool_size(0, false);
+        check_scale_pool_size(max_pool_size + 1, false);
+        check_scale_pool_size(1, true);
+        check_scale_pool_size(max_pool_size, true);
     }
 
     #[test]
