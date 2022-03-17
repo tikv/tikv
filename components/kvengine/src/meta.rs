@@ -6,7 +6,7 @@ use bytes::Bytes;
 use kvenginepb as pb;
 
 use super::*;
-use protobuf::{Message};
+use protobuf::Message;
 use slog_global::*;
 
 #[derive(Default, Clone)]
@@ -243,7 +243,12 @@ impl ShardMeta {
         }
     }
 
-    pub fn apply_split(&self, split: &kvenginepb::Split, sequence: u64, initial_seq: u64) -> Vec<ShardMeta> {
+    pub fn apply_split(
+        &self,
+        split: &kvenginepb::Split,
+        sequence: u64,
+        initial_seq: u64,
+    ) -> Vec<ShardMeta> {
         let old = self;
         let new_shards_len = split.get_new_shards().len();
         let mut new_shards = Vec::with_capacity(new_shards_len);

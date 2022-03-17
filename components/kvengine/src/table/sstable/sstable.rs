@@ -466,9 +466,9 @@ pub(crate) fn test_key(prefix: &str, i: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::Iterator as StdIterator;
     use bytes::BytesMut;
     use rand::Rng;
+    use std::iter::Iterator as StdIterator;
 
     use crate::Iterator;
 

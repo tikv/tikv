@@ -41,7 +41,7 @@ impl CFTable {
                 arena,
                 ver,
                 props,
-            })
+            }),
         }
     }
 }

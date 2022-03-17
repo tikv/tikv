@@ -27,11 +27,7 @@ impl ConcatIterator {
     }
 
     pub(crate) fn new_with_tables(tables: Vec<SSTable>, reversed: bool) -> Self {
-        let scf = ShardCF::new_with_levels(vec![LevelHandler {
-            tables,
-            level: 1,
-            total_size: 0,
-        }]);
+        let scf = ShardCF::new_with_levels(vec![LevelHandler { tables, level: 1 }]);
         ConcatIterator {
             idx: -1,
             iter: None,

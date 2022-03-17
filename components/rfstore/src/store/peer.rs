@@ -9,7 +9,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::disk_usage::DiskUsage;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{PeerRole};
+use kvproto::metapb::PeerRole;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
@@ -1400,12 +1400,6 @@ impl Peer {
         );
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
-
-
-        if cs.has_initial_flush() {
-            self.mut_store().initial_flushed = true;
-            ctx.global.engines.raft.remove_dependent(parent_id, self.region_id);
-        }
     }
 
     pub(crate) fn preprocess_pending_splits(

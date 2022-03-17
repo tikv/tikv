@@ -555,7 +555,11 @@ impl<'a> PeerMsgHandler<'a> {
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
         if let Some(parent_id) = self.peer.mut_store().parent_id() {
-            self.ctx.global.engines.raft.remove_dependent(parent_id, self.region_id());
+            self.ctx
+                .global
+                .engines
+                .raft
+                .remove_dependent(parent_id, self.region_id());
         }
 
         let mut meta = self.ctx.global.store_meta.lock().unwrap();
@@ -1092,7 +1096,6 @@ impl<'a> PeerMsgHandler<'a> {
                 callback: Callback::None,
             };
             self.ctx.global.pd_scheduler.schedule(task).unwrap();
-
         }
     }
 
@@ -1199,7 +1202,7 @@ impl<'a> PeerMsgHandler<'a> {
             ));
         }
         if !self.peer.get_store().initial_flushed {
-            return Err(Error::RegionNotInitialized(self.region_id()))
+            return Err(Error::RegionNotInitialized(self.region_id()));
         }
         Ok(())
     }
@@ -1276,7 +1279,13 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         if change.has_flush() {
-            let write_sequence = self.peer.mut_store().shard_meta.as_ref().unwrap().data_sequence;
+            let write_sequence = self
+                .peer
+                .mut_store()
+                .shard_meta
+                .as_ref()
+                .unwrap()
+                .data_sequence;
             self.ctx.raft_wb.truncate_raft_log(tag.id(), write_sequence);
         }
         if change.has_snapshot() {
@@ -1286,9 +1295,25 @@ impl<'a> PeerMsgHandler<'a> {
             store.snap_state = SnapState::Relax;
             store.shard_meta = Some(ShardMeta::new(&change));
             if let Some(parent_id) = parent_id {
-                self.ctx.global.engines.raft.remove_dependent(parent_id, tag.id());
+                self.ctx
+                    .global
+                    .engines
+                    .raft
+                    .remove_dependent(parent_id, tag.id());
             }
             return;
+        }
+        if change.has_initial_flush() {
+            let store = self.peer.mut_store();
+            store.initial_flushed = true;
+            let parent_id = store.parent_id();
+            if let Some(parent_id) = parent_id {
+                self.ctx
+                    .global
+                    .engines
+                    .raft
+                    .remove_dependent(parent_id, tag.id());
+            }
         }
     }
 

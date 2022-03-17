@@ -7,12 +7,12 @@ use std::fmt::Debug;
 use std::time::Instant;
 
 use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot};
+use kvenginepb::ChangeSet;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::{metapb, pdpb, raft_serverpb as rspb};
 use raft_proto::eraftpb;
-use kvenginepb::ChangeSet;
 use raftstore::store::util::KeysInfoFormatter;
 
 use super::{Peer, RaftApplyState};

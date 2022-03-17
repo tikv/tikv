@@ -237,7 +237,7 @@ impl EngineCore {
                         mem_tbl: mem_tbl.clone(),
                         next_mem_tbl_size: 0,
                     }),
-                    initial: None
+                    initial: None,
                 })
                 .unwrap();
         }
@@ -248,7 +248,8 @@ impl EngineCore {
         let parent_snap = guard.as_ref().unwrap().clone();
         let mut mem_tbls = vec![];
         for mem_tbl in &shard.get_mem_tbls().tbls.as_slice()[1..] {
-            debug!("trigger initial flush check mem table version {}, size {}, parent base {} parent write {}",
+            debug!(
+                "trigger initial flush check mem table version {}, size {}, parent base {} parent write {}",
                 mem_tbl.get_version(),
                 mem_tbl.size(),
                 parent_snap.base_version,
@@ -267,13 +268,13 @@ impl EngineCore {
                 start: shard.start.to_vec(),
                 end: shard.end.to_vec(),
                 normal: None,
-                initial: Some(InitialFlush{
+                initial: Some(InitialFlush {
                     parent_snap,
                     mem_tbls,
                     base_version: shard.base_version,
                     // A newly split shard's meta_sequence is an in-mem state until initial flush.
                     data_sequence: shard.get_meta_sequence(),
-                })
+                }),
             })
             .unwrap();
     }

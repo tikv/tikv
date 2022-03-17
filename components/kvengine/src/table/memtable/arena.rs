@@ -226,7 +226,8 @@ impl ArenaSegment {
             } else {
                 panic!(
                     "failed to get block idx {}, max {}",
-                    block_idx, self.block_idx.load(Ordering::Acquire),
+                    block_idx,
+                    self.block_idx.load(Ordering::Acquire),
                 );
             }
         }

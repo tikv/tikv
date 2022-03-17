@@ -223,11 +223,7 @@ impl ApplyWorker {
         router: RaftRouter,
         receiver: Receiver<ApplyBatch>,
     ) -> Self {
-        let ctx = ApplyContext::new(
-            engine,
-            Some(region_sched),
-            Some(router),
-        );
+        let ctx = ApplyContext::new(engine, Some(region_sched), Some(router));
         Self { ctx, receiver }
     }
 

@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Write;
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
 use aws_sdk_s3::model::{Tag, Tagging};
@@ -11,6 +10,7 @@ use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Bytes;
 use file_system::{IOOp, IORateLimiter, IOType};
 use http::Uri;
+use std::io::Write;
 use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -158,7 +158,8 @@ impl S3FSCore {
         let mut start_off = 0;
         let write_batch_size = 256 * 1024;
         while start_off < data.len() {
-            self.rate_limiter.request(IOType::Compaction, IOOp::Write, write_batch_size);
+            self.rate_limiter
+                .request(IOType::Compaction, IOOp::Write, write_batch_size);
             let end_off = std::cmp::min(start_off + write_batch_size, data.len());
             file.write(&data[start_off..end_off])?;
             start_off = end_off;
@@ -322,9 +323,7 @@ impl DFS for S3FS {
                 } else {
                     error!(
                         "failed to remove file {}, reach max retry count {}, err {:?}",
-                        file_id,
-                        MAX_RETRY_COUNT,
-                        err,
+                        file_id, MAX_RETRY_COUNT, err,
                     );
                 }
             }

@@ -409,10 +409,7 @@ fn check_get(begin: usize, end: usize, en: &Engine) {
                 let shard_stats = shard.get_stats();
                 panic!(
                     "failed to get key {}, shard {}:{}, stats {:?}",
-                    key,
-                    shard.id,
-                    shard.ver,
-                    shard_stats,
+                    key, shard.id, shard.ver, shard_stats,
                 );
             }
         }

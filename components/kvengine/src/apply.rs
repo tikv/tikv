@@ -11,7 +11,10 @@ use std::iter::Iterator as StdIterator;
 
 impl Engine {
     pub fn apply_change_set(&self, cs: pb::ChangeSet) -> Result<()> {
-        info!("{}:{} apply change set {:?}", cs.shard_id, cs.shard_ver, &cs);
+        info!(
+            "{}:{} apply change set {:?}",
+            cs.shard_id, cs.shard_ver, &cs
+        );
         self.pre_load_files(&cs)?;
         let shard = self.get_shard(cs.shard_id);
         if shard.is_none() {
@@ -73,7 +76,9 @@ impl Engine {
         *guard = l0s;
         drop(guard);
         while let Some(last_read_only) = shard.get_last_read_only_mem_table() {
-            if last_read_only.get_version() <= initial_flush.base_version + initial_flush.data_sequence {
+            if last_read_only.get_version()
+                <= initial_flush.base_version + initial_flush.data_sequence
+            {
                 shard.atomic_remove_mem_table();
             } else {
                 break;
@@ -150,9 +155,7 @@ impl Engine {
         for (id, cover) in del_files {
             if cover {
                 let fs_n = fs.clone();
-                runtime.spawn(async move {
-                    fs_n.remove(id, opts).await
-                });
+                runtime.spawn(async move { fs_n.remove(id, opts).await });
             }
         }
     }
@@ -175,7 +178,6 @@ impl Engine {
         let level_idx = level as usize - 1;
         let mut new_level = &mut new_levels[level_idx];
         let old_level = &old_scf.levels.as_slice()[level_idx];
-        new_level.total_size = 0;
         new_level.tables.truncate(0);
         let mut need_update = false;
         for create in creates {
@@ -184,7 +186,6 @@ impl Engine {
             }
             let file = self.fs.open(create.id, opts)?;
             let tbl = sstable::SSTable::new(file, Some(self.cache.clone()))?;
-            new_level.total_size += tbl.size();
             new_level.tables.push(tbl);
             need_update = true;
         }
@@ -192,10 +193,12 @@ impl Engine {
         for old_tbl in old_level.tables.iter() {
             let id = old_tbl.id();
             if del_ids.contains(&id) {
-                del_files.insert(id, shard.cover_full_table(old_tbl.smallest(), old_tbl.biggest()));
+                del_files.insert(
+                    id,
+                    shard.cover_full_table(old_tbl.smallest(), old_tbl.biggest()),
+                );
                 need_update = true;
             } else {
-                new_level.total_size += old_tbl.size();
                 new_level.tables.push(old_tbl.clone());
             }
         }

@@ -439,10 +439,7 @@ impl SkipListCore {
                 }
             }
             if !next_node.is_null()
-                && key
-                    > self
-                        .arena
-                        .get_key(deref(self.arena.get_node(next_node)))
+                && key > self.arena.get_key(deref(self.arena.get_node(next_node)))
             {
                 // Key is after splice.
                 while next_node == h.next[recompute_height] {
@@ -655,8 +652,7 @@ impl SKIterator {
         }
         self.uk.truncate(0);
         let n_node = deref(self.list.arena.get_node(self.n));
-        self.uk
-            .extend_from_slice(self.list.arena.get_key(n_node));
+        self.uk.extend_from_slice(self.list.arena.get_key(n_node));
         let mut val_addr = n_node.get_val_addr();
         if !val_addr.is_value_node_addr() {
             self.v = self.list.arena.get_val(val_addr);

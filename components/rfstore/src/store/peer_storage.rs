@@ -470,7 +470,7 @@ impl PeerStorage {
     pub(crate) fn parent_id(&self) -> Option<u64> {
         if let Some(meta) = &self.shard_meta {
             if let Some(parent) = &meta.parent {
-                return Some(parent.id)
+                return Some(parent.id);
             }
         }
         None

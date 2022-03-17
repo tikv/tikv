@@ -7,6 +7,7 @@ use crate::{mvcc, RaftRouter, UserMeta};
 use bytes::Buf;
 use fail::fail_point;
 use kvengine::SnapAccess;
+use kvenginepb::ChangeSet;
 use kvproto::metapb;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_cmdpb::{
@@ -30,7 +31,6 @@ use std::vec::Drain;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 use time::Timespec;
-use kvenginepb::ChangeSet;
 use txn_types::LockType;
 
 pub(crate) struct PendingCmd {
@@ -1107,7 +1107,11 @@ impl Applier {
         if let Err(err) = ctx.engine.split(cs, RAFT_INIT_LOG_INDEX) {
             // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
             // in the background worker.
-            panic!("region {} failed to execute split operation, error {:?}", self.tag(), err);
+            panic!(
+                "region {} failed to execute split operation, error {:?}",
+                self.tag(),
+                err
+            );
         }
         self.snap.take(); // snapshot is outdated.
         // clear the cache here or the locks doesn't belong to the new range would never have chance to delete.

@@ -163,7 +163,12 @@ impl L0Builder {
             let builder = Builder::new(fid, opt);
             builders.push(builder);
         }
-        Self { builders, version, count: 0, fid }
+        Self {
+            builders,
+            version,
+            count: 0,
+            fid,
+        }
     }
 
     pub fn add(&mut self, cf: usize, key: &[u8], val: Value) {

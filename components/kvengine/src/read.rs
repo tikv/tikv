@@ -56,9 +56,7 @@ impl Debug for SnapAccess {
         write!(
             f,
             "snap access {}:{}, seq: {}",
-            self.shard.id,
-            self.shard.ver,
-            self.write_sequence,
+            self.shard.id, self.shard.ver, self.write_sequence,
         )
     }
 }
@@ -84,8 +82,14 @@ impl SnapAccess {
         }
     }
 
-    pub fn new_iterator(&self, cf: usize, reversed: bool, all_versions: bool, read_ts: Option<u64>) -> Iterator {
-        let read_ts= if let Some(ts) = read_ts {
+    pub fn new_iterator(
+        &self,
+        cf: usize,
+        reversed: bool,
+        all_versions: bool,
+        read_ts: Option<u64>,
+    ) -> Iterator {
+        let read_ts = if let Some(ts) = read_ts {
             ts
         } else {
             if CF_MANAGED[cf] && self.managed_ts != 0 {

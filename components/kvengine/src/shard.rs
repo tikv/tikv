@@ -192,13 +192,9 @@ impl Shard {
     }
 
     pub(crate) fn refresh_estimated_size(&self) {
-        let mut size = 0;
-        let l0s = self.get_l0_tbls();
-        for l0 in l0s.tbls.as_ref() {
-            size += l0.size();
-        }
+        let mut size = self.get_l0_total_size();
         self.for_each_level(|_, l| {
-            size += l.total_size;
+            size += self.get_level_total_size(l);
             false
         });
         store_u64(&self.estimated_size, size);
@@ -232,33 +228,27 @@ impl Shard {
             return vec![];
         }
         let mut keys = Vec::new();
-        let l0s = self.get_l0_tbls();
-        if l0s.tbls.len() > 0 && l0s.total_size() > (estimated_size * 3 / 10) {
-            if let Some(tbl) = l0s.tbls[0].get_cf(0) {
-                if let Some(split_key) = tbl.get_suggest_split_key() {
-                    info!(
-                        "shard {}:{} get table suggest split key {:x}, start {:x}, end {:x}",
-                        self.id, self.ver, split_key, self.start, self.end
-                    );
-                    keys.push(split_key);
-                    return keys;
-                }
-            }
-        }
         let max_cf = self.get_cf(0);
         let mut max_level = &max_cf.levels[0];
+        let mut max_level_total_size = 0;
         for i in 1..max_cf.levels.len() {
             let level = &max_cf.levels[i];
-            if level.total_size > max_level.total_size {
+            let mut level_total_size = self.get_level_total_size(level);
+            if level_total_size > max_level_total_size {
                 max_level = level;
+                max_level_total_size = level_total_size;
             }
         }
         let level_target_size =
-            ((target_size as f64) * (max_level.total_size as f64) / (estimated_size as f64)) as u64;
+            ((target_size as f64) * (max_level_total_size as f64) / (estimated_size as f64)) as u64;
         let mut current_size = 0;
         for i in 0..max_level.tables.len() {
             let tbl = &max_level.tables[i];
-            current_size += tbl.size();
+            if self.cover_full_table(tbl.smallest(), tbl.biggest()) {
+                current_size += tbl.size();
+            } else {
+                current_size += tbl.size() / 2;
+            }
             if i != 0 && current_size > level_target_size {
                 keys.push(Bytes::copy_from_slice(tbl.smallest()));
                 current_size = 0
@@ -361,7 +351,7 @@ impl Shard {
     pub fn get_last_read_only_mem_table(&self) -> Option<memtable::CFTable> {
         let guard = self.mem_tbls.read().unwrap();
         if guard.tbls.len() < 2 {
-            return None
+            return None;
         }
         Some(guard.tbls.last().unwrap().clone())
     }
@@ -387,7 +377,12 @@ impl Shard {
             warn!("atomic remove mem table with old table len {}", old_len);
             return;
         }
-        info!("shard {}:{} atomic remove mem table version {}", self.id, self.ver, old_tables.last().unwrap().get_version());
+        info!(
+            "shard {}:{} atomic remove mem table version {}",
+            self.id,
+            self.ver,
+            old_tables.last().unwrap().get_version()
+        );
         let new_len = old_len - 1;
         let mut tbl_vec = Vec::with_capacity(new_len);
         for tbl in old_tables {
@@ -405,8 +400,10 @@ impl Shard {
     pub fn set_split_mem_tables(&self, old_mem_tbls: &[CFTable]) {
         let mut new_mem_tbls = Vec::with_capacity(old_mem_tbls.len());
         for old_mem_tbl in old_mem_tbls {
-            if old_mem_tbl.is_empty() || old_mem_tbl.has_data_in_range(self.start.chunk(), self.end.chunk()) {
-                new_mem_tbls.push( old_mem_tbl.new_split());
+            if old_mem_tbl.is_empty()
+                || old_mem_tbl.has_data_in_range(self.start.chunk(), self.end.chunk())
+            {
+                new_mem_tbls.push(old_mem_tbl.new_split());
             }
         }
         let mut guard = self.mem_tbls.write().unwrap();
@@ -479,24 +476,19 @@ impl Shard {
                 max_pri.score += 2.0;
                 let mut lock = self.compaction_priority.write().unwrap();
                 *lock = Some(max_pri);
-                return
+                return;
             }
         }
         for cf in 0..NUM_CFS {
             let scf = self.get_cf(cf);
             for lh in &scf.levels[..scf.levels.len() - 1] {
-                let score = lh.total_size as f64
+                let level_total_size = self.get_level_total_size(lh);
+                let score = level_total_size as f64
                     / ((self.opt.base_size as f64) * 10f64.powf((lh.level - 1) as f64));
                 if max_pri.score < score {
                     max_pri.score = score;
                     max_pri.level = lh.level;
                     max_pri.cf = cf as isize;
-                }
-                for tbl in &lh.tables {
-                    if !self.cover_full_table(tbl.smallest(), tbl.biggest()) {
-                        // increase the priority for non-cover table.
-                        max_pri.score += 1.0;
-                    }
                 }
             }
         }
@@ -510,6 +502,31 @@ impl Shard {
 
     pub(crate) fn get_compaction_priority(&self) -> Option<CompactionPriority> {
         self.compaction_priority.read().unwrap().clone()
+    }
+
+    pub(crate) fn get_level_total_size(&self, level: &LevelHandler) -> u64 {
+        let mut total_size = 0;
+        for tbl in &level.tables {
+            if self.cover_full_table(tbl.smallest(), tbl.biggest()) {
+                total_size += tbl.size();
+            } else {
+                total_size += tbl.size() / 2;
+            }
+        }
+        total_size
+    }
+
+    pub(crate) fn get_l0_total_size(&self) -> u64 {
+        let mut total_size = 0;
+        let l0s = self.get_l0_tbls();
+        for l0 in l0s.tbls.as_ref() {
+            if self.cover_full_table(l0.smallest(), l0.biggest()) {
+                total_size += l0.size();
+            } else {
+                total_size += l0.size() / 2;
+            }
+        }
+        total_size
     }
 }
 
@@ -570,15 +587,7 @@ impl LevelHandlerBuilder {
     fn build(&mut self, level: usize) -> LevelHandler {
         let mut tables = self.tables.take().unwrap();
         tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
-        let mut total_size = 0;
-        for tbl in tables.iter() {
-            total_size += tbl.size()
-        }
-        LevelHandler {
-            tables,
-            level,
-            total_size,
-        }
+        LevelHandler { tables, level }
     }
 
     fn add_table(&mut self, tbl: SSTable) {
@@ -631,7 +640,6 @@ impl ShardCF {
 pub struct LevelHandler {
     pub(crate) tables: Vec<SSTable>,
     pub(crate) level: usize,
-    pub(crate) total_size: u64,
 }
 
 impl LevelHandler {
@@ -639,7 +647,6 @@ impl LevelHandler {
         Self {
             tables: Vec::new(),
             level,
-            total_size: 0,
         }
     }
 

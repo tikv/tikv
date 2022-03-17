@@ -70,9 +70,9 @@ impl Engine {
         let mem_tbl = &task.normal.as_ref().unwrap().mem_tbl;
 
         let flush_version = mem_tbl.get_version();
-        debug!(
-            "{}:{} flush version {}",
-            flush_version, task.shard_id, task.shard_ver
+        info!(
+            "{}:{} flush normal version {}",
+            task.shard_id, task.shard_ver, flush_version
         );
         cs.mut_flush().set_version(flush_version);
         if let Some(props) = mem_tbl.get_properties() {
@@ -92,11 +92,8 @@ impl Engine {
         // TODO: handle alloc_id error.
         let fid = self.id_allocator.alloc_id(1).unwrap().pop().unwrap();
 
-        let mut l0_builder = sstable::L0Builder::new(
-            fid,
-            self.opts.table_builder_options,
-            m.get_version(),
-        );
+        let mut l0_builder =
+            sstable::L0Builder::new(fid, self.opts.table_builder_options, m.get_version());
         for cf in 0..NUM_CFS {
             let skl = m.get_cf(cf);
             if skl.is_empty() {
@@ -184,11 +181,8 @@ impl Engine {
         let mut l0_builders = vec![];
         for m in &flush.mem_tbls {
             let fid = self.id_allocator.alloc_id(1).unwrap().pop().unwrap();
-            let mut l0_builder = sstable::L0Builder::new(
-                fid,
-                self.opts.table_builder_options,
-                m.get_version(),
-            );
+            let mut l0_builder =
+                sstable::L0Builder::new(fid, self.opts.table_builder_options, m.get_version());
             for cf in 0..NUM_CFS {
                 let skl = m.get_cf(cf);
                 if skl.is_empty() {
@@ -243,7 +237,11 @@ impl Engine {
                     l0_create.set_id(l0_builder.get_fid());
                     l0_create.set_smallest(smallest.to_vec());
                     l0_create.set_biggest(biggest.to_vec());
-                    result.change_set.mut_initial_flush().mut_l0_creates().push(l0_create);
+                    result
+                        .change_set
+                        .mut_initial_flush()
+                        .mut_l0_creates()
+                        .push(l0_create);
                 }
             }
             res_tx.send(result).unwrap();
@@ -269,13 +267,11 @@ impl Engine {
                 let task = result.task;
                 if let Some(normal) = &task.normal {
                     if normal.next_mem_tbl_size > 0 {
-                        let mut change_size =
-                            new_change_set(task.shard_id, task.shard_ver);
+                        let mut change_size = new_change_set(task.shard_id, task.shard_ver);
                         change_size.set_next_mem_table_size(normal.next_mem_tbl_size);
                         self.meta_change_listener.on_change_set(change_size);
                     }
                 }
-
             }
         }
     }

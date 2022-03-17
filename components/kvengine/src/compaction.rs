@@ -216,7 +216,9 @@ impl CompactDef {
             let new_bot_size =
                 Self::sume_tbl_size(&next[self.bot_right_idx..right]) + self.bot_size;
             let new_ratio = Self::calc_ratio(new_top_size, new_bot_size);
-            if new_ratio > candidate_ratio && (new_top_size + new_bot_size) < MAX_COMPACTION_EXPAND_SIZE {
+            if new_ratio > candidate_ratio
+                && (new_top_size + new_bot_size) < MAX_COMPACTION_EXPAND_SIZE
+            {
                 self.top_right_idx += 1;
                 self.bot_right_idx = right;
                 self.top_size = new_top_size;
@@ -310,7 +312,7 @@ impl Engine {
         results.truncate(0);
         for entry in self.shards.iter() {
             let shard = entry.value().clone();
-            if shard.is_active() && !load_bool(&shard.compacting) {
+            if shard.is_active() && !load_bool(&shard.compacting) && shard.get_initial_flushed() {
                 if let Some(pri) = shard.get_compaction_priority() {
                     results.push(pri);
                 }
