@@ -1640,26 +1640,19 @@ where
         let region_id = buckets.meta.region_id;
         self.region_buckets
             .entry(region_id)
-            .and_modify(|current| match current.meta.cmp(&buckets.meta) {
-                Ordering::Equal | Ordering::Greater => {
-                    merge_bucket_stats(
-                        &current.meta.keys,
-                        &mut current.stats,
-                        &buckets.meta.keys,
-                        &buckets.stats,
-                    );
-                }
-                Ordering::Less => {
-                    merge_bucket_stats(
-                        &buckets.meta.keys,
-                        &mut buckets.stats,
-                        &current.meta.keys,
-                        &current.stats,
-                    );
+            .and_modify(|current| {
+                if current.meta.cmp(&buckets.meta) == Ordering::Less {
                     mem::swap(current, &mut buckets);
                 }
+
+                merge_bucket_stats(
+                    &current.meta.keys,
+                    &mut current.stats,
+                    &buckets.meta.keys,
+                    &buckets.stats,
+                );
             })
-            .or_insert_with(|| buckets);
+            .or_insert(buckets);
     }
 }
 

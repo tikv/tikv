@@ -84,7 +84,6 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        bucket_meta: Option<Arc<BucketMeta>>,
         mut ts: Option<ThreadReadId>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
@@ -109,9 +108,8 @@ pub trait ReadExecutor<E: KvEngine> {
                     }
                 },
                 CmdType::Snap => {
-                    let mut snapshot =
+                    let snapshot =
                         RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
-                    snapshot.bucket_meta = bucket_meta.clone();
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -644,13 +642,7 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response = self.execute(
-                            &req,
-                            &delegate.region,
-                            None,
-                            delegate.bucket_meta.clone(),
-                            read_id,
-                        );
+                        let response = self.execute(&req, &delegate.region, None, read_id);
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(
                             &self.router,
@@ -671,13 +663,7 @@ where
                         }
 
                         // Getting the snapshot
-                        let response = self.execute(
-                            &req,
-                            &delegate.region,
-                            None,
-                            delegate.bucket_meta.clone(),
-                            read_id,
-                        );
+                        let response = self.execute(&req, &delegate.region, None, read_id);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) =
