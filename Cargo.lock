@@ -872,6 +872,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
 
 [[package]]
+name = "cpu-time"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
+dependencies = [
+ "libc 0.2.119",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "cpuid-bool"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5361,6 +5371,7 @@ dependencies = [
  "codec",
  "collections",
  "fail",
+ "futures 0.3.15",
  "itertools 0.10.0",
  "kvproto",
  "log_wrappers",
@@ -5689,6 +5700,7 @@ dependencies = [
  "chrono",
  "codec",
  "collections",
+ "cpu-time",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -5714,6 +5726,7 @@ dependencies = [
  "procfs",
  "procinfo",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "rand 0.8.3",
  "regex",
