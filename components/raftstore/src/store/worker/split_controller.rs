@@ -27,6 +27,8 @@ pub const TOP_N: usize = 10;
 // LOAD_BASE_SPLIT_EVENT metrics label definitions.
 // Workload fits the QPS threshold or byte threshold.
 const LOAD_FIT: &str = "load_fit";
+// The statistical key is empty.
+const EMPTY_STATISTICAL_KEY: &str = "empty_statistical_key";
 // Split info has been collected, ready to split.
 const READY_TO_SPLIT: &str = "ready_to_split";
 // Split info has not been collected yet, not ready to split.
@@ -82,11 +84,15 @@ where
     if key_ranges_providers.is_empty() {
         return sampled_key_ranges;
     }
-    let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges| {
-        key_ranges_getter(key_ranges).len()
+    let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges_provider| {
+        // NOTICE: `key_ranges_provider` may return an empty key range vector here.
+        key_ranges_getter(key_ranges_provider).len()
     });
     // The last sum is the number of all the key ranges.
     let all_key_ranges_num = *prefix_sum.last().unwrap();
+    if all_key_ranges_num == 0 {
+        return sampled_key_ranges;
+    }
     // If the number of key ranges is less than the sample number,
     // we will return them directly without sampling.
     if all_key_ranges_num <= sample_num {
@@ -101,8 +107,13 @@ where
     // If the number of key ranges is greater than the sample number,
     // we will randomly sample the key ranges.
     while sampled_key_ranges.len() < sample_num {
+        // Generate a random number in [1, all_key_ranges_num].
+        // Starting from 1 is to achieve equal probability.
+        // For example, for a `prefix_sum` like [1, 2, 3, 4],
+        // if we generate a random number in [0, 4], the probability of choosing the first index is 0.4
+        // rather than 0.25 due to that 0 and 1 will both make `binary_search` get the same result.
         let i = prefix_sum
-            .binary_search(&rng.gen_range(0..=all_key_ranges_num))
+            .binary_search(&rng.gen_range(1..=all_key_ranges_num))
             .unwrap_or_else(|i| i);
         let key_ranges = key_ranges_getter(&mut key_ranges_providers[i]);
         if !key_ranges.is_empty() {
@@ -565,7 +576,12 @@ impl AutoSplitController {
                 region_infos,
                 RegionInfo::get_key_ranges_mut,
             );
-
+            if key_ranges.is_empty() {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&[EMPTY_STATISTICAL_KEY])
+                    .inc();
+                continue;
+            }
             recorder.record(key_ranges);
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
@@ -874,6 +890,18 @@ mod tests {
             qps_stats_vec.push(qps_stats);
             hub.flush(qps_stats_vec);
         }
+
+        // Test the empty key ranges.
+        let mut qps_stats_vec = vec![];
+        let mut qps_stats = ReadStats::with_sample_num(hub.cfg.sample_num);
+        qps_stats.add_query_num(1, &Peer::default(), KeyRange::default(), QueryKind::Get);
+        qps_stats_vec.push(qps_stats);
+        let mut qps_stats = ReadStats::with_sample_num(hub.cfg.sample_num);
+        for _ in 0..2000 {
+            qps_stats.add_query_num(1, &Peer::default(), KeyRange::default(), QueryKind::Get);
+        }
+        qps_stats_vec.push(qps_stats);
+        hub.flush(qps_stats_vec);
     }
 
     fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
@@ -923,6 +951,140 @@ mod tests {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
         check_sample_length(sample_num, key_ranges);
+
+        // Test the empty key range gap.
+        // See https://github.com/tikv/tikv/issues/12185 for more details.
+        let test_cases = vec![
+            // Case 1: small gap.
+            vec![
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+            ],
+            // Case 2: big gap.
+            vec![
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![build_key_range(b"c", b"d", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+            ],
+            vec![
+                vec![build_key_range(b"c", b"d", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+            ],
+            // Case 3: multiple gaps.
+            vec![
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+            ],
+            vec![
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                ],
+            ],
+            // Case 4: all empty.
+            vec![vec![], vec![], vec![], vec![]],
+        ];
+        for sample_num in 0..=DEFAULT_SAMPLE_NUM {
+            for test_case in test_cases.iter() {
+                check_sample_length(sample_num, test_case.clone());
+            }
+        }
     }
 
     #[test]
