@@ -368,7 +368,7 @@ fn test_tombstone_block_list() {
 }
 
 #[test]
-fn test_store_whitelist() {
+fn test_store_allowlist() {
     let pd_server = test_pd::Server::new(1);
     let eps = pd_server.bind_addrs();
     let pd_client = Arc::new(test_pd::util::new_client(eps, None));

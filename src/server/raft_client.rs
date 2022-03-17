@@ -809,19 +809,19 @@ async fn start<S, R, E>(
 struct ConnectionPool {
     connections: HashMap<(u64, usize), Arc<Queue>>,
     tombstone_stores: HashSet<u64>,
-    store_whitelist: Vec<u64>,
+    store_allowlist: Vec<u64>,
 }
 
 impl ConnectionPool {
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
-        self.store_whitelist = stores;
+        self.store_allowlist = stores;
         for (&(store_id, _), q) in self.connections.iter() {
             q.set_paused(self.need_pause(store_id));
         }
     }
 
     fn need_pause(&self, store_id: u64) -> bool {
-        !self.store_whitelist.is_empty() && !self.store_whitelist.contains(&store_id)
+        !self.store_allowlist.is_empty() && !self.store_allowlist.contains(&store_id)
     }
 }
 
