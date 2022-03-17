@@ -374,7 +374,6 @@ async fn get_tikv_client(
     let store = box_try!(pd_client.get_store_async(store_id).await);
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
-    // let store = box_try!(pd_client.get_store_async(store_id).await);
     // hack: so it's different args, grpc will always create a new connection.
     let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
         CString::new("random id").unwrap(),
