@@ -30,7 +30,7 @@ use std::{mem, u64};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
-use engine_traits::CF_LOCK;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
@@ -782,6 +782,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
         sample.add_write_bytes(write_bytes);
+        let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_LOCK).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
+        sample.add_read_bytes(read_bytes);
         let quota_delay = quota_limiter.async_consume(sample).await;
         if !quota_delay.is_zero() {
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
