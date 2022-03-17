@@ -27,7 +27,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
@@ -41,12 +41,19 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
 
+#[repr(u8)]
+enum ConnState {
+    Established = 0,
+    /// The connection is paused and may be resumed later.
+    Paused,
+    /// The connection is closed and removed from the connection pool.
+    Disconnected,
+}
+
 /// A quick queue for sending raft messages.
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
-    /// A flag indicates whether the queue can still accept messages.
-    connected: AtomicBool,
-    paused: AtomicBool,
+    conn_state: AtomicU8,
     waker: Mutex<Option<Waker>>,
 }
 
@@ -55,8 +62,7 @@ impl Queue {
     fn with_capacity(cap: usize) -> Queue {
         Queue {
             buf: ArrayQueue::new(cap),
-            connected: AtomicBool::new(true),
-            paused: AtomicBool::new(false),
+            conn_state: AtomicU8::new(ConnState::Established as u8),
             waker: Mutex::new(None),
         }
     }
@@ -68,32 +74,19 @@ impl Queue {
     ///
     /// True when the message is pushed into queue otherwise false.
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
-        // Another way is pop the old messages, but it makes things
-        // complicated.
-        if self.paused.load(Ordering::SeqCst) {
-            return Err(DiscardReason::Paused);
-        }
-        if self.connected.load(Ordering::Relaxed) {
-            match self.buf.push(msg) {
-                Ok(()) => (),
-                Err(_) => return Err(DiscardReason::Full),
-            }
-        } else {
-            return Err(DiscardReason::Disconnected);
-        }
-        if self.connected.load(Ordering::SeqCst) {
-            Ok(())
-        } else {
-            Err(DiscardReason::Disconnected)
+        match self.conn_state.load(Ordering::SeqCst) {
+            x if x == ConnState::Established as u8 => match self.buf.push(msg) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(DiscardReason::Full),
+            },
+            x if x == ConnState::Paused as u8 => Err(DiscardReason::Paused),
+            x if x == ConnState::Disconnected as u8 => Err(DiscardReason::Disconnected),
+            _ => unreachable!(),
         }
     }
 
-    fn disconnect(&self) {
-        self.connected.store(false, Ordering::SeqCst);
-    }
-
-    fn set_paused(&self, v: bool) {
-        self.paused.store(v, Ordering::SeqCst);
+    fn set_conn_state(&self, s: ConnState) {
+        self.conn_state.store(s as u8, Ordering::SeqCst);
     }
 
     /// Wakes up consumer to retrive message.
@@ -759,7 +752,7 @@ async fn start<S, R, E>(
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();
                     if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                        s.disconnect();
+                        s.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -816,7 +809,11 @@ impl ConnectionPool {
     fn set_store_allowlist(&mut self, stores: Vec<u64>) {
         self.store_allowlist = stores;
         for (&(store_id, _), q) in self.connections.iter() {
-            q.set_paused(self.need_pause(store_id));
+            let mut state = ConnState::Established;
+            if self.need_pause(store_id) {
+                state = ConnState::Paused;
+            }
+            q.set_conn_state(state);
         }
     }
 
@@ -905,7 +902,7 @@ where
                         self.builder.cfg.raft_client_queue_size,
                     ));
                     if need_pause {
-                        queue.set_paused(true);
+                        queue.set_conn_state(ConnState::Paused);
                     }
                     let back_end = StreamBackEnd {
                         store_id,
