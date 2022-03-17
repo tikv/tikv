@@ -25,7 +25,6 @@ use std::{
     u64,
 };
 
-use causal_ts::CausalTsProvider;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -44,7 +43,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
+    resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -666,23 +665,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pools.handle()
         };
 
-        // Create causal timestamp provider
-        let causal_ts_provider: Option<Arc<dyn CausalTsProvider>> =
-            if let ApiVersion::V2 = self.config.storage.api_version() {
-                let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-                    self.pd_client.clone(),
-                    self.config.causal_ts.renew_interval.0,
-                    self.config.causal_ts.renew_batch_min_size,
-                ));
-                if let Err(e) = tso {
-                    panic!("Causal timestamp provider initialize failed: {:?}", e);
-                }
-                info!("Causal timestamp startup.");
-                Some(Arc::new(tso.unwrap()))
-            } else {
-                None
-            };
-
         let storage = create_raft_storage(
             engines.engine.clone(),
             &self.config.storage,
@@ -693,7 +675,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             flow_controller,
             pd_sender.clone(),
             resource_tag_factory.clone(),
-            causal_ts_provider.clone(),
             self.pd_client.feature_gate().clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -730,11 +711,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register causal timestamp observer.
-        if let Some(causal_ts_provider) = causal_ts_provider {
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        }
+        // Register causal observer for RawKV API V2
+        // TODO: uncomment after finish modification of Storage.
+        // if let ApiVersion::V2 = self.config.storage.api_version() {
+        //     let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+        //         self.pd_client.clone(),
+        //         self.config.causal_ts.renew_interval.0,
+        //         self.config.causal_ts.renew_batch_min_size,
+        //     ));
+        //     if let Err(e) = tso {
+        //         panic!("Causal timestamp provider initialize failed: {:?}", e);
+        //     }
+        //     let causal_ts_provider = Arc::new(tso.unwrap());
+        //     info!("Causal timestamp provider startup.");
+        //
+        //     let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        //     causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // }
 
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());

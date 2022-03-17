@@ -692,7 +692,6 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "online_config",
- "panic_hook",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -711,7 +710,6 @@ dependencies = [
  "tikv",
  "tikv_kv",
  "tikv_util",
- "time",
  "tokio",
  "txn_types",
 ]

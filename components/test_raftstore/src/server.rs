@@ -10,7 +10,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Servic
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::{create_debug, DebugClient};
 use kvproto::import_sstpb::create_import_sst;
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
@@ -342,14 +342,6 @@ impl Simulator for ServerCluster {
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
-        // Create causal timestamp provider.
-        let causal_ts_provider: Option<Arc<dyn causal_ts::CausalTsProvider>> =
-            if let ApiVersion::V2 = cfg.storage.api_version() {
-                Some(Arc::new(causal_ts::tests::TestProvider::default()))
-            } else {
-                None
-            };
-
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let store = create_raft_storage(
             engine,
@@ -361,7 +353,6 @@ impl Simulator for ServerCluster {
             Arc::new(FlowController::empty()),
             pd_sender,
             res_tag_factory.clone(),
-            causal_ts_provider,
             self.pd_client.feature_gate().clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
