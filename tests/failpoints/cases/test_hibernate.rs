@@ -22,10 +22,7 @@ fn test_break_leadership_on_restart() {
     // So the random election timeout will always be 10, which makes the case more stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
-    // Disable peer stale state check.
-    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(1000);
-    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::secs(2000);
-    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(500);
+    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
@@ -79,9 +76,6 @@ fn test_break_leadership_on_restart() {
     cluster.add_send_filter(CloneFilterFactory(filter));
     cluster.run_node(2).unwrap();
 
-    // If peer 3 starts a new election, it can be rejected by peer 1 and 2 because both of them
-    // are in lease. Then peer 1 will step down because heartbeat responses from peer 3 can
-    // carry a higher term. So there will be at least 1 election timeout that the region loses
-    // its leader.
+    // Peer 3 shouldn't start a new election, otherwise the leader may step down incorrectly.
     assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
 }
