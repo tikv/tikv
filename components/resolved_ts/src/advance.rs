@@ -371,7 +371,10 @@ async fn get_tikv_client(
             return Ok(client);
         }
     }
-    let store = box_try!(pd_client.get_store_async(store_id).await);
+    let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+    let store = box_try!(box_try!(
+        tokio::time::timeout(timeout, pd_client.get_store_async(store_id)).await
+    ));
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
     // hack: so it's different args, grpc will always create a new connection.
