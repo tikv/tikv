@@ -780,7 +780,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .map_err(StorageError::from)
         };
 
-        if !write_result.is_err() {
+        if write_result.is_ok() {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
             sample.add_write_bytes(write_bytes);
         }
