@@ -30,7 +30,7 @@ use std::{mem, u64};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
-use engine_traits::CF_LOCK;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
@@ -39,7 +39,7 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
@@ -206,6 +206,7 @@ struct SchedulerInner<L: LockManager> {
 
     resource_tag_factory: ResourceTagFactory,
 
+    quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
 }
 
@@ -325,6 +326,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
     ) -> Self {
         let t = Instant::now_coarse();
@@ -359,6 +361,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
             resource_tag_factory,
+            quota_limiter,
             feature_gate,
         });
 
@@ -748,11 +751,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
+        let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
+        let quota_limiter = self.inner.quota_limiter.clone();
+        let mut sample = quota_limiter.new_sample();
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
@@ -760,6 +766,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let deadline = task.cmd.deadline();
         let write_result = {
+            let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
@@ -772,6 +779,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .process_write(snapshot, context)
                 .map_err(StorageError::from)
         };
+
+        if write_result.is_ok() {
+            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
+            sample.add_write_bytes(write_bytes);
+        }
+        let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_LOCK).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
+        sample.add_read_bytes(read_bytes);
+        let quota_delay = quota_limiter.async_consume(sample).await;
+        if !quota_delay.is_zero() {
+            TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(tag)
+                .inc_by(quota_delay.as_micros() as u64);
+        }
+
         let WriteResult {
             ctx,
             mut to_be_write,
@@ -1287,6 +1310,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
         );
 
@@ -1344,6 +1368,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
         );
 
@@ -1401,6 +1426,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
         );
 
@@ -1466,6 +1492,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
         );
 
@@ -1525,6 +1552,7 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
             feature_gate.clone(),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.

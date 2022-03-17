@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
@@ -29,12 +30,14 @@ use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
 use resource_metering::CollectorRegHandle;
 use test_raftstore::*;
+use tikv::config::QuotaConfig;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::Config as ImportConfig;
 use tikv::import::SSTImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
+use tikv_util::config::ReadableSize;
 use tikv_util::worker::{dummy_scheduler, LazyWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
@@ -1939,4 +1942,73 @@ fn test_txn_api_version() {
             }
         }
     }
+}
+
+#[test]
+fn test_storage_with_quota_limiter_enable() {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        let quota_config = QuotaConfig {
+            foreground_cpu_time: 2000,
+            foreground_write_bandwidth: ReadableSize(10),
+            foreground_read_bandwidth: ReadableSize(0),
+        };
+        cluster.cfg.quota = quota_config;
+        cluster.cfg.storage.scheduler_worker_pool_size = 1;
+    });
+
+    let env = Arc::new(Environment::new(1));
+    let leader_store = leader.get_store_id();
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
+    let client = TikvClient::new(channel);
+
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    let begin = Instant::now();
+
+    // Prewrite
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
+
+    // 800 only represents quota enabled, no specific significance
+    assert!(begin.elapsed() > Duration::from_millis(800));
+}
+
+#[test]
+fn test_storage_with_quota_limiter_disable() {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
+        // all limit set to 0, which means quota limiter not work.
+        let quota_config = QuotaConfig {
+            foreground_cpu_time: 0,
+            foreground_write_bandwidth: ReadableSize(0),
+            foreground_read_bandwidth: ReadableSize(0),
+        };
+        cluster.cfg.quota = quota_config;
+        cluster.cfg.storage.scheduler_worker_pool_size = 1;
+    });
+
+    let env = Arc::new(Environment::new(1));
+    let leader_store = leader.get_store_id();
+    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
+    let client = TikvClient::new(channel);
+
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    let begin = Instant::now();
+
+    // Prewrite
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
+
+    assert!(begin.elapsed() < Duration::from_millis(800));
 }
