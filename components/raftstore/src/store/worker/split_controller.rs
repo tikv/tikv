@@ -4,16 +4,18 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::slice::Iter;
+use std::slice::{Iter, IterMut};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rand::Rng;
 
 use kvproto::kvrpcpb::KeyRange;
-use kvproto::metapb::Peer;
+use kvproto::metapb::{self, Peer};
 use kvproto::pdpb::QueryKind;
+use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use tikv_util::config::Tracker;
-use tikv_util::{debug, error, info};
+use tikv_util::{debug, info};
 
 use crate::store::metrics::*;
 use crate::store::worker::query_stats::{is_read_query, QueryStats};
@@ -25,6 +27,8 @@ pub const TOP_N: usize = 10;
 // LOAD_BASE_SPLIT_EVENT metrics label definitions.
 // Workload fits the QPS threshold or byte threshold.
 const LOAD_FIT: &str = "load_fit";
+// The statistical key is empty.
+const EMPTY_STATISTICAL_KEY: &str = "empty_statistical_key";
 // Split info has been collected, ready to split.
 const READY_TO_SPLIT: &str = "ready_to_split";
 // Split info has not been collected yet, not ready to split.
@@ -53,12 +57,23 @@ where
     .collect()
 }
 
+#[inline(always)]
+fn prefix_sum_mut<F, T>(iter: IterMut<'_, T>, read: F) -> Vec<usize>
+where
+    F: Fn(&mut T) -> usize,
+{
+    let mut sum = 0;
+    iter.map(|item| {
+        sum += read(item);
+        sum
+    })
+    .collect()
+}
+
 // This function uses the distributed/parallel reservoir sampling algorithm.
 // It will sample min(sample_num, all_key_ranges_num) key ranges from multiple `key_ranges_provider` with the same possibility.
-// NOTICE: `prefix_sum` should be calculated from the `key_ranges_providers`, so they should have the same length too.
 fn sample<F, T>(
     sample_num: usize,
-    prefix_sum: &[usize],
     mut key_ranges_providers: Vec<T>,
     key_ranges_getter: F,
 ) -> Vec<KeyRange>
@@ -66,21 +81,39 @@ where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
     let mut sampled_key_ranges = vec![];
-    if prefix_sum.len() != key_ranges_providers.len() {
-        error!("failed to sample, prefix_sum length is not equal to key_ranges_providers length";
-            "prefix_sum_len" => prefix_sum.len(),
-            "key_ranges_providers_len" => key_ranges_providers.len(),
-        );
+    if key_ranges_providers.is_empty() {
         return sampled_key_ranges;
     }
-
-    let mut rng = rand::thread_rng();
-    // The last sum of the QPS is the number of all the key ranges.
+    let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges_provider| {
+        // NOTICE: `key_ranges_provider` may return an empty key range vector here.
+        key_ranges_getter(key_ranges_provider).len()
+    });
+    // The last sum is the number of all the key ranges.
     let all_key_ranges_num = *prefix_sum.last().unwrap();
-    let sample_num = std::cmp::min(sample_num, all_key_ranges_num);
+    if all_key_ranges_num == 0 {
+        return sampled_key_ranges;
+    }
+    // If the number of key ranges is less than the sample number,
+    // we will return them directly without sampling.
+    if all_key_ranges_num <= sample_num {
+        key_ranges_providers
+            .iter_mut()
+            .for_each(|key_ranges_provider| {
+                sampled_key_ranges.append(key_ranges_getter(key_ranges_provider));
+            });
+        return sampled_key_ranges;
+    }
+    let mut rng = rand::thread_rng();
+    // If the number of key ranges is greater than the sample number,
+    // we will randomly sample the key ranges.
     while sampled_key_ranges.len() < sample_num {
+        // Generate a random number in [1, all_key_ranges_num].
+        // Starting from 1 is to achieve equal probability.
+        // For example, for a `prefix_sum` like [1, 2, 3, 4],
+        // if we generate a random number in [0, 4], the probability of choosing the first index is 0.4
+        // rather than 0.25 due to that 0 and 1 will both make `binary_search` get the same result.
         let i = prefix_sum
-            .binary_search(&rng.gen_range(0..=all_key_ranges_num))
+            .binary_search(&rng.gen_range(1..=all_key_ranges_num))
             .unwrap_or_else(|i| i);
         let key_ranges = key_ranges_getter(&mut key_ranges_providers[i]);
         if !key_ranges.is_empty() {
@@ -256,12 +289,7 @@ impl Recorder {
     // This will start a second-level sampling on the previous sampled key ranges,
     // evaluate the samples according to the given key range, and compute the split keys finally.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
-        let sampled_key_ranges = sample(
-            config.sample_num,
-            &prefix_sum(self.key_ranges.iter(), Vec::len),
-            self.key_ranges.clone(),
-            |x| x,
-        );
+        let sampled_key_ranges = sample(config.sample_num, self.key_ranges.clone(), |x| x);
         let mut samples = Samples::from(sampled_key_ranges);
         let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
         // Because we need to observe the number of `no_enough_key` of all the actual keys,
@@ -339,12 +367,14 @@ pub struct ReadStats {
     // RegionID -> RegionInfo
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
+    pub region_buckets: HashMap<u64, BucketStat>,
 }
 
 impl ReadStats {
     pub fn with_sample_num(sample_num: usize) -> Self {
         ReadStats {
             region_infos: HashMap::default(),
+            region_buckets: HashMap::default(),
             sample_num,
         }
     }
@@ -379,7 +409,15 @@ impl ReadStats {
         region_info.add_query_num(kind, query_num);
     }
 
-    pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
+    pub fn add_flow(
+        &mut self,
+        region_id: u64,
+        buckets: Option<&Arc<BucketMeta>>,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        write: &FlowStatistics,
+        data: &FlowStatistics,
+    ) {
         let num = self.sample_num;
         let region_info = self
             .region_infos
@@ -387,6 +425,34 @@ impl ReadStats {
             .or_insert_with(|| RegionInfo::new(num));
         region_info.flow.add(write);
         region_info.flow.add(data);
+        if let Some(buckets) = buckets {
+            let bucket_stat = self.region_buckets.entry(region_id).or_insert_with(|| {
+                let stats = new_bucket_stats(buckets);
+                BucketStat::new(buckets.clone(), stats)
+            });
+            if bucket_stat.meta < *buckets {
+                let stats = new_bucket_stats(buckets);
+                let mut new = BucketStat::new(buckets.clone(), stats);
+                merge_bucket_stats(
+                    &new.meta.keys,
+                    &mut new.stats,
+                    &bucket_stat.meta.keys,
+                    &bucket_stat.stats,
+                );
+                *bucket_stat = new;
+            }
+            let mut delta = metapb::BucketStats::default();
+            delta.set_write_bytes(vec![write.read_bytes as u64]);
+            delta.set_read_bytes(vec![data.read_bytes as u64]);
+            let start = start.unwrap_or_default();
+            let end = end.unwrap_or_default();
+            merge_bucket_stats(
+                &bucket_stat.meta.keys,
+                &mut bucket_stat.stats,
+                &[start, end],
+                &delta,
+            );
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -399,6 +465,7 @@ impl Default for ReadStats {
         ReadStats {
             sample_num: DEFAULT_SAMPLE_NUM,
             region_infos: HashMap::default(),
+            region_buckets: HashMap::default(),
         }
     }
 }
@@ -506,11 +573,15 @@ impl AutoSplitController {
 
             let key_ranges = sample(
                 self.cfg.sample_num,
-                &qps_prefix_sum,
                 region_infos,
                 RegionInfo::get_key_ranges_mut,
             );
-
+            if key_ranges.is_empty() {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&[EMPTY_STATISTICAL_KEY])
+                    .inc();
+                continue;
+            }
             recorder.record(key_ranges);
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
@@ -819,13 +890,24 @@ mod tests {
             qps_stats_vec.push(qps_stats);
             hub.flush(qps_stats_vec);
         }
+
+        // Test the empty key ranges.
+        let mut qps_stats_vec = vec![];
+        let mut qps_stats = ReadStats::with_sample_num(hub.cfg.sample_num);
+        qps_stats.add_query_num(1, &Peer::default(), KeyRange::default(), QueryKind::Get);
+        qps_stats_vec.push(qps_stats);
+        let mut qps_stats = ReadStats::with_sample_num(hub.cfg.sample_num);
+        for _ in 0..2000 {
+            qps_stats.add_query_num(1, &Peer::default(), KeyRange::default(), QueryKind::Get);
+        }
+        qps_stats_vec.push(qps_stats);
+        hub.flush(qps_stats_vec);
     }
 
     fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
         for _ in 0..100 {
-            let prefix_sum = prefix_sum(key_ranges.iter(), Vec::len);
-            let sampled_key_ranges = sample(sample_num, &prefix_sum, key_ranges.clone(), |x| x);
-            let all_key_ranges_num = *prefix_sum.last().unwrap();
+            let sampled_key_ranges = sample(sample_num, key_ranges.clone(), |x| x);
+            let all_key_ranges_num = *prefix_sum(key_ranges.iter(), Vec::len).last().unwrap();
             assert_eq!(
                 sampled_key_ranges.len(),
                 std::cmp::min(sample_num, all_key_ranges_num)
@@ -835,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_sample_length() {
-        // Test the sample_num <= all_key_ranges_length.
+        // Test the sample_num = key range number.
         let sample_num = 20;
         let mut key_ranges = vec![];
         for _ in 0..sample_num {
@@ -843,14 +925,15 @@ mod tests {
         }
         check_sample_length(sample_num, key_ranges);
 
+        // Test the sample_num < key range number.
         let mut key_ranges = vec![];
-        let num = 100;
-        for _ in 0..num {
+        for _ in 0..sample_num + 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
         check_sample_length(sample_num, key_ranges);
 
         let mut key_ranges = vec![];
+        let num = 100;
         for _ in 0..num {
             let mut ranges = vec![];
             for _ in 0..num {
@@ -860,30 +943,148 @@ mod tests {
         }
         check_sample_length(sample_num, key_ranges);
 
-        // Test the sample_num > all_key_ranges_length.
-        let sample_num = 20;
+        // Test the sample_num > key range number.
+        check_sample_length(sample_num, vec![vec![build_key_range(b"a", b"b", false)]]);
+
         let mut key_ranges = vec![];
         for _ in 0..sample_num - 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges.clone());
+        check_sample_length(sample_num, key_ranges);
 
-        // Test the wrong length of prefix_sum or key_ranges_providers.
-        let prefix_sum = prefix_sum(key_ranges.clone().iter(), Vec::len);
-        let sampled_key_ranges = sample(
-            sample_num,
-            &prefix_sum[..prefix_sum.len() - 1],
-            key_ranges.clone(),
-            |x| x,
-        );
-        assert!(sampled_key_ranges.is_empty());
-        let sampled_key_ranges = sample(
-            sample_num,
-            &prefix_sum,
-            key_ranges.clone()[..key_ranges.len() - 1].to_vec(),
-            |x| x,
-        );
-        assert!(sampled_key_ranges.is_empty());
+        // Test the empty key range gap.
+        // See https://github.com/tikv/tikv/issues/12185 for more details.
+        let test_cases = vec![
+            // Case 1: small gap.
+            vec![
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+            ],
+            // Case 2: big gap.
+            vec![
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![build_key_range(b"a", b"b", false)],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![build_key_range(b"c", b"d", false)],
+            ],
+            vec![
+                vec![build_key_range(b"c", b"d", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+            ],
+            vec![
+                vec![build_key_range(b"c", b"d", false)],
+                vec![build_key_range(b"a", b"b", false)],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+            ],
+            // Case 3: multiple gaps.
+            vec![
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+            ],
+            vec![
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"i", b"j", false),
+                ],
+                vec![],
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                ],
+            ],
+            // Case 4: all empty.
+            vec![vec![], vec![], vec![], vec![]],
+        ];
+        for sample_num in 0..=DEFAULT_SAMPLE_NUM {
+            for test_case in test_cases.iter() {
+                check_sample_length(sample_num, test_case.clone());
+            }
+        }
     }
 
     #[test]

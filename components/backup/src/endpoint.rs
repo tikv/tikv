@@ -285,6 +285,7 @@ impl BackupRange {
                         key,
                         backup_ts,
                         &Default::default(),
+                        IsolationLevel::Si,
                     )
                 },
             )

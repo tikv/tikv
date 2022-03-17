@@ -21,6 +21,7 @@ use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_L
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
+    kvrpcpb::IsolationLevel,
     metapb,
     raft_cmdpb::{
         CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -532,6 +533,9 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
+                // The replica read is not compatible with `RcCheckTs` isolation level yet.
+                // It's ensured in the tidb side when `RcCheckTs` is enabled for read requests,
+                // the replica read would not be enabled at the same time.
                 let res = self.concurrency_manager.read_range_check(
                     start_key.as_ref(),
                     end_key.as_ref(),
@@ -541,6 +545,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             key,
                             start_ts,
                             &Default::default(),
+                            IsolationLevel::Si,
                         )
                     },
                 );

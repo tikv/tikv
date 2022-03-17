@@ -667,7 +667,6 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "online_config",
- "panic_hook",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -686,7 +685,6 @@ dependencies = [
  "tikv",
  "tikv_kv",
  "tikv_util",
- "time",
  "tokio",
  "txn_types",
 ]
@@ -830,6 +828,7 @@ dependencies = [
  "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
+ "kvproto",
  "parking_lot 0.12.0",
  "rand 0.8.3",
  "tikv_alloc",
@@ -871,6 +870,16 @@ name = "core-foundation-sys"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
+
+[[package]]
+name = "cpu-time"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
+dependencies = [
+ "libc 0.2.119",
+ "winapi 0.3.9",
+]
 
 [[package]]
 name = "cpuid-bool"
@@ -1131,12 +1140,13 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "4.0.2"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e77a43b28d0668df09411cb0bc9a8c2adc40f9a048afe863e05fd43251e8e39c"
+checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
+ "parking_lot 0.12.0",
 ]
 
 [[package]]
@@ -2990,9 +3000,9 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05499f3756671c15885fee9034446956fff3f243d6077b91e5767df161f766b3"
+checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
 dependencies = [
  "hermit-abi",
  "libc 0.2.119",
@@ -3198,28 +3208,9 @@ dependencies = [
 
 [[package]]
 name = "paste"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45ca20c77d80be666aef2b45486da86238fabe33e38306bd3118fe4af33fa880"
-dependencies = [
- "paste-impl",
- "proc-macro-hack",
-]
-
-[[package]]
-name = "paste"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5d65c4d95931acda4498f675e332fcbdc9a06705cd07086c510e9b6009cd1c1"
-
-[[package]]
-name = "paste-impl"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d95a7db200b97ef370c8e6de0088252f7e0dfff7d047a28528e47456c0fc98b6"
-dependencies = [
- "proc-macro-hack",
-]
 
 [[package]]
 name = "pd_client"
@@ -5219,7 +5210,7 @@ dependencies = [
  "more-asserts",
  "online_config",
  "panic_hook",
- "paste 1.0.4",
+ "paste",
  "pd_client",
  "perfcnt",
  "procinfo",
@@ -5400,6 +5391,7 @@ dependencies = [
  "codec",
  "collections",
  "fail",
+ "futures 0.3.15",
  "itertools 0.10.0",
  "kvproto",
  "log_wrappers",
@@ -5519,7 +5511,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "parking_lot 0.12.0",
- "paste 1.0.4",
+ "paste",
  "pd_client",
  "pin-project",
  "pnet_datalink",
@@ -5628,20 +5620,20 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f28c80e4338857639f443169a601fafe49866aed8d7a8d565c2f5bfb1a021adf"
+checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
 dependencies = [
  "libc 0.2.119",
- "paste 0.1.18",
+ "paste",
  "tikv-jemalloc-sys",
 ]
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.1+5.2.1-patched"
+version = "0.4.3+5.2.1-patched.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a26331b05179d4cb505c8d6814a7e18d298972f0a551b0e3cefccff927f86d3"
+checksum = "a1792ccb507d955b46af42c123ea8863668fae24d03721e40cad6a41773dbb49"
 dependencies = [
  "cc",
  "fs_extra",
@@ -5650,9 +5642,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.4.1"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c14a5a604eb8715bc5785018a37d00739b180bcf609916ddf4393d33d49ccdf"
+checksum = "a5b7bcecfafe4998587d636f9ae9d55eb9d0499877b88757767c346875067098"
 dependencies = [
  "libc 0.2.119",
  "tikv-jemalloc-sys",
@@ -5704,6 +5696,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "panic_hook",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "raftstore",
@@ -5727,6 +5720,7 @@ dependencies = [
  "chrono",
  "codec",
  "collections",
+ "cpu-time",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -5752,6 +5746,7 @@ dependencies = [
  "procfs",
  "procinfo",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "rand 0.8.3",
  "regex",
@@ -6398,14 +6393,14 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#d564d197f6cc5d086a300af4661a5fc67d722b4a"
+source = "git+https://github.com/tikv/yatp.git?branch=master#5f3d58002b383bfd0014e271ae58261ecc072de3"
 dependencies = [
  "crossbeam-deque",
  "dashmap",
  "fail",
  "lazy_static",
  "num_cpus",
- "parking_lot_core 0.8.3",
+ "parking_lot_core 0.9.1",
  "prometheus",
  "rand 0.8.3",
 ]

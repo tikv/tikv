@@ -17,8 +17,10 @@ use tipb::Executor as PbExecutor;
 use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
+use tikv_util::quota_limiter::QuotaLimiter;
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more comprehensive benchmarks
 /// will be.
@@ -50,6 +52,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         false,
         false,
         None,
+        Arc::new(QuotaLimiter::default()),
     )
     .build()
     .unwrap()

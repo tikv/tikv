@@ -54,7 +54,9 @@ use tokio::sync::{Mutex, Semaphore};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
-use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
+use crate::delegate::{
+    on_init_downstream, post_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState,
+};
 use crate::metrics::*;
 use crate::old_value::{
     near_seek_old_value, new_old_value_cursor, OldValueCache, OldValueCallback, OldValueCursors,
@@ -67,7 +69,7 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 // 10 minutes, it's the default gc life time of TiDB
 // and is long enough for most transactions.
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
-// Suppress repeat resolved ts lag warnning.
+// Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
@@ -156,6 +158,7 @@ pub enum Task {
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
+        region_id: u64,
         downstream_id: DownstreamID,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
@@ -198,8 +201,8 @@ impl fmt::Debug for Task {
                 .field("conn_id", &conn.get_id())
                 .finish(),
             Task::MultiBatch { multi, .. } => de
-                .field("type", &"multibatch")
-                .field("multibatch", &multi.len())
+                .field("type", &"multi_batch")
+                .field("multi_batch", &multi.len())
                 .finish(),
             Task::MinTS { ref min_ts, .. } => {
                 de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
@@ -215,9 +218,12 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
             Task::InitDownstream {
-                ref downstream_id, ..
+                ref region_id,
+                ref downstream_id,
+                ..
             } => de
                 .field("type", &"init_downstream")
+                .field("region_id", &region_id)
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
@@ -425,7 +431,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             sink_memory_quota,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
             region_read_progress,
-            // Log the first resolved ts warnning.
+            // Log the first resolved ts warning.
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
         };
         ep.register_min_ts_event();
@@ -864,9 +870,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             resolved_ts.regions = Vec::with_capacity(downstream_regions.len());
             // Only send region ids that are captured by the connection.
             for (region_id, (_, downstream_state)) in conn.get_downstreams() {
-                if regions.contains(region_id)
-                    && matches!(downstream_state.load(), DownstreamState::Normal)
-                {
+                if regions.contains(region_id) && downstream_state.load().ready_for_advancing_ts() {
                     resolved_ts.regions.push(*region_id);
                 }
             }
@@ -1126,7 +1130,7 @@ impl<E: KvEngine> Initializer<E> {
         // When downstream_state is Stopped, it means the corresponding delegate
         // is stopped. The initialization can be safely canceled.
         //
-        // Acquiring a permit may take some time, it is possiable that
+        // Acquiring a permit may take some time, it is possible that
         // initialization can be canceled.
         if self.downstream_state.load() == DownstreamState::Stopped {
             info!("cdc async incremental scan canceled";
@@ -1145,6 +1149,7 @@ impl<E: KvEngine> Initializer<E> {
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
+        let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
         let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
@@ -1160,6 +1165,7 @@ impl<E: KvEngine> Initializer<E> {
                 region_epoch,
                 callback: Callback::Read(Box::new(move |resp| {
                     if let Err(e) = sched.schedule(Task::InitDownstream {
+                        region_id,
                         downstream_id,
                         downstream_state,
                         sink,
@@ -1215,6 +1221,7 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Result<()> {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
+        let observe_id = self.observe_id;
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -1248,16 +1255,26 @@ impl<E: KvEngine> Initializer<E> {
         let conn_id = self.conn_id;
         let mut done = false;
         let start = Instant::now_coarse();
+
+        let curr_state = self.downstream_state.load();
+        assert!(matches!(
+            curr_state,
+            DownstreamState::Initializing | DownstreamState::Stopped
+        ));
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
+
         while !done {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
             if self.downstream_state.load() == DownstreamState::Stopped {
-                info!("cdc async incremental scan canceled";
-                    "region_id" => region_id,
-                    "downstream_id" => ?downstream_id,
-                    "observe_id" => ?self.observe_id,
-                    "conn_id" => ?conn_id);
-                return Err(box_err!("scan canceled"));
+                return on_cancel();
             }
             let cursors = old_value_cursors.as_mut();
             let resolver = resolver.as_mut();
@@ -1271,9 +1288,19 @@ impl<E: KvEngine> Initializer<E> {
             self.sink_scan_events(entries, done).await?;
         }
 
+        if !post_init_downstream(&self.downstream_state) {
+            return on_cancel();
+        }
         let takes = start.saturating_elapsed();
+        info!("cdc async incremental scan finished";
+            "region_id" => region.get_id(),
+            "conn_id" => ?self.conn_id,
+            "downstream_id" => ?self.downstream_id,
+            "takes" => ?takes,
+        );
+
         if let Some(resolver) = resolver {
-            self.finish_building_resolver(resolver, region, takes);
+            self.finish_building_resolver(resolver, region);
         }
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
@@ -1402,7 +1429,7 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
+    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
@@ -1413,7 +1440,6 @@ impl<E: KvEngine> Initializer<E> {
             "resolved_ts" => rts,
             "lock_count" => resolver.locks().len(),
             "observe_id" => ?observe_id,
-            "takes" => ?takes,
         );
 
         fail_point!("before_schedule_resolver_ready");
@@ -1538,6 +1564,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent => self.register_min_ts_event(),
             Task::InitDownstream {
+                region_id,
                 downstream_id,
                 downstream_state,
                 sink,
@@ -1545,23 +1572,19 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 cb,
             } => {
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
-                    error!(
-                        "cdc failed to schedule barrier for delta before delta scan";
-                        "error" => ?e
-                    );
+                    error!("cdc failed to schedule barrier for delta before delta scan";
+                        "region_id" => region_id,
+                        "error" => ?e);
                     return;
                 }
-                match downstream_state
-                    .compare_exchange(DownstreamState::Uninitialized, DownstreamState::Normal)
-                {
-                    Ok(_) => {
-                        info!("cdc downstream is initialized"; "downstream_id" => ?downstream_id);
-                    }
-                    Err(state) => {
-                        warn!("cdc downstream fails to initialize";
-                            "downstream_id" => ?downstream_id,
-                            "state" => ?state);
-                    }
+                if on_init_downstream(&downstream_state) {
+                    info!("cdc downstream starts to initialize";
+                        "region_id" => region_id,
+                        "downstream_id" => ?downstream_id);
+                } else {
+                    warn!("cdc downstream fails to initialize";
+                        "region_id" => region_id,
+                        "downstream_id" => ?downstream_id);
                 }
                 cb();
             }
@@ -1585,6 +1608,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
     fn on_timeout(&mut self) {
+        CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
+
         // Reclaim resolved_region_heap memory.
         self.resolved_region_heap
             .reset_and_shrink_to(self.capture_regions.len());
@@ -1702,7 +1727,7 @@ mod tests {
             .worker_threads(4)
             .build()
             .unwrap();
-        let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Normal));
+        let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
             engine: engine.unwrap_or_else(|| {
                 TestEngineBuilder::new()
@@ -1868,10 +1893,16 @@ mod tests {
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
         initializer.max_scan_batch_bytes = total_bytes;
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
         initializer.build_resolver = false;
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
 
@@ -1902,7 +1933,9 @@ mod tests {
 
         // Disconnect sink by dropping runtime (it also drops drain).
         drop(pool);
-        initializer.downstream_state.store(DownstreamState::Normal);
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
         block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
 
         worker.stop();
@@ -1911,7 +1944,7 @@ mod tests {
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
     // Whether `DeltaScanner` emits correct old values or not is already tested by
     // another case `test_old_value_with_hint_min_ts`, so here we only care about
-    // hanlding `OldValue::SeekWrite` with `OldValueReader`.
+    // handling `OldValue::SeekWrite` with `OldValueReader`.
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
         let engine = TestEngineBuilder::new().build_without_cache().unwrap();
