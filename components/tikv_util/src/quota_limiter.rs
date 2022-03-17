@@ -6,7 +6,6 @@ use super::config::ReadableSize;
 use super::time::Limiter;
 use super::timer::GLOBAL_TIMER_HANDLE;
 
-use codec::prelude::BufferWriter;
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
 
