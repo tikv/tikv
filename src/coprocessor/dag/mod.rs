@@ -14,6 +14,8 @@ use tipb::{DagRequest, SelectResponse, StreamResponse};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};
 use crate::storage::{Statistics, Store};
+use crate::tikv_util::quota_limiter::QuotaLimiter;
+use std::sync::Arc;
 
 pub struct DagHandlerBuilder<S: Store + 'static> {
     req: DagRequest,
@@ -25,6 +27,7 @@ pub struct DagHandlerBuilder<S: Store + 'static> {
     is_streaming: bool,
     is_cache_enabled: bool,
     paging_size: Option<u64>,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<S: Store + 'static> DagHandlerBuilder<S> {
@@ -37,6 +40,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         is_streaming: bool,
         is_cache_enabled: bool,
         paging_size: Option<u64>,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
         DagHandlerBuilder {
             req,
@@ -48,6 +52,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             is_streaming,
             is_cache_enabled,
             paging_size,
+            quota_limiter,
         }
     }
 
@@ -69,6 +74,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
             self.batch_row_limit,
             self.is_streaming,
             self.paging_size,
+            self.quota_limiter,
         )?
         .into_boxed())
     }
@@ -90,6 +96,7 @@ impl BatchDAGHandler {
         streaming_batch_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(
@@ -100,6 +107,7 @@ impl BatchDAGHandler {
                 streaming_batch_limit,
                 is_streaming,
                 paging_size,
+                quota_limiter,
             )?,
             data_version,
         })

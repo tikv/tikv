@@ -21,6 +21,21 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref PENDING_CHECK_LEADER_REQ_COUNT: IntGauge = register_int_gauge!(
+        "tikv_check_leader_request_pending_count",
+        "Total number of pending check leader requests"
+    )
+    .unwrap();
+    pub static ref PENDING_CHECK_LEADER_REQ_SENT_COUNT: IntGauge = register_int_gauge!(
+        "tikv_check_leader_request_sent_pending_count",
+        "Total number of pending sent check leader requests"
+    )
+    .unwrap();
+    pub static ref PENDING_RTS_COUNT: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_pending_count",
+        "Total number of pending rts"
+    )
+    .unwrap();
     pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_resolved_ts_gap_millis",
         "The minimal (non-zero) resolved ts gap for observe regions"
