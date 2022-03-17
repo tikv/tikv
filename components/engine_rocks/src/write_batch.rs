@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::engine::RocksEngine;
 use crate::options::RocksWriteOptions;
 use crate::util::get_cf_handle;
-use engine_traits::{self, Error, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_traits::{self, Error, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 impl WriteBatchExt for RocksEngine {
@@ -33,6 +33,14 @@ impl RocksWriteBatch {
         RocksWriteBatch { db, wb }
     }
 
+    pub fn with_capacity(engine: &RocksEngine, cap: usize) -> RocksWriteBatch {
+        let wb = RawWriteBatch::with_capacity(cap);
+        RocksWriteBatch {
+            db: engine.as_inner().clone(),
+            wb,
+        }
+    }
+
     pub fn as_inner(&self) -> &RawWriteBatch {
         &self.wb
     }
@@ -46,15 +54,7 @@ impl RocksWriteBatch {
     }
 }
 
-impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
-    fn with_capacity(engine: &RocksEngine, cap: usize) -> RocksWriteBatch {
-        let wb = RawWriteBatch::with_capacity(cap);
-        RocksWriteBatch {
-            db: engine.as_inner().clone(),
-            wb,
-        }
-    }
-
+impl engine_traits::WriteBatch for RocksWriteBatch {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
         self.get_db()

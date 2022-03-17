@@ -5,7 +5,7 @@ use crate::options::WriteOptions;
 
 /// Engines that can create write batches
 pub trait WriteBatchExt: Sized {
-    type WriteBatch: WriteBatch<Self>;
+    type WriteBatch: WriteBatch;
 
     /// The number of puts/deletes made to a write batch before the batch should
     /// be committed with `write`. More entries than this will cause
@@ -70,10 +70,7 @@ pub trait Mutable: Send {
 /// point can be recorded. Any number of save points can be recorded to a stack.
 /// Calling `rollback_to_save_point` reverts all commands issued since the last
 /// save point, and pops the save point from the stack.
-pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
-    /// Create a WriteBatch with a given command capacity
-    fn with_capacity(e: &E, cap: usize) -> Self;
-
+pub trait WriteBatch: Mutable {
     /// Commit the WriteBatch to disk with the given options
     fn write_opt(&self, opts: &WriteOptions) -> Result<()>;
 
