@@ -27,7 +27,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::marker::Unpin;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, result};
@@ -41,11 +41,30 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
 
+#[repr(u8)]
+enum ConnState {
+    Established = 0,
+    /// The connection is paused and may be resumed later.
+    Paused = 1,
+    /// The connection is closed and removed from the connection pool.
+    Disconnected = 2,
+}
+
+impl From<u8> for ConnState {
+    fn from(state: u8) -> ConnState {
+        match state {
+            0 => ConnState::Established,
+            1 => ConnState::Paused,
+            2 => ConnState::Disconnected,
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// A quick queue for sending raft messages.
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
-    /// A flag indicates whether the queue can still accept messages.
-    connected: AtomicBool,
+    conn_state: AtomicU8,
     waker: Mutex<Option<Waker>>,
 }
 
@@ -54,7 +73,7 @@ impl Queue {
     fn with_capacity(cap: usize) -> Queue {
         Queue {
             buf: ArrayQueue::new(cap),
-            connected: AtomicBool::new(true),
+            conn_state: AtomicU8::new(ConnState::Established as u8),
             waker: Mutex::new(None),
         }
     }
@@ -66,25 +85,18 @@ impl Queue {
     ///
     /// True when the message is pushed into queue otherwise false.
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
-        // Another way is pop the old messages, but it makes things
-        // complicated.
-        if self.connected.load(Ordering::Relaxed) {
-            match self.buf.push(msg) {
-                Ok(()) => (),
-                Err(_) => return Err(DiscardReason::Full),
-            }
-        } else {
-            return Err(DiscardReason::Disconnected);
-        }
-        if self.connected.load(Ordering::SeqCst) {
-            Ok(())
-        } else {
-            Err(DiscardReason::Disconnected)
+        match self.conn_state.load(Ordering::SeqCst).into() {
+            ConnState::Established => match self.buf.push(msg) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(DiscardReason::Full),
+            },
+            ConnState::Paused => Err(DiscardReason::Paused),
+            ConnState::Disconnected => Err(DiscardReason::Disconnected),
         }
     }
 
-    fn disconnect(&self) {
-        self.connected.store(false, Ordering::SeqCst);
+    fn set_conn_state(&self, s: ConnState) {
+        self.conn_state.store(s as u8, Ordering::SeqCst);
     }
 
     /// Wakes up consumer to retrive message.
@@ -750,7 +762,7 @@ async fn start<S, R, E>(
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();
                     if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                        s.disconnect();
+                        s.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -800,6 +812,24 @@ async fn start<S, R, E>(
 struct ConnectionPool {
     connections: HashMap<(u64, usize), Arc<Queue>>,
     tombstone_stores: HashSet<u64>,
+    store_allowlist: Vec<u64>,
+}
+
+impl ConnectionPool {
+    fn set_store_allowlist(&mut self, stores: Vec<u64>) {
+        self.store_allowlist = stores;
+        for (&(store_id, _), q) in self.connections.iter() {
+            let mut state = ConnState::Established;
+            if self.need_pause(store_id) {
+                state = ConnState::Paused;
+            }
+            q.set_conn_state(state);
+        }
+    }
+
+    fn need_pause(&self, store_id: u64) -> bool {
+        !self.store_allowlist.is_empty() && !self.store_allowlist.contains(&store_id)
+    }
 }
 
 /// Queue in cache.
@@ -873,6 +903,7 @@ where
                 self.cache.resize(pool_len);
                 return false;
             }
+            let need_pause = pool.need_pause(store_id);
             let conn = pool
                 .connections
                 .entry((store_id, conn_id))
@@ -880,6 +911,9 @@ where
                     let queue = Arc::new(Queue::with_capacity(
                         self.builder.cfg.raft_client_queue_size,
                     ));
+                    if need_pause {
+                        queue.set_conn_state(ConnState::Paused);
+                    }
                     let back_end = StreamBackEnd {
                         store_id,
                         queue: queue.clone(),
@@ -924,6 +958,7 @@ where
             };
             self.last_hash.1 as usize
         };
+
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
@@ -965,6 +1000,7 @@ where
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
+                    Err(DiscardReason::Paused) => return Err(DiscardReason::Paused),
                     Err(DiscardReason::Filtered) => return Err(DiscardReason::Filtered),
                 }
             }
@@ -1026,6 +1062,11 @@ where
             self.need_flush.shrink_to(512);
         }
         RAFT_MESSAGE_FLUSH_COUNTER.wake.inc_by(counter);
+    }
+
+    pub fn set_store_allowlist(&mut self, stores: Vec<u64>) {
+        let mut p = self.pool.lock().unwrap();
+        p.set_store_allowlist(stores);
     }
 }
 
