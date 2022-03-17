@@ -2280,8 +2280,9 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
     pub num_threads: usize,
-    pub enable_streaming: bool,
-    pub streaming_path: String,
+    #[online_config(skip)]
+    pub enable: bool,
+    pub temp_path: String,
     pub temp_file_size_limit_per_task: ReadableSize,
 }
 
@@ -2300,9 +2301,9 @@ impl Default for BackupStreamConfig {
         Self {
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(1.0, 8.0) as usize,
-            enable_streaming: false,
+            enable: false,
             // TODO: may be use raft store directory
-            streaming_path: env::temp_dir().into_os_string().into_string().unwrap(),
+            temp_path: env::temp_dir().into_os_string().into_string().unwrap(),
             temp_file_size_limit_per_task: ReadableSize::mb(128),
         }
     }

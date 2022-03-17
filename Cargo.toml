@@ -256,7 +256,7 @@ members = [
   "components/error_code",
   "components/concurrency_manager",
   "components/server",
-  "components/br-stream",
+  "components/backup-stream",
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",

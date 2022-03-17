@@ -25,8 +25,8 @@ use std::{
     u64,
 };
 
-use br_stream::config::BackupStreamConfigManager;
-use br_stream::observer::BackupStreamObserver;
+use backup_stream::config::BackupStreamConfigManager;
+use backup_stream::observer::BackupStreamObserver;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -797,9 +797,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         // Start backup stream
-        if self.config.backup_stream.enable_streaming {
+        if self.config.backup_stream.enable {
             // Create backup stream.
-            let mut backup_stream_worker = Box::new(LazyWorker::new("br-stream"));
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
             let backup_stream_scheduler = backup_stream_worker.scheduler();
 
             // Register backup-stream observer.
@@ -811,7 +811,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
             );
 
-            let backup_stream_endpoint = br_stream::Endpoint::new::<String>(
+            let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
                 node.id(),
                 &self.config.pd.endpoints,
                 self.config.backup_stream.clone(),

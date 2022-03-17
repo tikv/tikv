@@ -434,6 +434,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "backup-stream"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes 0.4.12",
+ "crossbeam",
+ "crossbeam-channel",
+ "dashmap 5.0.0",
+ "engine_panic",
+ "engine_rocks",
+ "engine_traits",
+ "etcd-client",
+ "external_storage",
+ "external_storage_export",
+ "file_system",
+ "futures 0.3.15",
+ "hex 0.4.2",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "online_config",
+ "openssl",
+ "pd_client",
+ "prometheus",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "rand 0.8.3",
+ "regex",
+ "resolved_ts",
+ "slog",
+ "slog-global",
+ "thiserror",
+ "tidb_query_datatype",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+ "tokio-util 0.7.0",
+ "txn_types",
+ "uuid",
+]
+
+[[package]]
 name = "base64"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -539,51 +584,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f901accdf830d2ea2f4e27f923a5e1125cd8b1a39ab578b9db1a42d578a6922b"
 dependencies = [
  "cmake",
-]
-
-[[package]]
-name = "br-stream"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes 0.4.12",
- "crossbeam",
- "crossbeam-channel",
- "dashmap 5.0.0",
- "engine_panic",
- "engine_rocks",
- "engine_traits",
- "etcd-client",
- "external_storage",
- "external_storage_export",
- "file_system",
- "futures 0.3.15",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "log_wrappers",
- "online_config",
- "openssl",
- "pd_client",
- "prometheus",
- "protobuf",
- "raft",
- "raftstore",
- "rand 0.8.3",
- "regex",
- "resolved_ts",
- "slog",
- "slog-global",
- "thiserror",
- "tidb_query_datatype",
- "tikv",
- "tikv_alloc",
- "tikv_util",
- "tokio",
- "tokio-stream",
- "tokio-util 0.7.0",
- "txn_types",
- "uuid",
 ]
 
 [[package]]
@@ -2474,7 +2474,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#13a8f820a4e09e1fe471847ca9606e2f378c40a4"
+source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#4f14da8e3dd1269765f82f6c2259458df9804ff0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4751,7 +4751,7 @@ name = "server"
 version = "0.0.1"
 dependencies = [
  "backup",
- "br-stream",
+ "backup-stream",
  "cdc",
  "chrono",
  "clap",

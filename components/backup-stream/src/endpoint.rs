@@ -81,7 +81,7 @@ where
         router: RT,
         pd_client: Arc<PDC>,
     ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
-        let pool = create_tokio_runtime(config.num_threads, "br-stream")
+        let pool = create_tokio_runtime(config.num_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
         // TODO consider TLS?
@@ -97,7 +97,7 @@ where
         };
 
         let range_router = Router::new(
-            PathBuf::from(config.streaming_path.clone()),
+            PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
             config.temp_file_size_limit_per_task.0,
         );
@@ -116,7 +116,7 @@ where
             pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
 
-        info!("the endpoint of stream backup started"; "path" => %config.streaming_path);
+        info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         Endpoint {
             config,
             meta_client,
@@ -395,7 +395,7 @@ where
                 }
                 if let Err(err) = pd_cli
                     .update_service_safe_point(
-                        format!("br-stream-{}-{}", task, store_id),
+                        format!("backup-stream-{}-{}", task, store_id),
                         TimeStamp::new(rts),
                         Duration::from_secs(600),
                     )
@@ -479,7 +479,7 @@ where
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
-        info!("br-stream: on_modify_observe"; "op" => ?op);
+        info!("backup stream: on_modify_observe"; "op" => ?op);
         match op {
             ObserveOp::Start {
                 region,

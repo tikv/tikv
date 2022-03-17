@@ -522,7 +522,7 @@ where
                             let mut import_err = kvproto::import_sstpb::Error::default();
                             let err = r.response.get_header().get_error();
                             import_err
-                                .set_message(format!("failed to complete raft command"));
+                                .set_message("failed to complete raft command".to_string());
                             // FIXME: if there are many errors, we may lose some of them here.
                             import_err 
                                 .set_store_error(err.clone());

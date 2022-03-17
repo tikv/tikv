@@ -1,5 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use br_stream::{
+use backup_stream::{
     errors::Result,
     metadata::{store::EtcdStore, MetadataClient},
 };

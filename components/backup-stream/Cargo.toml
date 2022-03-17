@@ -1,5 +1,5 @@
 [package]
-name = "br-stream"
+name = "backup-stream"
 version = "0.1.0"
 edition = "2018"
 

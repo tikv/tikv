@@ -28,7 +28,7 @@ nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
 backup = { path = "../backup", default-features = false }
-br-stream = { path = "../br-stream", default-features = false }
+backup-stream = { path = "../backup-stream", default-features = false }
 cdc = { path = "../cdc", default-features = false }
 chrono = "0.4"
 tempfile = "3.0"

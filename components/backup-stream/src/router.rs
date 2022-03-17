@@ -28,7 +28,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 
-use futures::io::{AllowStdIo, Cursor};
+use futures::io::Cursor;
 use kvproto::{
     brpb::{DataFileInfo, FileType, Metadata},
     raft_cmdpb::CmdType,
