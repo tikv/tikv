@@ -140,6 +140,7 @@ impl Filter for DelayFilter {
 
 #[derive(Clone)]
 pub struct SimulateTransport<C> {
+    store_allowlist: Vec<u64>,
     filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
     ch: C,
 }
@@ -147,6 +148,7 @@ pub struct SimulateTransport<C> {
 impl<C> SimulateTransport<C> {
     pub fn new(ch: C) -> SimulateTransport<C> {
         SimulateTransport {
+            store_allowlist: vec![],
             filters: Arc::new(RwLock::new(vec![])),
             ch,
         }
@@ -196,11 +198,20 @@ where
 
 impl<C: Transport> Transport for SimulateTransport<C> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
+        if !self.store_allowlist.is_empty()
+            && !self
+                .store_allowlist
+                .contains(&m.get_to_peer().get_store_id())
+        {
+            return Err(Error::Timeout("".to_string()));
+        }
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
     }
 
-    fn set_store_allowlist(&mut self, _: Vec<u64>) {}
+    fn set_store_allowlist(&mut self, allowlist: Vec<u64>) {
+        self.store_allowlist = allowlist;
+    }
 
     fn need_flush(&self) -> bool {
         self.ch.need_flush()
