@@ -1069,18 +1069,20 @@ impl<'a> PeerMsgHandler<'a> {
             if !shard.get_initial_flushed() {
                 return;
             }
-            let cfg_split_size = self.ctx.cfg.region_split_size.0;
+            let region_max_size = self.ctx.cfg.region_max_size.0;
+            let region_split_size = self.ctx.cfg.region_split_size.0;
             let estimated_size = shard.get_estimated_size();
-            if estimated_size < cfg_split_size {
+            if estimated_size < region_max_size {
                 return;
             }
             info!(
-                "region {} estimated size {} is greater than cfg split size {}",
+                "region {} estimated size {} is greater than region max size {}, split size is {}",
                 self.peer.tag(),
                 estimated_size,
-                cfg_split_size
+                region_max_size,
+                region_split_size,
             );
-            let raw_keys = shard.get_suggest_split_keys(cfg_split_size);
+            let raw_keys = shard.get_suggest_split_keys(region_split_size);
             let encoded_split_keys = raw_keys
                 .iter()
                 .map(|k| {

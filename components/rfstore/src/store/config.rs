@@ -72,6 +72,8 @@ pub struct Config {
 
     pub channel_capacity: usize,
 
+    pub region_max_size: ReadableSize,
+
     pub region_split_size: ReadableSize,
 
     pub apply_pool_size: usize,
@@ -101,7 +103,8 @@ impl Default for Config {
             allow_remove_leader: false,
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(3),
-            region_split_size: ReadableSize::gb(1),
+            region_max_size: ReadableSize::gb(1),
+            region_split_size: ReadableSize::mb(640),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             update_safe_ts_interval: ReadableDuration::secs(60),
@@ -149,6 +152,7 @@ impl Config {
         cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
 
         cfg.region_split_size = old_cop.region_split_size;
+        cfg.region_max_size = old_cop.region_max_size;
         cfg.apply_pool_size = old.apply_batch_system.pool_size;
         cfg.async_io = old.store_io_pool_size > 0;
         cfg
