@@ -4,6 +4,7 @@ use crate::resource_metering::test_suite::TestSuite;
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::PerfLevel;
@@ -18,6 +19,7 @@ use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::read_pool::ReadPool;
 use tikv::storage::RocksEngine;
 use tikv_util::config::ReadableDuration;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::thread_group::GroupProperties;
 use txn_types::{Key, TimeStamp};
 
@@ -223,6 +225,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         cm,
         PerfLevel::EnableCount,
         test_suite.get_tag_factory(),
+        Arc::new(QuotaLimiter::default()),
     );
     (test_suite, store, endpoint)
 }
