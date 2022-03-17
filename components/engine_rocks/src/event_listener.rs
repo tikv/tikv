@@ -4,8 +4,8 @@ use crate::rocks_metrics::*;
 
 use file_system::{get_io_type, set_io_type, IOType};
 use rocksdb::{
-    CompactionJobInfo, DBBackgroundErrorReason, MutableStatus, FlushJobInfo, IngestionInfo, SubcompactionJobInfo,
-    WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MutableStatus,
+    SubcompactionJobInfo, WriteStallInfo,
 };
 use tikv_util::set_panic_mark;
 
