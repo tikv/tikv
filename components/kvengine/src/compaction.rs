@@ -767,7 +767,8 @@ pub(crate) fn compact_tables(
     let mut builder = sstable::Builder::new(0, req.get_table_builder_options());
     let mut id_idx = 0;
     let (tx, rx) = tikv_util::mpsc::bounded(req.file_ids.len());
-    while iter.valid() {
+    let mut reach_end = false;
+    while iter.valid() && !reach_end {
         let id = req.file_ids[id_idx];
         builder.reset(id);
         last_key.truncate(0);
@@ -788,7 +789,8 @@ pub(crate) fn compact_tables(
                 if last_key.len() > 0 && builder.estimated_size() + kv_size > req.max_table_size {
                     break;
                 }
-                if key > req.end.as_slice() {
+                if key >= req.end.as_slice() {
+                    reach_end = true;
                     break;
                 }
                 last_key.truncate(0);

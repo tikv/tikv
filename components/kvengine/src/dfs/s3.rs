@@ -98,7 +98,7 @@ impl S3FSCore {
         let cfg = s3_conf_builder.build();
         let s3c = Client::from_conf(cfg);
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
+            .worker_threads(2)
             .enable_all()
             .build()
             .unwrap();
