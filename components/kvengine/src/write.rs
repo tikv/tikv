@@ -96,24 +96,33 @@ impl WriteBatch {
 }
 
 impl Engine {
-    pub(crate) fn switch_mem_table(&self, shard: &Shard, version: u64) -> memtable::CFTable {
-        let mut writable = shard.get_writable_mem_table();
-        if writable.is_empty() {
-            writable = memtable::CFTable::new();
-        } else {
-            let new_tbl = memtable::CFTable::new();
-            shard.atomic_add_mem_table(new_tbl);
+    pub(crate) fn switch_mem_table(&self, shard: &Shard, version: u64) {
+        let mem_table = shard.get_writable_mem_table();
+        if mem_table.is_empty() {
+            return;
         }
-        writable.set_version(version);
+        let new_tbl = memtable::CFTable::new();
+        shard.atomic_add_mem_table(new_tbl);
+        mem_table.set_version(version);
         info!(
-            "shard {}:{} set mem-table version {}, empty {}, size {}",
+            "shard {}:{} set mem-table version {}, size {}",
             shard.id,
             shard.ver,
             version,
-            writable.is_empty(),
-            writable.size()
+            mem_table.size()
         );
-        writable
+        let mut guard = shard.last_switch_time.write().unwrap();
+        let last_switch_instant = *guard;
+        *guard = Instant::now();
+        let props = shard.properties.to_pb(shard.id);
+        mem_table.set_properties(props);
+        if shard.is_active() && shard.get_initial_flushed() && self.opts.dynamic_mem_table_size {
+            let next_mem_tbl_size =
+                shard.next_mem_table_size(mem_table.size() as u64, last_switch_instant);
+            let mut change_size = new_change_set(shard.id, shard.ver);
+            change_size.set_next_mem_table_size(next_mem_tbl_size);
+            self.meta_change_listener.on_change_set(change_size);
+        }
     }
 
     pub fn write(&self, wb: &mut WriteBatch) {
@@ -137,8 +146,10 @@ impl Engine {
         }
         store_u64(&shard.write_sequence, wb.sequence);
         if mem_tbl.size() > shard.get_max_mem_table_size() as usize {
-            let old_mem_tbl = self.switch_mem_table(&shard, version);
-            self.schedule_flush_task(&shard, old_mem_tbl);
+            self.switch_mem_table(&shard, version);
+            if shard.is_active() && shard.get_mem_tbls().tbls.len() == 2 {
+                self.trigger_flush(&shard);
+            }
         }
     }
 
@@ -149,36 +160,6 @@ impl Engine {
                     e.version = version;
                 });
             };
-        }
-    }
-
-    pub(crate) fn schedule_flush_task(&self, shard: &Shard, mem_tbl: memtable::CFTable) {
-        let mut guard = shard.last_switch_time.write().unwrap();
-        let last_switch_instant = *guard;
-        *guard = Instant::now();
-        let props = shard.properties.to_pb(shard.id);
-        mem_tbl.set_properties(props);
-        if shard.is_active() {
-            let mut next_mem_tbl_size = 0;
-            if !mem_tbl.is_empty()
-                && self.opts.dynamic_mem_table_size
-                && load_bool(&shard.initial_flushed)
-            {
-                next_mem_tbl_size =
-                    shard.next_mem_table_size(mem_tbl.size() as u64, last_switch_instant);
-            }
-            let task = FlushTask {
-                shard_id: shard.id,
-                shard_ver: shard.ver,
-                start: shard.start.to_vec(),
-                end: shard.end.to_vec(),
-                normal: Some(NormalFlush {
-                    next_mem_tbl_size,
-                    mem_tbl,
-                }),
-                initial: None,
-            };
-            self.flush_tx.send(task).unwrap();
         }
     }
 }

@@ -233,7 +233,7 @@ impl Shard {
         let mut max_level_total_size = 0;
         for i in 1..max_cf.levels.len() {
             let level = &max_cf.levels[i];
-            let mut level_total_size = self.get_level_total_size(level);
+            let level_total_size = self.get_level_total_size(level);
             if level_total_size > max_level_total_size {
                 max_level = level;
                 max_level_total_size = level_total_size;

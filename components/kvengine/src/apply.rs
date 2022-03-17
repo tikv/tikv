@@ -35,22 +35,25 @@ impl Engine {
             store_u64(&shard.meta_seq, cs.sequence);
         }
         if cs.has_flush() {
-            self.apply_flush(&shard, cs)?
+            self.apply_flush(&shard, &cs)?
         } else if cs.has_compaction() {
-            let result = self.apply_compaction(&shard, cs);
+            let result = self.apply_compaction(&shard, &cs);
             store_bool(&shard.compacting, false);
             if result.is_err() {
                 return result;
             }
         } else if cs.has_initial_flush() {
-            self.apply_initial_flush(&shard, cs)?;
+            self.apply_initial_flush(&shard, &cs)?;
         }
         shard.refresh_estimated_size();
         shard.refresh_compaction_priority();
+        if shard.is_active() && (cs.has_flush() || cs.has_initial_flush()) {
+            self.trigger_flush(&shard);
+        }
         Ok(())
     }
 
-    pub fn apply_flush(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
+    pub fn apply_flush(&self, shard: &Shard, cs: &pb::ChangeSet) -> Result<()> {
         let flush = cs.get_flush();
         if flush.has_l0_create() {
             let opts = dfs::Options::new(shard.id, shard.ver);
@@ -65,7 +68,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn apply_initial_flush(&self, shard: &Shard, cs: pb::ChangeSet) -> Result<()> {
+    pub fn apply_initial_flush(&self, shard: &Shard, cs: &pb::ChangeSet) -> Result<()> {
         let initial_flush = cs.get_initial_flush();
         let (l0s, mut scfs) = self.create_snapshot_tables(shard.id, shard.ver, initial_flush)?;
         // sync the files from bottom to top.
@@ -88,8 +91,8 @@ impl Engine {
         Ok(())
     }
 
-    fn apply_compaction(&self, shard: &Shard, mut cs: pb::ChangeSet) -> Result<()> {
-        let comp = cs.take_compaction();
+    fn apply_compaction(&self, shard: &Shard, cs: &pb::ChangeSet) -> Result<()> {
+        let comp = cs.get_compaction();
         let mut del_files = HashMap::new();
         if comp.conflicted {
             if is_move_down(&comp) {
@@ -176,7 +179,7 @@ impl Engine {
             new_levels.push(l.clone());
         }
         let level_idx = level as usize - 1;
-        let mut new_level = &mut new_levels[level_idx];
+        let new_level = &mut new_levels[level_idx];
         let old_level = &old_scf.levels.as_slice()[level_idx];
         new_level.tables.truncate(0);
         let mut need_update = false;

@@ -32,7 +32,7 @@ impl Engine {
         let version = old_shard.load_mem_table_version();
         // Switch the old shard mem-table, so the first mem-table is always empty.
         // ignore the read-only mem-table to be flushed. let the new shard handle it.
-        let _ = self.switch_mem_table(&old_shard, version);
+        self.switch_mem_table(&old_shard, version);
 
         let mut new_shards = vec![];
         let new_shard_props = split.get_new_shards();

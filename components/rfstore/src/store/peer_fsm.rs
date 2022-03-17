@@ -1301,7 +1301,6 @@ impl<'a> PeerMsgHandler<'a> {
                     .raft
                     .remove_dependent(parent_id, tag.id());
             }
-            return;
         }
         if change.has_initial_flush() {
             let store = self.peer.mut_store();

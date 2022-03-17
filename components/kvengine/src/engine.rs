@@ -62,7 +62,6 @@ impl Engine {
         }
         let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity, 64);
         let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
-        let (flush_result_tx, flush_result_rx) = mpsc::bounded(opts.num_mem_tables);
         let core = EngineCore {
             shards: DashMap::new(),
             opts: opts.clone(),
@@ -84,13 +83,9 @@ impl Engine {
         thread::Builder::new()
             .name("flush".to_string())
             .spawn(move || {
-                flush_en.run_flush_worker(flush_rx, flush_result_tx);
+                flush_en.run_flush_worker(flush_rx);
             })
             .unwrap();
-        let flush_result_en = en.clone();
-        thread::spawn(move || {
-            flush_result_en.run_flush_result(flush_result_rx);
-        });
         let compact_en = en.clone();
         thread::Builder::new()
             .name("compaction".to_string())
@@ -216,16 +211,13 @@ impl EngineCore {
             self.trigger_initial_flush(shard);
             return;
         }
-        let mem_tbls = shard.get_mem_tbls();
-        for i in (1..mem_tbls.tbls.len()).rev() {
-            let mem_tbl = &mem_tbls.tbls.as_slice()[i];
+        if let Some(mem_tbl) = shard.get_last_read_only_mem_table() {
             info!(
-                "shard {}:{} trigger flush mem-table ts {}, size {}, idx: {}",
+                "shard {}:{} trigger flush mem-table ts {}, size {}",
                 shard.id,
                 shard.ver,
                 mem_tbl.get_version(),
                 mem_tbl.size(),
-                i,
             );
             self.flush_tx
                 .send(FlushTask {
@@ -233,10 +225,7 @@ impl EngineCore {
                     shard_ver: shard.ver,
                     start: shard.start.to_vec(),
                     end: shard.end.to_vec(),
-                    normal: Some(NormalFlush {
-                        mem_tbl: mem_tbl.clone(),
-                        next_mem_tbl_size: 0,
-                    }),
+                    normal: Some(mem_tbl.clone()),
                     initial: None,
                 })
                 .unwrap();

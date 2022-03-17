@@ -1393,7 +1393,7 @@ impl Peer {
         if let Some(parent) = &shard_meta.parent {
             parent_id = parent.id;
         }
-        shard_meta.apply_change_set(&mut cs);
+        shard_meta.apply_change_set(&cs);
         info!(
             "shard meta apply change set {:?}", &cs;
             "region" => tag,
