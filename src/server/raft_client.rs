@@ -45,9 +45,20 @@ const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
 enum ConnState {
     Established = 0,
     /// The connection is paused and may be resumed later.
-    Paused,
+    Paused = 1,
     /// The connection is closed and removed from the connection pool.
-    Disconnected,
+    Disconnected = 2,
+}
+
+impl From<u8> for ConnState {
+    fn from(state: u8) -> ConnState {
+        match state {
+            0 => ConnState::Established,
+            1 => ConnState::Paused,
+            2 => ConnState::Disconnected,
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A quick queue for sending raft messages.
@@ -74,14 +85,13 @@ impl Queue {
     ///
     /// True when the message is pushed into queue otherwise false.
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
-        match self.conn_state.load(Ordering::SeqCst) {
-            x if x == ConnState::Established as u8 => match self.buf.push(msg) {
+        match self.conn_state.load(Ordering::SeqCst).into() {
+            ConnState::Established => match self.buf.push(msg) {
                 Ok(()) => Ok(()),
                 Err(_) => Err(DiscardReason::Full),
             },
-            x if x == ConnState::Paused as u8 => Err(DiscardReason::Paused),
-            x if x == ConnState::Disconnected as u8 => Err(DiscardReason::Disconnected),
-            _ => unreachable!(),
+            ConnState::Paused => Err(DiscardReason::Paused),
+            ConnState::Disconnected => Err(DiscardReason::Disconnected),
         }
     }
 
