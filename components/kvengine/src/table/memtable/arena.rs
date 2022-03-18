@@ -16,6 +16,8 @@ pub const NULL_ARENA_ADDR: u64 = 0;
 const NULL_BLOCK_OFF: u32 = 0xffff_ffff;
 const MAX_VAL_SIZE: u32 = 1 << 24 - 1;
 
+const BLOCK_ALIGN: u32 = 8;
+const ALIGN_MASK: u32 = 0xffff_fff8;
 const BLOCK_IDX_MASK: u64 = 0xff00_0000_0000_0000;
 const BLOCK_IDX_SHIFT: u64 = 56;
 const BLOCK_OFF_MASK: u64 = 0x00ff_ffff_0000_0000;
@@ -76,7 +78,6 @@ const MAX_NUM_BLOCKS: usize = 256;
 
 pub struct Arena {
     nodes: ArenaSegment,
-    keys: ArenaSegment,
     values: ArenaSegment,
     total_size: Arc<AtomicU32>,
     pub(crate) rand_id: i32,
@@ -90,7 +91,6 @@ impl Arena {
         let total_size = Arc::new(AtomicU32::new(0));
         let s = Self {
             nodes: ArenaSegment::new(total_size.clone()),
-            keys: ArenaSegment::new(total_size.clone()),
             values: ArenaSegment::new(total_size.clone()),
             total_size,
             rand_id,
@@ -99,8 +99,8 @@ impl Arena {
     }
 
     pub fn put_key(&self, key: &[u8]) -> ArenaAddr {
-        let addr = self.keys.alloc(key.len() as u32);
-        let buf = self.keys.get_mut_bytes(addr);
+        let addr = self.nodes.alloc(key.len() as u32);
+        let buf = self.nodes.get_mut_bytes(addr);
         unsafe {
             ptr::copy(key.as_ptr(), buf.as_mut_ptr(), key.len());
         }
@@ -144,7 +144,7 @@ impl Arena {
     }
 
     pub fn get_key(&self, node: &mut Node) -> &[u8] {
-        self.keys.get_bytes(node.key_addr)
+        self.nodes.get_bytes(node.key_addr)
     }
 
     pub fn get_val(&self, addr: ArenaAddr) -> Value {
@@ -290,7 +290,7 @@ impl ArenaBlock {
 
     pub fn alloc(&self, size: u32) -> u32 {
         // The returned addr should be aligned in 8 bytes.
-        let offset = self.len.load(Ordering::Acquire);
+        let offset = (self.len.load(Ordering::SeqCst) + BLOCK_ALIGN - 1) & ALIGN_MASK;
         let length = offset + size;
         if length > self.cap {
             return NULL_BLOCK_OFF;
