@@ -100,6 +100,7 @@ impl S3FSCore {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
+            .thread_name("s3")
             .build()
             .unwrap();
         Self {
@@ -144,7 +145,7 @@ impl S3FSCore {
                 }
             }
             SdkError::ResponseError { .. } => false,
-            SdkError::ServiceError { .. } => false,
+            SdkError::ServiceError { .. } => true,
         }
     }
 
