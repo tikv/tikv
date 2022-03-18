@@ -1649,18 +1649,20 @@ impl<T: Simulator> Cluster<T> {
         region: &metapb::Region,
         buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
-        expect_buckets: Buckets,
+        expect_buckets: Option<Buckets>,
     ) -> u64 {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let (tx, rx) = channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
-                assert_eq!(expect_buckets.get_keys(), stat.buckets.keys);
-                assert_eq!(
-                    expect_buckets.get_keys().len() - 1,
-                    stat.buckets.sizes.len()
-                );
+                if let Some(expect_buckets) = expect_buckets {
+                    assert_eq!(expect_buckets.get_keys(), stat.buckets.keys);
+                    assert_eq!(
+                        expect_buckets.get_keys().len() - 1,
+                        stat.buckets.sizes.len()
+                    );
+                }
                 tx.send(stat.buckets.version).unwrap();
             }),
         };

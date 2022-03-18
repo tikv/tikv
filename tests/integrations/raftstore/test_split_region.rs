@@ -995,7 +995,7 @@ fn test_refresh_region_bucket_keys() {
         &region,
         buckets,
         Option::None,
-        expected_buckets.clone(),
+        Some(expected_buckets.clone()),
     );
     let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
     region.mut_region_epoch().set_conf_ver(conf_ver);
@@ -1014,7 +1014,7 @@ fn test_refresh_region_bucket_keys() {
         &region,
         buckets.clone(),
         Option::None,
-        expected_buckets.clone(),
+        Some(expected_buckets.clone()),
     );
     assert_eq!(bucket_version2, bucket_version + 1);
 
@@ -1024,7 +1024,7 @@ fn test_refresh_region_bucket_keys() {
         &region,
         buckets,
         Option::None,
-        expected_buckets.clone(),
+        Some(expected_buckets.clone()),
     );
     assert_eq!(bucket_version3, bucket_version2);
 
@@ -1061,7 +1061,7 @@ fn test_refresh_region_bucket_keys() {
         &region,
         buckets,
         Some(bucket_ranges),
-        expected_buckets.clone(),
+        Some(expected_buckets.clone()),
     );
     assert_eq!(bucket_version4, bucket_version3 + 1);
 
@@ -1101,7 +1101,7 @@ fn test_refresh_region_bucket_keys() {
         &region,
         buckets,
         Some(bucket_ranges),
-        expected_buckets.clone(),
+        Some(expected_buckets.clone()),
     );
 }
 
@@ -1135,7 +1135,7 @@ fn test_gen_split_check_bucket_ranges() {
         &region,
         buckets.clone(),
         Option::None,
-        expected_buckets.clone(),
+        Some(expected_buckets.clone()),
     );
     cluster.must_put(b"k10", b"v1");
     cluster.must_put(b"k12", b"v1");
@@ -1147,7 +1147,12 @@ fn test_gen_split_check_bucket_ranges() {
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 
     // set fsm.peer.last_bucket_regions
-    cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Option::None,
+        Some(expected_buckets.clone()),
+    );
     // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
     let expected_bucket_ranges = vec![];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
