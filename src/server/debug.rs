@@ -568,7 +568,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let mut wb = self.engines.kv.write_batch();
+        let mut wb = RocksWriteBatch::new(self.engines.kv.as_inner().clone());
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
@@ -1001,7 +1001,7 @@ fn recover_mvcc_for_range(
     let wb_limit: usize = 10240;
 
     loop {
-        let mut wb = db.c().write_batch();
+        let mut wb = RocksWriteBatch::new(db.clone());
         mvcc_checker.check_mvcc(&mut wb, Some(wb_limit))?;
 
         let batch_size = wb.count();
