@@ -7,7 +7,7 @@ use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
-use crate::storage::{build_raw_write_pre_propose_cb, ProcessResult, Snapshot};
+use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
 use std::sync::Arc;
@@ -22,7 +22,6 @@ command! {
             cf: CfName,
             mutations: Vec<Modify>,
             api_version: ApiVersion,
-            causal_ts_provider: Option<Arc<dyn causal_ts::CausalTsProvider>>,
         }
 }
 
@@ -50,10 +49,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
-            pre_propose_cb: build_raw_write_pre_propose_cb(
-                self.api_version,
-                self.causal_ts_provider.as_ref(),
-            ),
         })
     }
 }

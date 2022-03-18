@@ -608,7 +608,6 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: None,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
-                pre_propose_cb: None,
             }
         } else {
             // Skip write stage if some keys are locked.
@@ -627,7 +626,6 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
-                pre_propose_cb: None,
             }
         };
 

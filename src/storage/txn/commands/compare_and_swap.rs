@@ -3,11 +3,11 @@
 // #[PerformanceCriticalPath]
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
+use crate::storage::raw;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
-use crate::storage::{build_raw_write_pre_propose_cb, raw};
 use crate::storage::{ProcessResult, Snapshot};
 use api_version::{match_template_api_version, APIVersion, RawValue};
 use engine_traits::raw_ttl::ttl_to_expire_ts;
@@ -33,7 +33,6 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
-            causal_ts_provider: Option<Arc<dyn causal_ts::CausalTsProvider>>,
         }
 }
 
@@ -94,10 +93,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
-            pre_propose_cb: build_raw_write_pre_propose_cb(
-                self.api_version,
-                self.causal_ts_provider.as_ref(),
-            ),
         })
     }
 }
@@ -120,16 +115,12 @@ mod tests {
         test_cas_basic_impl(ApiVersion::V2);
     }
 
-    /// Note: for API V2, TestEngine don't support MVCC reading, so `pre_propose_cb` of `WriteResult` is ignored,
+    /// Note: for API V2, TestEngine don't support MVCC reading, so `pre_propose` observer is ignored,
     /// and no timestamp will be append to key.
     /// The full test of `RawCompareAndSwap` is in `src/storage/mod.rs`.
     fn test_cas_basic_impl(api_version: ApiVersion) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
-        let causal_ts_provider =
-            TestStorageBuilder::<RocksEngine, DummyLockManager>::new_causal_ts_provider(
-                api_version,
-            );
         let key = b"rk";
 
         let encoded_key: Key = match_template_api_version!(
@@ -146,7 +137,6 @@ mod tests {
             b"v1".to_vec(),
             0,
             api_version,
-            causal_ts_provider.as_ref().cloned(),
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -160,7 +150,6 @@ mod tests {
             b"v2".to_vec(),
             1,
             api_version,
-            causal_ts_provider.as_ref().cloned(),
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -174,7 +163,6 @@ mod tests {
             b"v3".to_vec(),
             2,
             api_version,
-            causal_ts_provider,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();

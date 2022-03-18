@@ -62,7 +62,6 @@ use crate::storage::types::{
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use raftstore::store::msg::RaftRequestCallback;
 
 /// Store Transaction scheduler commands.
 ///
@@ -374,7 +373,6 @@ pub struct WriteResult {
     pub lock_info: Option<WriteResultLockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
-    pub pre_propose_cb: Option<RaftRequestCallback>,
 }
 
 pub struct WriteResultLockInfo {

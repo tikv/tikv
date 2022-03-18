@@ -803,7 +803,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_info,
             lock_guards,
             response_policy,
-            pre_propose_cb,
         } = match deadline
             .check()
             .map_err(StorageError::from)

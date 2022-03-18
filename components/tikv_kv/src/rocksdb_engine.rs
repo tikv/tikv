@@ -15,7 +15,7 @@ use engine_traits::{
 };
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb;
+use kvproto::{raft_cmdpb, metapb};
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
@@ -27,6 +27,7 @@ use super::{
 };
 
 pub use engine_rocks::RocksSnapshot;
+use raftstore::coprocessor::CoprocessorHost;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -82,6 +83,7 @@ pub struct RocksEngine {
     sched: Scheduler<Task>,
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
+    coprocessor: CoprocessorHost<BaseRocksEngine>,
 }
 
 impl RocksEngine {
@@ -126,6 +128,7 @@ impl RocksEngine {
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
+            coprocessor: CoprocessorHost::default(),
         })
     }
 
@@ -149,6 +152,10 @@ impl RocksEngine {
         let core = self.core.lock().unwrap();
         core.worker.stop();
     }
+
+    pub fn mut_coprocessor(&mut self) -> &mut CoprocessorHost<BaseRocksEngine> {
+        &mut self.coprocessor
+    }
 }
 
 impl Display for RocksEngine {
@@ -165,57 +172,6 @@ impl Debug for RocksEngine {
             self.core.lock().unwrap().temp_dir.is_some()
         )
     }
-}
-
-fn requests_to_modifies(requests: Vec<raft_cmdpb::Request>) -> Vec<Modify> {
-    let mut modifies = Vec::with_capacity(requests.len());
-    for mut req in requests {
-        let m = match req.get_cmd_type() {
-            raft_cmdpb::CmdType::Delete => {
-                let delete = req.mut_delete();
-                Modify::Delete(
-                    engine_traits::name_to_cf(delete.get_cf()).unwrap(),
-                    Key::from_encoded(delete.take_key()),
-                )
-            }
-            raft_cmdpb::CmdType::Put if req.get_put().get_cf() == engine_traits::CF_LOCK => {
-                let put = req.mut_put();
-                let lock = txn_types::Lock::parse(put.get_value()).unwrap();
-                Modify::PessimisticLock(
-                    Key::from_encoded(put.take_key()),
-                    txn_types::PessimisticLock {
-                        primary: lock.primary.into_boxed_slice(),
-                        start_ts: lock.ts,
-                        ttl: lock.ttl,
-                        for_update_ts: lock.for_update_ts,
-                        min_commit_ts: lock.min_commit_ts,
-                    },
-                )
-            }
-            raft_cmdpb::CmdType::Put => {
-                let put = req.mut_put();
-                Modify::Put(
-                    engine_traits::name_to_cf(put.get_cf()).unwrap(),
-                    Key::from_encoded(put.take_key()),
-                    put.take_value(),
-                )
-            }
-            raft_cmdpb::CmdType::DeleteRange => {
-                let delete_range = req.mut_delete_range();
-                Modify::DeleteRange(
-                    engine_traits::name_to_cf(delete_range.get_cf()).unwrap(),
-                    Key::from_encoded(delete_range.take_start_key()),
-                    Key::from_encoded(delete_range.take_end_key()),
-                    delete_range.get_notify_only(),
-                )
-            }
-            _ => {
-                unimplemented!()
-            }
-        };
-        modifies.push(m);
-    }
-    modifies
 }
 
 impl Engine for RocksEngine {
@@ -252,7 +208,14 @@ impl Engine for RocksEngine {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
 
-        // TODO: create CoprocessorHost & invoke "pre_propose" here.
+        // Trigger "pre_propose_query" observers.
+        let requests = batch.modifies.into_iter().map(Into::into).collect::<Vec<_>>();
+        let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
+        cmd_req.set_requests(requests.into());
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        self.coprocessor.pre_propose(&region, &mut cmd_req).map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
+        batch.modifies = cmd_req.take_requests().into_iter().map(Into::into).collect::<Vec<_>>();
 
         if let Some(cb) = proposed_cb {
             cb();

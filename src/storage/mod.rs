@@ -84,7 +84,6 @@ use crate::storage::{
 use api_version::{
     match_template_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL, APIV2,
 };
-use causal_ts::{self, CausalTsProvider};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -1562,12 +1561,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                for get in &gets {
-                    let key = get.key.to_owned();
-                    let region_id = get.get_context().get_region_id();
-                    let peer = get.get_context().get_peer();
-                    tls_collect_query(region_id, peer, &key, &key, false, QueryKind::Get);
-                }
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
@@ -1609,12 +1602,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             ApiVersion::API => API::encode_raw_key_owned(req.take_key(), None),
                         }
                     );
+                    tls_collect_query(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        key.as_encoded(),
+                        key.as_encoded(),
+                        false,
+                        QueryKind::Get,
+                    );
+
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
                             let buckets = snapshot.ext().get_buckets();
                             let store = RawStore::new(snapshot, api_version);
-                            let key = Key::from_encoded(key);
                             match Self::rawkv_cf(&cf, api_version) {
                                 Ok(cf) => {
                                     consumer.consume(
@@ -1712,36 +1713,39 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let cf = Self::rawkv_cf(&cf, api_version)?;
                     // no scan_count for this kind of op.
                     let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> =  match_template_api_version!(
+                    let result: Vec<Result<KvPair>> = match_template_api_version!(
                         API,
                         match api_version {
                             ApiVersion::API => {
-                                keys
-                                .into_iter()
-                                .map(|k| API::encode_raw_key_owned(k, None))
-                                .map(|k| {
-                                    let mut s = Statistics::default();
-                                    let v = store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
-                                    tls_collect_read_flow(
-                                        ctx.get_region_id(),
-                                        Some(k.as_encoded()),
-                                        Some(k.as_encoded()),
-                                        &s,
-                                        buckets.as_ref(),
-                                    );
-                                    stats.add(&s);
-                                    (k, v)
-                                })
-                                .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                                .map(|(k, v)| match v {
-                                    Ok(v) => {
-                                        let (user_key, _) =
-                                            API::decode_raw_key_owned(k, false).unwrap();
-                                        Ok((user_key, v.unwrap()))
-                                    }
-                                    Err(v) => Err(v),
-                                })
-                                .collect()
+                                keys.into_iter()
+                                    .map(|k| API::encode_raw_key_owned(k, None))
+                                    .map(|k| {
+                                        let mut s = Statistics::default();
+                                        let v = store
+                                            .raw_get_key_value(cf, &k, &mut s)
+                                            .map_err(Error::from);
+                                        tls_collect_read_flow(
+                                            ctx.get_region_id(),
+                                            Some(k.as_encoded()),
+                                            Some(k.as_encoded()),
+                                            &s,
+                                            buckets.as_ref(),
+                                        );
+                                        stats.add(&s);
+                                        (k, v)
+                                    })
+                                    .filter(|&(_, ref v)| {
+                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                    })
+                                    .map(|(k, v)| match v {
+                                        Ok(v) => {
+                                            let (user_key, _) =
+                                                API::decode_raw_key_owned(k, false).unwrap();
+                                            Ok((user_key, v.unwrap()))
+                                        }
+                                        Err(v) => Err(v),
+                                    })
+                                    .collect()
                             }
                         }
                     );
@@ -1888,15 +1892,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb =
-            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
-        self.engine.async_write_ext(
+        self.engine.async_write(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
-            pre_propose_cb,
-            None,
-            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -1941,15 +1940,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb =
-            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
-        self.engine.async_write_ext(
+        self.engine.async_write(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
-            pre_propose_cb,
-            None,
-            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -2050,15 +2044,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
-        let pre_propose_cb =
-            build_raw_write_pre_propose_cb(self.api_version, self.causal_ts_provider.as_ref());
-        self.engine.async_write_ext(
+        self.engine.async_write(
             &ctx,
             batch,
             Box::new(|res| callback(res.map_err(Error::from))),
-            pre_propose_cb,
-            None,
-            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
@@ -2129,14 +2118,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
 
-                    let result = match_template_api_version!(
+                    match_template_api_version!(
                         API,
                         match api_version {
                             ApiVersion::API => {
                                 let start_key = API::encode_raw_key_owned(start_key, None);
                                 let end_key = end_key.map(|k| API::encode_raw_key_owned(k, None));
 
-                                if reverse_scan {
+                                let result = if reverse_scan {
                                     store
                                         .reverse_raw_scan(
                                             cf,
@@ -2175,30 +2164,30 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                         })
                                         .collect()
                                 })
-                                .map_err(Error::from)
+                                .map_err(Error::from);
+
+                                metrics::tls_collect_read_flow(
+                                    ctx.get_region_id(),
+                                    Some(start_key.as_encoded()),
+                                    end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                                    &statistics,
+                                    buckets.as_ref(),
+                                );
+                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                                    .get(CMD)
+                                    .observe(statistics.data.flow_stats.read_keys as f64);
+                                metrics::tls_collect_scan_details(CMD, &statistics);
+                                SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                                    .get(CMD)
+                                    .observe(begin_instant.saturating_elapsed_secs());
+                                SCHED_HISTOGRAM_VEC_STATIC
+                                    .get(CMD)
+                                    .observe(command_duration.saturating_elapsed_secs());
+
+                                result
                             }
                         }
-                    );
-
-                    metrics::tls_collect_read_flow(
-                        ctx.get_region_id(),
-                        Some(start_key.as_encoded()),
-                        end_key.as_ref().map(|k| k.as_encoded().as_slice()),
-                        &statistics,
-                        buckets.as_ref(),
-                    );
-                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(statistics.data.flow_stats.read_keys as f64);
-                    metrics::tls_collect_scan_details(CMD, &statistics);
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
-
-                    result
+                    )
                 }
             }
             .in_resource_metering_tag(resource_tag),
@@ -2436,7 +2425,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let key = Key::from_encoded(key);
                     let r = store
                         .raw_get_key_ttl(cf, &key, &mut stats)
                         .map_err(Error::from);
@@ -2496,16 +2484,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         );
 
-        let cmd = RawCompareAndSwap::new(
-            cf,
-            key,
-            previous_value,
-            value,
-            ttl,
-            self.api_version,
-            self.causal_ts_provider.as_ref().cloned(),
-            ctx,
-        );
+        let cmd =
+            RawCompareAndSwap::new(cf, key, previous_value, value, ttl, self.api_version, ctx);
         self.sched_txn_command(cmd, cb)
     }
 
@@ -2526,13 +2506,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let modifies = Self::raw_batch_put_requests_to_modifies(self.api_version, cf, pairs, ttls)?;
-        let cmd = RawAtomicStore::new(
-            cf,
-            modifies,
-            self.api_version,
-            self.causal_ts_provider.as_ref().cloned(),
-            ctx,
-        );
+        let cmd = RawAtomicStore::new(cf, modifies, self.api_version, ctx);
         self.sched_txn_command(cmd, callback)
     }
 
@@ -2552,13 +2526,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let modifies = Self::raw_batch_delete_requests_to_modifies(self.api_version, cf, keys);
-        let cmd = RawAtomicStore::new(
-            cf,
-            modifies,
-            self.api_version,
-            self.causal_ts_provider.as_ref().cloned(),
-            ctx,
-        );
+        let cmd = RawAtomicStore::new(cf, modifies, self.api_version, ctx);
         self.sched_txn_command(cmd, callback)
     }
 
@@ -2752,10 +2720,17 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager, api_version: ApiVersion) -> Self {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .api_version(api_version)
             .build()
             .unwrap();
+
+        if let ApiVersion::V2 = api_version {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(engine.mut_coprocessor());
+        }
+
         Self::from_engine_and_lock_mgr(engine, lock_mgr, api_version)
     }
 }
@@ -2983,36 +2958,6 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
     fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
-}
-
-/// Build `pre_propose_cb` for API V2 raw write requests.
-/// `pre_propose_cb` ingests causal timestamp into key in Raft pre-propose phase in Raftstore.
-/// For a key, Raft pre-propose phase is single-threaded,
-/// which will ensure that order of timestamp is consistent with sequence of Raft commands,
-/// and maintain the "causality consistency" of the timestamp.
-/// See https://github.com/tikv/rfcs/blob/master/text/0083-rawkv-cross-cluster-replication.md
-pub(crate) fn build_raw_write_pre_propose_cb(
-    api_version: ApiVersion,
-    causal_ts_provider: Option<&Arc<dyn causal_ts::CausalTsProvider>>,
-) -> Option<Box<dyn FnOnce(&mut [RaftRequest]) + Send>> {
-    if let ApiVersion::V2 = api_version {
-        let causal_ts_provider = causal_ts_provider.unwrap().clone();
-        Some(Box::new(move |requests: &mut [RaftRequest]| {
-            for req in requests {
-                debug_assert!(matches!(req.get_cmd_type(), CmdType::Put));
-                let ts = causal_ts_provider.get_ts().unwrap(); // `get_ts()` must not fail.
-                api_version::APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts);
-
-                debug!(
-                    "raw_write::pre_propose_cb";
-                    "ts" => ts,
-                    "key" => &log_wrappers::Value::key(req.get_put().get_key()),
-                );
-            }
-        }))
-    } else {
-        None
-    }
 }
 
 pub mod test_util {
