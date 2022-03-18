@@ -638,6 +638,38 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    /// Event handler for the success of write.
+    fn on_write_finished_release_latch(
+        &self,
+        cid: u64,
+        lock_guards: Vec<KeyHandleGuard>,
+        pipelined: bool,
+        async_apply_prewrite: bool,
+        tag: metrics::CommandKind,
+        txtc_lock: Lock,
+    ) {
+        // TODO: Does async apply prewrite worth a special metric here?
+        if pipelined {
+            SCHED_STAGE_COUNTER_VEC
+                .get(tag)
+                .pipelined_write_finish
+                .inc();
+        } else if async_apply_prewrite {
+            SCHED_STAGE_COUNTER_VEC
+                .get(tag)
+                .async_apply_prewrite_finish
+                .inc();
+        } else {
+            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
+        }
+
+        debug!("write command finished";
+            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
+        drop(lock_guards);
+
+        self.release_lock(&txtc_lock, cid);
+    }
+
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
@@ -1017,19 +1049,50 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     }
                 }
             }
+            
+            let TaskContext {
+                task: _,
+                lock: task_lock,
+                cb: task_cb,
+                pr: task_pr,
+                owned: _,
+                write_bytes: _,
+                tag: _,
+                latch_timer: _,
+                _cmd_timer: _,
+            } = self.inner.dequeue_task_context(cid);
+
+            // If pipelined pessimistic lock or async apply prewrite takes effect, it's not guaranteed
+            // that the proposed or committed callback is surely invoked, which takes and invokes
+            // `tctx.cb(tctx.pr)`.
+            if let Some(cb) = task_cb {
+                let pr = match result {
+                    Ok(()) => pr.or(task_pr).unwrap(),
+                    Err(e) => ProcessResult::Failed {
+                        err: StorageError::from(e),
+                    },
+                };
+                if let ProcessResult::NextCommand { cmd } = pr {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
+                    self.schedule_command(cmd, cb);
+                } else {
+                    cb.execute(pr);
+                }
+            } else {
+                assert!(pipelined || is_async_apply_prewrite);
+            }
 
             sched_pool
                 .spawn(async move {
                     fail_point!("scheduler_async_write_finish");
 
-                    sched.on_write_finished(
+                    sched.on_write_finished_release_latch(
                         cid,
-                        pr,
-                        result,
                         lock_guards,
                         pipelined,
                         is_async_apply_prewrite,
                         tag,
+                        task_lock,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                         .get(tag)
