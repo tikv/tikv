@@ -607,8 +607,8 @@ where
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
-    pub buckets_size: Vec<u64>,
     pub region_buckets: Option<BucketStat>,
+    pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
 }
@@ -736,8 +736,8 @@ where
             persisted_number: 0,
             apply_snap_ctx: None,
             region_buckets: None,
+            last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
-            buckets_size: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.

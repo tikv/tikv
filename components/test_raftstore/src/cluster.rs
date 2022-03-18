@@ -30,6 +30,7 @@ use engine_traits::{
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
+use kvproto::pdpb::CheckPolicy;
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
@@ -1655,8 +1656,11 @@ impl<T: Simulator> Cluster<T> {
         let (tx, rx) = channel();
         let cb = Callback::Test {
             cb: Box::new(move |stat: PeerInternalStat| {
-                assert_eq!(expect_buckets.get_keys(), stat.buckets.get_keys());
-                assert_eq!(expect_buckets.get_keys().len() - 1, stat.buckets_size.len());
+                assert_eq!(expect_buckets.get_keys(), stat.buckets.keys);
+                assert_eq!(
+                    expect_buckets.get_keys().len() - 1,
+                    stat.buckets.sizes.len()
+                );
                 tx.send(stat.buckets.version).unwrap();
             }),
         };
@@ -1672,6 +1676,46 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
+    pub fn send_half_split_region_message(
+        &mut self,
+        region: &metapb::Region,
+        expected_bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+    ) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let (tx, rx) = channel();
+        let cb = Callback::Test {
+            cb: Box::new(move |stat: PeerInternalStat| {
+                assert_eq!(
+                    expected_bucket_ranges.is_none(),
+                    stat.bucket_ranges.is_none()
+                );
+                if let Some(expected_bucket_ranges) = expected_bucket_ranges {
+                    let actual_bucket_ranges = stat.bucket_ranges.unwrap();
+                    assert_eq!(expected_bucket_ranges.len(), actual_bucket_ranges.len());
+                    for i in 0..actual_bucket_ranges.len() {
+                        assert_eq!(expected_bucket_ranges[i].0, actual_bucket_ranges[i].0);
+                        assert_eq!(expected_bucket_ranges[i].1, actual_bucket_ranges[i].1);
+                    }
+                }
+                tx.send(1).unwrap();
+            }),
+        };
+
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::HalfSplitRegion {
+                region_epoch: region.get_region_epoch().clone(),
+                policy: CheckPolicy::Approximate,
+                source: "test",
+                cb,
+            },
+        )
+        .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 }
 

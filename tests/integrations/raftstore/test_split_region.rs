@@ -991,7 +991,12 @@ fn test_refresh_region_bucket_keys() {
         .insert(0, region.get_start_key().to_vec());
     expected_buckets.keys.push(region.get_end_key().to_vec());
     let buckets = vec![bucket];
-    let bucket_version = cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
+    let bucket_version = cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Option::None,
+        expected_buckets.clone(),
+    );
     let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
     region.mut_region_epoch().set_conf_ver(conf_ver);
 
@@ -1015,7 +1020,12 @@ fn test_refresh_region_bucket_keys() {
 
     let conf_ver = 0;
     region.mut_region_epoch().set_conf_ver(conf_ver);
-    let bucket_version3 = cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
+    let bucket_version3 = cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Option::None,
+        expected_buckets.clone(),
+    );
     assert_eq!(bucket_version3, bucket_version2);
 
     // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more buckets
@@ -1093,4 +1103,52 @@ fn test_refresh_region_bucket_keys() {
         Some(bucket_ranges),
         expected_buckets.clone(),
     );
+}
+
+#[test]
+fn test_gen_split_check_bucket_ranges() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(2);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    cluster.must_put(b"k11", b"v1");
+    let region = pd_client.get_region(b"k11").unwrap();
+
+    let bucket = Bucket {
+        keys: vec![b"k11".to_vec()],
+        size: 1024 * 1024 * 200,
+    };
+
+    let mut expected_buckets = metapb::Buckets::default();
+    expected_buckets.set_keys(bucket.clone().keys.into());
+    expected_buckets
+        .keys
+        .insert(0, region.get_start_key().to_vec());
+    expected_buckets.keys.push(region.get_end_key().to_vec());
+    let buckets = vec![bucket];
+
+    // initialize fsm.peer.bucket_regions
+    cluster.send_half_split_region_message(&region, Option::None);
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Option::None,
+        expected_buckets.clone(),
+    );
+    cluster.must_put(b"k10", b"v1");
+    cluster.must_put(b"k12", b"v1");
+
+    let expected_bucket_ranges = vec![
+        SplitCheckBucketRange(vec![], b"k11".to_vec()),
+        SplitCheckBucketRange(b"k11".to_vec(), vec![]),
+    ];
+    cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
+
+    // set fsm.peer.last_bucket_regions
+    cluster.refresh_region_bucket_keys(&region, buckets, Option::None, expected_buckets.clone());
+    // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
+    let expected_bucket_ranges = vec![];
+    cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 }

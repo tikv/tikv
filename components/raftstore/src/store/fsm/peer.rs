@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
+use std::ops::Deref;
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
@@ -72,8 +73,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
-    SplitCheckBucketRange, SplitCheckTask,
+    Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
+    RegionTask, SplitCheckBucketRange, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::RaftlogFetchResult;
@@ -967,8 +968,9 @@ where
                 region_epoch,
                 policy,
                 source,
+                cb,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy, source);
+                self.on_schedule_half_split_region(&region_epoch, policy, source, cb);
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -1596,11 +1598,26 @@ where
                 let applied_index = res.apply_state.applied_index;
                 if let Some(delta) = res.bucket_stat {
                     let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                    // TO DELETE
+                    println!(
+                        "Before Merge, with bucket_stat delta {:?} stats {:?} delta keys {:?}, stats keys {:?}",
+                        &delta.stats.write_bytes,
+                        &buckets.stats.write_bytes,
+                        &delta.meta.keys,
+                        &buckets.meta.keys
+                    );
                     merge_bucket_stats(
                         &buckets.meta.keys,
                         &mut buckets.stats,
                         &delta.meta.keys,
                         &delta.stats,
+                    );
+                    println!(
+                        "After Merge, with bucket_stat delta {:?} stats {:?} delta keys {:?}, stats keys {:?}",
+                        &delta.stats.write_bytes,
+                        &buckets.stats.write_bytes,
+                        &delta.meta.keys,
+                        &buckets.meta.keys
                     );
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
@@ -4563,8 +4580,12 @@ where
             return;
         }
         self.fsm.skip_split_count = 0;
-        let task =
-            SplitCheckTask::split_check(self.region().clone(), true, CheckPolicy::Scan, None);
+        let task = SplitCheckTask::split_check(
+            self.region().clone(),
+            true,
+            CheckPolicy::Scan,
+            self.gen_bucket_range_for_update(),
+        );
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
@@ -4707,11 +4728,12 @@ where
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
         cb: Callback<EK::Snapshot>,
     ) {
-        let test_only_callback = |cb, region_buckets, buckets_size| {
+        println!("on_refresh_region_buckets is called ");
+        let test_only_callback = |cb, region_buckets| {
             if let Callback::Test { cb } = cb {
                 let peer_stat = PeerInternalStat {
                     buckets: region_buckets,
-                    buckets_size,
+                    bucket_ranges: None,
                 };
                 cb(peer_stat);
             }
@@ -4727,7 +4749,7 @@ where
             let bucket_version: u64 = if current_version_term == term {
                 current_version + 1
             } else {
-                (term << 32)
+                term << 32
             };
             bucket_version
         };
@@ -4741,107 +4763,114 @@ where
                 "epoch" => ?region_epoch,
                 "current_epoch" => ?region.get_region_epoch(),
             );
+            let default_buckets = BucketStat::default();
             // test purpose
             test_only_callback(
                 cb,
-                self.fsm.peer.region_buckets.clone(),
-                self.fsm.peer.buckets_size.clone(),
+                self.fsm
+                    .peer
+                    .region_buckets
+                    .as_ref()
+                    .unwrap_or(&default_buckets)
+                    .meta
+                    .clone(),
             );
             return;
         }
 
+        let current_version = if let Some(region_buckets) = &self.fsm.peer.region_buckets {
+            region_buckets.meta.version
+        } else {
+            0
+        };
+        let mut region_buckets: BucketStat;
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
-            let mut region_buckets_keys = self.fsm.peer.region_buckets.keys.to_vec();
-            let mut region_buckets_size = self.fsm.peer.buckets_size.clone();
-            let mut region_buckets = Buckets::default();
-            region_buckets.version =
-                gen_bucket_version(self.fsm.peer.term(), self.fsm.peer.region_buckets.version);
             let mut i = 0;
             let mut j = 0;
             let buckets = buckets.drain(..);
+            region_buckets = self.fsm.peer.region_buckets.as_ref().unwrap().clone();
+            let mut meta = region_buckets.meta.deref().clone();
             for mut bucket in buckets {
-                while i < region_buckets_keys.len() && region_buckets_keys[i] != bucket_ranges[j].0
-                {
+                while i < meta.keys.len() && meta.keys[i] != bucket_ranges[j].0 {
                     i += 1;
                 }
-                assert!(i != region_buckets_keys.len());
+                assert!(i != meta.keys.len());
                 // the bucket size is small and does not have split keys,
                 // then it should be merged with its left neighbor
                 if bucket.keys.is_empty()
                     && bucket.size <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
                 {
-                    region_buckets_size[i] = bucket.size;
+                    meta.sizes[i] = bucket.size;
                     // i is not the last entry (which is end key)
-                    assert!(i < region_buckets_keys.len() - 1);
+                    assert!(i < meta.keys.len() - 1);
                     // the region has more than one bucket
                     // and the left neighbor + current bucket size is not very big
-                    if region_buckets_keys.len() > 2
+                    if meta.keys.len() > 2
                         && i != 0
-                        && region_buckets_size[i - 1] + bucket.size
+                        && meta.sizes[i - 1] + bucket.size
                             < self.ctx.coprocessor_host.cfg.region_bucket_size.0 * 2
                     {
-                        region_buckets_size[i - 1] += region_buckets_size[i];
-                        region_buckets_keys.remove(i); // bucket is too small
-                        region_buckets_size.remove(i);
+                        // bucket is too small
+                        region_buckets.left_merge(i);
+                        meta.left_merge(i);
                         j += 1;
                         continue;
                     }
                 } else {
                     // update size
-                    region_buckets_size[i] = bucket.size / (bucket.keys.len() + 1) as u64;
+                    meta.sizes[i] = bucket.size / (bucket.keys.len() + 1) as u64;
                     // insert new bucket keys (split the original bucket)
                     for bucket_key in bucket.keys.drain(..) {
                         i += 1;
-                        region_buckets_keys.insert(i, bucket_key);
-                        region_buckets_size
-                            .insert(i, self.ctx.coprocessor_host.cfg.region_bucket_size.0);
+                        region_buckets.split(i);
+                        meta.split(i, bucket_key);
                     }
                 }
                 i += 1;
                 j += 1;
             }
-
-            region_buckets.set_keys(region_buckets_keys.into());
+            meta.region_epoch = region_epoch;
+            meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
+            region_buckets.meta = Arc::new(meta);
             assert_eq!(j, bucket_ranges.len());
-            self.fsm.peer.region_buckets = region_buckets;
-            self.fsm.peer.buckets_size = region_buckets_size;
         } else {
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
-            self.fsm.peer.buckets_size = vec![
-                self.ctx.coprocessor_host.cfg.region_bucket_size.0;
-                self.fsm.peer.region_buckets.keys.len() - 1
-            ];
-          
+            let bucket_count = bucket_keys.len() + 1;
+
             let mut meta = BucketMeta {
                 region_id: self.fsm.region_id(),
                 region_epoch,
-                version: gen_bucket_version(self.fsm.peer.term(), self.fsm.peer.region_buckets.version);,
+                version: gen_bucket_version(self.fsm.peer.term(), current_version),
                 keys: bucket_keys,
+                sizes: vec![self.ctx.coprocessor_host.cfg.region_bucket_size.0; bucket_count],
             };
             meta.keys.insert(0, region.get_start_key().to_vec());
             meta.keys.push(region.get_end_key().to_vec());
+
             let stats = new_bucket_stats(&meta);
-            let meta = Arc::new(meta);
-            let region_buckets = BucketStat::new(meta.clone(), stats);
-            self.fsm.peer.region_buckets = Some(region_buckets);
-            let mut store_meta = self.ctx.store_meta.lock().unwrap();
-            if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
-                reader.update(ReadProgress::region_buckets(meta));
-            }
+            region_buckets = BucketStat::new(Arc::new(meta), stats);
+        }
+
+        let old_region_buckets = self.fsm.peer.region_buckets.replace(region_buckets);
+        self.fsm.peer.last_region_buckets = old_region_buckets;
+        let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+            reader.update(ReadProgress::region_buckets(
+                self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
+            ));
         }
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
-            "buckets count" => self.fsm.peer.region_buckets.get_keys().len(),
-            "buckets size" => ?self.fsm.peer.buckets_size,
+            "buckets count" => self.fsm.peer.region_buckets.as_ref().unwrap().meta.keys.len(),
+            "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
         // test purpose
         test_only_callback(
             cb,
-            self.fsm.peer.region_buckets.clone(),
-            self.fsm.peer.buckets_size.clone(),
+            self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
         );
     }
 
@@ -4853,11 +4882,61 @@ where
         self.register_split_region_check_tick();
     }
 
+    // generate bucket range list to run split-check (to further split buckets)
+    fn gen_bucket_range_for_update(&self) -> Option<Vec<SplitCheckBucketRange>> {
+        let region_buckets = self.fsm.peer.region_buckets.as_ref()?;
+        let stats = &region_buckets.stats;
+        let keys = &region_buckets.meta.keys;
+
+        let empty_last_keys = vec![];
+        let empty_last_stats = metapb::BucketStats::default();
+        let (last_keys, last_stats) = if self.fsm.peer.last_region_buckets.is_some() {
+            (
+                &self
+                    .fsm
+                    .peer
+                    .last_region_buckets
+                    .as_ref()
+                    .unwrap()
+                    .meta
+                    .keys,
+                &self.fsm.peer.last_region_buckets.as_ref().unwrap().stats,
+            )
+        } else {
+            (&empty_last_keys, &empty_last_stats)
+        };
+        let mut bucket_ranges = vec![];
+        let mut j = 0;
+        for i in 0..stats.write_bytes.len() {
+            let mut diff_in_bytes = stats.write_bytes[i];
+            while j < last_keys.len() && keys[i] > last_keys[j] {
+                j += 1;
+            }
+            if j < last_keys.len() && keys[i] == last_keys[j] {
+                diff_in_bytes -= last_stats.write_bytes[j];
+                j += 1;
+            }
+            // if the bucket's write_bytes exceed half of the configured region_bucket_size,
+            // add it to the bucket_ranges for checking update
+            let bucket_update_diff_size_threshold =
+                self.ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
+            if diff_in_bytes >= bucket_update_diff_size_threshold {
+                if i == stats.write_bytes.len() - 1 {
+                    bucket_ranges.push(SplitCheckBucketRange(keys[i].clone(), vec![]));
+                } else {
+                    bucket_ranges.push(SplitCheckBucketRange(keys[i].clone(), keys[i + 1].clone()));
+                }
+            }
+        }
+        Some(bucket_ranges)
+    }
+
     fn on_schedule_half_split_region(
         &mut self,
         region_epoch: &metapb::RegionEpoch,
         policy: CheckPolicy,
         source: &str,
+        cb: Callback<EK::Snapshot>,
     ) {
         info!(
             "on half split";
@@ -4886,7 +4965,16 @@ where
             return;
         }
 
-        let task = SplitCheckTask::split_check(region.clone(), false, policy, None);
+        let split_check_bucket_ranges = self.gen_bucket_range_for_update();
+        if let Callback::Test { cb } = cb {
+            let peer_stat = PeerInternalStat {
+                buckets: Arc::default(),
+                bucket_ranges: split_check_bucket_ranges.clone(),
+            };
+            cb(peer_stat);
+        }
+        let task =
+            SplitCheckTask::split_check(region.clone(), false, policy, split_check_bucket_ranges);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";

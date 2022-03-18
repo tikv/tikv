@@ -24,7 +24,7 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, SplitCheckBucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
-use kvproto::metapb::Buckets;
+use pd_client::BucketMeta;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -44,8 +44,8 @@ pub struct WriteResponse {
 // Peer's internal stat, for test purpose only
 #[derive(Debug)]
 pub struct PeerInternalStat {
-    pub buckets: Buckets,
-    pub buckets_size: Vec<u64>,
+    pub buckets: Arc<BucketMeta>,
+    pub bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -376,6 +376,7 @@ pub enum CasualMessage<EK: KvEngine> {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
         source: &'static str,
+        cb: Callback<EK::Snapshot>,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {

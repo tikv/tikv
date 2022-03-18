@@ -80,6 +80,7 @@ pub struct BucketMeta {
     pub version: u64,
     pub region_epoch: metapb::RegionEpoch,
     pub keys: Vec<Vec<u8>>,
+    pub sizes: Vec<u64>,
 }
 
 impl Eq for BucketMeta {}
@@ -108,6 +109,20 @@ impl Ord for BucketMeta {
             Ordering::Equal => self.version.cmp(&other.version),
             ord => ord,
         }
+    }
+}
+
+impl BucketMeta {
+    pub fn split(&mut self, idx: usize, key: Vec<u8>) {
+        assert!(idx != 0);
+        self.keys.insert(idx, key);
+        self.sizes.insert(idx, self.sizes[idx - 1]);
+    }
+
+    pub fn left_merge(&mut self, idx: usize) {
+        self.sizes[idx - 1] += self.sizes[idx];
+        self.keys.remove(idx);
+        self.sizes.remove(idx);
     }
 }
 
@@ -148,6 +163,42 @@ impl BucketStat {
         if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
             *bytes += key.len() as u64 + value_size;
         }
+
+        // TO DELETE
+        println!(
+            "write_key key {:?}, idx {}, keys {:?} stats {:?}",
+            key, idx, &self.meta.keys, self.stats.write_bytes
+        );
+    }
+
+    pub fn split(&mut self, idx: usize) {
+        self.stats.mut_write_keys().insert(idx, 0);
+        self.stats.mut_write_bytes().insert(idx, 0);
+        self.stats.mut_read_qps().insert(idx, 0);
+        self.stats.mut_write_qps().insert(idx, 0);
+        self.stats.mut_read_keys().insert(idx, 0);
+        self.stats.mut_read_bytes().insert(idx, 0);
+    }
+
+    pub fn left_merge(&mut self, idx: usize) {
+        assert!(idx != 0);
+        let val = self.stats.mut_write_keys().remove(idx);
+        self.stats.mut_write_keys()[idx - 1] += val;
+
+        let val = self.stats.mut_write_bytes().remove(idx);
+        self.stats.mut_write_bytes()[idx - 1] += val;
+
+        let val = self.stats.mut_read_qps().remove(idx);
+        self.stats.mut_read_qps()[idx - 1] += val;
+
+        let val = self.stats.mut_write_qps().remove(idx);
+        self.stats.mut_write_qps()[idx - 1] += val;
+
+        let val = self.stats.mut_read_keys().remove(idx);
+        self.stats.mut_read_keys()[idx - 1] += val;
+
+        let val = self.stats.mut_read_bytes().remove(idx);
+        self.stats.mut_read_bytes()[idx - 1] += val;
     }
 }
 

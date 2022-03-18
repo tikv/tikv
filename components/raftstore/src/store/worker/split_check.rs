@@ -124,7 +124,7 @@ where
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct BucketRange(pub Vec<u8>, pub Vec<u8>);
 
 #[derive(Default, Clone)]
