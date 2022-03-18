@@ -384,13 +384,15 @@ where
             } => self.check_split_and_bucket(&region, auto_split, policy),
             Task::ChangeConfig(c) => self.change_cfg(c),
             Task::ApproximateBuckets(region) => {
-                let mut host = self.coprocessor.new_split_checker_host(
-                    &region,
-                    &self.engine,
-                    false,
-                    CheckPolicy::Approximate,
-                );
-                self.refresh_approximate_bucket_keys(&region, &mut host);
+                if self.coprocessor.cfg.enable_region_bucket {
+                    let mut host = self.coprocessor.new_split_checker_host(
+                        &region,
+                        &self.engine,
+                        false,
+                        CheckPolicy::Approximate,
+                    );
+                    self.refresh_approximate_bucket_keys(&region, &mut host);
+                }
             }
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.coprocessor.cfg),
