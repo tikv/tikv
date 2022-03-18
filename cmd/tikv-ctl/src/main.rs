@@ -96,6 +96,7 @@ fn main() {
             match args[0].as_str() {
                 "ldb" => run_ldb_command(args, &cfg),
                 "sst_dump" => run_sst_dump_command(args, &cfg),
+                "raft-engine-ctl" => run_raft_engine_ctl_command(args),
                 _ => Opt::clap().print_help().unwrap(),
             }
         }
@@ -655,6 +656,10 @@ fn run_ldb_command(args: Vec<String>, cfg: &TiKvConfig) {
 fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
     let opts = cfg.rocksdb.build_opt();
     engine_rocks::raw::run_sst_dump_tool(&args, &opts);
+}
+
+fn run_raft_engine_ctl_command(args: Vec<String>) {
+    raft_engine_ctl::run_command(args);
 }
 
 fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
