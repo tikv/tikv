@@ -1049,7 +1049,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     }
                 }
             }
-            
+
             let TaskContext {
                 task: _,
                 lock: task_lock,
