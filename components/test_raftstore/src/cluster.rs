@@ -1313,15 +1313,13 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         region_id: u64,
         store_id: u64,
-        expected_alive_voter_count: usize,
+        failed_stores: HashSet<u64>,
     ) {
         let router = self.sim.rl().get_router(store_id).unwrap();
         router
             .significant_send(
                 region_id,
-                SignificantMsg::EnterForceLeaderState {
-                    expected_alive_voter_count,
-                },
+                SignificantMsg::EnterForceLeaderState { failed_stores },
             )
             .unwrap();
     }

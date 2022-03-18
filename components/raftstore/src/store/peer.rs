@@ -457,7 +457,7 @@ pub struct ReadyResult {
 pub enum ForceLeaderState {
     PreForceLeader {
         term: u64,
-        expected_alive_voter_count: usize,
+        expected_alive_voter: HashSet<u64>,
     },
     ForceLeader,
 }

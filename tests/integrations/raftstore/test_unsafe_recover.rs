@@ -4,6 +4,7 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Duration;
 
+use collections::HashSet;
 use futures::executor::block_on;
 use kvproto::metapb;
 use pd_client::PdClient;
@@ -90,6 +91,7 @@ fn test_unsafe_recover_create_region() {
 #[test]
 fn test_force_leader() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
@@ -109,7 +111,7 @@ fn test_force_leader() {
             .is_err()
     );
 
-    cluster.enter_force_leader(1, 1, 2);
+    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![3, 4, 5]));
     // remove the peers on failed nodes
     cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
     cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
@@ -153,6 +155,7 @@ fn test_force_leader() {
 #[test]
 fn test_force_leader_for_learner() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
@@ -183,8 +186,7 @@ fn test_force_leader_for_learner() {
             .is_err()
     );
 
-    // learner itself isn't voter, so the expected alive voter count is 1.
-    cluster.enter_force_leader(1, 1, 1);
+    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![3, 4, 5]));
     // promote the learner first and remove the peers on failed nodes
     cluster.pd_client.must_add_peer(1, new_peer(1, 1));
     cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
@@ -203,13 +205,14 @@ fn test_force_leader_for_learner() {
 #[test]
 fn test_force_leader_on_healthy_region() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
     cluster.must_transfer_leader(1, new_peer(5, 5));
 
     // try to enter force leader, it can't succeed due to majority isn't lost
-    cluster.enter_force_leader(1, 1, 2);
+    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![3, 4, 5]));
 
     // put and get can propose successfully.
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
@@ -226,6 +229,7 @@ fn test_force_leader_on_healthy_region() {
 #[test]
 fn test_force_leader_on_wrong_leader() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
@@ -240,18 +244,22 @@ fn test_force_leader_on_wrong_leader() {
     cluster.stop_node(5);
     cluster.run_node(2).unwrap();
 
+    // restart to clean lease
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+
     let put = new_put_cmd(b"k3", b"v3");
     let mut region = cluster.get_region(b"k2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // majority is lost, can't propose command successfully.
     assert!(
         cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
+            .call_command_on_leader(req, Duration::from_millis(100))
             .is_err()
     );
 
     // try to force leader on peer of node2 which is stale
-    cluster.enter_force_leader(1, 2, 2);
+    cluster.enter_force_leader(1, 2, HashSet::from_iter(vec![3, 4, 5]));
     let region = cluster.get_region(b"k2");
     // can't propose confchange as it's not in force leader state
     let cmd = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));

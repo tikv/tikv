@@ -23,6 +23,7 @@ use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::{RaftlogFetchResult, SnapKey};
+use collections::HashSet;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -311,7 +312,7 @@ where
         res: Box<RaftlogFetchResult>,
     },
     EnterForceLeaderState {
-        expected_alive_voter_count: usize,
+        failed_stores: HashSet<u64>,
     },
     ExitForceLeaderState,
 }
