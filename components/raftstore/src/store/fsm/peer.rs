@@ -4417,7 +4417,7 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        let mut compact_idx = if force_compact {
+        let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
         } else if (applied_idx > first_idx
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
