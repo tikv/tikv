@@ -271,6 +271,9 @@ pub struct Config {
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
 
+    // Interval to report min resolved ts, if it is zero, it means disabled.
+    pub report_min_resolved_ts_interval: ReadableDuration,
+
     /// Interval to check whether to reactivate in-memory pessimistic lock after being disabled
     /// before transferring leader.
     pub reactive_memory_lock_tick_interval: ReadableDuration,
@@ -363,6 +366,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
+            report_min_resolved_ts_interval: ReadableDuration::millis(0),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
         }

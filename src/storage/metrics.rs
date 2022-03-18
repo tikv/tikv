@@ -388,6 +388,10 @@ make_auto_flush_static_metric! {
         "metric" => PerfMetric,
     }
 
+    pub struct TxnCommandThrottleTimeCounterVec: LocalIntCounter {
+        "type" => CommandKind,
+    }
+
     pub struct InMemoryPessimisticLockingCounter: LocalIntCounter {
         "result" => InMemoryPessimisticLockingResult,
     }
@@ -627,6 +631,16 @@ lazy_static! {
 
     pub static ref STORAGE_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(STORAGE_ROCKSDB_PERF_COUNTER, PerfCounter);
+
+    pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_txn_command_throttle_time_total",
+        "Total throttle time (microsecond) of txn commands.",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC: TxnCommandThrottleTimeCounterVec =
+        auto_flush_from!(TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC, TxnCommandThrottleTimeCounterVec);
 
     pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_in_memory_pessimistic_locking",
