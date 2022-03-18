@@ -2038,7 +2038,10 @@ where
             }
         }
 
-        if !self.raft_group.has_ready() {
+        // If committed entires not being sent to apply loop, raft tick will trigger it to be dealt with in next loop.
+        // Apply flow control will not set RaoNode ready flag, so here need recheck it.
+        // And committed entries will be generated in ready() by commit_since_index which has not been advanced yet.
+        if !self.raft_group.has_ready() && !self.has_pending_committed_entries {
             fail_point!("before_no_ready_gen_snap_task", |_| None);
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
@@ -2123,6 +2126,7 @@ where
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
         // Skip it now when there are committed entries which not be sent to apply loop.
+        // Keep the order of sending apply tasks between committed entries and snapshot.
         if !self.has_pending_committed_entries {
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
