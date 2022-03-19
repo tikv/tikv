@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "hex::encode_upper", reason = "Keys should not be printed to log. Consider using log_wrapper for logging." },
+]
