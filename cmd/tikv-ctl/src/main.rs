@@ -23,7 +23,7 @@ use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::{Peer, Region, RegionEpoch};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb::TikvClient;
@@ -1781,7 +1781,25 @@ fn main() {
                         .short("k")
                         .required(true)
                         .takes_value(true)
-                        .help("The key to split it, in unencoded escaped format")
+                        .help("The key to split it, in encoded hex format")
+                )
+                .arg(
+                    Arg::with_name("conf-ver")
+                        .short("c")
+                        .takes_value(true)
+                        .help("The conf version to used for split request")
+                )
+                .arg(
+                    Arg::with_name("version")
+                        .short("v")
+                        .takes_value(true)
+                        .help("The version to used for split request")
+                )
+                .arg(
+                    Arg::with_name("tikv-addr")
+                        .short("a")
+                        .takes_value(true)
+                        .help("The tikv address to used for connecting")
                 ),
         )
         .subcommand(
@@ -2004,10 +2022,22 @@ fn main() {
         }
         return;
     }
+    let pd_client = matches
+        .value_of("pd")
+        .map(|pd| get_pd_rpc_client(pd, Arc::clone(&mgr)));
+    if let Some(matches) = matches.subcommand_matches("split-region") {
+        let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+        let version = matches.value_of("version").map(|v| v.parse().unwrap());
+        let conf_ver = matches.value_of("conf-ver").map(|c| c.parse().unwrap());
+        let key = Key::from_encoded(from_hex(matches.value_of("key").unwrap()).unwrap())
+            .into_raw()
+            .unwrap();
+        let addr = matches.value_of("tikv-addr");
+        return split_region(pd_client, mgr, region_id, conf_ver, version, key, addr);
+    }
 
     // Deal with all subcommands needs PD.
-    if let Some(pd) = matches.value_of("pd") {
-        let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
+    if let Some(pd_client) = pd_client {
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
             let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
@@ -2019,11 +2049,6 @@ fn main() {
             return compact_whole_cluster(
                 &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
             );
-        }
-        if let Some(matches) = matches.subcommand_matches("split-region") {
-            let region_id = value_t_or_exit!(matches.value_of("region"), u64);
-            let key = unescape(matches.value_of("key").unwrap());
-            return split_region(&pd_client, mgr, region_id, key);
         }
 
         let _ = app.print_help();
@@ -2361,31 +2386,49 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
     RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
-fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
-    let region = block_on(pd_client.get_region_by_id(region_id))
-        .expect("get_region_by_id should success")
-        .expect("must have the region");
+fn split_region(
+    pd_client: Option<RpcClient>,
+    mgr: Arc<SecurityManager>,
+    region_id: u64,
+    conf_ver: Option<u64>,
+    version: Option<u64>,
+    key: Vec<u8>,
+    address: Option<&str>,
+) {
+    let (epoch, addr) = match (conf_ver, version, address) {
+        (Some(c), Some(v), Some(addr)) => {
+            let mut epoch = RegionEpoch::default();
+            epoch.set_conf_ver(c);
+            epoch.set_version(v);
+            (epoch, addr.to_string())
+        }
+        _ => {
+            let pd_client = pd_client.unwrap();
+            let mut region = block_on(pd_client.get_region_by_id(region_id))
+                .expect("get_region_by_id should success")
+                .expect("must have the region");
+            let leader = pd_client
+                .get_region_info(region.get_start_key())
+                .expect("get_region_info should success")
+                .leader
+                .expect("region must have leader");
 
-    let leader = pd_client
-        .get_region_info(region.get_start_key())
-        .expect("get_region_info should success")
-        .leader
-        .expect("region must have leader");
-
-    let store = pd_client
-        .get_store(leader.get_store_id())
-        .expect("get_store should success");
+            let mut store = pd_client
+                .get_store(leader.get_store_id())
+                .expect("get_store should success");
+            (region.take_region_epoch(), store.take_address())
+        }
+    };
 
     let tikv_client = {
         let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
-        let channel = mgr.connect(cb, store.get_address());
+        let channel = mgr.connect(cb, &addr);
         TikvClient::new(channel)
     };
 
     let mut req = SplitRegionRequest::default();
     req.mut_context().set_region_id(region_id);
-    req.mut_context()
-        .set_region_epoch(region.get_region_epoch().clone());
+    req.mut_context().set_region_epoch(epoch);
     req.set_split_key(key);
 
     let resp = tikv_client
