@@ -1681,16 +1681,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 let mut key_ranges = vec![];
-                for key in &keys {
-                    key_ranges.push(build_key_range(key, key, false));
-                }
-                tls_collect_query_batch(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    key_ranges.clone(),
-                    QueryKind::Get,
-                );
-
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
@@ -1732,6 +1722,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                             buckets.as_ref(),
                                         );
                                         stats.add(&s);
+                                        key_ranges.push(build_key_range(
+                                            k.as_encoded(),
+                                            k.as_encoded(),
+                                            false,
+                                        ));
                                         (k, v)
                                     })
                                     .filter(|&(_, ref v)| {
@@ -1750,6 +1745,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     );
 
+                    tls_collect_query_batch(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        key_ranges,
+                        QueryKind::Get,
+                    );
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
                         .observe(stats.data.flow_stats.read_keys as f64);
@@ -2081,49 +2082,48 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                {
-                    tls_collect_query(
-                        ctx.get_region_id(),
-                        ctx.get_peer(),
-                        &start_key,
-                        end_key.as_ref().unwrap_or(&vec![]),
-                        reverse_scan,
-                        QueryKind::Scan,
-                    );
-                }
+                match_template_api_version!(
+                    API,
+                    match api_version {
+                        ApiVersion::API => {
+                            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                            SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                                .get(priority_tag)
+                                .inc();
 
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
+                            Self::check_api_version_ranges(
+                                api_version,
+                                ctx.api_version,
+                                CMD,
+                                [(Some(&start_key), end_key.as_ref())],
+                            )?;
 
-                Self::check_api_version_ranges(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    [(Some(&start_key), end_key.as_ref())],
-                )?;
+                            let start_key = API::encode_raw_key_owned(start_key, None);
+                            let end_key = end_key.map(|k| API::encode_raw_key_owned(k, None));
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let snap_ctx = SnapContext {
-                    pb_ctx: &ctx,
-                    ..Default::default()
-                };
-                let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let buckets = snapshot.ext().get_buckets();
-                let cf = Self::rawkv_cf(&cf, api_version)?;
-                {
-                    let store = RawStore::new(snapshot, api_version);
-                    let begin_instant = Instant::now_coarse();
-                    let mut statistics = Statistics::default();
+                            tls_collect_query(
+                                ctx.get_region_id(),
+                                ctx.get_peer(),
+                                start_key.as_encoded(),
+                                end_key.as_ref().map(|k| k.as_encoded()).unwrap_or(&vec![]),
+                                reverse_scan,
+                                QueryKind::Scan,
+                            );
 
-                    match_template_api_version!(
-                        API,
-                        match api_version {
-                            ApiVersion::API => {
-                                let start_key = API::encode_raw_key_owned(start_key, None);
-                                let end_key = end_key.map(|k| API::encode_raw_key_owned(k, None));
+                            let command_duration = tikv_util::time::Instant::now_coarse();
+                            let snap_ctx = SnapContext {
+                                pb_ctx: &ctx,
+                                ..Default::default()
+                            };
+                            let snapshot =
+                                Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx))
+                                    .await?;
+                            let buckets = snapshot.ext().get_buckets();
+                            let cf = Self::rawkv_cf(&cf, api_version)?;
+                            {
+                                let store = RawStore::new(snapshot, api_version);
+                                let begin_instant = Instant::now_coarse();
+                                let mut statistics = Statistics::default();
 
                                 let result = if reverse_scan {
                                     store
@@ -2187,8 +2187,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 result
                             }
                         }
-                    )
-                }
+                    }
+                )
             }
             .in_resource_metering_tag(resource_tag),
             priority,
@@ -2257,13 +2257,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     };
                     let mut result: Vec<Result<KvPair>> = Vec::new();
                     let mut key_ranges = vec![];
-                    for range in &ranges {
-                        key_ranges.push(build_key_range(
-                            &range.start_key,
-                            &range.end_key,
-                            reverse_scan,
-                        ));
-                    }
                     let ranges_len = ranges.len();
 
                     match_template_api_version!(
@@ -2327,6 +2320,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                             .collect()
                                     })
                                     .map_err(Error::from)?;
+
+                                    key_ranges.push(build_key_range(
+                                        start_key.as_encoded(),
+                                        end_key.as_ref().map(|k| k.as_encoded()).unwrap_or(&vec![]),
+                                        reverse_scan,
+                                    ));
                                     metrics::tls_collect_read_flow(
                                         ctx.get_region_id(),
                                         Some(start_key.as_encoded()),
@@ -2390,21 +2389,28 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                tls_collect_query(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    &key,
-                    &key,
-                    false,
-                    QueryKind::Get,
-                );
-
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
                     .inc();
 
                 Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+
+                let key: Key = match_template_api_version!(
+                    API,
+                    match api_version {
+                        ApiVersion::API => API::encode_raw_key_owned(key, None),
+                    }
+                );
+
+                tls_collect_query(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key.as_encoded(),
+                    key.as_encoded(),
+                    false,
+                    QueryKind::Get,
+                );
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let snap_ctx = SnapContext {
@@ -2416,12 +2422,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let buckets = snapshot.ext().get_buckets();
                 let store = RawStore::new(snapshot, api_version);
                 let cf = Self::rawkv_cf(&cf, api_version)?;
-                let key: Key = match_template_api_version!(
-                    API,
-                    match api_version {
-                        ApiVersion::API => API::encode_raw_key_owned(key, None),
-                    }
-                );
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
@@ -3189,9 +3189,7 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{
-        raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE,
-    };
+    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
