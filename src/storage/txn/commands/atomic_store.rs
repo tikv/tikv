@@ -10,7 +10,6 @@ use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
-use std::sync::Arc;
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.

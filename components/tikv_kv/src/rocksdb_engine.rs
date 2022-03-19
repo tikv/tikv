@@ -15,7 +15,7 @@ use engine_traits::{
 };
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
-use kvproto::{raft_cmdpb, metapb};
+use kvproto::{metapb, raft_cmdpb};
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
@@ -209,13 +209,23 @@ impl Engine for RocksEngine {
         }
 
         // Trigger "pre_propose_query" observers.
-        let requests = batch.modifies.into_iter().map(Into::into).collect::<Vec<_>>();
+        let requests = batch
+            .modifies
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
         let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
         cmd_req.set_requests(requests.into());
         let mut region = metapb::Region::default();
         region.set_id(1);
-        self.coprocessor.pre_propose(&region, &mut cmd_req).map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
-        batch.modifies = cmd_req.take_requests().into_iter().map(Into::into).collect::<Vec<_>>();
+        self.coprocessor
+            .pre_propose(&region, &mut cmd_req)
+            .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
+        batch.modifies = cmd_req
+            .take_requests()
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
 
         if let Some(cb) = proposed_cb {
             cb();

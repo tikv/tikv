@@ -17,8 +17,6 @@ use raw::RawStore;
 use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
-use std::sync::Arc;
-
 command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value. The bool indicates whether they are equal.
@@ -101,11 +99,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use super::*;
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Engine, Statistics, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{Engine, Statistics, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
-    use tikv_kv::RocksEngine;
     use txn_types::Key;
 
     #[test]

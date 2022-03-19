@@ -40,7 +40,7 @@ pub mod tests {
     impl Default for TestProvider {
         fn default() -> Self {
             Self {
-                ts: Arc::new(AtomicU64::new(1))
+                ts: Arc::new(AtomicU64::new(1)),
             }
         }
     }

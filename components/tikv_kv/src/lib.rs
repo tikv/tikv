@@ -159,20 +159,6 @@ impl From<raft_cmdpb::Request> for Modify {
                     Key::from_encoded(delete.take_key()),
                 )
             }
-            raft_cmdpb::CmdType::Put if req.get_put().get_cf() == engine_traits::CF_LOCK => {
-                let put = req.mut_put();
-                let lock = txn_types::Lock::parse(put.get_value()).unwrap();
-                Modify::PessimisticLock(
-                    Key::from_encoded(put.take_key()),
-                    txn_types::PessimisticLock {
-                        primary: lock.primary.into_boxed_slice(),
-                        start_ts: lock.ts,
-                        ttl: lock.ttl,
-                        for_update_ts: lock.for_update_ts,
-                        min_commit_ts: lock.min_commit_ts,
-                    },
-                )
-            }
             raft_cmdpb::CmdType::Put => {
                 let put = req.mut_put();
                 Modify::Put(
@@ -1223,12 +1209,21 @@ mod unit_tests {
             requests
         );
 
+        let expect_requests: Vec<_> = modifies
+            .into_iter()
+            .map(|m| match m {
+                Modify::PessimisticLock(k, lock) => {
+                    Modify::Put(CF_LOCK, k, lock.into_lock().to_bytes())
+                }
+                _ => m,
+            })
+            .collect();
         assert_eq!(
             requests
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<Modify>>(),
-            modifies
+            expect_requests
         )
     }
 }
