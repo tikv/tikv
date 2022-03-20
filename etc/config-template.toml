@@ -46,7 +46,7 @@
 ## Quota is use to add some limitation for the read write flow and then
 ## gain predictable stable performance.
 ## CPU quota for these front requests can use, default value is 0, it means unlimited.
-## The unit is millicpu which 1000 means 1vCPU and this config is approximate.
+## The unit is millicpu but for now this config is approximate and soft limit.
 # foreground-cpu-time = 0
 ## Write bandwidth limitation for this TiKV instance, default value is 0 which means unlimited.
 # foreground-write-bandwidth = "0B"
