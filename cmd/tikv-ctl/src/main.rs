@@ -48,6 +48,8 @@ use crate::executor::*;
 use crate::util::*;
 
 fn main() {
+    hex::encode_upper("test");
+
     let opt = Opt::from_args();
 
     // Initialize logger.
