@@ -532,6 +532,8 @@ trait DebugExecutor {
     /// Recover the cluster when given `store_ids` are failed.
     fn remove_fail_stores(&self, store_ids: Vec<u64>, region_ids: Option<Vec<u64>>);
 
+    fn shrink_range(&self, region_id: u64, start_key: Option<Vec<u8>>, end_key: Option<Vec<u8>>);
+
     /// Recreate the region with metadata from pd, but alloc new id for it.
     fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64);
 
@@ -762,6 +764,10 @@ impl DebugExecutor for DebugClient {
         self.check_local_mode();
     }
 
+    fn shrink_range(&self, _: u64, _: Option<Vec<u8>>, _: Option<Vec<u8>>) {
+        self.check_local_mode();
+    }
+
     fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
         self.check_local_mode();
     }
@@ -941,6 +947,18 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         self.remove_failed_stores(store_ids, region_ids)
             .unwrap_or_else(|e| perror_and_exit("Debugger::remove_fail_stores", e));
         println!("success");
+    }
+
+    fn shrink_range(&self, region_id: u64, start_key: Option<Vec<u8>>, end_key: Option<Vec<u8>>) {
+        println!(
+            "shrink range for region {} from {:?} to {:?}",
+            region_id,
+            start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
+            end_key.as_ref().map(|k| log_wrappers::Value::key(k))
+        );
+        self.shrink_range(region_id, start_key, end_key)
+            .unwrap_or_else(|e| perror_and_exit("Debugger::shrink_range", e));
+        println!("success")
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
@@ -1593,6 +1611,29 @@ fn main() {
                                 .takes_value(false)
                                 .help("Do the command for all regions"),
                         )
+                )
+                .subcommand(
+                    SubCommand::with_name("shrink-range")
+                        .about("shrink the range of a region")
+                        .arg(
+                            Arg::with_name("region")
+                                .short("r")
+                                .required(true)
+                                .takes_value(true)
+                                .help("The target region id")
+                        )
+                        .arg(
+                            Arg::with_name("start-key")
+                                .short("s")
+                                .takes_value(true)
+                                .help("The new start key, in encoded hex format")
+                        )
+                        .arg(
+                            Arg::with_name("end-key")
+                                .short("e")
+                                .takes_value(true)
+                                .help("The new end key, in encoded hex format")
+                        )
                 ),
         )
         .subcommand(
@@ -2222,6 +2263,15 @@ fn main() {
                     .expect("parse regions fail")
             });
             debug_executor.remove_fail_stores(store_ids, region_ids);
+        } else if let Some(matches) = matches.subcommand_matches("shrink-range") {
+            let region_id = matches
+                .value_of("region")
+                .expect("region id")
+                .parse()
+                .unwrap();
+            let start_key = matches.value_of("start-key").map(|k| from_hex(&k).unwrap());
+            let end_key = matches.value_of("end-key").map(|k| from_hex(&k).unwrap());
+            debug_executor.shrink_range(region_id, start_key, end_key);
         } else {
             println!("{}", matches.usage());
         }
