@@ -962,6 +962,9 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
+    // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
+    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
+    // in RocksDB has been removed.
     #[online_config(skip)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
@@ -1014,8 +1017,8 @@ impl Default for DbConfig {
             max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: true,
-            enable_multi_batch_write: true,
+            enable_pipelined_write: false,
+            enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1074,11 +1077,9 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(
-            (self.enable_pipelined_write || self.enable_multi_batch_write)
-                && !self.enable_unordered_write,
-        );
-        opts.enable_multi_batch_write(self.enable_multi_batch_write);
+        opts.enable_pipelined_write(self.enable_pipelined_write);
+        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
@@ -1121,9 +1122,7 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            if self.enable_pipelined_write || self.enable_multi_batch_write {
-                return Err("pipelined_write is not compatible with unordered_write".into());
-            }
+            self.enable_pipelined_write = false;
         }
 
         // Since the following configuration supports online update, in order to
@@ -1687,13 +1686,16 @@ pub mod log_level_serde {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnifiedReadPoolConfig {
+    #[online_config(skip)]
     pub min_thread_count: usize,
     pub max_thread_count: usize,
+    #[online_config(skip)]
     pub stack_size: ReadableSize,
+    #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
@@ -1712,6 +1714,17 @@ impl UnifiedReadPoolConfig {
                     .into(),
             );
         }
+        let limit = cmp::max(
+            UNIFIED_READPOOL_MIN_CONCURRENCY,
+            SysQuota::cpu_cores_quota() as usize,
+        );
+        if self.max_thread_count > limit {
+            return Err(format!(
+                "readpool.unified.max-thread-count should be smaller than {}",
+                limit
+            )
+            .into());
+        }
         if self.stack_size.0 < ReadableSize::mb(2).0 {
             return Err("readpool.unified.stack-size should be >= 2mb"
                 .to_string()
@@ -1726,7 +1739,7 @@ impl UnifiedReadPoolConfig {
     }
 }
 
-const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+pub const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
@@ -1756,6 +1769,15 @@ mod unified_read_pool_tests {
             max_tasks_per_worker: 2000,
         };
         assert!(cfg.validate().is_ok());
+        let cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ),
+            ..cfg
+        };
+        assert!(cfg.validate().is_ok());
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -1778,6 +1800,15 @@ mod unified_read_pool_tests {
 
         let invalid_cfg = UnifiedReadPoolConfig {
             max_tasks_per_worker: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ) + 1,
             ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
@@ -2030,12 +2061,15 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    #[online_config(submodule)]
     pub unified: UnifiedReadPoolConfig,
+    #[online_config(skip)]
     pub storage: StorageReadPoolConfig,
+    #[online_config(skip)]
     pub coprocessor: CoprReadPoolConfig,
 }
 
@@ -2433,6 +2467,25 @@ impl LogConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct QuotaConfig {
+    pub foreground_cpu_time: usize,
+    pub foreground_write_bandwidth: ReadableSize,
+    pub foreground_read_bandwidth: ReadableSize,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            foreground_cpu_time: 0,
+            foreground_write_bandwidth: ReadableSize(0),
+            foreground_read_bandwidth: ReadableSize(0),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2489,6 +2542,9 @@ pub struct TiKvConfig {
     pub log: LogConfig,
 
     #[online_config(skip)]
+    pub quota: QuotaConfig,
+
+    #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
     #[online_config(submodule)]
@@ -2567,6 +2623,7 @@ impl Default for TiKvConfig {
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),

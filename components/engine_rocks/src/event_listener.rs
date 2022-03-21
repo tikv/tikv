@@ -4,8 +4,8 @@ use crate::rocks_metrics::*;
 
 use file_system::{get_io_type, set_io_type, IOType};
 use rocksdb::{
-    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, SubcompactionJobInfo,
-    WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MutableStatus,
+    SubcompactionJobInfo, WriteStallInfo,
 };
 use tikv_util::set_panic_mark;
 
@@ -95,7 +95,8 @@ impl rocksdb::EventListener for RocksEventListener {
             .observe(info.picked_level() as f64);
     }
 
-    fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
+    fn on_background_error(&self, reason: DBBackgroundErrorReason, status: MutableStatus) {
+        let result = status.result();
         assert!(result.is_err());
         if let Err(err) = result {
             if matches!(
