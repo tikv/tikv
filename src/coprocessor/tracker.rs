@@ -68,8 +68,6 @@ pub struct Tracker {
     slow_log_threshold: Duration,
     scan_process_time_ms: u64,
 
-    abort_error: Option<String>,
-
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
 }
@@ -96,13 +94,8 @@ impl Tracker {
             total_perf_stats: PerfStatisticsDelta::default(),
             scan_process_time_ms: 0,
             slow_log_threshold,
-            abort_error: None,
             req_ctx,
         }
-    }
-
-    pub fn set_abort_error(&mut self, error: String) {
-        self.abort_error = Some(error);
     }
 
     pub fn on_scheduled(&mut self) {
@@ -253,7 +246,7 @@ impl Tracker {
 
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
-        if self.total_process_time > self.slow_log_threshold || self.abort_error.is_some() {
+        if self.req_lifetime > self.slow_log_threshold {
             let first_range = self.req_ctx.ranges.first();
             let some_table_id = first_range.as_ref().map(|range| {
                 tidb_query_datatype::codec::table::decode_table_id(range.get_start())
@@ -270,7 +263,6 @@ impl Tracker {
                 "handler_build_time" => ?self.handler_build_time,
                 "total_process_time" => ?self.total_process_time,
                 "total_suspend_time" => ?self.total_suspend_time,
-                "abort_error" => ?self.abort_error,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
                 "tag" => self.req_ctx.tag.get_str(),

@@ -411,12 +411,6 @@ impl<E: Engine> Endpoint<E> {
                 .map_err(Error::from)
                 .and_then(|res| res)
         };
-        if matches!(
-            result,
-            Err(Error::DeadlineExceeded | Error::MaxPendingTasksExceeded)
-        ) {
-            tracker.set_abort_error(format!("{}", result.as_ref().unwrap_err()));
-        }
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
