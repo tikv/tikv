@@ -187,6 +187,8 @@ struct SchedulerInner<L: LockManager> {
     // high priority commands and system commands will be delivered to this pool
     high_priority_pool: SchedPool,
 
+    on_write_finish_pool: SchedPool,
+
     // used to control write flow
     running_write_bytes: CachePadded<AtomicUsize>,
 
@@ -348,10 +350,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
+                engine.clone(),
+                std::cmp::max(1, config.scheduler_worker_pool_size / 2),
+                reporter.clone(),
+                "sched-high-pri-pool",
+            ),
+            on_write_finish_pool: SchedPool::new(
                 engine,
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 reporter,
-                "sched-high-pri-pool",
+                "sched-on-write-finish-pool",
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
@@ -484,6 +492,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             &self.inner.worker_pool
         }
+    }
+
+    pub fn get_on_write_finish_pool(&self) -> &SchedPool {
+        &self.inner.on_write_finish_pool
     }
 
     /// Executes the task in the sched pool.
@@ -754,7 +766,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let priority = task.cmd.priority();
+        // let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
@@ -863,7 +875,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         to_be_write.deadline = Some(deadline);
 
         let sched = scheduler.clone();
-        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
+        let on_write_finish_pool = scheduler.get_on_write_finish_pool().pool.clone();
 
         let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
             match response_policy {
@@ -1018,7 +1030,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
             }
 
-            sched_pool
+            on_write_finish_pool
                 .spawn(async move {
                     fail_point!("scheduler_async_write_finish");
 
