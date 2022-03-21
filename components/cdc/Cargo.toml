@@ -28,7 +28,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 futures = "0.3"
 getset = "0.1"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
 pd_client = { path = "../pd_client", default-features = false }
@@ -62,9 +62,7 @@ engine_traits = { path = "../engine_traits", default-features = false }
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
-panic_hook = { path = "../panic_hook" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-time = "0.1"
 criterion = "0.3"
 
 [[test]]

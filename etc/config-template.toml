@@ -42,6 +42,17 @@
 ## to release memory.
 # memory-usage-limit = "0B"
 
+[quota]
+## Quota is use to add some limitation for the read write flow and then
+## gain predictable stable performance.
+## CPU quota for these front requests can use, default value is 0, it means unlimited.
+## The unit is millicpu which 1000 means 1vCPU and this config is approximate.
+# foreground-cpu-time = 0
+## Write bandwidth limitation for this TiKV instance, default value is 0 which means unlimited.
+# foreground-write-bandwidth = "0B"
+## Read bandwidth limitation for this TiKV instance, default value is 0 which means unlimited
+# foreground-read-bandwidth = "0B"
+
 [log]
 ## Log levels: debug, info, warn, error, fatal.
 ## Note that `debug` is only available in development builds.
@@ -564,8 +575,9 @@
 # rate-limiter-mode = "write-only"
 # rate-limiter-auto-tuned = true
 
-## Enable or disable the pipelined write.
-# enable-pipelined-write = true
+## Enable or disable the pipelined write. If set false, RocksDB will use a new write mode port from cockroachdb/pebble.
+## See more details in https://github.com/tikv/rocksdb/pull/267 and https://github.com/tikv/tikv/issues/12059.
+# enable-pipelined-write = false
 
 ## Allows OS to incrementally sync files to disk while they are being written, asynchronously,
 ## in the background.
@@ -1104,9 +1116,14 @@
 ## one more likely acquires the lock.
 # wake-up-delay-duration = "20ms"
 
-## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
-## Enabled this will improve performance, but slightly increase the transcation failure rate
+## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions.
+## Enabling this will improve performance, but slightly increase the transaction failure rate
 # pipelined = true
+
+## Enable in-memory pessimistic lock, only effect when processing perssimistic transactions.
+## Enabling this will improve performance, but slightly increase the transaction failure rate.
+## It only takes effect when `pessimistic-txn.pipelined` is also set to true.
+# in-memory = true
 
 [gc]
 ## The number of keys to GC in one batch.

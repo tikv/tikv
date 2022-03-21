@@ -9,7 +9,7 @@ failpoints = ["fail/failpoints"]
 test-cgroup = []
 
 [dependencies]
-nix = "0.19"
+nix = "0.23"
 async-speed-limit = "0.4.0"
 backtrace = "0.3.9"
 byteorder = "1.2"
@@ -24,7 +24,7 @@ derive_more = "0.99.3"
 fail = "0.5"
 futures = { version = "0.3", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 http = "0.2.0"
 lazy_static = "1.3"
 libc = "0.2"
@@ -34,6 +34,7 @@ num_cpus = "1"
 num-traits = "0.2"
 openssl = "0.10"
 prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 rand = "0.8"
 rusoto_core = "0.46.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -54,6 +55,7 @@ tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hot
 url = "2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
 protobuf = "2"
+cpu-time = "1.0.0"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(target_os = "linux")'.dependencies]

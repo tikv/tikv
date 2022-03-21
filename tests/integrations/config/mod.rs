@@ -31,7 +31,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{
     BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
 };
-use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -69,7 +69,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = OptionReadableSize(Some(ReadableSize::gb(10)));
+    value.memory_usage_limit = Some(ReadableSize::gb(10));
     value.memory_usage_high_water = 0.65;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
@@ -228,9 +228,12 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        report_min_resolved_ts_interval: ReadableDuration::millis(233),
         raft_msg_flush_interval: ReadableDuration::micros(250),
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
+        reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
+        reactive_memory_lock_timeout_tick: 8,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -285,7 +288,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        enable_multi_batch_write: false,
+        enable_multi_batch_write: true,
         enable_unordered_write: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
@@ -646,7 +649,7 @@ fn test_serde_custom_tikv_config() {
         },
         block_cache: BlockCacheConfig {
             shared: true,
-            capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
+            capacity: Some(ReadableSize::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
@@ -736,7 +739,7 @@ fn test_serde_custom_tikv_config() {
         wait_for_lock_timeout: ReadableDuration::millis(10),
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: false,
-        in_memory: true,
+        in_memory: false,
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
@@ -837,11 +840,11 @@ fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.shared);
-    assert!(cfg.storage.block_cache.capacity.0.is_none());
+    assert!(cfg.storage.block_cache.capacity.is_none());
     cfg.compatible_adjust();
-    assert!(cfg.storage.block_cache.capacity.0.is_some());
+    assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
-        cfg.storage.block_cache.capacity.0.unwrap().0,
+        cfg.storage.block_cache.capacity.unwrap().0,
         cfg.rocksdb.defaultcf.block_cache_size.0
             + cfg.rocksdb.writecf.block_cache_size.0
             + cfg.rocksdb.lockcf.block_cache_size.0

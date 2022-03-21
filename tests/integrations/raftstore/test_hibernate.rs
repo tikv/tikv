@@ -310,6 +310,8 @@ fn test_inconsistent_configuration() {
     cluster.stop_node(3);
     cluster.run_node(3).unwrap();
     cluster.must_put(b"k2", b"v2");
+    // In case leader changes.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Wait till leader peer goes to sleep.
     thread::sleep(

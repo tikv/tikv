@@ -8,7 +8,6 @@ use tikv_util::config::ReadableDuration;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[online_config(skip)]
     pub max_batch_size: Option<usize>,
     pub pool_size: usize,
     #[online_config(skip)]

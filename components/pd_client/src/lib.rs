@@ -16,10 +16,13 @@ pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
 pub use self::util::PdConnector;
 pub use self::util::REQUEST_RECONNECT_INTERVAL;
+pub use self::util::{merge_bucket_stats, new_bucket_stats};
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::time::Duration;
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
@@ -29,7 +32,7 @@ use kvproto::replication_modepb::{
     RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
@@ -69,6 +72,83 @@ impl Deref for RegionInfo {
 
     fn deref(&self) -> &Self::Target {
         &self.region
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct BucketMeta {
+    pub region_id: u64,
+    pub version: u64,
+    pub region_epoch: metapb::RegionEpoch,
+    pub keys: Vec<Vec<u8>>,
+}
+
+impl Eq for BucketMeta {}
+
+impl PartialEq for BucketMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.region_id == other.region_id
+            && self.region_epoch.get_version() == other.region_epoch.get_version()
+            && self.version == other.version
+    }
+}
+
+impl PartialOrd for BucketMeta {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BucketMeta {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self
+            .region_epoch
+            .get_version()
+            .cmp(&other.region_epoch.get_version())
+        {
+            Ordering::Equal => self.version.cmp(&other.version),
+            ord => ord,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BucketStat {
+    pub meta: Arc<BucketMeta>,
+    pub stats: metapb::BucketStats,
+    pub last_report_time: Instant,
+}
+
+impl Default for BucketStat {
+    fn default() -> Self {
+        Self {
+            last_report_time: Instant::now(),
+            meta: Arc::default(),
+            stats: metapb::BucketStats::default(),
+        }
+    }
+}
+
+impl BucketStat {
+    pub fn new(meta: Arc<BucketMeta>, stats: metapb::BucketStats) -> Self {
+        Self {
+            meta,
+            stats,
+            last_report_time: Instant::now(),
+        }
+    }
+
+    pub fn write_key(&mut self, key: &[u8], value_size: u64) {
+        let idx = match util::find_bucket_index(key, &self.meta.keys) {
+            Some(idx) => idx,
+            None => return,
+        };
+        if let Some(keys) = self.stats.mut_write_keys().get_mut(idx) {
+            *keys += 1;
+        }
+        if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
+            *bytes += key.len() as u64 + value_size;
+        }
     }
 }
 
@@ -297,6 +377,11 @@ pub trait PdClient: Send + Sync {
 
     /// Gets the internal `FeatureGate`.
     fn feature_gate(&self) -> &FeatureGate {
+        unimplemented!()
+    }
+
+    // Report min resolved_ts to PD.
+    fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
         unimplemented!()
     }
 }

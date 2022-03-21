@@ -56,19 +56,19 @@ futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 gag = "1.0"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
 keys = { path = "../../components/keys", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../../components/log_wrappers" }
-nix = "0.19"
+nix = "0.23"
 pd_client = { path = "../../components/pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
-promptly = "0.3.0"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine", branch = "0.1.x" }
 raftstore = { path = "../../components/raftstore", default-features = false }
 rand = "0.8"
 regex = "1"
@@ -86,6 +86,7 @@ txn_types = { path = "../../components/txn_types", default-features = false }
 
 [build-dependencies]
 time = "0.1"
+cc = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

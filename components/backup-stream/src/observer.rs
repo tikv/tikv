@@ -177,8 +177,8 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
 }
 
 impl RoleObserver for BackupStreamObserver {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, r: StateRole) {
-        if r != StateRole::Leader {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, r: &RoleChange) {
+        if r.state != StateRole::Leader {
             try_send!(
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Stop {
@@ -243,7 +243,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::{
         Cmd, CmdBatch, CmdObserveInfo, CmdObserver, ObserveHandle, ObserveLevel, ObserverContext,
-        RegionChangeEvent, RegionChangeObserver, RoleObserver,
+        RegionChangeEvent, RegionChangeObserver, RoleObserver, RoleChange,
     };
 
     use tikv_util::worker::dummy_scheduler;
@@ -328,7 +328,7 @@ mod tests {
         // Test region out of range won't be added to observe list.
         let r = fake_region(43, b"0010", b"0042");
         let mut ctx = ObserverContext::new(&r);
-        o.on_role_change(&mut ctx, StateRole::Leader);
+        o.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
         let task = rx.recv_timeout(Duration::from_millis(20));
         assert!(task.is_err(), "it is {:?}", task);
         assert!(!o.subs.is_observing(43));
@@ -343,7 +343,7 @@ mod tests {
         // Test give up subscripting when become follower.
         let r = fake_region(42, b"0008", b"0009");
         let mut ctx = ObserverContext::new(&r);
-        o.on_role_change(&mut ctx, StateRole::Follower);
+        o.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         let task = rx.recv_timeout(Duration::from_millis(20));
         assert_matches!(
             task,

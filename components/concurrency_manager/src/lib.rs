@@ -19,7 +19,7 @@ pub use self::key_handle::{KeyHandle, KeyHandleGuard};
 pub use self::lock_table::LockTable;
 
 use std::{
-    mem::{self, MaybeUninit},
+    mem::MaybeUninit,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -78,11 +78,7 @@ impl ConcurrencyManager {
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
-        #[allow(clippy::unsound_collection_transmute)]
-        #[allow(clippy::transmute_undefined_repr)]
-        unsafe {
-            mem::transmute(result)
-        }
+        unsafe { tikv_util::memory::vec_transmute(result) }
     }
 
     /// Checks if there is a memory lock of the key which blocks the read.

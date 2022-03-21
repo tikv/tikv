@@ -941,6 +941,36 @@ impl PdClient for RpcClient {
     fn feature_gate(&self) -> &FeatureGate {
         &self.pd_client.feature_gate
     }
+
+    fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::ReportMinResolvedTsRequest::default();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+        req.set_min_resolved_ts(min_resolved_ts);
+
+        let executor = move |client: &Client, req: pdpb::ReportMinResolvedTsRequest| {
+            let handler = client
+                .inner
+                .rl()
+                .client_stub
+                .report_min_resolved_ts_async_opt(&req, Self::call_option(client))
+                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "min_resolved_ts", e));
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["min_resolved_ts"])
+                    .observe(duration_to_sec(timer.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(())
+            }) as PdFuture<_>
+        };
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
 }
 
 pub struct DummyPdClient {

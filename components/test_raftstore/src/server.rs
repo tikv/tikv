@@ -63,6 +63,7 @@ use tikv::storage::txn::flow_controller::FlowController;
 use tikv::storage::{self, Engine};
 use tikv::{config::ConfigController, server::raftkv::ReplicaReadLockChecker};
 use tikv_util::config::VersionTrack;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker};
 use tikv_util::HandyRwLock;
@@ -343,6 +344,11 @@ impl Simulator for ServerCluster {
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
+        let quota_limiter = Arc::new(QuotaLimiter::new(
+            cfg.quota.foreground_cpu_time,
+            cfg.quota.foreground_write_bandwidth,
+            cfg.quota.foreground_read_bandwidth,
+        ));
         let store = create_raft_storage(
             engine,
             &cfg.storage,
@@ -353,6 +359,8 @@ impl Simulator for ServerCluster {
             Arc::new(FlowController::empty()),
             pd_sender,
             res_tag_factory.clone(),
+            quota_limiter.clone(),
+            self.pd_client.feature_gate().clone(),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -403,6 +411,7 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
             res_tag_factory,
+            quota_limiter,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -657,20 +666,29 @@ impl Simulator for ServerCluster {
 
 impl Cluster<ServerCluster> {
     pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<RocksSnapshot> {
-        let leader = self.leader_of_region(region_id).unwrap();
-        let store_id = leader.store_id;
-        let epoch = self.get_region_epoch(region_id);
-        let mut ctx = Context::default();
-        ctx.set_region_id(region_id);
-        ctx.set_peer(leader);
-        ctx.set_region_epoch(epoch);
+        let mut try_snapshot = || -> Option<RegionSnapshot<RocksSnapshot>> {
+            let leader = self.leader_of_region(region_id)?;
+            let store_id = leader.store_id;
+            let epoch = self.get_region_epoch(region_id);
+            let mut ctx = Context::default();
+            ctx.set_region_id(region_id);
+            ctx.set_peer(leader);
+            ctx.set_region_epoch(epoch);
 
-        let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
+            let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            storage.snapshot(snap_ctx).ok()
         };
-        storage.snapshot(snap_ctx).unwrap()
+        for _ in 0..10 {
+            if let Some(snapshot) = try_snapshot() {
+                return snapshot;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+        panic!("failed to get snapshot of region {}", region_id);
     }
 }
 

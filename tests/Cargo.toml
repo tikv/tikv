@@ -75,8 +75,8 @@ online_config = { path = "../components/online_config", default-features = false
 encryption = { path = "../components/encryption", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 futures = "0.3"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-grpcio-health = { version = "0.9", default-features = false }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio-health = { version = "0.10", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
 paste = "1.0"

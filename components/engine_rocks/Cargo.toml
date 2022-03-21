@@ -53,7 +53,7 @@ case_macros = { path = "../case_macros" }
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-features = ["encryption", "static_libcpp"]
+features = ["encryption"]
 
 [dev-dependencies]
 rand = "0.8"

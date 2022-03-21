@@ -12,7 +12,7 @@ pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="br-stream" }
 tikv_util = { path = "../tikv_util" }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 online_config = { path = "../online_config" }
 serde = "1.0"
 serde_derive = "1.0"
