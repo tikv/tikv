@@ -30,7 +30,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     need_check_existence: bool,
     min_commit_ts: TimeStamp,
     need_old_value: bool,
-) -> MvccResult<(Option<Value>, OldValue)> {
+) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
@@ -43,7 +43,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // When `need_value` is set, the value need to be loaded of course. If `need_check_existence`
     // and `need_old_value` are both set, we also load the value even if `need_value` is false,
     // so that it avoids `load_old_value` doing repeated work.
-    let need_load_value = need_value || (need_check_existence && need_old_value);
+    let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
     fn load_old_value<S: Snapshot>(
         need_old_value: bool,
@@ -69,18 +69,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
     }
 
-    /// Returns proper result according to the loaded value (if any) the specified settings.
-    #[inline]
-    fn ret_val(need_value: bool, need_check_existence: bool, val: Option<Value>) -> Option<Value> {
-        if need_value {
-            val
-        } else if need_check_existence {
-            val.map(|_| vec![])
-        } else {
-            None
-        }
-    }
-
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
         if lock.ts != reader.start_ts {
@@ -94,6 +82,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
+
+        let locked_with_conflict_ts = if for_update_ts < lock.for_update_ts {
+            need_load_value = true;
+            Some(lock.for_update_ts)
+        } else {
+            None
+        };
+
         if need_load_value {
             val = reader.get(&key, for_update_ts)?;
         } else if need_check_existence {
@@ -127,8 +123,18 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 .acquire_pessimistic_lock
                 .inc();
         }
-        return Ok((ret_val(need_value, need_check_existence, val), old_value));
+        return Ok((
+            PessimisticLockKeyResult::new(
+                need_value,
+                need_check_existence,
+                locked_with_conflict_ts,
+                val,
+            ),
+            old_value,
+        ));
     }
+
+    let mut locked_with_conflict_ts = None;
 
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
@@ -143,17 +149,20 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         // whose commit timestamp is larger than current `for_update_ts`, the
         // transaction should retry to get the latest data.
         if commit_ts > for_update_ts {
+            locked_with_conflict_ts = Some(commit_ts);
+            need_load_value = true;
+            // TODO: New metrics.
             MVCC_CONFLICT_COUNTER
                 .acquire_pessimistic_lock_conflict
                 .inc();
-            return Err(ErrorInner::WriteConflict {
-                start_ts: reader.start_ts,
-                conflict_start_ts: write.start_ts,
-                conflict_commit_ts: commit_ts,
-                key: key.into_raw()?,
-                primary: primary.to_vec(),
-            }
-            .into());
+            // return Err(ErrorInner::WriteConflict {
+            //     start_ts: reader.start_ts,
+            //     conflict_start_ts: write.start_ts,
+            //     conflict_commit_ts: commit_ts,
+            //     key: key.into_raw()?,
+            //     primary: primary.to_vec(),
+            // }
+            // .into());
         }
 
         // Handle rollback.
@@ -187,10 +196,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
         }
 
+        // TODO: How to handle this when aggressively locking?
         // Check data constraint when acquiring pessimistic lock.
         check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
 
-        if need_value || need_check_existence {
+        if need_value || need_check_existence || locked_with_conflict_ts.is_some() {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
                 WriteType::Put
@@ -218,7 +228,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     let old_value = load_old_value(
         need_old_value,
-        need_load_value,
+        need_load_value(),
         val.as_ref(),
         reader,
         &key,
@@ -236,7 +246,15 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn.put_pessimistic_lock(key, lock);
     // TODO don't we need to commit the modifies in txn?
 
-    Ok((ret_val(need_value, need_check_existence, val), old_value))
+    Ok((
+        PessimisticLockKeyResult::new(
+            need_value,
+            need_check_existence,
+            locked_with_conflict_ts,
+            val,
+        ),
+        old_value,
+    ))
 }
 
 pub mod tests {

@@ -57,7 +57,7 @@ use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotR
 use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
-    MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
+    MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
     TxnStatus,
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
@@ -183,7 +183,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockResults>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()

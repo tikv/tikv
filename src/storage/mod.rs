@@ -60,7 +60,9 @@ pub use self::{
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
+    types::{
+        PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus,
+    },
 };
 use self::{kv::SnapContext, test_util::latest_feature_gate};
 
@@ -2929,9 +2931,9 @@ pub mod test_util {
 
     pub fn expect_pessimistic_lock_res_callback(
         done: Sender<i32>,
-        pessimistic_lock_res: PessimisticLockRes,
-    ) -> Callback<Result<PessimisticLockRes>> {
-        Box::new(move |res: Result<Result<PessimisticLockRes>>| {
+        pessimistic_lock_res: PessimisticLockResults,
+    ) -> Callback<Result<PessimisticLockResults>> {
+        Box::new(move |res: Result<Result<PessimisticLockResults>>| {
             assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
             done.send(0).unwrap();
         })
@@ -2947,7 +2949,7 @@ pub mod test_util {
         })
     }
 
-    type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
+    type PessimisticLockCommand = TypedCommand<Result<PessimisticLockResults>>;
 
     pub fn new_acquire_pessimistic_lock_command(
         keys: Vec<(Key, bool)>,
@@ -6536,11 +6538,11 @@ mod tests {
             &[(false, false), (false, true), (true, false), (true, true)]
         {
             let pessimistic_lock_res = if return_values {
-                PessimisticLockRes::Values(vec![None])
+                PessimisticLockResults::Values(vec![None])
             } else if check_existence {
-                PessimisticLockRes::Existence(vec![false])
+                PessimisticLockResults::Existence(vec![false])
             } else {
-                PessimisticLockRes::Empty
+                PessimisticLockResults::Empty
             };
 
             storage
@@ -6588,7 +6590,7 @@ mod tests {
                     false,
                     false,
                 ),
-                expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockRes::Empty),
+                expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockResults::Empty),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -6690,11 +6692,11 @@ mod tests {
             &[(false, false), (false, true), (true, false), (true, true)]
         {
             let pessimistic_lock_res = if return_values {
-                PessimisticLockRes::Values(vec![Some(val.clone()), Some(val2.clone()), None])
+                PessimisticLockResults::Values(vec![Some(val.clone()), Some(val2.clone()), None])
             } else if check_existence {
-                PessimisticLockRes::Existence(vec![true, true, false])
+                PessimisticLockResults::Existence(vec![true, true, false])
             } else {
-                PessimisticLockRes::Empty
+                PessimisticLockResults::Empty
             };
             storage
                 .sched_txn_command(

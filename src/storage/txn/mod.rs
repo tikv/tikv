@@ -22,8 +22,8 @@ use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::{
     mvcc::Error as MvccError,
-    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
-    Error as StorageError, Result as StorageResult,
+    types::{MvccInfo, PrewriteResult, SecondaryLocksStatus, TxnStatus},
+    Error as StorageError, PessimisticLockResults, Result as StorageResult,
 };
 
 pub use self::actions::{
@@ -70,7 +70,7 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<PessimisticLockRes>,
+        res: StorageResult<PessimisticLockResults>,
     },
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,

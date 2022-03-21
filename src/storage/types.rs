@@ -120,39 +120,66 @@ pub struct PrewriteResult {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum PessimisticLockRes {
-    /// The previous value is loaded while handling the `AcquirePessimisticLock` command. The i-th
-    /// item is the value of the i-th key in the `AcquirePessimisticLock` command.
-    Values(Vec<Option<Value>>),
-    /// Checked whether the key exists while handling the `AcquirePessimisticLock` command. The i-th
-    /// item is true if the i-th key in the `AcquirePessimisticLock` command exists.
-    Existence(Vec<bool>),
+/// Represents the result of pessimistic lock on a single key.
+pub enum PessimisticLockKeyResult {
     Empty,
+    Value(Option<Value>),
+    Existence(bool),
+    LockedWithConflict {
+        value: Option<Value>,
+        conflict_ts: TimeStamp,
+    },
 }
 
-impl PessimisticLockRes {
-    pub fn push(&mut self, value: Option<Value>) {
-        match self {
-            PessimisticLockRes::Values(v) => v.push(value),
-            PessimisticLockRes::Existence(v) => v.push(value.is_some()),
-            _ => panic!("unexpected PessimisticLockRes"),
+impl PessimisticLockKeyResult {
+    fn new(
+        need_value: bool,
+        need_check_existence: bool,
+        locked_with_conflict_ts: Option<TimeStamp>,
+        value: Option<Value>,
+    ) -> Self {
+        if let Some(conflict_ts) = locked_with_conflict_ts {
+            Self::LockedWithConflict { value, conflict_ts }
+        } else if need_value {
+            Self::Value(value)
+        } else if need_check_existence {
+            Self::Existence(value.is_some())
+        } else {
+            Self::Empty
         }
     }
+}
 
-    pub fn into_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
+#[derive(Clone, Debug, PartialEq)]
+pub struct PessimisticLockResults(Vec<PessimisticLockKeyResult>);
+
+impl PessimisticLockResults {
+    pub fn new() -> Self {
+        Self(vec![])
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    pub fn push(&mut self, key_res: PessimisticLockKeyResult) {
+        self.0.push(key_res);
+    }
+
+    pub fn into_resp_parts(self) -> (Vec<Value>, Vec<bool>, Vec<u64>) {
         match self {
-            PessimisticLockRes::Values(vals) => vals
+            PessimisticLockResults::Values(vals) => vals
                 .into_iter()
                 .map(|v| {
                     let is_not_found = v.is_none();
                     (v.unwrap_or_default(), is_not_found)
                 })
                 .unzip(),
-            PessimisticLockRes::Existence(mut vals) => {
+            PessimisticLockResults::Existence(mut vals) => {
                 vals.iter_mut().for_each(|x| *x = !*x);
                 (vec![], vals)
             }
-            PessimisticLockRes::Empty => (vec![], vec![]),
+            PessimisticLockResults::Empty => (vec![], vec![]),
         }
     }
 }

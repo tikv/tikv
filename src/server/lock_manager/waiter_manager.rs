@@ -635,7 +635,7 @@ impl FutureRunnable<Task> for WaiterManager {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::PessimisticLockRes;
+    use crate::storage::PessimisticLockResults;
     use tikv_util::future::paired_future_callback;
     use tikv_util::worker::FutureWorker;
 
@@ -725,7 +725,7 @@ pub mod tests {
         Waiter,
         LockInfo,
         futures::channel::oneshot::Receiver<
-            Result<Result<PessimisticLockRes, StorageError>, StorageError>,
+            Result<Result<PessimisticLockResults, StorageError>, StorageError>,
         >,
     );
 
