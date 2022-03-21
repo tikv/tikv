@@ -25,6 +25,8 @@ pub enum DiscardReason {
     Disconnected,
     /// Message is dropped due to some filter rules, usually in tests.
     Filtered,
+    /// Channel is paused. Maybe target store is not in allowlist.
+    Paused,
     /// Channel runs out of capacity, message can't be delivered.
     Full,
 }

@@ -119,7 +119,7 @@ pub struct PeerPessimisticLocks {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LocksStatus {
     Normal,
-    TransferingLeader,
+    TransferringLeader,
     MergingRegion,
     NotLeader,
 }
@@ -195,6 +195,10 @@ impl PeerPessimisticLocks {
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 
     pub fn is_writable(&self) -> bool {

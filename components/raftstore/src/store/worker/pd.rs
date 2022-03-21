@@ -34,7 +34,7 @@ use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
 use crate::store::{
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    SnapManager, StoreInfo, StoreMsg, TxnExt,
+    RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 use collections::HashMap;
@@ -172,6 +172,10 @@ where
         duration: RaftstoreDuration,
     },
     RegionCPURecords(Arc<RawRecords>),
+    ReportMinResolvedTS {
+        store_id: u64,
+        min_resolved_ts: u64,
+    },
 }
 
 pub struct StoreStat {
@@ -339,6 +343,16 @@ where
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
             }
+            Task::ReportMinResolvedTS {
+                store_id,
+                min_resolved_ts,
+            } => {
+                write!(
+                    f,
+                    "report min resolved ts: store {}, resolved ts {}",
+                    store_id, min_resolved_ts
+                )
+            }
         }
     }
 }
@@ -352,6 +366,14 @@ fn default_collect_tick_interval() -> Duration {
         Duration::from_millis(1)
     });
     DEFAULT_COLLECT_TICK_INTERVAL
+}
+
+fn config(interval: Duration) -> Duration {
+    #[cfg(feature = "failpoints")]
+    fail_point!("mock_min_resolved_ts_interval", |_| {
+        Duration::from_millis(50)
+    });
+    interval
 }
 
 #[inline]
@@ -378,6 +400,7 @@ where
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
+    report_min_resolved_ts_interval: Duration,
 }
 
 impl<EK, ER> StatsMonitor<EK, ER>
@@ -385,7 +408,11 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(interval: Duration, scheduler: Scheduler<Task<EK, ER>>) -> Self {
+    pub fn new(
+        interval: Duration,
+        report_min_resolved_ts_interval: Duration,
+        scheduler: Scheduler<Task<EK, ER>>,
+    ) -> Self {
         StatsMonitor {
             scheduler,
             handle: None,
@@ -396,7 +423,8 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
-            collect_tick_interval: cmp::min(DEFAULT_COLLECT_TICK_INTERVAL, interval),
+            report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
+            collect_tick_interval: cmp::min(default_collect_tick_interval(), interval),
         }
     }
 
@@ -405,6 +433,8 @@ where
     pub fn start(
         &mut self,
         mut auto_split_controller: AutoSplitController,
+        region_read_progress: RegionReadProgressRegistry,
+        store_id: u64,
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval < default_collect_tick_interval()
             || self.collect_store_infos_interval < self.collect_tick_interval
@@ -418,10 +448,13 @@ where
         let tick_interval = self.collect_tick_interval;
         let collect_store_infos_interval = self
             .collect_store_infos_interval
-            .div_duration_f64(tick_interval) as i32;
+            .div_duration_f64(tick_interval) as u64;
         let load_base_split_check_interval = self
             .load_base_split_check_interval
-            .div_duration_f64(tick_interval) as i32;
+            .div_duration_f64(tick_interval) as u64;
+        let report_min_resolved_ts_interval = self
+            .report_min_resolved_ts_interval
+            .div_duration_f64(tick_interval) as u64;
 
         let (tx, rx) = mpsc::channel();
         self.timer = Some(tx);
@@ -432,6 +465,9 @@ where
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
 
+        fn is_enable_tick(timer_cnt: u64, interval: u64) -> bool {
+            interval != 0 && timer_cnt % interval == 0
+        }
         let h = Builder::new()
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
@@ -439,19 +475,24 @@ where
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(tick_interval) {
-                    if timer_cnt % collect_store_infos_interval == 0 {
+                    if is_enable_tick(timer_cnt, collect_store_infos_interval) {
                         StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
-                    if timer_cnt % load_base_split_check_interval == 0 {
+                    if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
                             &receiver,
                             &scheduler,
                         );
                     }
-                    // modules timer_cnt with the least common multiple of intervals to avoid overflow
-                    timer_cnt = (timer_cnt + 1)
-                        % (load_base_split_check_interval * collect_store_infos_interval);
+                    if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
+                        StatsMonitor::report_min_resolved_ts(
+                            &region_read_progress,
+                            store_id,
+                            &scheduler,
+                        );
+                    }
+                    timer_cnt += 1;
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
@@ -509,6 +550,31 @@ where
             } else {
                 READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
             }
+        }
+    }
+
+    pub fn report_min_resolved_ts(
+        region_read_progress: &RegionReadProgressRegistry,
+        store_id: u64,
+        scheduler: &Scheduler<Task<EK, ER>>,
+    ) {
+        let min_resolved_ts = region_read_progress.with(|registry| {
+            registry
+            .iter()
+            .map(|(_, rrp)| rrp.safe_ts())
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            .min()
+            .unwrap_or(0)
+        });
+        let task = Task::ReportMinResolvedTS {
+            store_id,
+            min_resolved_ts,
+        };
+        if let Err(e) = scheduler.schedule(task) {
+            error!(
+                "failed to send min resolved ts to pd worker";
+                "err" => ?e,
+            );
         }
     }
 
@@ -730,10 +796,15 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
+        region_read_progress: RegionReadProgressRegistry,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
-        let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
-        if let Err(e) = stats_monitor.start(auto_split_controller) {
+        let mut stats_monitor = StatsMonitor::new(
+            interval,
+            cfg.report_min_resolved_ts_interval.0,
+            scheduler.clone(),
+        );
+        if let Err(e) = stats_monitor.start(auto_split_controller, region_read_progress, store_id) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -1529,6 +1600,18 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
+
+    fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
+        let resp = self
+            .pd_client
+            .report_min_resolved_ts(store_id, min_resolved_ts);
+        let f = async move {
+            if let Err(e) = resp.await {
+                warn!("report min resolved_ts failed"; "err" => ?e);
+            }
+        };
+        self.remote.spawn(f);
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -1751,6 +1834,10 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
+            Task::ReportMinResolvedTS {
+                store_id,
+                min_resolved_ts,
+            } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
         };
     }
 
@@ -2010,6 +2097,8 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_collect_stats() {
+        use crate::store::fsm::StoreMeta;
+
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
         use std::sync::Mutex;
         use std::time::Instant;
@@ -2026,9 +2115,16 @@ mod tests {
                 scheduler: Scheduler<Task<KvTestEngine, RaftTestEngine>>,
                 store_stat: Arc<Mutex<StoreStat>>,
             ) -> RunnerTest {
-                let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
-
-                if let Err(e) = stats_monitor.start(AutoSplitController::default()) {
+                let mut stats_monitor = StatsMonitor::new(
+                    Duration::from_secs(interval),
+                    Duration::from_secs(0),
+                    scheduler,
+                );
+                let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+                let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
+                if let Err(e) =
+                    stats_monitor.start(AutoSplitController::default(), region_read_progress, 1)
+                {
                     error!("failed to start stats collector, error = {:?}", e);
                 }
 

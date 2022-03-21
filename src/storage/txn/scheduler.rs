@@ -30,15 +30,16 @@ use std::{mem, u64};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
-use engine_traits::CF_LOCK;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp};
 use kvproto::pdpb::QueryKind;
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
+use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::TimeStamp;
 
 use crate::server::lock_manager::waiter_manager;
@@ -70,6 +71,8 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 // The default limit is set to be very large. Then, requests without `max_exectuion_duration`
 // will not be aborted unexpectedly.
 pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+
+const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 
 /// Task is a running command.
 pub(super) struct Task {
@@ -202,6 +205,9 @@ struct SchedulerInner<L: LockManager> {
     enable_async_apply_prewrite: bool,
 
     resource_tag_factory: ResourceTagFactory,
+
+    quota_limiter: Arc<QuotaLimiter>,
+    feature_gate: FeatureGate,
 }
 
 #[inline]
@@ -289,6 +295,13 @@ impl<L: LockManager> SchedulerInner<L> {
     fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.lock_mgr.dump_wait_for_entries(cb);
     }
+
+    fn scale_pool_size(&self, pool_size: usize) {
+        self.worker_pool.pool.scale_pool_size(pool_size);
+        self.high_priority_pool
+            .pool
+            .scale_pool_size(std::cmp::max(1, pool_size / 2));
+    }
 }
 
 /// Scheduler which schedules the execution of `storage::Command`s.
@@ -313,6 +326,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         flow_controller: Arc<FlowController>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
+        quota_limiter: Arc<QuotaLimiter>,
+        feature_gate: FeatureGate,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -346,6 +361,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             flow_controller,
             resource_tag_factory,
+            quota_limiter,
+            feature_gate,
         });
 
         slow_log!(
@@ -360,6 +377,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
         self.inner.dump_wait_for_entries(cb);
+    }
+
+    pub fn scale_pool_size(&self, pool_size: usize) {
+        self.inner.scale_pool_size(pool_size)
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
@@ -456,7 +477,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
+    // pub for test
+    pub fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
         if priority == CommandPri::High {
             &self.inner.high_priority_pool
         } else {
@@ -470,6 +492,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.get_sched_pool(task.cmd.priority())
             .pool
             .spawn(async move {
+                fail_point!("scheduler_start_execute");
                 if sched.check_task_deadline_exceeded(&task) {
                     return;
                 }
@@ -687,6 +710,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 _ => {}
             }
 
+            fail_point!("scheduler_process");
             if task.cmd.readonly() {
                 self.process_read(snapshot, task, &mut statistics);
             } else {
@@ -727,11 +751,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
+        let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
+        let quota_limiter = self.inner.quota_limiter.clone();
+        let mut sample = quota_limiter.new_sample();
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
@@ -739,6 +766,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let deadline = task.cmd.deadline();
         let write_result = {
+            let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager: self.inner.concurrency_manager.clone(),
@@ -751,6 +779,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .process_write(snapshot, context)
                 .map_err(StorageError::from)
         };
+
+        if write_result.is_ok() {
+            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
+            sample.add_write_bytes(write_bytes);
+        }
+        let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_LOCK).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
+        sample.add_read_bytes(read_bytes);
+        let quota_delay = quota_limiter.async_consume(sample).await;
+        if !quota_delay.is_zero() {
+            TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                .get(tag)
+                .inc_by(quota_delay.as_micros() as u64);
+        }
+
         let WriteResult {
             ctx,
             mut to_be_write,
@@ -1040,8 +1084,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return false;
         }
         match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
-            Ok(()) => true,
+            Ok(()) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.success.inc();
+                true
+            }
             Err(modifies) => {
+                IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.full.inc();
                 to_be_write.modifies = modifies;
                 false
             }
@@ -1068,7 +1116,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let in_memory = self
             .inner
             .in_memory_pessimistic_lock
-            .load(Ordering::Relaxed);
+            .load(Ordering::Relaxed)
+            && self
+                .inner
+                .feature_gate
+                .can_enable(IN_MEMORY_PESSIMISTIC_LOCK);
         if pipelined && in_memory {
             PessimisticLockMode::InMemory
         } else if pipelined {
@@ -1097,6 +1149,7 @@ mod tests {
     use crate::storage::{
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
+        test_util::latest_feature_gate,
         txn::commands::TypedCommand,
         TxnStatus,
     };
@@ -1257,6 +1310,8 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1313,6 +1368,8 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         // Spawn a task that sleeps for 500ms to occupy the pool. The next request
@@ -1369,6 +1426,8 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         let mut req = CheckTxnStatusRequest::default();
@@ -1433,6 +1492,8 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            latest_feature_gate(),
         );
 
         let mut lock = Lock::new(&[Key::from_raw(b"b")]);
@@ -1476,6 +1537,9 @@ mod tests {
             enable_async_apply_prewrite: false,
             ..Default::default()
         };
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.0.0").unwrap();
+
         let scheduler = Scheduler::new(
             engine,
             DummyLockManager,
@@ -1488,6 +1552,8 @@ mod tests {
             Arc::new(FlowController::empty()),
             DummyReporter,
             ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            feature_gate.clone(),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
@@ -1506,6 +1572,13 @@ mod tests {
             scheduler.pessimistic_lock_mode(),
             PessimisticLockMode::InMemory
         );
+        // Test the feature gate. The feature should not work under 6.0.0.
+        unsafe { feature_gate.reset_version("5.4.0").unwrap() };
+        assert_eq!(
+            scheduler.pessimistic_lock_mode(),
+            PessimisticLockMode::Pipelined
+        );
+        feature_gate.set_version("6.0.0").unwrap();
         // Mode is Pipelined when only pipelined is true.
         scheduler
             .inner

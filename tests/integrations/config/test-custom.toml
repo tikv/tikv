@@ -213,6 +213,9 @@ io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
 check-leader-lease-interval = "123ms"
 renew-leader-lease-advance-duration = "456ms"
+reactive-memory-lock-tick-interval = "566ms"
+reactive-memory-lock-timeout-tick = 8
+report-min-resolved-ts-interval = "233ms"
 
 [coprocessor]
 split-region-on-table = false
@@ -256,7 +259,6 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
-enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -622,7 +624,7 @@ enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
 pipelined = false
-in-memory = true
+in-memory = false
 
 [cdc]
 min-ts-interval = "4s"

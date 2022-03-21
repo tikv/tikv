@@ -16,12 +16,13 @@ use yatp::task::future::reschedule;
 
 use super::interface::{BatchExecutor, ExecuteStats};
 use super::*;
-
 use tidb_query_common::execute_stats::ExecSummary;
 use tidb_query_common::metrics::*;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::expr::{EvalConfig, EvalContext, EvalWarnings};
+use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
+use tikv_util::quota_limiter::QuotaLimiter;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -69,6 +70,8 @@ pub struct BatchExecutorsRunner<SS> {
 
     /// If it's a paging request, paging_size indicates to the required size for current page.
     paging_size: Option<u64>,
+
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -120,6 +123,11 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                ExecType::TypeProjection => {
+                    let descriptor = ed.get_projection();
+                    BatchProjectionExecutor::check_supported(descriptor)
+                        .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
+                }
                 ExecType::TypeJoin => {
                     other_err!("Join executor not implemented");
                 }
@@ -131,9 +139,6 @@ impl BatchExecutorsRunner<()> {
                 }
                 ExecType::TypeExchangeReceiver => {
                     other_err!("ExchangeReceiver executor not implemented");
-                }
-                ExecType::TypeProjection => {
-                    other_err!("Projection executor not implemented");
                 }
                 ExecType::TypePartitionTableScan => {
                     other_err!("PartitionTableScan executor not implemented");
@@ -234,6 +239,18 @@ pub fn build_executors<S: Storage + 'static>(
                         config.clone(),
                         executor,
                         ed.take_selection().take_conditions().into(),
+                    )?
+                    .collect_summary(summary_slot_index),
+                )
+            }
+            ExecType::TypeProjection => {
+                EXECUTOR_COUNT_METRICS.batch_projection.inc();
+
+                Box::new(
+                    BatchProjectionExecutor::new(
+                        config.clone(),
+                        executor,
+                        ed.take_projection().take_exprs().into(),
                     )?
                     .collect_summary(summary_slot_index),
                 )
@@ -349,6 +366,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         stream_row_limit: usize,
         is_streaming: bool,
         paging_size: Option<u64>,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -393,6 +411,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             stream_row_limit,
             encode_type,
             paging_size,
+            quota_limiter,
         })
     }
 
@@ -416,22 +435,32 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         let mut time_slice_start = Instant::now();
         loop {
-            let time_slice_len = time_slice_start.saturating_elapsed();
             // Check whether we should yield from the execution
-            if time_slice_len > MAX_TIME_SLICE {
+            if need_reschedule(time_slice_start) {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
 
             let mut chunk = Chunk::default();
 
-            let (drained, record_len) = self.internal_handle_request(
-                false,
-                batch_size,
-                &mut chunk,
-                &mut warnings,
-                &mut ctx,
-            )?;
+            let mut sample = self.quota_limiter.new_sample();
+            let (drained, record_len) = {
+                let _guard = sample.observe_cpu();
+                self.internal_handle_request(
+                    false,
+                    batch_size,
+                    &mut chunk,
+                    &mut warnings,
+                    &mut ctx,
+                )?
+            };
+
+            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            if !quota_delay.is_zero() {
+                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                    .get(ThrottleType::dag)
+                    .inc_by(quota_delay.as_micros() as u64);
+            }
 
             if record_len > 0 {
                 chunks.push(chunk);
@@ -498,6 +527,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         // record count less than batch size and is not drained
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
+            // TODO: Streaming coprocessor on TiKV is just not enabled in TiDB now.
             let (drained, len) = self.internal_handle_request(
                 true,
                 batch_size.min(self.stream_row_limit - record_len),
@@ -639,4 +669,10 @@ fn grow_batch_size(batch_size: &mut usize) {
             *batch_size = BATCH_MAX_SIZE
         }
     }
+}
+
+#[inline]
+fn need_reschedule(time_slice_start: Instant) -> bool {
+    fail_point!("copr_reschedule", |_| true);
+    time_slice_start.saturating_elapsed() > MAX_TIME_SLICE
 }
