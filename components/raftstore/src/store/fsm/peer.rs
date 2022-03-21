@@ -1762,16 +1762,11 @@ where
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
-            let do_check = || {
-                fail_point!("memtrace_raft_messages_overflow_check_peer_recv", |_| {
-                    true
-                });
-                false
-            };
-            if do_check() {
-                let prev = MEMTRACE_RAFT_MESSAGES.sum();
-                assert!(prev >= heap_size);
-            }
+            fail_point!(
+                "memtrace_raft_messages_overflow_check_peer_recv",
+                MEMTRACE_RAFT_MESSAGES.sum() < heap_size,
+                |_| {}
+            );
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
