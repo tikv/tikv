@@ -243,10 +243,17 @@ where
         }
         let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
         let event = TraceEvent::Add(heap_size);
+        let send_failed = Cell::new(true);
+
+        MEMTRACE_RAFT_MESSAGES.trace(event);
+        defer!(if send_failed.get() {
+            MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
+        });
 
         let store_msg = match self.try_send(id, peer_msg) {
             Either::Left(Ok(())) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                fail_point!("memtrace_raft_messages_overflow_check_send");
+                send_failed.set(false);
                 return Ok(());
             }
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(im)))) => {
@@ -260,7 +267,7 @@ where
         };
         match self.send_control(store_msg) {
             Ok(()) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                send_failed.set(false);
                 Ok(())
             }
             Err(TrySendError::Full(StoreMsg::RaftMessage(im))) => Err(TrySendError::Full(im.msg)),
