@@ -13,7 +13,7 @@ fn test_memory_metrics_overflow() {
     let fp_send = "memtrace_raft_messages_overflow_check_send";
     fail::cfg(fp_send, "sleep(1)").unwrap(); // 1s seems enough
     let fp_peer_recv = "memtrace_raft_messages_overflow_check_peer_recv";
-    fail::cfg(fp_peer_recv, "return").unwrap();
+    fail::cfg(fp_peer_recv, "panic").unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_get(b"k1");
     fail::remove(fp_send);
