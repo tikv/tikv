@@ -1304,7 +1304,6 @@ where
 
         // become candidate first to increase term
         self.fsm.peer.raft_group.raft.become_candidate();
-        self.reset_raft_tick(GroupState::Ordered);
 
         // trigger vote request to all voters, will check the vote result in `check_force_leader`
         self.fsm.peer.raft_group.campaign().unwrap();
@@ -1351,7 +1350,10 @@ where
         assert!(self.fsm.peer.is_leader());
         self.fsm.peer.raft_group.raft.set_check_quorum(false);
 
-        // forward commit index
+        // make sure it's not hibernated
+        self.reset_raft_tick(GroupState::Ordered);
+
+        // forward commit index immediately
         self.fsm.peer.raft_group.raft.raft_log.committed = std::cmp::max(
             self.fsm.peer.raft_group.raft.raft_log.committed,
             self.fsm.peer.raft_group.raft.raft_log.persisted,

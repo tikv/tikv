@@ -2500,6 +2500,12 @@ where
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
+
+            if let Some(ForceLeaderState::ForceLeader) = self.force_leader {
+                // forward commit index, the committed entries will be applied in the raft base tick round
+                self.raft_group.raft.raft_log.committed =
+                    std::cmp::max(self.raft_group.raft.raft_log.committed, persist_index);
+            }
         }
 
         if self.apply_snap_ctx.is_some() && self.unpersisted_readies.is_empty() {
@@ -2539,8 +2545,9 @@ where
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
         if let Some(ForceLeaderState::ForceLeader) = self.force_leader {
-            // forward commit index
-            self.raft_group.raft.raft_log.committed = persist_index;
+            // forward commit index, the committed entries will be applied in the raft base tick round
+            self.raft_group.raft.raft_log.committed =
+                std::cmp::max(self.raft_group.raft.raft_log.committed, persist_index);
         }
         self.mut_store().update_cache_persisted(persist_index);
 
@@ -2846,6 +2853,13 @@ where
             // if commit merge runs slow on sibling peers.
             debug!(
                 "prevents renew lease while merging";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            None
+        } else if self.force_leader.is_some() {
+            debug!(
+                "prevents renew lease while in force leader state";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
