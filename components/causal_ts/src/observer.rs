@@ -2,19 +2,18 @@
 
 use api_version::{APIVersion, KeyMode, APIV2};
 use engine_rocks::RocksEngine;
-use engine_traits::CfName;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
 use raftstore::coprocessor;
 use raftstore::coprocessor::{
-    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver,
-    Coprocessor, CoprocessorHost, ObserverContext, QueryObserver, RoleChange, RoleObserver,
+    BoxQueryObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    QueryObserver, RoleChange, RoleObserver,
 };
 use std::sync::Arc;
 
 use crate::CausalTsProvider;
 
-/// CausalObserver append timestamp for RawKV V2 data,
+/// CausalObserver appends timestamp for RawKV V2 data,
 /// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
 #[derive(Clone)]
@@ -22,7 +21,7 @@ pub struct CausalObserver {
     causal_ts_provider: Arc<dyn CausalTsProvider>,
 }
 
-// Causality is most important and should be done first.
+// Causal observer's priority should be higher than all other observers, to avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
 impl CausalObserver {
@@ -34,10 +33,6 @@ impl CausalObserver {
         coprocessor_host.registry.register_query_observer(
             CAUSAL_OBSERVER_PRIORITY,
             BoxQueryObserver::new(self.clone()),
-        );
-        coprocessor_host.registry.register_apply_snapshot_observer(
-            CAUSAL_OBSERVER_PRIORITY,
-            BoxApplySnapshotObserver::new(self.clone()),
         );
         coprocessor_host
             .registry
@@ -68,31 +63,6 @@ impl QueryObserver for CausalObserver {
             APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
         }
         Ok(())
-    }
-}
-
-impl ApplySnapshotObserver for CausalObserver {
-    fn apply_plain_kvs(
-        &self,
-        ctx: &mut ObserverContext<'_>,
-        _cf: CfName,
-        _kv_pairs: &[(Vec<u8>, Vec<u8>)],
-    ) {
-        self.handle_snapshot(ctx.region().get_id());
-    }
-
-    fn apply_sst(&self, ctx: &mut ObserverContext<'_>, _cf: CfName, _path: &str) {
-        self.handle_snapshot(ctx.region().get_id());
-    }
-}
-
-impl CausalObserver {
-    fn handle_snapshot(&self, region_id: u64) {
-        if let Err(err) = self.causal_ts_provider.flush() {
-            warn!("CausalObserver::handle_snapshot, flush timestamp error"; "region" => region_id, "error" => ?err);
-        } else {
-            debug!("CausalObserver::handle_snapshot, flush timestamp succeed"; "region" => region_id);
-        }
     }
 }
 
