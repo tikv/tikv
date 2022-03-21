@@ -2318,11 +2318,16 @@ where
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
+
+        let apply_flow_control = apply_need_flow_control(ctx.cfg.applys_memory_ratio);
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
         for entry in committed_entries.iter().rev() {
-            // raft meta is very small, can be ignored.
-            self.raft_log_size_hint += entry.get_data().len() as u64;
+            if !apply_flow_control {
+                // This flag what is applied but not compacted yet should not update when apply flow control.
+                // raft meta is very small, can be ignored.
+                self.raft_log_size_hint += entry.get_data().len() as u64;
+            }
             if lease_to_be_updated {
                 let propose_time = self
                     .proposals
@@ -2355,7 +2360,7 @@ where
 
         if let Some(last_entry) = committed_entries.last() {
             // check apply memory usage.
-            if apply_need_flow_control(ctx.cfg.applys_memory_ratio) {
+            if apply_flow_control {
                 // deal with the log entries that have been commmitted but not sent to apply in next loop.
                 self.has_pending_committed_entries = true;
                 return;
