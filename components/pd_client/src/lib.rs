@@ -163,12 +163,6 @@ impl BucketStat {
         if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
             *bytes += key.len() as u64 + value_size;
         }
-
-        // TO DELETE
-        println!(
-            "write_key key {:?}, idx {}, keys {:?} stats {:?}",
-            key, idx, &self.meta.keys, self.stats.write_bytes
-        );
     }
 
     pub fn split(&mut self, idx: usize) {

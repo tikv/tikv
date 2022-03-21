@@ -1615,26 +1615,11 @@ where
                 let applied_index = res.apply_state.applied_index;
                 if let Some(delta) = res.bucket_stat {
                     let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
-                    // TO DELETE
-                    println!(
-                        "Before Merge, with bucket_stat delta {:?} stats {:?} delta keys {:?}, stats keys {:?}",
-                        &delta.stats.write_bytes,
-                        &buckets.stats.write_bytes,
-                        &delta.meta.keys,
-                        &buckets.meta.keys
-                    );
                     merge_bucket_stats(
                         &buckets.meta.keys,
                         &mut buckets.stats,
                         &delta.meta.keys,
                         &delta.stats,
-                    );
-                    println!(
-                        "After Merge, with bucket_stat delta {:?} stats {:?} delta keys {:?}, stats keys {:?}",
-                        &delta.stats.write_bytes,
-                        &buckets.stats.write_bytes,
-                        &delta.meta.keys,
-                        &buckets.meta.keys
                     );
                 }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
@@ -4745,7 +4730,6 @@ where
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
         cb: Callback<EK::Snapshot>,
     ) {
-        println!("on_refresh_region_buckets is called ");
         let test_only_callback = |cb, region_buckets| {
             if let Callback::Test { cb } = cb {
                 let peer_stat = PeerInternalStat {
@@ -4907,7 +4891,7 @@ where
 
         let empty_last_keys = vec![];
         let empty_last_stats = metapb::BucketStats::default();
-        let (last_keys, last_stats) = if self.fsm.peer.last_region_buckets.is_some() {
+        let (last_keys, last_stats, stats_reset) = if self.fsm.peer.last_region_buckets.is_some() {
             (
                 &self
                     .fsm
@@ -4918,10 +4902,19 @@ where
                     .meta
                     .keys,
                 &self.fsm.peer.last_region_buckets.as_ref().unwrap().stats,
+                region_buckets.last_report_time
+                    != self
+                        .fsm
+                        .peer
+                        .last_region_buckets
+                        .as_ref()
+                        .unwrap()
+                        .last_report_time,
             )
         } else {
-            (&empty_last_keys, &empty_last_stats)
+            (&empty_last_keys, &empty_last_stats, false)
         };
+
         let mut bucket_ranges = vec![];
         let mut j = 0;
         for i in 0..stats.write_bytes.len() {
@@ -4930,7 +4923,9 @@ where
                 j += 1;
             }
             if j < last_keys.len() && keys[i] == last_keys[j] {
-                diff_in_bytes -= last_stats.write_bytes[j];
+                if !stats_reset {
+                    diff_in_bytes -= last_stats.write_bytes[j];
+                }
                 j += 1;
             }
             // if the bucket's write_bytes exceed half of the configured region_bucket_size,

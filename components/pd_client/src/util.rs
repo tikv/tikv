@@ -840,24 +840,28 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
                 }
             }
         };
-        let end = match find_bucket_index(range.1, keys) {
-            Some(idx) => {
-                // If end key is the start key of a bucket, this bucket should not be included.
-                if range.1 == keys[idx].as_ref() {
-                    if idx == 0 {
+        let end = if range.1.is_empty() {
+            last_bucket_idx
+        } else {
+            match find_bucket_index(range.1, keys) {
+                Some(idx) => {
+                    // If end key is the start key of a bucket, this bucket should not be included.
+                    if range.1 == keys[idx].as_ref() {
+                        if idx == 0 {
+                            return None;
+                        }
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                }
+                None => {
+                    if range.1 >= keys[keys.len() - 1].as_ref() {
+                        last_bucket_idx
+                    } else {
+                        // Not in the bucket range.
                         return None;
                     }
-                    idx - 1
-                } else {
-                    idx
-                }
-            }
-            None => {
-                if range.1 >= keys[keys.len() - 1].as_ref() {
-                    last_bucket_idx
-                } else {
-                    // Not in the bucket range.
-                    return None;
                 }
             }
         };
