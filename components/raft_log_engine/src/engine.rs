@@ -2,19 +2,20 @@
 
 use std::fs;
 use std::io::{Read, Result as IoResult, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask,
-    Result,
+    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineReadOnly,
+    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+use raft_engine::env::{DefaultFileSystem, FileSystem, Handle, WriteExt};
 use raft_engine::{
-    Command, Engine as RawRaftEngine, Error as RaftEngineError, FileBuilder, LogBatch, MessageExt,
+    Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 use tikv_util::Either;
 
@@ -31,12 +32,15 @@ impl MessageExt for MessageExtTyped {
     }
 }
 
-struct ManagedReader<R: Seek + Read> {
-    inner: Either<R, DecrypterReader<R>>,
+struct ManagedReader {
+    inner: Either<
+        <DefaultFileSystem as FileSystem>::Reader,
+        DecrypterReader<<DefaultFileSystem as FileSystem>::Reader>,
+    >,
     rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
-impl<R: Seek + Read> Seek for ManagedReader<R> {
+impl Seek for ManagedReader {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         match self.inner.as_mut() {
             Either::Left(reader) => reader.seek(pos),
@@ -45,7 +49,7 @@ impl<R: Seek + Read> Seek for ManagedReader<R> {
     }
 }
 
-impl<R: Seek + Read> Read for ManagedReader<R> {
+impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
@@ -58,12 +62,15 @@ impl<R: Seek + Read> Read for ManagedReader<R> {
     }
 }
 
-struct ManagedWriter<W: Seek + Write> {
-    inner: Either<W, EncrypterWriter<W>>,
+struct ManagedWriter {
+    inner: Either<
+        <DefaultFileSystem as FileSystem>::Writer,
+        EncrypterWriter<<DefaultFileSystem as FileSystem>::Writer>,
+    >,
     rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
-impl<W: Seek + Write> Seek for ManagedWriter<W> {
+impl Seek for ManagedWriter {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         match self.inner.as_mut() {
             Either::Left(writer) => writer.seek(pos),
@@ -72,7 +79,7 @@ impl<W: Seek + Write> Seek for ManagedWriter<W> {
     }
 }
 
-impl<W: Seek + Write> Write for ManagedWriter<W> {
+impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
@@ -89,56 +96,121 @@ impl<W: Seek + Write> Write for ManagedWriter<W> {
     }
 }
 
-struct ManagedFileBuilder {
+impl WriteExt for ManagedWriter {
+    fn truncate(&mut self, offset: usize) -> IoResult<()> {
+        self.seek(SeekFrom::Start(offset as u64))?;
+        match self.inner.as_mut() {
+            Either::Left(writer) => writer.truncate(offset),
+            Either::Right(writer) => writer.inner_mut().truncate(offset),
+        }
+    }
+
+    fn sync(&mut self) -> IoResult<()> {
+        match self.inner.as_mut() {
+            Either::Left(writer) => writer.sync(),
+            Either::Right(writer) => writer.inner_mut().sync(),
+        }
+    }
+
+    fn allocate(&mut self, offset: usize, size: usize) -> IoResult<()> {
+        match self.inner.as_mut() {
+            Either::Left(writer) => writer.allocate(offset, size),
+            Either::Right(writer) => writer.inner_mut().allocate(offset, size),
+        }
+    }
+}
+
+struct ManagedFileSystem {
+    base_level_file_system: DefaultFileSystem,
     key_manager: Option<Arc<DataKeyManager>>,
     rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
-impl ManagedFileBuilder {
+impl ManagedFileSystem {
     fn new(
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
     ) -> Self {
         Self {
+            base_level_file_system: DefaultFileSystem,
             key_manager,
             rate_limiter,
         }
     }
 }
 
-impl FileBuilder for ManagedFileBuilder {
-    type Reader<R: Seek + Read + Send> = ManagedReader<R>;
-    type Writer<W: Seek + Write + Send> = ManagedWriter<W>;
+struct ManagedHandle {
+    path: PathBuf,
+    base: Arc<<DefaultFileSystem as FileSystem>::Handle>,
+}
 
-    fn build_reader<R>(&self, path: &Path, reader: R) -> IoResult<Self::Reader<R>>
-    where
-        R: Seek + Read + Send,
-    {
+impl Handle for ManagedHandle {
+    fn truncate(&self, offset: usize) -> IoResult<()> {
+        self.base.truncate(offset)
+    }
+
+    fn file_size(&self) -> IoResult<usize> {
+        self.base.file_size()
+    }
+}
+
+impl FileSystem for ManagedFileSystem {
+    type Handle = ManagedHandle;
+    type Reader = ManagedReader;
+    type Writer = ManagedWriter;
+
+    fn create<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
+        let base = Arc::new(self.base_level_file_system.create(path.as_ref())?);
+        if let Some(ref manager) = self.key_manager {
+            manager.new_file(path.as_ref().to_str().unwrap())?;
+        }
+        Ok(ManagedHandle {
+            path: path.as_ref().to_path_buf(),
+            base,
+        })
+    }
+
+    fn open<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
+        Ok(ManagedHandle {
+            path: path.as_ref().to_path_buf(),
+            base: Arc::new(self.base_level_file_system.open(path.as_ref())?),
+        })
+    }
+
+    fn new_reader(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Reader> {
+        let base_reader = self
+            .base_level_file_system
+            .new_reader(handle.base.clone())?;
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
-                inner: Either::Right(key_manager.open_file_with_reader(path, reader)?),
+                inner: Either::Right(key_manager.open_file_with_reader(&handle.path, base_reader)?),
                 rate_limiter: self.rate_limiter.clone(),
             })
         } else {
             Ok(ManagedReader {
-                inner: Either::Left(reader),
+                inner: Either::Left(base_reader),
                 rate_limiter: self.rate_limiter.clone(),
             })
         }
     }
 
-    fn build_writer<W>(&self, path: &Path, writer: W, create: bool) -> IoResult<Self::Writer<W>>
-    where
-        W: Seek + Write + Send,
-    {
+    fn new_writer(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Writer> {
+        let base_writer = self
+            .base_level_file_system
+            .new_writer(handle.base.clone())?;
+
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedWriter {
-                inner: Either::Right(key_manager.open_file_with_writer(path, writer, create)?),
+                inner: Either::Right(key_manager.open_file_with_writer(
+                    &handle.path,
+                    base_writer,
+                    false,
+                )?),
                 rate_limiter: self.rate_limiter.clone(),
             })
         } else {
             Ok(ManagedWriter {
-                inner: Either::Left(writer),
+                inner: Either::Left(base_writer),
                 rate_limiter: self.rate_limiter.clone(),
             })
         }
@@ -146,7 +218,7 @@ impl FileBuilder for ManagedFileBuilder {
 }
 
 #[derive(Clone)]
-pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileBuilder>>);
+pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileSystem>>);
 
 impl RaftLogEngine {
     pub fn new(
@@ -154,9 +226,9 @@ impl RaftLogEngine {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
     ) -> Result<Self> {
-        let file_builder = Arc::new(ManagedFileBuilder::new(key_manager, rate_limiter));
+        let file_system = Arc::new(ManagedFileSystem::new(key_manager, rate_limiter));
         Ok(RaftLogEngine(Arc::new(
-            RawRaftEngine::open_with_file_builder(config, file_builder).map_err(transfer_error)?,
+            RawRaftEngine::open_with_file_system(config, file_system).map_err(transfer_error)?,
         )))
     }
 

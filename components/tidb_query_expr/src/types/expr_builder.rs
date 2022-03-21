@@ -362,6 +362,9 @@ fn handle_node_constant(
         ExprType::MysqlEnum if eval_type == EvalType::Enum => {
             extract_scalar_value_enum(tree_node.take_val(), tree_node.get_field_type())?
         }
+        ExprType::MysqlBit if eval_type == EvalType::Int => {
+            extract_scalar_value_uint64_from_bits(tree_node.take_val())?
+        }
         expr_type => {
             return Err(other_err!(
                 "Unexpected ExprType {:?} and EvalType {:?}",
@@ -393,6 +396,17 @@ fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
         .read_i64()
         .map_err(|_| other_err!("Unable to decode int64 from the request"))?;
     Ok(ScalarValue::Int(Some(value)))
+}
+
+#[inline]
+fn extract_scalar_value_uint64_from_bits(val: Vec<u8>) -> Result<ScalarValue> {
+    debug_assert!(val.len() <= 8);
+    let mut res = 0;
+    for v in val {
+        res <<= 8;
+        res |= v as u64;
+    }
+    Ok(ScalarValue::Int(Some(res as i64)))
 }
 
 #[inline]
@@ -892,5 +906,15 @@ mod tests {
                 .is_ok()
             );
         }
+    }
+
+    #[test]
+    fn test_extract_scalar_value_uint64_from_bits() {
+        let mut res = extract_scalar_value_uint64_from_bits(vec![0x01, 0x56, 0x12, 0x34]).unwrap();
+        assert_eq!(ScalarValue::Int(Some(0x1561234)), res);
+        res = extract_scalar_value_uint64_from_bits(vec![0x56, 0x34, 0x12, 0x78]).unwrap();
+        assert_eq!(ScalarValue::Int(Some(0x56341278)), res);
+        res = extract_scalar_value_uint64_from_bits(vec![0x78]).unwrap();
+        assert_eq!(ScalarValue::Int(Some(0x78)), res);
     }
 }

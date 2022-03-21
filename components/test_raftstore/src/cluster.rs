@@ -1091,6 +1091,27 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
+        let timer = Instant::now();
+        let mut state;
+        loop {
+            state = self.region_local_state(region_id, peer.get_store_id());
+            if state.get_state() == PeerState::Tombstone
+                && (!check_exist || state.get_region().get_peers().contains(&peer))
+            {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{:?} is still not gc in region {} {:?}",
+            peer, region_id, state
+        );
+    }
+
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
@@ -1619,6 +1640,24 @@ impl<T: Simulator> Cluster<T> {
         ctx.set_peer(leader);
         ctx.set_region_epoch(epoch);
         ctx
+    }
+
+    pub fn refresh_region_bucket_keys(
+        &mut self,
+        region: &metapb::Region,
+        bucket_keys: Vec<Vec<u8>>,
+    ) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                bucket_keys,
+            },
+        )
+        .unwrap();
     }
 }
 

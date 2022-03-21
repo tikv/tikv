@@ -21,7 +21,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::fsm::store::StoreMeta;
@@ -31,6 +31,7 @@ use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager,
 use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::config::VersionTrack;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -48,6 +49,8 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     flow_controller: Arc<FlowController>,
     reporter: R,
     resource_tag_factory: ResourceTagFactory,
+    quota_limiter: Arc<QuotaLimiter>,
+    feature_gate: FeatureGate,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -63,6 +66,8 @@ where
         flow_controller,
         reporter,
         resource_tag_factory,
+        quota_limiter,
+        feature_gate,
     )?;
     Ok(store)
 }

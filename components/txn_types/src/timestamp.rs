@@ -145,16 +145,12 @@ impl TsSet {
 
     pub fn from_u64s(ts: Vec<u64>) -> Self {
         // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        #[allow(clippy::transmute_undefined_repr)]
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::new(ts)
+        Self::new(unsafe { tikv_util::memory::vec_transmute(ts) })
     }
 
     pub fn vec_from_u64s(ts: Vec<u64>) -> Self {
         // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        #[allow(clippy::transmute_undefined_repr)]
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::vec(ts)
+        Self::vec(unsafe { tikv_util::memory::vec_transmute(ts) })
     }
 
     /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the

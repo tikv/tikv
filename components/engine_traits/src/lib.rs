@@ -139,7 +139,7 @@
 //!
 //! # The porting process
 //!
-//! These are some guidelines that seem to make the porting managable. As the
+//! These are some guidelines that seem to make the porting manageable. As the
 //! process continues new strategies are discovered and written here. This is a
 //! big refactoring and will take many monthse.
 //!

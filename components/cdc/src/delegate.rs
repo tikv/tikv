@@ -50,7 +50,12 @@ impl Default for DownstreamID {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
+    /// It's just created and rejects change events and resolved timestamps.
     Uninitialized,
+    /// It has got a snapshot for incremental scan, and change events will be accepted.
+    /// However it still rejects resolved timestamps.
+    Initializing,
+    /// Incremental scan is finished so that resolved timestamps are acceptable now.
     Normal,
     Stopped,
 }
@@ -58,6 +63,40 @@ pub enum DownstreamState {
 impl Default for DownstreamState {
     fn default() -> Self {
         Self::Uninitialized
+    }
+}
+
+/// Shold only be called when it's uninitialized or stopped. Return false if it's stopped.
+pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+    s.compare_exchange(
+        DownstreamState::Uninitialized,
+        DownstreamState::Initializing,
+    )
+    .is_ok()
+}
+
+/// Shold only be called when it's initializing or stopped. Return false if it's stopped.
+pub(crate) fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+    s.compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
+        .is_ok()
+}
+
+impl DownstreamState {
+    pub fn ready_for_change_events(&self) -> bool {
+        match *self {
+            DownstreamState::Uninitialized | DownstreamState::Stopped => false,
+            DownstreamState::Initializing | DownstreamState::Normal => true,
+        }
+    }
+
+    pub fn ready_for_advancing_ts(&self) -> bool {
+        match *self {
+            DownstreamState::Normal => true,
+
+            DownstreamState::Uninitialized
+            | DownstreamState::Stopped
+            | DownstreamState::Initializing => false,
+        }
     }
 }
 
@@ -550,7 +589,7 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            if downstream.state.load() != DownstreamState::Normal {
+            if !downstream.state.load().ready_for_change_events() {
                 return Ok(());
             }
             let event = change_data_event.clone();

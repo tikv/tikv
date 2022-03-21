@@ -202,7 +202,7 @@ where
     let on_start = || {
         let guard = pprof::ProfilerGuardBuilder::default()
             .frequency(frequency)
-            .blocklist(&["libc", "libgcc", "pthread"])
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
             .build()
             .map_err(|e| format!("pprof::ProfilerGuardBuilder::build fail: {}", e))?;
         Ok(guard)
@@ -223,7 +223,7 @@ where
                 .pprof()
                 .map_err(|e| format!("generate pprof from report fail: {}", e))?;
             profile
-                .encode(&mut body)
+                .write_to_vec(&mut body)
                 .map_err(|e| format!("encode pprof into bytes fail: {}", e))?;
         } else {
             report

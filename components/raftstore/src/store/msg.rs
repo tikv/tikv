@@ -191,6 +191,7 @@ pub enum PeerTick {
     CheckPeerStaleState = 5,
     EntryCacheEvict = 6,
     CheckLeaderLease = 7,
+    ReactivateMemoryLock = 8,
 }
 
 impl PeerTick {
@@ -207,6 +208,7 @@ impl PeerTick {
             PeerTick::CheckPeerStaleState => "check_peer_stale_state",
             PeerTick::EntryCacheEvict => "entry_cache_evict",
             PeerTick::CheckLeaderLease => "check_leader_lease",
+            PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
         }
     }
 
@@ -220,6 +222,7 @@ impl PeerTick {
             PeerTick::CheckPeerStaleState,
             PeerTick::EntryCacheEvict,
             PeerTick::CheckLeaderLease,
+            PeerTick::ReactivateMemoryLock,
         ];
         TICKS
     }
@@ -379,9 +382,16 @@ pub enum CasualMessage<EK: KvEngine> {
     RejectRaftAppend {
         peer_id: u64,
     },
+    RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
+        bucket_keys: Vec<Vec<u8>>,
+    },
 
     // Try renew leader lease
     RenewLease,
+
+    // Snapshot is applied
+    SnapshotApplied,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -437,7 +447,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
             }
+            CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
+            CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
         }
     }
 }

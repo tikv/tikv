@@ -44,7 +44,7 @@ use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
 
-use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange};
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
@@ -54,6 +54,7 @@ use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
+use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
     HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress,
@@ -65,7 +66,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
-use pd_client::INVALID_ID;
+use pd_client::{BucketStat, INVALID_ID};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::codec::number::decode_u64;
 use tikv_util::sys::disk::DiskUsage;
@@ -605,6 +606,10 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
+    /// region buckets.
+    pub region_buckets: Option<BucketStat>,
+    /// lead_transferee if the peer is in a leadership transferring.
+    pub lead_transferee: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -729,6 +734,8 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
+            region_buckets: None,
+            lead_transferee: raft::INVALID_ID,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1331,7 +1338,8 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            ctx.coprocessor_host.on_step_read_index(&mut m);
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -1689,16 +1697,22 @@ where
                 _ => {}
             }
             self.on_leader_changed(ss.leader_id, self.term());
-            // TODO: it may possible that only the `leader_id` change and the role
-            // didn't change
-            ctx.coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
+            ctx.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: self.lead_transferee,
+                    vote: self.raft_group.raft.vote,
+                },
+            );
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
                 self.on_leader_changed(self.leader_id(), hs.get_term());
             }
         }
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
     /// Correctness depends on the order between calling this function and notifying other peers
@@ -2368,6 +2382,7 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
+                self.region_buckets.as_ref().map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
@@ -2955,17 +2970,20 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
                 cb.invoke_with_response(err_resp);
+                self.post_propose_fail(req_admin_cmd_type);
                 false
             }
             Ok(Either::Right(idx)) => {
                 if !cb.is_none() {
                     self.cmd_epoch_checker.attach_to_conflict_cmd(idx, cb);
                 }
+                self.post_propose_fail(req_admin_cmd_type);
                 false
             }
             Ok(Either::Left(idx)) => {
@@ -2998,6 +3016,27 @@ where
                 }
                 self.post_propose(ctx, p);
                 true
+            }
+        }
+    }
+
+    fn post_propose_fail(&mut self, req_admin_cmd_type: Option<AdminCmdType>) {
+        if req_admin_cmd_type == Some(AdminCmdType::PrepareMerge) {
+            // If we just failed to propose PrepareMerge, the pessimistic locks status
+            // may become MergingRegion incorrectly. So, we have to revert it here.
+            // But we have to rule out the case when the region has successfully
+            // proposed PrepareMerge or has been in merging, which is decided by
+            // the boolean expression below.
+            let is_merging = self.is_merging()
+                || self
+                    .cmd_epoch_checker
+                    .last_cmd_index(AdminCmdType::PrepareMerge)
+                    .is_some();
+            if !is_merging {
+                let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+                if pessimistic_locks.status == LocksStatus::MergingRegion {
+                    pessimistic_locks.status = LocksStatus::Normal;
+                }
             }
         }
     }
@@ -3608,12 +3647,13 @@ where
         if !passed_merge_fence {
             let pessimistic_locks = self.txn_ext.pessimistic_locks.read();
             if !pessimistic_locks.is_empty() {
-                if !pessimistic_locks.is_valid {
-                    // If `is_valid` is already false, it means the in-memory pessimistic locks are
+                if pessimistic_locks.status != LocksStatus::Normal {
+                    // If `status` is not `Normal`, it means the in-memory pessimistic locks are
                     // being transferred, probably triggered by transferring leader. In this case,
                     // we abort merging to simplify the situation.
                     return Err(box_err!(
-                        "pessimistic locks are invalid, indicating an ongoing region change, skip merging."
+                        "pessimistic locks status is {:?}, skip merging.",
+                        pessimistic_locks.status
                     ));
                 }
                 if self.get_store().applied_index() < last_index {
@@ -3646,10 +3686,7 @@ where
         let pessimistic_locks = self.txn_ext.pessimistic_locks.upgradable_read();
         if pessimistic_locks.is_empty() {
             let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
-            pessimistic_locks.is_valid = false;
-            // FIXME(sticnarf): if `PrepareMerge` fails to propose later, `is_valid` will remain false. Then,
-            // in-memory pessimistic locking will become not usable and the region will also reject merging.
-            // This will be fixed by introducing a tick that reactivates in-memory pessimistic locking.
+            pessimistic_locks.status = LocksStatus::MergingRegion;
             return Ok(());
         }
         // The proposed pessimistic locks here will also be carried in CommitMerge. Check the size
@@ -3689,9 +3726,7 @@ where
 
         {
             let mut pessimistic_locks = RwLockUpgradableReadGuard::upgrade(pessimistic_locks);
-            pessimistic_locks.is_valid = false;
-            // FIXME(sticnarf): Same as the FIXME comment above in this function. `is_valid` should be reset to true
-            // when the lock proposal or the PrepareMerge proposal fails to propose.
+            pessimistic_locks.status = LocksStatus::MergingRegion;
         }
         debug!("propose {} pessimistic locks before prepare merge", cmd.get_requests().len();
             "region_id" => self.region_id);
@@ -3803,6 +3838,7 @@ where
             });
         }
 
+        self.maybe_inject_propose_error(&req)?;
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
@@ -4090,6 +4126,7 @@ where
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
+            snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
@@ -4633,14 +4670,14 @@ where
 
     fn activate_in_memory_pessimistic_locks(&mut self) {
         let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.is_valid = true;
+        pessimistic_locks.status = LocksStatus::Normal;
         pessimistic_locks.term = self.term();
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     fn clear_in_memory_pessimistic_locks(&mut self) {
         let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
-        pessimistic_locks.is_valid = false; // Not necessary, but just make it safer.
+        pessimistic_locks.status = LocksStatus::NotLeader;
         pessimistic_locks.clear();
         pessimistic_locks.term = self.term();
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
@@ -4688,6 +4725,46 @@ where
             }
             self.raft_max_inflight_msgs = raft_max_inflight_msgs;
         }
+        self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
+    }
+
+    fn maybe_inject_propose_error(
+        &self,
+        #[allow(unused_variables)] req: &RaftCmdRequest,
+    ) -> Result<()> {
+        // The return value format is {req_type}:{store_id}
+        // Request matching the format will fail to be proposed.
+        // Empty `req_type` means matching all kinds of requests.
+        // ":{store_id}" can be omitted, meaning matching all stores.
+        fail_point!("raft_propose", |r| {
+            r.map_or(Ok(()), |s| {
+                let mut parts = s.splitn(2, ':');
+                let cmd_type = parts.next().unwrap();
+                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
+                if let Some(store_id) = store_id {
+                    if store_id != self.peer.get_store_id() {
+                        return Ok(());
+                    }
+                }
+                let admin_type = req.get_admin_request().get_cmd_type();
+                let match_type = cmd_type.is_empty()
+                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
+                    || (cmd_type == "transfer_leader"
+                        && admin_type == AdminCmdType::TransferLeader);
+                // More matching rules can be added here.
+                if match_type {
+                    Err(box_err!("injected error"))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        Ok(())
+    }
+
+    /// Update states of the peer which can be changed in the previous raft tick.
+    pub fn post_raft_group_tick(&mut self) {
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 }
 
