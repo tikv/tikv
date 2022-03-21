@@ -388,7 +388,15 @@ impl Engine {
         let l0s = shard.get_l0_tbls();
         let mut req = self.new_compact_request(shard, -1, 0);
         let mut total_size = 0;
+        let mut smallest = l0s.tbls[0].smallest();
+        let mut biggest = l0s.tbls[0].biggest();
         for l0 in l0s.tbls.as_ref() {
+            if smallest > l0.smallest() {
+                smallest = l0.smallest();
+            }
+            if biggest < l0.biggest() {
+                biggest = l0.biggest();
+            }
             req.tops.push(l0.id());
             total_size += l0.size();
         }
@@ -396,6 +404,9 @@ impl Engine {
             let lh = &shard.get_cf(cf).levels[0];
             let mut bottoms = vec![];
             for tbl in lh.tables.iter() {
+                if tbl.biggest() < smallest || tbl.smallest() > biggest {
+                    continue;
+                }
                 bottoms.push(tbl.id());
                 total_size += tbl.size();
             }

@@ -147,7 +147,7 @@ impl Engine {
         store_u64(&shard.write_sequence, wb.sequence);
         if mem_tbl.size() > shard.get_max_mem_table_size() as usize {
             self.switch_mem_table(&shard, version);
-            if shard.is_active() && shard.get_mem_tbls().tbls.len() == 2 {
+            if shard.is_active() {
                 self.trigger_flush(&shard);
             }
         }

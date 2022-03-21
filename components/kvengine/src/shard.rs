@@ -467,8 +467,8 @@ impl Shard {
         max_pri.shard_ver = self.ver;
         let l0s = self.get_l0_tbls();
         let size_score = l0s.total_size() as f64 / self.opt.base_size as f64;
-        let num_tbl_score = l0s.tbls.len() as f64 / 5.0;
-        max_pri.score = size_score * 0.7 + num_tbl_score * 0.3;
+        let num_tbl_score = l0s.tbls.len() as f64 / 4.0;
+        max_pri.score = size_score * 0.6 + num_tbl_score * 0.4;
         max_pri.cf = -1;
         for l0 in l0s.tbls.as_ref() {
             if !self.cover_full_table(l0.smallest(), l0.biggest()) {

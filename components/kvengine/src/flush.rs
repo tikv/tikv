@@ -8,7 +8,10 @@ use bytes::BytesMut;
 use kvenginepb as pb;
 use kvenginepb::L0Create;
 use slog_global::info;
+use std::collections::HashMap;
+use std::time::Duration;
 use tikv_util::mpsc;
+use tikv_util::time::Instant;
 
 pub(crate) struct FlushTask {
     pub(crate) shard_id: u64,
@@ -32,10 +35,37 @@ pub(crate) struct InitialFlush {
     pub(crate) data_sequence: u64,
 }
 
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub(crate) struct FlushStateKey {
+    shard_id: u64,
+    shard_ver: u64,
+    tbl_version: u64,
+}
+
+const FLUSH_DEDUP_DURATION: Duration = Duration::from_secs(30);
+
 impl Engine {
     pub(crate) fn run_flush_worker(&self, rx: mpsc::Receiver<FlushTask>) {
+        let mut flush_states = HashMap::new();
         loop {
             if let Ok(task) = rx.recv() {
+                let tbl_version = match task.normal.as_ref() {
+                    None => 0,
+                    Some(tbl) => tbl.get_version(),
+                };
+                let flush_state_key = FlushStateKey {
+                    shard_id: task.shard_id,
+                    shard_ver: task.shard_ver,
+                    tbl_version,
+                };
+                let now = Instant::now();
+                let mut min_flush_time = now - FLUSH_DEDUP_DURATION;
+                flush_states
+                    .retain(|_, flush_time: &mut Instant| flush_time.gt(&&mut min_flush_time));
+                if flush_states.get(&flush_state_key).is_some() {
+                    continue;
+                }
+                flush_states.insert(flush_state_key, now);
                 let engine = self.clone();
                 std::thread::spawn(move || {
                     let res = if task.normal.is_some() {
