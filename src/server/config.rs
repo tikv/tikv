@@ -42,7 +42,7 @@ const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 
-const DEFAULT_ENDPOINT_SEMAPHORE_WAITER_LIMIT: usize = usize::MAX;
+const DEFAULT_ENDPOINT_SEMAPHORE_WAITER_LIMIT: usize = isize::MAX as usize;
 
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
