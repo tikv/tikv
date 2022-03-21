@@ -470,7 +470,7 @@ impl PeerStorage {
     pub(crate) fn parent_id(&self) -> Option<u64> {
         if let Some(meta) = &self.shard_meta {
             if let Ok(shard) = self.engines.kv.get_shard_with_ver(meta.id, meta.ver) {
-                return Some(shard.parent_id)
+                return Some(shard.parent_id);
             }
         }
         None

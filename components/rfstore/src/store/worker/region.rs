@@ -99,11 +99,13 @@ impl Runner {
             return None;
         }
         let (tx, rx) = tikv_util::mpsc::bounded(1);
-        let res = kv
-            .pre_load_files(&change_set)
-            .map_err(|err| crate::Error::KVEngineError(err));
-        tx.send(res.map(|_| Task::ApplyChangeSet { change: change_set }))
-            .unwrap();
+        let kv = kv.clone();
+        std::thread::spawn(move || {
+            let res = kv
+                .pre_load_files(&change_set)
+                .map_err(|err| crate::Error::KVEngineError(err));
+            let _ = tx.send(res.map(|_| Task::ApplyChangeSet { change: change_set }));
+        });
         Some(rx)
     }
 }
