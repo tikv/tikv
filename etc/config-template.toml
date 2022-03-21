@@ -575,8 +575,9 @@
 # rate-limiter-mode = "write-only"
 # rate-limiter-auto-tuned = true
 
-## Enable or disable the pipelined write.
-# enable-pipelined-write = true
+## Enable or disable the pipelined write. If set false, RocksDB will use a new write mode port from cockroachdb/pebble.
+## See more details in https://github.com/tikv/rocksdb/pull/267 and https://github.com/tikv/tikv/issues/12059.
+# enable-pipelined-write = false
 
 ## Allows OS to incrementally sync files to disk while they are being written, asynchronously,
 ## in the background.
