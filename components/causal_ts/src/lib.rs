@@ -4,13 +4,13 @@
 extern crate tikv_util;
 
 mod errors;
-
 pub use errors::*;
-
 mod tso;
 pub use tso::*;
-
+mod metrics;
+pub use metrics::*;
 mod observer;
+
 pub use observer::*;
 
 use crate::errors::Result;

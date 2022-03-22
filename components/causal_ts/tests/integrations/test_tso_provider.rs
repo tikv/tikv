@@ -26,7 +26,12 @@ fn test_batch_tso_provider() {
 
     // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
     // allocated: [1001, 1100]
-    let provider = block_on(BatchTsoProvider::new_opt(pd_cli, Duration::ZERO, 100)).unwrap();
+    let provider = block_on(BatchTsoProvider::new_opt(
+        pd_cli.clone(),
+        Duration::ZERO,
+        100,
+    ))
+    .unwrap();
     assert_eq!(provider.batch_size(), 100);
     for ts in 1001..=1010u64 {
         assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
@@ -35,6 +40,7 @@ fn test_batch_tso_provider() {
     provider.flush().unwrap(); // allocated: [1101, 1200]
     assert_eq!(provider.batch_size(), 100);
     // used up
+    pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
     for ts in 1101..=1200u64 {
         assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
     }
@@ -51,10 +57,16 @@ fn test_batch_tso_provider() {
     provider.flush().unwrap(); // allocated: [1401, 1500]
     assert_eq!(provider.batch_size(), 100);
 
+    pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
     for ts in 1401..=1500u64 {
         assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
     }
     assert!(provider.get_ts().is_err());
+
+    // renew on used-up
+    for ts in 1501..=2500u64 {
+        assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
+    }
 }
 
 #[test]
@@ -93,14 +105,20 @@ fn test_batch_tso_provider_on_failure() {
     }
 
     assert!(provider.flush().is_err());
-    assert!(provider.get_ts().is_err());
+    for ts in 1101..=1300u64 {
+        // renew on used-up, allocated: [1101, 1300]
+        assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
+    }
+
+    pd_cli.trigger_tso_failure();
+    assert!(provider.get_ts().is_err()); // renew fail on used-up
 
     pd_cli.trigger_tso_failure();
     assert!(provider.flush().is_err());
-    assert!(provider.get_ts().is_err());
 
-    provider.flush().unwrap(); // allocated: [1101, 1300]
-    for ts in 1101..=1300u64 {
+    provider.flush().unwrap(); // allocated: [1301, 1700]
+    pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
+    for ts in 1301..=1700u64 {
         assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
     }
     assert!(provider.get_ts().is_err());
