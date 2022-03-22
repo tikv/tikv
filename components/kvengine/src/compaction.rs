@@ -332,9 +332,10 @@ impl Engine {
                 "start compact L0 for {}:{} score:{}",
                 shard.id, shard.ver, pri.score
             );
-            let req = self.build_compact_l0_request(&shard)?;
-            let comp = self.comp_client.compact(req)?;
-            self.handle_compact_response(comp, &shard);
+            if let Some(req) = self.build_compact_l0_request(&shard)? {
+                let comp = self.comp_client.compact(req)?;
+                self.handle_compact_response(comp, &shard);
+            }
             return Ok(());
         }
         let scf = shard.get_cf(pri.cf as usize);
@@ -384,8 +385,14 @@ impl Engine {
         Ok(())
     }
 
-    pub(crate) fn build_compact_l0_request(&self, shard: &Shard) -> Result<CompactionRequest> {
+    pub(crate) fn build_compact_l0_request(
+        &self,
+        shard: &Shard,
+    ) -> Result<Option<CompactionRequest>> {
         let l0s = shard.get_l0_tbls();
+        if l0s.tbls.len() == 0 {
+            return Ok(None);
+        }
         let mut req = self.new_compact_request(shard, -1, 0);
         let mut total_size = 0;
         let mut smallest = l0s.tbls[0].smallest();
@@ -413,7 +420,7 @@ impl Engine {
             req.multi_cf_bottoms.push(bottoms);
         }
         self.set_alloc_ids_for_request(&mut req, total_size)?;
-        Ok(req)
+        Ok(Some(req))
     }
 
     pub(crate) fn set_alloc_ids_for_request(
