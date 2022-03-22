@@ -638,38 +638,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    /// Event handler for the success of write.
-    fn on_write_finished_release_latch(
-        &self,
-        cid: u64,
-        lock_guards: Vec<KeyHandleGuard>,
-        pipelined: bool,
-        async_apply_prewrite: bool,
-        tag: metrics::CommandKind,
-        txtc_lock: Lock,
-    ) {
-        // TODO: Does async apply prewrite worth a special metric here?
-        if pipelined {
-            SCHED_STAGE_COUNTER_VEC
-                .get(tag)
-                .pipelined_write_finish
-                .inc();
-        } else if async_apply_prewrite {
-            SCHED_STAGE_COUNTER_VEC
-                .get(tag)
-                .async_apply_prewrite_finish
-                .inc();
-        } else {
-            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
-        }
-
-        debug!("write command finished";
-            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
-        drop(lock_guards);
-
-        self.release_lock(&txtc_lock, cid);
-    }
-
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
@@ -1050,6 +1018,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
             }
 
+            if pipelined {
+                SCHED_STAGE_COUNTER_VEC
+                    .get(tag)
+                    .pipelined_write_finish
+                    .inc();
+            } else if is_async_apply_prewrite {
+                SCHED_STAGE_COUNTER_VEC
+                    .get(tag)
+                    .async_apply_prewrite_finish
+                    .inc();
+            } else {
+                SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
+            }
+
+            debug!("write command finished";
+                "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => is_async_apply_prewrite);
+            drop(lock_guards);
+
             let TaskContext {
                 task: _,
                 lock: task_lock,
@@ -1086,14 +1072,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .spawn(async move {
                     fail_point!("scheduler_async_write_finish");
 
-                    sched.on_write_finished_release_latch(
-                        cid,
-                        lock_guards,
-                        pipelined,
-                        is_async_apply_prewrite,
-                        tag,
-                        task_lock,
-                    );
+                    self.release_lock(&task_lock, cid);
+
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                         .get(tag)
                         .observe(rows as f64);
