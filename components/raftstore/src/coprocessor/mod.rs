@@ -175,6 +175,7 @@ pub enum RegionChangeEvent {
     Create,
     Update,
     Destroy,
+    UpdateBuckets(usize),
 }
 
 pub trait RegionChangeObserver: Coprocessor {

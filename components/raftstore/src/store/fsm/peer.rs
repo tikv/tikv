@@ -4854,6 +4854,12 @@ where
             region_buckets = BucketStat::new(Arc::new(meta), stats);
         }
 
+        let buckets_count = region_buckets.meta.keys.len() - 1;
+        self.ctx.coprocessor_host.on_region_changed(
+            region,
+            RegionChangeEvent::UpdateBuckets(buckets_count),
+            self.fsm.peer.get_role(),
+        );
         let old_region_buckets = self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
@@ -4862,10 +4868,10 @@ where
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
             ));
         }
-        debug!(
+        info!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
-            "buckets count" => self.fsm.peer.region_buckets.as_ref().unwrap().meta.keys.len(),
+            "buckets count" => buckets_count,
             "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
         // test purpose
