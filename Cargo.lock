@@ -642,11 +642,9 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "collections",
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",
@@ -658,7 +656,6 @@ dependencies = [
  "slog",
  "slog-global",
  "test_raftstore",
- "test_util",
  "thiserror",
  "tikv_util",
  "txn_types",
