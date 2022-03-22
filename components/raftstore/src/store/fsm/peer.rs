@@ -2353,7 +2353,9 @@ where
             // It must be ensured that all logs have been applied.
             // Suppose apply fsm is applying a `CommitMerge` log and this snapshot is generated after
             // merge, its corresponding source peer can not be destroy by this snapshot.
-            && self.fsm.peer.ready_to_handle_pending_snap();
+            && self.fsm.peer.ready_to_handle_pending_snap()
+            // When has_pending_committed_entries, cannnot destroy peer now, wait until all committed entries applyed.
+            && !self.fsm.peer.has_pending_committed_entries;
         for exist_region in meta
             .region_ranges
             .range((Excluded(snap_enc_start_key), Unbounded::<Vec<u8>>))
