@@ -2099,7 +2099,7 @@ where
         {
             let err = {
                 if self.fsm.peer.is_leader() {
-                    format!("already leader")
+                    "already leader".to_string()
                 } else if *term != self.fsm.peer.term() {
                     format!(
                         "unexpected term {}, expected {}",
@@ -2118,7 +2118,7 @@ where
                             if *vote {
                                 granted += 1;
                             } else {
-                                err = Some(format!("receive reject response"));
+                                err = Some(format!("receive reject response from {}", *id));
                                 break;
                             }
                         } else if *id == self.fsm.peer_id() {
