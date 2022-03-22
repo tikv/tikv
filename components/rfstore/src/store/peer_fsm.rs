@@ -790,12 +790,10 @@ impl<'a> PeerMsgHandler<'a> {
                 assert!(not_exist, "[region {}] should not exist", new_region_id);
                 continue;
             }
-            if let Some(r) = meta.regions.get(&new_region_id) {
-                if is_region_initialized(r) {
-                    // The region is created by raft message.
-                    info!("initialized region already exists, must be created by raft message.");
-                    continue;
-                }
+            if meta.regions.get(&new_region_id).is_some() {
+                // The region is created by raft message.
+                info!("region already exists, must be created by raft message.");
+                continue;
             }
             // Now all checking passed.
             // Insert new regions and validation
