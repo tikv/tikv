@@ -191,6 +191,9 @@ pub fn new_filename(file_id: u64) -> PathBuf {
     PathBuf::from(format!("{:016x}.sst", file_id))
 }
 
-pub fn new_tmp_filename(file_id: u64) -> PathBuf {
-    PathBuf::from(format!("{:016x}.tmp", file_id))
+pub fn new_tmp_filename(file_id: u64, opts: Options) -> PathBuf {
+    PathBuf::from(format!(
+        "{:016x}.{}_{}.tmp",
+        file_id, opts.shard_id, opts.shard_ver
+    ))
 }

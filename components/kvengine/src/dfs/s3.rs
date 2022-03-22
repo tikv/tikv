@@ -117,8 +117,8 @@ impl S3FSCore {
         self.local_dir.join(new_filename(file_id))
     }
 
-    fn tmp_file_path(&self, file_id: u64) -> PathBuf {
-        self.local_dir.join(new_tmp_filename(file_id))
+    fn tmp_file_path(&self, file_id: u64, opts: Options) -> PathBuf {
+        self.local_dir.join(new_tmp_filename(file_id, opts))
     }
 
     fn file_key(&self, file_id: u64) -> String {
@@ -196,7 +196,7 @@ impl DFS for S3FS {
             return Ok(());
         }
         let data = self.read_file(file_id, opts).await?;
-        let tmp_file_path = self.tmp_file_path(file_id);
+        let tmp_file_path = self.tmp_file_path(file_id, opts);
         self.write_local_file(&tmp_file_path, data)?;
         std::fs::rename(tmp_file_path, &local_file_path)?;
         Ok(())
