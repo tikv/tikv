@@ -455,18 +455,6 @@ impl PeerStorage {
         self.shard_meta.as_mut().unwrap()
     }
 
-    pub(crate) fn reset_meta(&mut self) {
-        let meta_bin = self
-            .engines
-            .raft
-            .get_state(self.region.get_id(), KV_ENGINE_META_KEY)
-            .unwrap();
-        let mut change = kvenginepb::ChangeSet::new();
-        change.merge_from_bytes(&meta_bin).unwrap();
-        self.shard_meta = Some(ShardMeta::new(&change));
-        self.initial_flushed = false;
-    }
-
     pub(crate) fn parent_id(&self) -> Option<u64> {
         if let Some(meta) = &self.shard_meta {
             if let Ok(shard) = self.engines.kv.get_shard_with_ver(meta.id, meta.ver) {

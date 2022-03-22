@@ -1426,6 +1426,8 @@ impl Peer {
                 let store = self.mut_store();
                 // The raft state key changed when region version change, we need to set it here.
                 store.write_raft_state(ctx);
+                store.shard_meta = Some(new_meta.clone());
+                store.initial_flushed = false;
             } else {
                 let mut store_meta = ctx.global.store_meta.lock().unwrap();
                 if let Some(region) = store_meta.regions.get(&new_meta.id) {

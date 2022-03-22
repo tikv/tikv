@@ -874,7 +874,6 @@ impl<'a> PeerMsgHandler<'a> {
             }
         }
         drop(meta);
-        self.peer.mut_store().reset_meta();
         if is_leader {
             if let Some(shard) = self.ctx.global.engines.kv.get_shard(self.region_id()) {
                 self.ctx.global.engines.kv.trigger_flush(&shard);
