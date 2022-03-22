@@ -1975,8 +1975,8 @@ fn test_storage_with_quota_limiter_enable() {
     mutation.set_value(v);
     must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
-    // 800 only represents quota enabled, no specific significance
-    assert!(begin.elapsed() > Duration::from_millis(800));
+    // 500 only represents quota enabled, no specific significance
+    assert!(begin.elapsed() > Duration::from_millis(500));
 }
 
 #[test]
@@ -2006,5 +2006,5 @@ fn test_storage_with_quota_limiter_disable() {
     mutation.set_value(v);
     must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
-    assert!(begin.elapsed() < Duration::from_millis(800));
+    assert!(begin.elapsed() < Duration::from_millis(500));
 }
