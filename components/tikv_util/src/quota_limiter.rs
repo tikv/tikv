@@ -2,15 +2,14 @@
 
 use std::time::Duration;
 
-use super::config::ReadableSize;
+use super::config::{ReadableDuration, ReadableSize};
 use super::time::Limiter;
 use super::timer::GLOBAL_TIMER_HANDLE;
 
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
 
-// To avoid long tail latency.
-const MAX_QUOTA_DELAY: Duration = Duration::from_secs(1);
+const CPU_LIMITER_REFILL_DURATION: Duration = Duration::from_millis(50);
 
 // Quota limiter allows users to obtain stable performance by increasing the
 // completion time of tasks through restrictions of different metrics.
@@ -19,6 +18,7 @@ pub struct QuotaLimiter {
     cputime_limiter: Limiter,
     write_bandwidth_limiter: Limiter,
     read_bandwidth_limiter: Limiter,
+    max_delay_duration: Duration,
 }
 
 // Throttle must be consumed in quota limiter.
@@ -78,6 +78,7 @@ impl Default for QuotaLimiter {
             cputime_limiter: Limiter::new(f64::INFINITY),
             write_bandwidth_limiter: Limiter::new(f64::INFINITY),
             read_bandwidth_limiter: Limiter::new(f64::INFINITY),
+            max_delay_duration: Duration::ZERO,
         }
     }
 }
@@ -88,11 +89,14 @@ impl QuotaLimiter {
         cpu_quota: usize,
         write_bandwidth: ReadableSize,
         read_bandwidth: ReadableSize,
+        max_delay_duration: ReadableDuration,
     ) -> Self {
         let cputime_limiter = if cpu_quota == 0 {
             Limiter::new(f64::INFINITY)
         } else {
-            Limiter::new(cpu_quota as f64 * 1000_f64)
+            <Limiter>::builder(cpu_quota as f64 * 1000_f64)
+                .refill(CPU_LIMITER_REFILL_DURATION)
+                .build()
         };
 
         let write_bandwidth_limiter = if write_bandwidth.0 == 0 {
@@ -107,10 +111,13 @@ impl QuotaLimiter {
             Limiter::new(read_bandwidth.0 as f64)
         };
 
+        let max_delay_duration = max_delay_duration.0;
+
         Self {
             cputime_limiter,
             write_bandwidth_limiter,
             read_bandwidth_limiter,
+            max_delay_duration,
         }
     }
 
@@ -148,8 +155,10 @@ impl QuotaLimiter {
             Duration::ZERO
         };
 
-        let max_dur = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
-        let exec_delay = std::cmp::min(MAX_QUOTA_DELAY, max_dur);
+        let mut exec_delay = std::cmp::max(cpu_dur, std::cmp::max(w_bw_dur, r_bw_dur));
+        if !self.max_delay_duration.is_zero() {
+            exec_delay = std::cmp::min(self.max_delay_duration, exec_delay);
+        };
 
         if !exec_delay.is_zero() {
             GLOBAL_TIMER_HANDLE
@@ -170,26 +179,34 @@ mod tests {
 
     #[test]
     fn test_quota_limiter() {
-        // refill duration = 100ms
-        // bucket capacity = 100
-        let quota_limiter = QuotaLimiter::new(1000, ReadableSize::kb(1), ReadableSize::kb(1));
+        // refill duration = 50ms
+        // bucket capacity = 50
+        let quota_limiter = QuotaLimiter::new(
+            1000,
+            ReadableSize::kb(1),
+            ReadableSize::kb(1),
+            ReadableDuration::millis(0),
+        );
 
         let thread_start_time = ThreadTime::now();
 
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(50));
+        sample.add_cpu_time(Duration::from_millis(20));
         let should_delay = block_on(quota_limiter.async_consume(sample));
         assert_eq!(should_delay, Duration::ZERO);
 
-        // after this refill bucket value about 60
+        let mut sample = quota_limiter.new_sample();
+        sample.add_cpu_time(Duration::from_millis(30));
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(50));
+
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(90));
+        sample.add_cpu_time(Duration::from_millis(30));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        // bucket value only about 60 but consume 90, delay should be about 130
-        assert!(should_delay <= Duration::from_millis(130));
-        assert!(should_delay > Duration::from_millis(120));
+        // should less 20+30+30
+        assert!(should_delay < Duration::from_millis(80));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));

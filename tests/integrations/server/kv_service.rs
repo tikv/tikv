@@ -1951,7 +1951,7 @@ fn test_storage_with_quota_limiter_enable() {
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),
-            foreground_read_bandwidth: ReadableSize(0),
+            ..Default::default()
         };
         cluster.cfg.quota = quota_config;
         cluster.cfg.storage.scheduler_worker_pool_size = 1;
@@ -1983,11 +1983,7 @@ fn test_storage_with_quota_limiter_enable() {
 fn test_storage_with_quota_limiter_disable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
         // all limit set to 0, which means quota limiter not work.
-        let quota_config = QuotaConfig {
-            foreground_cpu_time: 0,
-            foreground_write_bandwidth: ReadableSize(0),
-            foreground_read_bandwidth: ReadableSize(0),
-        };
+        let quota_config = QuotaConfig::default();
         cluster.cfg.quota = quota_config;
         cluster.cfg.storage.scheduler_worker_pool_size = 1;
     });
