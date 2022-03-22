@@ -16,6 +16,7 @@ use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
@@ -67,6 +68,7 @@ pub struct S3FSCore {
     bucket: String,
     runtime: tokio::runtime::Runtime,
     rate_limiter: Arc<file_system::IORateLimiter>,
+    tmp_id: AtomicU64,
 }
 
 impl S3FSCore {
@@ -110,6 +112,7 @@ impl S3FSCore {
             bucket,
             runtime,
             rate_limiter,
+            tmp_id: AtomicU64::new(0),
         }
     }
 
@@ -117,8 +120,9 @@ impl S3FSCore {
         self.local_dir.join(new_filename(file_id))
     }
 
-    fn tmp_file_path(&self, file_id: u64, opts: Options) -> PathBuf {
-        self.local_dir.join(new_tmp_filename(file_id, opts))
+    fn tmp_file_path(&self, file_id: u64) -> PathBuf {
+        let tmp_id = self.tmp_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.local_dir.join(new_tmp_filename(file_id, tmp_id))
     }
 
     fn file_key(&self, file_id: u64) -> String {
@@ -196,7 +200,7 @@ impl DFS for S3FS {
             return Ok(());
         }
         let data = self.read_file(file_id, opts).await?;
-        let tmp_file_path = self.tmp_file_path(file_id, opts);
+        let tmp_file_path = self.tmp_file_path(file_id);
         self.write_local_file(&tmp_file_path, data)?;
         std::fs::rename(tmp_file_path, &local_file_path)?;
         Ok(())
