@@ -2,6 +2,7 @@
 use std::{
     borrow::Borrow,
     collections::HashMap,
+    fmt::Display,
     io,
     path::{Path, PathBuf},
     result,
@@ -544,26 +545,44 @@ impl TempFileKey {
         }
     }
 
-    fn path_to_log_file(&self, min_ts: u64) -> String {
+    fn format_date_time(ts: u64) -> impl Display {
+        use chrono::prelude::*;
+        let millis = TimeStamp::physical(ts.into());
+        let dt = Utc.timestamp_millis(millis as _);
+        fail::fail_point!("stream_format_date_time", |s| {
+            return dt.format(&s.unwrap_or("%Y%m".to_owned())).to_string();
+        });
+        #[cfg(feature = "failpoints")]
+        return dt.format("%Y%m%d").to_string();
+        #[cfg(not(feature = "failpoints"))]
+        return dt.format("%Y%m%d");
+    }
+
+    fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
         format!(
-            // "/v1/t{:012}/{:012}-{}.log",
-            "v1_t{:012}_{:012}-{}.log",
+            "v1/t{:08}/{}-{:012}-{}.log",
             self.table_id,
+            // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
+            Self::format_date_time(max_ts),
             min_ts,
             uuid::Uuid::new_v4()
         )
     }
 
-    fn path_to_schema_file(min_ts: u64) -> String {
-        // format!("/v1/m/{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
-        format!("v1_m{:012}-{}.log", min_ts, uuid::Uuid::new_v4())
+    fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
+        format!(
+            "v1/schema-meta/{}-{:012}-{}.log",
+            Self::format_date_time(max_ts),
+            min_ts,
+            uuid::Uuid::new_v4(),
+        )
     }
 
-    fn file_name(&self, min_ts: TimeStamp) -> String {
+    fn file_name(&self, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
         if self.is_meta {
-            Self::path_to_schema_file(min_ts.into_inner())
+            Self::path_to_schema_file(min_ts.into_inner(), max_ts.into_inner())
         } else {
-            self.path_to_log_file(min_ts.into_inner())
+            self.path_to_log_file(min_ts.into_inner(), max_ts.into_inner())
         }
     }
 }
@@ -997,7 +1016,7 @@ impl DataFile {
 
     /// generate the metadata in protocol buffer of the file.
     fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
-        self.set_storage_path(file_key.file_name(self.min_ts));
+        self.set_storage_path(file_key.file_name(self.min_ts, self.max_ts));
 
         let mut meta = DataFileInfo::new();
         meta.set_sha_256(
@@ -1299,5 +1318,12 @@ mod tests {
         let ts = TimeStamp::compose(TimeStamp::physical_now(), 42);
         let rts = router.do_flush("nothing", 1, ts).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
+    }
+
+    #[test]
+    fn test_format_datetime() {
+        let s = TempFileKey::format_date_time(431656320867237891);
+        let s = s.to_string();
+        assert_eq!(s, "20220307");
     }
 }

@@ -12,6 +12,7 @@ default = ["test-engines-rocksdb"]
 test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
@@ -41,6 +42,8 @@ openssl = "0.10"
 dashmap = "5"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
+chrono = "0.4"
+fail = "0.4"
 
 file_system = { path = "../file_system" }
 tidb_query_datatype = {path = "../tidb_query_datatype", default-features = false}
