@@ -4836,6 +4836,10 @@ where
             region_buckets.meta = Arc::new(meta);
             assert_eq!(j, bucket_ranges.len());
         } else {
+            info!(
+                "refresh_region_buckets re-generates buckets";
+                "region_id" => self.fsm.region_id(),
+            );
             assert_eq!(buckets.len(), 1);
             let bucket_keys = buckets.pop().unwrap().keys;
             let bucket_count = bucket_keys.len() + 1;
