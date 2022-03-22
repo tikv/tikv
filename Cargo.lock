@@ -660,7 +660,6 @@ dependencies = [
  "test_raftstore",
  "test_util",
  "thiserror",
- "tikv",
  "tikv_util",
  "txn_types",
 ]
@@ -5200,7 +5199,6 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "backtrace",
- "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -5571,6 +5569,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "case_macros",
+ "causal_ts",
  "chrono",
  "codec",
  "collections",

@@ -109,6 +109,8 @@ use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
 
+use causal_ts;
+
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
@@ -2612,10 +2614,18 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager, api_version: ApiVersion) -> Self {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .api_version(api_version)
             .build()
             .unwrap();
+
+        // register causal observer for RawKV API V2
+        if let ApiVersion::V2 = api_version {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(engine.mut_coprocessor());
+        }
+
         Self::from_engine_and_lock_mgr(engine, lock_mgr, api_version)
     }
 }
