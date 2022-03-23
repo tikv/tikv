@@ -354,24 +354,24 @@ where
             checkpoint_ts: TimeStamp::zero(),
             is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
             send_entries: Box::new(move |entries, apply_index| {
-                scheduler
-                    .schedule(Task::ScanLocks {
-                        region_id,
-                        observe_id,
-                        entries,
-                        apply_index,
-                    })
-                    .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
+                if let Err(err) = scheduler.schedule(Task::ScanLocks {
+                    region_id,
+                    observe_id,
+                    entries,
+                    apply_index,
+                }) {
+                    warn!("schedule resolved ts task failed"; "err" => ?err);
+                }
                 RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
             }),
             on_error: Some(Box::new(move |observe_id, _region, e| {
-                scheduler_error
-                    .schedule(Task::ReRegisterRegion {
-                        region_id,
-                        observe_id,
-                        cause: format!("met error while handle scan task {:?}", e),
-                    })
-                    .unwrap();
+                if let Err(err) = scheduler_error.schedule(Task::ReRegisterRegion {
+                    region_id,
+                    observe_id,
+                    cause: format!("met error while handle scan task {:?}", e),
+                }) {
+                    warn!("schedule resolved ts task failed"; "err" => ?err)
+                }
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
