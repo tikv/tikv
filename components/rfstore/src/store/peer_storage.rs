@@ -363,14 +363,25 @@ impl PeerStorage {
         let mut res = None;
         let prev_raft_state = self.raft_state;
         if !ready.snapshot().is_empty() {
-            let prev_region = self.region().clone();
-            self.apply_snapshot(ready.snapshot(), ctx).unwrap();
-            let region = self.region.clone();
-            res = Some(ApplySnapResult {
-                prev_region,
-                region,
-                destroyed_regions: vec![],
-            })
+            let region_id = self.get_region_id();
+            let store_meta = ctx.global.store_meta.lock().unwrap();
+            let pending_split = store_meta.pending_new_regions.contains_key(&region_id);
+            let replaced_by_split = if let Some(meta_region) = store_meta.regions.get(&region_id) {
+                !self.region.is_initialized() && meta_region.is_initialized()
+            } else {
+                false
+            };
+            drop(store_meta);
+            if !pending_split && !replaced_by_split {
+                let prev_region = self.region().clone();
+                self.apply_snapshot(ready.snapshot(), ctx).unwrap();
+                let region = self.region.clone();
+                res = Some(ApplySnapResult {
+                    prev_region,
+                    region,
+                    destroyed_regions: vec![],
+                })
+            }
         }
         if !ready.entries().is_empty() {
             self.append(ready.take_entries(), &mut ctx.raft_wb);

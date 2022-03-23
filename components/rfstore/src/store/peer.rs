@@ -1767,14 +1767,6 @@ impl Peer {
                 return false;
             }
         }
-
-        // Remove its source peers' metadata
-        for r in &apply_result.destroyed_regions {
-            let prev = meta.region_ranges.remove(&raw_end_key(&r));
-            assert_eq!(prev, Some(r.get_id()));
-            assert!(meta.regions.remove(&r.get_id()).is_some());
-            meta.readers.remove(&r.get_id());
-        }
         debug!("meta reader insert read delegate {}", self.region_id);
         meta.readers
             .insert(self.region_id, ReadDelegate::from_peer(&self));
