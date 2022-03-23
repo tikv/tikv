@@ -22,7 +22,7 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
-use kvproto::metapb::{self, Buckets, Region, RegionEpoch};
+use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::{CheckPolicy, StoreStats};
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
@@ -34,6 +34,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::replication_modepb::{DrAutoSyncState, ReplicationMode};
 use parking_lot::RwLockWriteGuard;
+use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
@@ -71,7 +72,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
+    SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::RaftlogFetchResult;
@@ -1487,6 +1489,12 @@ where
     }
 
     fn on_raft_base_tick(&mut self) {
+        fail_point!(
+            "on_raft_base_tick_idle",
+            self.fsm.hibernate_state.group_state() == GroupState::Idle,
+            |_| {}
+        );
+
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
@@ -1520,11 +1528,19 @@ where
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
                 // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
                 // time(default 2s), no more followers will wake up and sends vote msg again.
-                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                if self.fsm.missing_ticks + 1 /* for the next tick after the peer isn't Idle */
+                    + self.fsm.peer.raft_group.raft.election_elapsed
+                    + self.ctx.cfg.raft_heartbeat_ticks
                     < self.ctx.cfg.raft_election_timeout_ticks
                 {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
+                } else {
+                    debug!("follower hibernates";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed,
+                        "missing_ticks" => self.fsm.missing_ticks);
                 }
                 return;
             }
@@ -1564,7 +1580,10 @@ where
             return;
         }
 
-        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        debug!("stop ticking"; "res" => ?res,
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed);
         self.fsm.reset_hibernate_state(GroupState::Idle);
         // Followers will stop ticking at L789. Keep ticking for followers
         // to allow it to campaign quickly when abnormal situation is detected.
@@ -1590,6 +1609,15 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
+                if let Some(delta) = res.bucket_stat {
+                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                    merge_bucket_stats(
+                        &buckets.meta.keys,
+                        &mut buckets.stats,
+                        &delta.meta.keys,
+                        &delta.stats,
+                    );
+                }
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
@@ -1734,6 +1762,11 @@ where
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
+            fail_point!(
+                "memtrace_raft_messages_overflow_check_peer_recv",
+                MEMTRACE_RAFT_MESSAGES.sum() < heap_size,
+                |_| {}
+            );
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
@@ -4406,13 +4439,13 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        let mut compact_idx = if force_compact
-            // Too many logs between applied index and first index.
-            || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
-            // Raft log size ecceeds the limit.
+        let mut compact_idx = if force_compact && replicated_idx > first_idx {
+            replicated_idx
+        } else if (applied_idx > first_idx
+            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft logs.
             // There will be at least 3 entries left after one compaction:
@@ -4698,15 +4731,22 @@ where
             );
             return;
         }
-        let mut region_buckets = Buckets::default();
-        region_buckets.version = timespec_to_ns(monotonic_raw_now());
-        region_buckets.set_keys(bucket_keys.into());
-        // add region's start/end key
-        region_buckets
-            .keys
-            .insert(0, region.get_start_key().to_vec());
-        region_buckets.keys.push(region.get_end_key().to_vec());
-        self.fsm.peer.region_buckets = region_buckets;
+        let mut meta = BucketMeta {
+            region_id: self.fsm.region_id(),
+            region_epoch,
+            version: timespec_to_ns(monotonic_raw_now()),
+            keys: bucket_keys,
+        };
+        meta.keys.insert(0, region.get_start_key().to_vec());
+        meta.keys.push(region.get_end_key().to_vec());
+        let stats = new_bucket_stats(&meta);
+        let meta = Arc::new(meta);
+        let region_buckets = BucketStat::new(meta.clone(), stats);
+        self.fsm.peer.region_buckets = Some(region_buckets);
+        let mut store_meta = self.ctx.store_meta.lock().unwrap();
+        if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
+            reader.update(ReadProgress::region_buckets(meta));
+        }
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
@@ -4796,9 +4836,13 @@ where
             if group_state == GroupState::Idle {
                 self.fsm.peer.ping();
                 if !self.fsm.peer.is_leader() {
-                    // If leader is able to receive message but can't send out any,
-                    // follower should be able to start an election.
-                    self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                    // The peer will keep tick some times after its state becomes
+                    // GroupState::Idle, in which case its state shouldn't be changed.
+                    if !self.fsm.tick_registry[PeerTick::Raft as usize] {
+                        // If leader is able to receive message but can't send out any,
+                        // follower should be able to start an election.
+                        self.fsm.reset_hibernate_state(GroupState::PreChaos);
+                    }
                 } else {
                     self.fsm.has_ready = true;
                     // Schedule a pd heartbeat to discover down and pending peer when

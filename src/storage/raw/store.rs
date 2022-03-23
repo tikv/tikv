@@ -142,8 +142,8 @@ impl<'a, S: Snapshot> RawStore<S> {
     pub async fn raw_checksum_ranges(
         &'a self,
         cf: CfName,
-        ranges: Vec<KeyRange>,
-        statistics: &'a mut Statistics,
+        ranges: &[KeyRange],
+        statistics: &'a mut Vec<Statistics>,
     ) -> Result<(u64, u64, u64)> {
         match self {
             RawStore::V1(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
@@ -287,21 +287,22 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     pub async fn raw_checksum_ranges(
         &'a self,
         cf: CfName,
-        ranges: Vec<KeyRange>,
-        statistics: &'a mut Statistics,
+        ranges: &[KeyRange],
+        statistics: &'a mut Vec<Statistics>,
     ) -> Result<(u64, u64, u64)> {
         let mut total_bytes = 0;
         let mut total_kvs = 0;
         let mut digest = crc64fast::Digest::new();
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        let statistics = statistics.mut_cf_statistics(cf);
         for r in ranges {
+            let mut stats = Statistics::default();
+            let cf_stats = stats.mut_cf_statistics(cf);
             let mut opts = IterOptions::new(None, None, false);
             opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
             let mut cursor =
                 Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
-            cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), statistics)?;
+            cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
             while cursor.valid()? {
                 row_count += 1;
                 if row_count >= MAX_BATCH_SIZE {
@@ -311,14 +312,15 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     }
                     row_count = 0;
                 }
-                let k = cursor.key(statistics);
-                let v = cursor.value(statistics);
+                let k = cursor.key(cf_stats);
+                let v = cursor.value(cf_stats);
                 digest.write(k);
                 digest.write(v);
                 total_kvs += 1;
                 total_bytes += k.len() + v.len();
-                cursor.next(statistics);
+                cursor.next(cf_stats);
             }
+            statistics.push(stats);
         }
         Ok((digest.sum64(), total_kvs, total_bytes as u64))
     }
