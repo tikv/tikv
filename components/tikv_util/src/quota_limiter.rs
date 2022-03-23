@@ -94,7 +94,7 @@ impl QuotaLimiter {
         let cputime_limiter = if cpu_quota == 0 {
             Limiter::new(f64::INFINITY)
         } else {
-            <Limiter>::builder(cpu_quota as f64 * 1000_f64)
+            Limiter::builder(cpu_quota as f64 * 1000_f64)
                 .refill(CPU_LIMITER_REFILL_DURATION)
                 .build()
         };
