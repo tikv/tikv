@@ -1731,7 +1731,7 @@ fn test_destroy_source_peer_while_merging() {
     assert_eq!(state.get_state(), PeerState::Tombstone);
     assert!(!state.has_merge_state(), "{:?}", state);
 
-    // let the peer on store 3 have a larger peer id
+    // let the peer on store 4 have a larger peer id
     pd_client.must_remove_peer(right.get_id(), new_peer(4, 4));
     pd_client.must_add_peer(right.get_id(), new_peer(4, 7));
     must_get_equal(&cluster.get_engine(4), b"k4", b"v4");
