@@ -52,9 +52,7 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
-use crate::store::memory::{
-    apply_need_flow_control, needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES,
-};
+use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
@@ -2330,12 +2328,12 @@ where
             self.tag
         );
 
-        let apply_flow_control = apply_need_flow_control(ctx.cfg.applys_memory_ratio);
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
         for entry in committed_entries.iter().rev() {
-            if !apply_flow_control {
+            if !self.has_pending_committed_entries {
                 // This flag what is applied but not compacted yet should not update when apply flow control.
+                // Prevent to compact log entries which not applyed.
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
             }
@@ -2371,12 +2369,10 @@ where
 
         if let Some(last_entry) = committed_entries.last() {
             // check apply memory usage.
-            if apply_flow_control {
+            if self.has_pending_committed_entries {
                 // deal with the log entries that have been commmitted but not sent to apply in next loop.
-                self.has_pending_committed_entries = true;
                 return;
             }
-            self.has_pending_committed_entries = false;
             self.last_applying_idx = last_entry.get_index();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
                 // Urgent requests are flushed, make it lazy again.
@@ -2548,6 +2544,7 @@ where
 
         self.persisted_number = ready.number();
 
+        // if has_pending_committed_entries, don't handle snapshot, but need stable unstables.
         if !ready.snapshot().is_empty() {
             self.raft_group.advance_append_async(ready);
             // The ready is persisted, but we don't want to handle following light

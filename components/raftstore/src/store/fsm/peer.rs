@@ -605,6 +605,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let apply_flow_control = apply_need_flow_control(self.ctx.cfg.applys_memory_ratio);
+        if apply_flow_control {
+            self.fsm.peer.has_pending_committed_entries = true;
+        } else {
+            self.fsm.peer.has_pending_committed_entries = false;
+        }
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
