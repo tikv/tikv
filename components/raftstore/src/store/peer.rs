@@ -811,7 +811,7 @@ where
             RegionChangeEvent::Create,
             self.get_role(),
         );
-        self.gen_approximate_buckets(ctx);
+        self.maybe_gen_approximate_buckets(ctx);
     }
 
     #[inline]
@@ -4366,8 +4366,8 @@ where
                 .is_none()
     }
 
-    pub fn gen_approximate_buckets<T>(&self, ctx: &PollContext<EK, ER, T>) {
-        if !self.region().get_peers().is_empty() {
+    pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &PollContext<EK, ER, T>) {
+        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
             if let Err(e) = ctx
                 .split_check_scheduler
                 .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))

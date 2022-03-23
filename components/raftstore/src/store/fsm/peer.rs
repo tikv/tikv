@@ -1081,7 +1081,7 @@ where
         {
             self.fsm.has_ready = true;
         }
-        self.fsm.peer.gen_approximate_buckets(&self.ctx);
+        self.fsm.peer.maybe_gen_approximate_buckets(self.ctx);
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
