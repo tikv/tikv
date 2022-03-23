@@ -26,7 +26,3 @@ txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
 test_raftstore = { path = "../test_raftstore", default-features = false }
-
-[[test]]
-name = "integrations"
-path = "tests/integrations/mod.rs"
