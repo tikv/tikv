@@ -1311,13 +1311,12 @@ where
         );
 
         if self.fsm.peer.is_leader() {
-            // expire the lease of previous leader.
-            self.fsm.peer.leader_lease.expire();
-            self.fsm
-                .peer
-                .raft_group
-                .raft
-                .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+            warn!(
+                "pre force leader on leader";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
         }
 
         // become candidate first to increase term

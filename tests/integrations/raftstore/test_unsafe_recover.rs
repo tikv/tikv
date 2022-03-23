@@ -303,7 +303,7 @@ fn test_force_leader_on_healthy_region() {
 
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k9");
-    let mut region = cluster.get_region(b"k2");
+    let region = cluster.get_region(b"k2");
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
