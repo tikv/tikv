@@ -1018,6 +1018,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
             }
 
+            fail_point!("scheduler_async_write_finish");
+
             if pipelined {
                 SCHED_STAGE_COUNTER_VEC
                     .get(tag)
@@ -1070,7 +1072,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
             sched_pool
                 .spawn(async move {
-                    fail_point!("scheduler_async_write_finish");
 
                     self.release_lock(&task_lock, cid);
 
