@@ -990,7 +990,12 @@ where
             &mut kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge_state.clone(),
+            // Only persist the `merge_state` if the merge is known to be succeeded
+            // which is determined by the `keep_data` flag
+            self.pending_merge_state
+                .as_ref()
+                .filter(|_| keep_data)
+                .cloned(),
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
