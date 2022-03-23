@@ -782,7 +782,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: API
 
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
-        let mut split_keys = if req.is_raw_kv {
+        let mut split_keys = if req.is_raw_kv && self.storage.get_api_version() != ApiVersion::V2 {
             if !req.get_split_key().is_empty() {
                 vec![req.get_split_key().to_vec()]
             } else {

@@ -166,6 +166,19 @@ impl APIVersion for APIV2 {
             encoded_key
         }
     }
+
+    // add prefix RAW_KEY_PREFIX
+    fn convert_raw_key_from(src_api: ApiVersion, key: &[u8], ts: Option<TimeStamp>) -> Result<Key> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => {
+                let mut apiv2_key = Vec::with_capacity(key.len() + 1);
+                apiv2_key.push(RAW_KEY_PREFIX);
+                apiv2_key.extend(key);
+                Ok(Self::encode_raw_key_owned(apiv2_key, ts))
+            }
+            ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
+        }
+    }
 }
 
 impl APIV2 {

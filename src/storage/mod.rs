@@ -321,6 +321,11 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         unsafe { with_tls_engine(f) }
     }
 
+    #[inline]
+    pub fn get_api_version(&self) -> ApiVersion {
+        self.api_version
+    }
+
     /// Check the given raw kv CF name. If the given cf is empty, CF_DEFAULT will be returned.
     // TODO: refactor to use `Api` parameter.
     fn rawkv_cf(cf: &str, api_version: ApiVersion) -> Result<CfName> {

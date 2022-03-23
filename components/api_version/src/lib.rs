@@ -68,6 +68,27 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     fn encode_raw_key_owned(user_key: Vec<u8>, _ts: Option<TimeStamp>) -> Key {
         Key::from_encoded(user_key)
     }
+
+    fn convert_raw_key_from(
+        _src_api: ApiVersion,
+        key: &[u8],
+        _ts: Option<TimeStamp>,
+    ) -> Result<Key> {
+        Ok(Key::from_encoded_slice(key))
+    }
+
+    /// convertion between different ApiVersion encoded values.
+    fn convert_raw_value_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
+        match_template_api_version!(
+            API,
+            match src_api {
+                ApiVersion::API => {
+                    let raw_value = API::decode_raw_value(value)?;
+                    return Ok(Self::encode_raw_value(raw_value));
+                }
+            }
+        )
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -203,6 +224,37 @@ impl<T: AsRef<[u8]>> RawValue<T> {
                 .expire_ts
                 .map_or(true, |expire_ts| expire_ts > current_ts)
     }
+}
+
+pub fn convert_raw_key(
+    key: &[u8],
+    src_api_version: ApiVersion,
+    dst_api_version: ApiVersion,
+    ts: Option<TimeStamp>,
+) -> Result<Key> {
+    match_template_api_version!(
+        DST_API,
+        match dst_api_version {
+            ApiVersion::DST_API => {
+                return DST_API::convert_raw_key_from(src_api_version, key, ts);
+            }
+        }
+    )
+}
+
+pub fn convert_raw_value(
+    value: &[u8],
+    src_api_version: ApiVersion,
+    dst_api_version: ApiVersion,
+) -> Result<Vec<u8>> {
+    match_template_api_version!(
+        DST_API,
+        match dst_api_version {
+            ApiVersion::DST_API => {
+                return DST_API::convert_raw_value_from(src_api_version, value);
+            }
+        }
+    )
 }
 
 #[cfg(test)]
@@ -588,5 +640,115 @@ mod tests {
                 }
             }
         )
+    }
+
+    #[test]
+    fn test_raw_key_convert() {
+        let timestamp = 30;
+        let apiv1_keys = vec![&b""[..], &b"abc"[..], &b"api_ver_test"[..]];
+        let apiv2_keys: Vec<Vec<u8>> = apiv1_keys
+            .clone()
+            .into_iter()
+            .map(|key| {
+                let mut v2_key = key.to_owned();
+                v2_key.insert(0, RAW_KEY_PREFIX);
+                APIV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
+            })
+            .collect();
+
+        for i in 0..apiv1_keys.len() {
+            assert_eq!(
+                convert_raw_key(
+                    apiv1_keys[i],
+                    ApiVersion::V1,
+                    ApiVersion::V2,
+                    Some(TimeStamp::from(timestamp))
+                )
+                .unwrap()
+                .into_encoded(),
+                apiv2_keys[i]
+            );
+            assert_eq!(
+                convert_raw_key(
+                    apiv1_keys[i],
+                    ApiVersion::V1ttl,
+                    ApiVersion::V2,
+                    Some(TimeStamp::from(timestamp))
+                )
+                .unwrap()
+                .into_encoded(),
+                apiv2_keys[i]
+            );
+            assert_eq!(
+                convert_raw_key(
+                    &apiv2_keys[i],
+                    ApiVersion::V2,
+                    ApiVersion::V1,
+                    Some(TimeStamp::from(timestamp))
+                )
+                .unwrap()
+                .into_encoded(),
+                apiv1_keys[i]
+            );
+            assert_eq!(
+                convert_raw_key(
+                    &apiv2_keys[i],
+                    ApiVersion::V2,
+                    ApiVersion::V1ttl,
+                    Some(TimeStamp::from(timestamp))
+                )
+                .unwrap()
+                .into_encoded(),
+                apiv1_keys[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_raw_value_convert() {
+        let apiv1_values = vec![&b""[..], &b"abc"[..], &b"api_ver_test"[..]];
+        let apiv1ttl_values: Vec<Vec<u8>> = apiv1_values
+            .clone()
+            .into_iter()
+            .map(|value| {
+                let raw_value = RawValue {
+                    user_value: value.to_owned(),
+                    expire_ts: None,
+                    is_delete: false,
+                };
+                APIV1TTL::encode_raw_value_owned(raw_value)
+            })
+            .collect();
+        let apiv2_values: Vec<Vec<u8>> = apiv1_values
+            .clone()
+            .into_iter()
+            .map(|value| {
+                let raw_value = RawValue {
+                    user_value: value.to_owned(),
+                    expire_ts: None,
+                    is_delete: false,
+                };
+                APIV2::encode_raw_value_owned(raw_value)
+            })
+            .collect();
+
+        for i in 0..apiv1_values.len() {
+            assert_eq!(
+                convert_raw_value(apiv1_values[i], ApiVersion::V1, ApiVersion::V2).unwrap(),
+                apiv2_values[i]
+            );
+            assert_eq!(
+                convert_raw_value(&apiv1ttl_values[i], ApiVersion::V1ttl, ApiVersion::V2).unwrap(),
+                apiv2_values[i]
+            );
+            assert_eq!(
+                convert_raw_value(&apiv2_values[i], ApiVersion::V2, ApiVersion::V1).unwrap(),
+                apiv1_values[i]
+            );
+            assert_eq!(
+                convert_raw_value(&apiv2_values[i], ApiVersion::V2, ApiVersion::V1ttl).unwrap(),
+                apiv1ttl_values[i]
+            );
+        }
     }
 }

@@ -57,4 +57,20 @@ impl APIVersion for APIV1TTL {
             .unwrap();
         value.user_value
     }
+
+    fn convert_raw_key_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        _ts: Option<TimeStamp>,
+    ) -> Result<Key> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
+            ApiVersion::V2 => {
+                assert_eq!(APIV2::parse_key_mode(key), KeyMode::Raw);
+                let (mut user_key, _) = APIV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
+                user_key.remove(0); // remove first byte `RAW_KEY_PREFIX`
+                return Ok(Self::encode_raw_key_owned(user_key, None));
+            }
+        }
+    }
 }

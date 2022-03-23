@@ -389,7 +389,6 @@ impl BackupRawKVWriter {
                 }
             };
 
-            assert!(!k.is_empty());
             self.writer.write(&k, &v)?;
             self.writer.update_raw_with(&k, &v, need_checksum)?;
         }

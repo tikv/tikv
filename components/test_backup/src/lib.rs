@@ -26,6 +26,7 @@ use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
+use tikv_util::codec::number::NumberEncoder;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::Instant;
 use tikv_util::worker::{LazyWorker, Worker};
@@ -39,6 +40,7 @@ pub struct TestSuite {
     pub context: Context,
     pub ts: TimeStamp,
     pub bg_worker: Worker,
+    pub api_version: ApiVersion,
 
     _env: Arc<Environment>,
 }
@@ -63,8 +65,8 @@ macro_rules! retry_req {
 }
 
 impl TestSuite {
-    pub fn new(count: usize, sst_max_size: u64) -> TestSuite {
-        let mut cluster = new_server_cluster(1, count);
+    pub fn new(count: usize, sst_max_size: u64, api_version: ApiVersion) -> TestSuite {
+        let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
@@ -86,7 +88,7 @@ impl TestSuite {
                     ..Default::default()
                 },
                 sim.get_concurrency_manager(*id),
-                ApiVersion::V1,
+                api_version,
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
             worker.start(backup_endpoint);
@@ -94,7 +96,10 @@ impl TestSuite {
         }
 
         // Make sure there is a leader.
-        cluster.must_put(b"foo", b"foo");
+        let mut tmp_value = String::from("foo").into_bytes();
+        tmp_value.encode_u64(u64::MAX).unwrap();
+        tmp_value.push(0);
+        cluster.must_put(b"foo", &tmp_value); // make raw apiv1ttl/apiv2 encode happy.
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
@@ -104,6 +109,7 @@ impl TestSuite {
         context.set_region_id(region_id);
         context.set_peer(leader);
         context.set_region_epoch(epoch);
+        context.set_api_version(api_version);
 
         let env = Arc::new(Environment::new(1));
         let channel = ChannelBuilder::new(env.clone()).connect(&leader_addr);
@@ -117,6 +123,7 @@ impl TestSuite {
             ts: TimeStamp::zero(),
             _env: env,
             bg_worker,
+            api_version,
         }
     }
 
@@ -134,10 +141,19 @@ impl TestSuite {
 
     pub fn must_raw_put(&self, k: Vec<u8>, v: Vec<u8>, cf: String) {
         let mut request = RawPutRequest::default();
-        request.set_context(self.context.clone());
+        let mut context = self.context.clone();
+        if context.api_version == ApiVersion::V1ttl {
+            context.api_version = ApiVersion::V1;
+        }
+        request.set_context(context);
         request.set_key(k);
         request.set_value(v);
         request.set_cf(cf);
+        let ttl = match self.api_version {
+            ApiVersion::V1 => 0,
+            _ => u64::MAX,
+        };
+        request.set_ttl(ttl);
         let mut response = self.tikv_cli.raw_put(&request).unwrap();
         retry_req!(
             self.tikv_cli.raw_put(&request).unwrap(),
@@ -263,6 +279,7 @@ impl TestSuite {
         end_key: Vec<u8>,
         cf: String,
         path: &Path,
+        api_ver: ApiVersion,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::default();
         req.set_start_key(start_key);
@@ -270,6 +287,7 @@ impl TestSuite {
         req.set_storage_backend(make_local_backend(path));
         req.set_is_raw_kv(true);
         req.set_cf(cf);
+        req.set_dst_api_version(api_ver);
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
@@ -320,7 +338,7 @@ impl TestSuite {
     }
 
     pub fn gen_raw_kv(&self, key_idx: u64) -> (String, String) {
-        (format!("key_{}", key_idx), format!("value_{}", key_idx))
+        (format!("rkey_{}", key_idx), format!("value_{}", key_idx))
     }
 
     pub fn raw_kv_checksum(&self, start: String, end: String, cf: CfName) -> (u64, u64, u64) {
