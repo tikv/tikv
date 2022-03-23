@@ -3,6 +3,9 @@
 use super::*;
 use crate::RaftRouter;
 use crossbeam::channel::RecvTimeoutError;
+use raftstore::store::metrics::{
+    STORE_WRITE_RAFTDB_DURATION_HISTOGRAM, STORE_WRITE_SEND_DURATION_HISTOGRAM,
+};
 use raftstore::store::util;
 use std::collections::HashMap;
 use std::mem;
@@ -10,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
-use tikv_util::time::InstantExt;
+use tikv_util::time::{duration_to_sec, InstantExt};
 use tikv_util::worker::Scheduler;
 use tikv_util::{debug, error};
 
@@ -319,8 +322,12 @@ impl IOWorker {
 
     fn handle_task(&mut self, task: IOTask) {
         if !task.raft_wb.is_empty() {
+            let timer = tikv_util::time::Instant::now();
             self.engine.persist(task.raft_wb).unwrap();
+            let write_raft_db_time = duration_to_sec(timer.saturating_elapsed());
+            STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_db_time);
         }
+        let timer = tikv_util::time::Instant::now();
         for mut ready in task.readies {
             let raft_messages = mem::take(&mut ready.raft_messages);
             for msg in raft_messages {
@@ -344,5 +351,7 @@ impl IOWorker {
         if self.trans.need_flush() {
             self.trans.flush();
         }
+        let send_time = duration_to_sec(timer.saturating_elapsed());
+        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(send_time);
     }
 }
