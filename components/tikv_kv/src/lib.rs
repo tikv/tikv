@@ -140,20 +140,33 @@ impl From<Modify> for raft_cmdpb::Request {
     }
 }
 
+// For test purpose only.
+// It's used to simulate observer actions in `rocksdb_engine`. See `RocksEngine::async_write_ext()`.
 impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
+        let name_to_cf = |name: &str| -> Option<CfName> {
+            engine_traits::name_to_cf(name).or_else(|| {
+                for c in TEST_ENGINE_CFS {
+                    if name == *c {
+                        return Some(c);
+                    }
+                }
+                None
+            })
+        };
+
         match req.get_cmd_type() {
             raft_cmdpb::CmdType::Delete => {
                 let delete = req.mut_delete();
                 Modify::Delete(
-                    engine_traits::name_to_cf(delete.get_cf()).unwrap(),
+                    name_to_cf(delete.get_cf()).unwrap(),
                     Key::from_encoded(delete.take_key()),
                 )
             }
             raft_cmdpb::CmdType::Put => {
                 let put = req.mut_put();
                 Modify::Put(
-                    engine_traits::name_to_cf(put.get_cf()).unwrap(),
+                    name_to_cf(put.get_cf()).unwrap(),
                     Key::from_encoded(put.take_key()),
                     put.take_value(),
                 )
@@ -161,7 +174,7 @@ impl From<raft_cmdpb::Request> for Modify {
             raft_cmdpb::CmdType::DeleteRange => {
                 let delete_range = req.mut_delete_range();
                 Modify::DeleteRange(
-                    engine_traits::name_to_cf(delete_range.get_cf()).unwrap(),
+                    name_to_cf(delete_range.get_cf()).unwrap(),
                     Key::from_encoded(delete_range.take_start_key()),
                     Key::from_encoded(delete_range.take_end_key()),
                     delete_range.get_notify_only(),
@@ -619,11 +632,11 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     Ok(())
 }
 
+pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+
 pub mod tests {
     use super::*;
     use tikv_util::codec::bytes;
-
-    pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
         engine
