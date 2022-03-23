@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use super::metrics::*;
 use fail::fail_point;
 use lazy_static::lazy_static;
 use std::sync::Arc;
@@ -70,4 +71,8 @@ pub fn needs_evict_entry_cache(evict_cache_on_memory_ratio: f64) -> bool {
         }
     }
     false
+}
+
+pub fn get_cached_entries_size() -> u64 {
+    RAFT_ENTRIES_CACHES_GAUGE.get() as u64
 }

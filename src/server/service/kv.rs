@@ -42,7 +42,9 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
+use raftstore::store::memory::{
+    get_cached_entries_size, MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES,
+};
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
@@ -2106,7 +2108,17 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
-        if raft_msg_usage as f64 > usage as f64 * reject_messages_on_memory_ratio {
+        let cached_entries = get_cached_entries_size();
+        let applying_entries = MEMTRACE_APPLYS.sum() as u64;
+        if (raft_msg_usage + cached_entries + applying_entries) as f64
+            > usage as f64 * reject_messages_on_memory_ratio
+        {
+            info!("need reject log append on memory limit";
+                "raft messages" => raft_msg_usage,
+                "cached entries" => cached_entries,
+                "applying entries" => applying_entries,
+                "current usage" => usage,
+                "reject ratio" => reject_messages_on_memory_ratio);
             return true;
         }
     }
