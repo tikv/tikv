@@ -272,8 +272,9 @@ impl Applier {
         wb: &mut kvengine::WriteBatch,
         key: &[u8],
         commit_ts: u64,
+        log_index: u64,
     ) {
-        let lock_val = self.get_lock_for_commit(kv, key, commit_ts);
+        let lock_val = self.get_lock_for_commit(kv, key, commit_ts, log_index);
         if lock_val.len() == 0 {
             return;
         }
@@ -313,6 +314,7 @@ impl Applier {
         kv: &kvengine::Engine,
         key: &[u8],
         commit_ts: u64,
+        log_index: u64,
     ) -> Vec<u8> {
         if let Some((_, v)) = self.lock_cache.remove_entry(key) {
             return v;
@@ -337,11 +339,13 @@ impl Applier {
         let item = snap.get(mvcc::WRITE_CF, key, u64::MAX);
         assert!(
             item.user_meta_len() > 0,
-            "key {:?}, {}:{} snap_ver:{}",
+            "key {:?}, {}:{} snap_ver:{}, snap_write_sequence: {}, log_index:{}",
             key,
             region_id,
             self.region.get_region_epoch().version,
-            snap.get_version()
+            snap.get_version(),
+            snap.get_write_sequence(),
+            log_index,
         );
         let user_meta = mvcc::UserMeta::from_slice(item.user_meta());
         assert_eq!(user_meta.commit_ts, commit_ts);
@@ -427,7 +431,8 @@ impl Applier {
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let wb = ctx.wb.get_engine_wb(self.region.get_id());
         let engine = &ctx.engine;
-        wb.set_sequence(ctx.exec_log_index);
+        let log_index = ctx.exec_log_index;
+        wb.set_sequence(log_index);
         if ctx.exec_log_term != self.apply_state.applied_index_term {
             wb.set_property(TERM_KEY, &ctx.exec_log_term.to_le_bytes())
         }
@@ -442,7 +447,7 @@ impl Applier {
                 wb.put(mvcc::LOCK_CF, k, v, 0, &[], 0);
             }),
             TYPE_COMMIT => cl.iterate_commit(|k, commit_ts| {
-                self.commit_lock(engine, wb, k, commit_ts);
+                self.commit_lock(engine, wb, k, commit_ts, log_index);
             }),
             TYPE_ONE_PC => cl.iterate_one_pc(|k, v, is_extra, del_lock, start_ts, commit_ts| {
                 self.metrics.written_keys += 1;

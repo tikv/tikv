@@ -342,8 +342,10 @@ impl Engine {
         let this_level = &scf.levels[pri.level - 1];
         let next_level = &scf.levels[pri.level];
         let mut cd = CompactDef::new(pri.cf as usize, pri.level);
-        let ok = cd.fill_table(this_level, next_level);
-        assert!(ok);
+        let filled = cd.fill_table(this_level, next_level);
+        if !filled {
+            return Ok(());
+        }
         scf.set_has_overlapping(&mut cd);
         let req = self.build_compact_ln_request(&shard, &cd)?;
         if req.bottoms.len() == 0 && req.cf as usize == WRITE_CF {

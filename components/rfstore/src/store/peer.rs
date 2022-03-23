@@ -419,9 +419,7 @@ pub(crate) struct Peer {
     /// A inaccurate cache about which peer is marked as down.
     down_peer_ids: Vec<u64>,
 
-    // PendingSplit is set to true when there are Split admin command proposed.
-    // It is set back to false when Split is finished.
-    pending_split: bool,
+    pub(crate) need_campaign: bool,
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
@@ -510,7 +508,7 @@ impl Peer {
             txn_ext: Arc::new(TxnExt::default()),
             max_ts_sync_status: Arc::new(Default::default()),
             cmd_epoch_checker: Default::default(),
-            pending_split: false,
+            need_campaign: false,
         };
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {

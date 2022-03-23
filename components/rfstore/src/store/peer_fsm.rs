@@ -291,6 +291,10 @@ impl<'a> PeerMsgHandler<'a> {
         }
         self.fsm.peer.raft_group.tick();
         self.fsm.peer.mut_store().flush_cache_metrics();
+        if self.peer.need_campaign {
+            let _ = self.peer.raft_group.campaign();
+            self.peer.need_campaign = false;
+        }
     }
 
     fn on_apply_result(&mut self, mut res: MsgApplyResult) {
@@ -830,7 +834,7 @@ impl<'a> PeerMsgHandler<'a> {
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
-            let campaigned = new_peer.peer.maybe_campaign(is_leader);
+            new_peer.peer.need_campaign = is_leader;
 
             if is_leader {
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
@@ -857,7 +861,7 @@ impl<'a> PeerMsgHandler<'a> {
                 .send(new_region_id, PeerMsg::Start)
                 .unwrap();
 
-            if !campaigned {
+            if !is_leader {
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
@@ -1234,7 +1238,7 @@ impl<'a> PeerMsgHandler<'a> {
         let cb = Callback::write(Box::new(move |resp| {
             if resp.response.get_header().has_error() {
                 let err_msg = resp.response.get_header().get_error().get_message();
-                error!(
+                warn!(
                     "failed to propose engine change set {:?} for {:?}",
                     err_msg, tag
                 );
