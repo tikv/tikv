@@ -166,12 +166,20 @@ impl BucketStat {
     }
 
     pub fn split(&mut self, idx: usize) {
-        self.stats.mut_write_keys().insert(idx, 0);
-        self.stats.mut_write_bytes().insert(idx, 0);
-        self.stats.mut_read_qps().insert(idx, 0);
-        self.stats.mut_write_qps().insert(idx, 0);
-        self.stats.mut_read_keys().insert(idx, 0);
-        self.stats.mut_read_bytes().insert(idx, 0);
+        assert!(idx != 0);
+        // inherit the traffic stats for splited bucket
+        let val = self.stats.write_keys[idx-1];
+        self.stats.mut_write_keys().insert(idx, val);
+        let val = self.stats.write_bytes[idx-1];
+        self.stats.mut_write_bytes().insert(idx, val);
+        let val = self.stats.read_qps[idx-1];
+        self.stats.mut_read_qps().insert(idx, val);
+        let val = self.stats.write_qps[idx-1];
+        self.stats.mut_write_qps().insert(idx, val);
+        let val = self.stats.read_keys[idx-1];
+        self.stats.mut_read_keys().insert(idx, val);
+        let val = self.stats.read_bytes[idx-1];
+        self.stats.mut_read_bytes().insert(idx, val);
     }
 
     pub fn left_merge(&mut self, idx: usize) {

@@ -178,15 +178,6 @@ where
     pub fn is_none(&self) -> bool {
         matches!(self, Callback::None)
     }
-
-    pub fn invoke_with_peer_stat(self, stat: PeerInternalStat) {
-        match self {
-            Callback::None => (),
-            Callback::Read(_) => (),
-            Callback::Write { .. } => (),
-            Callback::Test { cb } => cb(stat),
-        }
-    }
 }
 
 impl<S> fmt::Debug for Callback<S>

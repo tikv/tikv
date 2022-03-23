@@ -4900,6 +4900,9 @@ where
 
     // generate bucket range list to run split-check (to further split buckets)
     fn gen_bucket_range_for_update(&self) -> Option<Vec<SplitCheckBucketRange>> {
+        if !self.ctx.coprocessor_host.cfg.enable_region_bucket {
+            return None;
+        }
         let region_buckets = self.fsm.peer.region_buckets.as_ref()?;
         let stats = &region_buckets.stats;
         let keys = &region_buckets.meta.keys;

@@ -99,15 +99,12 @@ impl<'a, E> Host<'a, E> {
                 region_size / self.cfg.region_bucket_size.0,
                 CheckPolicy::Approximate,
             );
-            let result = bucket_checker.approximate_split_keys(region, engine);
-            if let Ok(keys) = result {
-                return Ok(Bucket {
+            return bucket_checker
+                .approximate_split_keys(region, engine)
+                .map(|keys| Bucket {
                     keys,
                     size: region_size,
                 });
-            } else {
-                return Err(result.unwrap_err());
-            }
         }
         Ok(Bucket {
             keys: vec![],

@@ -72,8 +72,6 @@ pub const SPLIT_KEYS: u64 = 960000;
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
 pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(128);
-pub const DEFAULT_LARGE_REGION_SIZE_THRESHOLD: ReadableSize = ReadableSize::mb(500);
-pub const DEFAULT_BUCKET_MERGE_SIZE: ReadableSize = ReadableSize::mb(64);
 
 impl Default for Config {
     fn default() -> Config {
@@ -89,8 +87,8 @@ impl Default for Config {
             perf_level: PerfLevel::EnableCount,
             enable_region_bucket: false,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
-            region_size_threshold_for_approximate: DEFAULT_LARGE_REGION_SIZE_THRESHOLD,
-            region_bucket_merge_size: DEFAULT_BUCKET_MERGE_SIZE,
+            region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * 4,
+            region_bucket_merge_size: DEFAULT_BUCKET_SIZE / 2,
         }
     }
 }
@@ -131,9 +129,9 @@ impl Config {
         if self.region_bucket_merge_size.0 == 0 {
             return Err(box_err!("region-bucket-merge-size cannot be 0."));
         }
-        if self.region_bucket_merge_size.0 >= self.region_bucket_size.0 {
+        if self.region_bucket_merge_size.0 > self.region_bucket_size.0/2 {
             return Err(box_err!(
-                "region bucket size {} must > region bucket merge size {}",
+                "region-bucket-size {} must be no less than 2*region-bucket-merge-size {}",
                 self.region_bucket_size.0,
                 self.region_bucket_merge_size.0
             ));
