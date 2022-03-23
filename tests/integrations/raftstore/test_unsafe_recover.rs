@@ -95,13 +95,17 @@ fn test_force_leader_three_nodes() {
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_transfer_leader(1, new_peer(3, 3));
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let mut region = cluster.get_region(b"k2");
+    let peer_on_store3 = find_peer(&region, 3).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store3.clone());
 
     cluster.stop_node(2);
     cluster.stop_node(3);
 
     let put = new_put_cmd(b"k2", b"v2");
-    let mut region = cluster.get_region(b"k2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // marjority is lost, can't propose command successfully.
     assert!(
@@ -110,11 +114,14 @@ fn test_force_leader_three_nodes() {
             .is_err()
     );
 
-    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![2, 3]));
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![2, 3]));
     // remove the peers on failed nodes
-    cluster.pd_client.must_remove_peer(1, new_peer(2, 2));
-    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
-    let mut region = cluster.get_region(b"k2");
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 2).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
     // forbid writes in force leader state
     let put = new_put_cmd(b"k3", b"v3");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
@@ -124,7 +131,7 @@ fn test_force_leader_three_nodes() {
     assert_eq!(
         resp.get_header().get_error().get_recovery_in_progress(),
         &kvproto::errorpb::RecoveryInProgress {
-            region_id: 1,
+            region_id: region.get_id(),
             ..Default::default()
         }
     );
@@ -137,11 +144,11 @@ fn test_force_leader_three_nodes() {
     assert_eq!(
         resp.get_header().get_error().get_recovery_in_progress(),
         &kvproto::errorpb::RecoveryInProgress {
-            region_id: 1,
+            region_id: region.get_id(),
             ..Default::default()
         }
     );
-    cluster.exit_force_leader(1, 1);
+    cluster.exit_force_leader(region.get_id(), 1);
 
     // majority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
@@ -157,14 +164,18 @@ fn test_force_leader_five_nodes() {
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_transfer_leader(1, new_peer(5, 5));
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let mut region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
     cluster.stop_node(3);
     cluster.stop_node(4);
     cluster.stop_node(5);
 
     let put = new_put_cmd(b"k2", b"v2");
-    let mut region = cluster.get_region(b"k2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // marjority is lost, can't propose command successfully.
     assert!(
@@ -173,12 +184,17 @@ fn test_force_leader_five_nodes() {
             .is_err()
     );
 
-    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
     // remove the peers on failed nodes
-    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
-    cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
-    cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
-    let mut region = cluster.get_region(b"k2");
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     // forbid writes in force leader state
     let put = new_put_cmd(b"k3", b"v3");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
@@ -188,7 +204,7 @@ fn test_force_leader_five_nodes() {
     assert_eq!(
         resp.get_header().get_error().get_recovery_in_progress(),
         &kvproto::errorpb::RecoveryInProgress {
-            region_id: 1,
+            region_id: region.get_id(),
             ..Default::default()
         }
     );
@@ -201,11 +217,11 @@ fn test_force_leader_five_nodes() {
     assert_eq!(
         resp.get_header().get_error().get_recovery_in_progress(),
         &kvproto::errorpb::RecoveryInProgress {
-            region_id: 1,
+            region_id: region.get_id(),
             ..Default::default()
         }
     );
-    cluster.exit_force_leader(1, 1);
+    cluster.exit_force_leader(region.get_id(), 1);
 
     // majority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
@@ -221,16 +237,22 @@ fn test_force_leader_for_learner() {
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_transfer_leader(1, new_peer(5, 5));
 
     let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let mut region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+
+    let peer_on_store1 = find_peer(&region, 5).unwrap();
     // replace one peer with learner
     cluster
         .pd_client
-        .must_remove_peer(region.get_id(), new_peer(1, 1));
-    cluster
-        .pd_client
-        .must_add_peer(region.get_id(), new_learner_peer(1, 1));
+        .must_remove_peer(region.get_id(), peer_on_store1.clone());
+    cluster.pd_client.must_add_peer(
+        region.get_id(),
+        new_learner_peer(peer_on_store1.get_id(), 1),
+    );
 
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
 
@@ -239,7 +261,6 @@ fn test_force_leader_for_learner() {
     cluster.stop_node(5);
 
     let put = new_put_cmd(b"k2", b"v2");
-    let mut region = cluster.get_region(b"k2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // majority is lost, can't propose command successfully.
     assert!(
@@ -248,20 +269,28 @@ fn test_force_leader_for_learner() {
             .is_err()
     );
 
-    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
     // promote the learner first and remove the peers on failed nodes
-    cluster.pd_client.must_add_peer(1, new_peer(1, 1));
-    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
-    cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
-    cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
-    cluster.exit_force_leader(1, 1);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), find_peer(&region, 1).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
 
     // marjority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
 }
 
 #[test]
@@ -271,19 +300,23 @@ fn test_force_leader_on_healthy_region() {
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_transfer_leader(1, new_peer(5, 5));
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let mut region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
     // try to enter force leader, it can't succeed due to majority isn't lost
-    cluster.enter_force_leader(1, 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
 
     // put and get can propose successfully.
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
     cluster.must_put(b"k2", b"v2");
 
     // try to exit force leader, it will be ignored silently as it's not in the force leader state
-    cluster.exit_force_leader(1, 1);
+    cluster.exit_force_leader(region.get_id(), 1);
 
-    // marjority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
@@ -295,7 +328,12 @@ fn test_force_leader_on_wrong_leader() {
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let mut region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
     // peer on node2 doesn't have latest committed log
     cluster.stop_node(2);
@@ -311,7 +349,6 @@ fn test_force_leader_on_wrong_leader() {
     cluster.run_node(1).unwrap();
 
     let put = new_put_cmd(b"k3", b"v3");
-    let mut region = cluster.get_region(b"k2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
     // majority is lost, can't propose command successfully.
     assert!(
@@ -321,17 +358,19 @@ fn test_force_leader_on_wrong_leader() {
     );
 
     // try to force leader on peer of node2 which is stale
-    cluster.enter_force_leader(1, 2, HashSet::from_iter(vec![3, 4, 5]));
-    let region = cluster.get_region(b"k2");
+    cluster.enter_force_leader(region.get_id(), 2, HashSet::from_iter(vec![3, 4, 5]));
     // can't propose confchange as it's not in force leader state
-    let cmd = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
+    let cmd = new_change_peer_request(
+        ConfChangeType::RemoveNode,
+        find_peer(&region, 3).unwrap().clone(),
+    );
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
             .is_err()
     );
-    cluster.exit_force_leader(1, 2);
+    cluster.exit_force_leader(region.get_id(), 2);
 
     // peer on node2 still doesn't have the latest committed log.
     must_get_none(&cluster.get_engine(2), b"k2");

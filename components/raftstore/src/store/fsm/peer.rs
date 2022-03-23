@@ -1282,6 +1282,7 @@ where
             return;
         }
 
+        let region = self.region();
         let expected_alive_voter = self
             .fsm
             .peer
@@ -1292,7 +1293,15 @@ where
             .voters()
             .ids()
             .iter()
-            .filter(|v| !failed_stores.contains(v))
+            .filter(|peer_id| {
+                let store_id = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == *peer_id)
+                    .unwrap()
+                    .get_store_id();
+                !failed_stores.contains(&store_id)
+            })
             .collect();
         info!(
             "enter pre force leader state";
@@ -4352,7 +4361,7 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
-        if self.fsm.peer.force_leader.is_some() {
+        if let Some(ForceLeaderState::ForceLeader) = self.fsm.peer.force_leader {
             // in force leader state, forbid requests to make the recovery progress less error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
