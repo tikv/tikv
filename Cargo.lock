@@ -657,6 +657,7 @@ dependencies = [
  "slog-global",
  "test_raftstore",
  "thiserror",
+ "tikv_alloc",
  "tikv_util",
  "txn_types",
 ]
