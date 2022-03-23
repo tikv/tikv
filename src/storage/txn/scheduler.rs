@@ -357,7 +357,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             ),
             on_write_finish_pool: SchedPool::new(
                 engine,
-                std::cmp::max(1, config.scheduler_worker_pool_size / 2),
+                std::cmp::max(1, config.scheduler_worker_pool_size / 4),
                 reporter,
                 "sched-on-write-finish-pool",
             ),
