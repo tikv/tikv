@@ -31,7 +31,7 @@ use engine_traits::{
 };
 use file_system::IORateLimiter;
 use kvproto::pdpb::CheckPolicy;
-use pd_client::PdClient;
+use pd_client::{BucketStat, PdClient};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -1048,6 +1048,21 @@ impl<T: Simulator> Cluster<T> {
         for engines in &self.dbs {
             engines.kv.flush_cf(cf, sync).unwrap();
         }
+    }
+
+    pub fn must_get_buckets(&mut self, region_id: u64) -> BucketStat {
+        let timer = Instant::now();
+        let timeout = Duration::from_secs(5);
+        let mut tried_times = 0;
+        // At least retry once.
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
+            tried_times += 1;
+            match self.pd_client.get_buckets(region_id) {
+                Some(buckets) => return buckets,
+                None => sleep_ms(100),
+            }
+        }
+        panic!("failed to get buckets for region {}", region_id);
     }
 
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {

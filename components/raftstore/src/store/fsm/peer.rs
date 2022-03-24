@@ -1063,6 +1063,7 @@ where
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
+            PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
         }
     }
 
@@ -1084,6 +1085,7 @@ where
         {
             self.fsm.has_ready = true;
         }
+        self.fsm.peer.maybe_gen_approximate_buckets(self.ctx);
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -1385,6 +1387,7 @@ where
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
                 self.register_check_leader_lease_tick();
+                self.register_report_region_buckets_tick();
             }
         }
     }
@@ -1613,8 +1616,8 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
-                if let Some(delta) = res.bucket_stat {
-                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                let buckets = self.fsm.peer.region_buckets.as_mut();
+                if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
                     merge_bucket_stats(
                         &buckets.meta.keys,
                         &mut buckets.stats,
@@ -2002,6 +2005,7 @@ where
         self.register_raft_base_tick();
         if self.fsm.peer.is_leader() {
             self.register_check_leader_lease_tick();
+            self.register_report_region_buckets_tick();
         }
     }
 
@@ -5167,6 +5171,38 @@ where
             drop(pessimistic_locks);
             self.register_reactivate_memory_lock_tick();
         }
+    }
+
+    fn on_report_region_buckets_tick(&mut self) {
+        if !self.fsm.peer.is_leader()
+            || self.fsm.peer.region_buckets.is_none()
+            || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+
+        let region_id = self.region_id();
+        let peer_id = self.fsm.peer_id();
+        let region_buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+        if let Err(e) = self
+            .ctx
+            .pd_scheduler
+            .schedule(PdTask::ReportBuckets(region_buckets.clone()))
+        {
+            error!(
+                "failed to report region buckets";
+                "region_id" => region_id,
+                "peer_id" => peer_id,
+                "err" => ?e,
+            );
+        }
+        region_buckets.stats = new_bucket_stats(&region_buckets.meta);
+
+        self.register_report_region_buckets_tick();
+    }
+
+    fn register_report_region_buckets_tick(&mut self) {
+        self.schedule_tick(PeerTick::ReportBuckets)
     }
 }
 

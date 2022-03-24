@@ -206,6 +206,7 @@ pub enum PeerTick {
     EntryCacheEvict = 6,
     CheckLeaderLease = 7,
     ReactivateMemoryLock = 8,
+    ReportBuckets = 9,
 }
 
 impl PeerTick {
@@ -223,6 +224,7 @@ impl PeerTick {
             PeerTick::EntryCacheEvict => "entry_cache_evict",
             PeerTick::CheckLeaderLease => "check_leader_lease",
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
+            PeerTick::ReportBuckets => "report_buckets",
         }
     }
 
@@ -237,6 +239,7 @@ impl PeerTick {
             PeerTick::EntryCacheEvict,
             PeerTick::CheckLeaderLease,
             PeerTick::ReactivateMemoryLock,
+            PeerTick::ReportBuckets,
         ];
         TICKS
     }
