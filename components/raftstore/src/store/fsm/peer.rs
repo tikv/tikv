@@ -2105,63 +2105,62 @@ where
             expected_alive_voter,
         }) = &self.fsm.peer.force_leader
         {
-            let err = {
+            let check = || {
                 if self.fsm.peer.is_leader() {
-                    "already leader".to_string()
+                    Err("already leader".to_string())
                 } else if *term != self.fsm.peer.term() {
-                    format!(
+                    Err(format!(
                         "unexpected term {}, expected {}",
                         self.fsm.peer.term(),
                         term
-                    )
+                    ))
                 } else if self.fsm.peer.raft_group.raft.state != StateRole::Candidate
                     && self.fsm.peer.raft_group.raft.state != StateRole::PreCandidate
                 {
-                    format!("unexpected role {:?}", self.fsm.peer.raft_group.raft.state)
+                    Err(format!(
+                        "unexpected role {:?}",
+                        self.fsm.peer.raft_group.raft.state
+                    ))
                 } else {
                     let mut granted = 0;
-                    let mut err = None;
                     for (id, vote) in self.fsm.peer.raft_group.raft.prs().votes() {
                         if expected_alive_voter.contains(id) {
                             if *vote {
                                 granted += 1;
                             } else {
-                                err = Some(format!("receive reject response from {}", *id));
-                                break;
+                                return Err(format!("receive reject response from {}", *id));
                             }
                         } else if *id == self.fsm.peer_id() {
                             // self may be a learner
                             continue;
                         } else {
-                            err = Some(format!(
+                            return Err(format!(
                                 "receive unexpected vote from {} vote {}",
                                 *id, *vote
                             ));
-                            break;
                         }
                     }
-                    match err {
-                        Some(e) => e,
-                        None => {
-                            if granted == expected_alive_voter.len() {
-                                self.on_enter_force_leader();
-                                return;
-                            } else {
-                                return;
-                            }
-                        }
-                    }
+                    Ok(granted)
                 }
             };
 
-            warn!(
-                "pre force leader check failed";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "alive_voter" => ?expected_alive_voter,
-                "reason" => err,
-            );
-            self.fsm.peer.force_leader = None;
+            match check() {
+                Err(err) => {
+                    warn!(
+                        "pre force leader check failed";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "alive_voter" => ?expected_alive_voter,
+                        "reason" => err,
+                    );
+                    self.fsm.peer.force_leader = None;
+                }
+                Ok(granted) => {
+                    if granted == expected_alive_voter.len() {
+                        self.on_enter_force_leader();
+                    }
+                }
+            }
         }
     }
 
