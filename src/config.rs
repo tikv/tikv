@@ -2803,9 +2803,9 @@ impl TiKvConfig {
         }
         // Fill in values for unspecified write stall configurations.
         macro_rules! fill_cf_opts {
-            ($cf_opts:expr, $flow_control_cfg:expr) => {
+            ($cf_opts:expr, $flow_control_cfg:expr, $check:expr) => {
                 if let Some(v) = $cf_opts.level0_slowdown_writes_trigger {
-                    if v > $flow_control_cfg.l0_files_threshold as i32 {
+                    if $check && v > $flow_control_cfg.l0_files_threshold as i32 {
                         return Err(format!(
                             "{}.level0-slowdown-writes-trigger ({}) should not be greater than \
                             storage.flow-control.l0-files-threshold ({})",
@@ -2818,7 +2818,7 @@ impl TiKvConfig {
                         Some($flow_control_cfg.l0_files_threshold as i32);
                 }
                 if let Some(v) = $cf_opts.level0_stop_writes_trigger {
-                    if v > $flow_control_cfg.l0_files_threshold as i32 {
+                    if $check && v > $flow_control_cfg.l0_files_threshold as i32 {
                         return Err(format!(
                             "{}.level0-stop-writes-trigger ({}) should not be greater than \
                             storage.flow-control.l0-files-threshold ({})",
@@ -2831,7 +2831,7 @@ impl TiKvConfig {
                         Some($flow_control_cfg.l0_files_threshold as i32);
                 }
                 if let Some(v) = $cf_opts.soft_pending_compaction_bytes_limit {
-                    if v.0 > $flow_control_cfg.soft_pending_compaction_bytes_limit.0 {
+                    if $check && v.0 > $flow_control_cfg.soft_pending_compaction_bytes_limit.0 {
                         return Err(format!(
                             "{}.soft-pending-compaction-bytes-limit ({}) should not be greater than \
                             storage.flow-control.soft-pending-compaction-bytes-limit ({})",
@@ -2844,7 +2844,7 @@ impl TiKvConfig {
                         Some($flow_control_cfg.soft_pending_compaction_bytes_limit);
                 }
                 if let Some(v) = $cf_opts.hard_pending_compaction_bytes_limit {
-                    if v.0 > $flow_control_cfg.hard_pending_compaction_bytes_limit.0 {
+                    if $check && v.0 > $flow_control_cfg.hard_pending_compaction_bytes_limit.0 {
                         return Err(format!(
                             "{}.hard-pending-compaction-bytes-limit ({}) should not be greater than \
                             storage.flow-control.hard-pending-compaction-bytes-limit ({})",
@@ -2863,11 +2863,31 @@ impl TiKvConfig {
         } else {
             crate::storage::config::FlowControlConfig::default()
         };
-        fill_cf_opts!(self.raftdb.defaultcf, flow_control_cfg);
-        fill_cf_opts!(self.rocksdb.defaultcf, flow_control_cfg);
-        fill_cf_opts!(self.rocksdb.writecf, flow_control_cfg);
-        fill_cf_opts!(self.rocksdb.lockcf, flow_control_cfg);
-        fill_cf_opts!(self.rocksdb.raftcf, flow_control_cfg);
+        fill_cf_opts!(
+            self.raftdb.defaultcf,
+            flow_control_cfg,
+            self.storage.flow_control.enable
+        );
+        fill_cf_opts!(
+            self.rocksdb.defaultcf,
+            flow_control_cfg,
+            self.storage.flow_control.enable
+        );
+        fill_cf_opts!(
+            self.rocksdb.writecf,
+            flow_control_cfg,
+            self.storage.flow_control.enable
+        );
+        fill_cf_opts!(
+            self.rocksdb.lockcf,
+            flow_control_cfg,
+            self.storage.flow_control.enable
+        );
+        fill_cf_opts!(
+            self.rocksdb.raftcf,
+            flow_control_cfg,
+            self.storage.flow_control.enable
+        );
 
         if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
@@ -5045,14 +5065,16 @@ mod tests {
         // Cannot specify larger configurations for RocksDB.
         let content = r#"
             [storage.flow-control]
-            enable = true
-            l0-files-threshold = 77
-            soft-pending-compaction-bytes-limit = "777GB"
+            enable = false
+            l0-files-threshold = 1
+            soft-pending-compaction-bytes-limit = "1B"
             [rocksdb.defaultcf]
             level0-slowdown-writes-trigger = 88
             soft-pending-compaction-bytes-limit = "888GB"
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        cfg.storage.flow_control.enable = true;
         assert!(cfg.validate().is_err());
     }
 }
