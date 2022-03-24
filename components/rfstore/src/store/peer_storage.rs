@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 
 use super::keys::raft_state_key;
 use crate::store::{
-    region_state_key, Engines, RaftApplyState, RaftContext, RaftState, RegionIDVer, RegionTask,
-    KV_ENGINE_META_KEY, TERM_KEY,
+    get_preprocess_cmd, region_state_key, Engines, ProposalContext, RaftApplyState, RaftContext,
+    RaftState, RegionIDVer, RegionTask, KV_ENGINE_META_KEY, TERM_KEY,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
 use protobuf::Message;
 use raft::StorageError;
@@ -384,6 +385,7 @@ impl PeerStorage {
             }
         }
         if !ready.entries().is_empty() {
+            self.handle_pending_split(ctx, ready.entries());
             self.append(ready.take_entries(), &mut ctx.raft_wb);
         }
 
@@ -398,6 +400,37 @@ impl PeerStorage {
             self.write_raft_state(ctx);
         }
         res
+    }
+
+    // TODO(x) This is a temporary solution
+    // A newly created peer can not send snapshot until initial flush, if majority of the peers
+    // are created by raft message, they will never get the snapshot, the raft group hangs forever.
+    // So we insert the pending split new region on appended instead of committed raft log,
+    // this way, we ensure majority of the peers will create the peer by split.
+    // But we still at the risk if one peer created by raft message,
+    // before initial flush, another peer is down, we are not able to replicate the snapshot.
+    // A complete solution would be that we send the snapshot with local generated initial flush
+    // result, mark some of the L0 tables are not replicated, then fix the inconsistency later.
+    pub fn handle_pending_split(&mut self, ctx: &mut RaftContext, entries: &Vec<eraftpb::Entry>) {
+        for entry in entries {
+            if let Some(cmd) = get_preprocess_cmd(entry) {
+                if cmd.has_admin_request() {
+                    let splits = cmd.get_admin_request().get_splits();
+                    let mut meta = ctx.global.store_meta.lock().unwrap();
+                    for req in splits.get_requests() {
+                        if req.new_region_id != self.get_region_id() {
+                            if let Some(meta_region) = meta.regions.get(&req.new_region_id) {
+                                if meta_region.is_initialized() {
+                                    continue;
+                                }
+                            }
+                            meta.pending_new_regions.insert(req.new_region_id, true);
+                        }
+                    }
+                    drop(meta);
+                }
+            }
+        }
     }
 
     pub fn update_commit_index(&mut self, ctx: &mut RaftContext, commit_idx: u64) {

@@ -1336,20 +1336,12 @@ impl Peer {
     }
 
     pub(crate) fn preprocess_committed_entry(&mut self, ctx: &mut RaftContext, entry: &Entry) {
-        if entry.entry_type != eraftpb::EntryType::EntryNormal {
-            return;
-        }
-        let pc = ProposalContext::from_bytes(&entry.context);
-        if !pc.contains(ProposalContext::PRE_PROCESS) {
-            return;
-        }
-        let mut cmd = RaftCmdRequest::default();
-        cmd.merge_from_bytes(&entry.data).unwrap();
-        if cmd.has_custom_request() {
-            self.preprocess_change_set(ctx, entry, cmd.get_custom_request());
-        } else {
-            let splits = cmd.get_admin_request().get_splits();
-            self.preprocess_pending_splits(ctx, entry, splits);
+        if let Some(cmd) = get_preprocess_cmd(entry) {
+            if cmd.has_custom_request() {
+                self.preprocess_change_set(ctx, entry, cmd.get_custom_request());
+            } else {
+                self.preprocess_pending_splits(ctx, entry, cmd.get_admin_request().get_splits());
+            }
         }
     }
 
@@ -1428,14 +1420,10 @@ impl Peer {
                 store.initial_flushed = false;
             } else {
                 let mut store_meta = ctx.global.store_meta.lock().unwrap();
-                if let Some(region) = store_meta.regions.get(&new_meta.id) {
-                    if is_region_initialized(region) {
-                        // new region is already created by raft message.
-                        continue;
-                    }
+                if store_meta.pending_new_regions.get(&new_meta.id).is_none() {
+                    // new region is already created by raft message.
+                    continue;
                 }
-                // prevent the new region being created by raft message.
-                store_meta.pending_new_regions.insert(new_meta.id, true);
                 ctx.raft_wb
                     .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
             }
@@ -2758,6 +2746,19 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
     let mut resp = RaftCmdResponse::default();
     resp.set_admin_response(response);
     resp
+}
+
+pub(crate) fn get_preprocess_cmd(entry: &eraftpb::Entry) -> Option<RaftCmdRequest> {
+    if entry.entry_type != eraftpb::EntryType::EntryNormal {
+        return None;
+    }
+    let pc = ProposalContext::from_bytes(&entry.context);
+    if !pc.contains(ProposalContext::PRE_PROCESS) {
+        return None;
+    }
+    let mut cmd = RaftCmdRequest::default();
+    cmd.merge_from_bytes(&entry.data).unwrap();
+    Some(cmd)
 }
 
 #[cfg(test)]
