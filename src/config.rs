@@ -2753,19 +2753,55 @@ impl TiKvConfig {
         // Fill in values for unspecified write stall configurations.
         macro_rules! fill_cf_opts {
             ($cf_opts:expr, $flow_control_cfg:expr) => {
-                if $cf_opts.level0_slowdown_writes_trigger.is_none() {
+                if let Some(v) = $cf_opts.level0_slowdown_writes_trigger {
+                    if v > $flow_control_cfg.l0_files_threshold as i32 {
+                        return Err(format!(
+                            "{}.level0-slowdown-writes-trigger ({}) should not be greater than \
+                            storage.flow-control.l0-files-threshold ({})",
+                            stringify!($cf_opts), v, $flow_control_cfg.l0_files_threshold
+                        )
+                        .into());
+                    }
+                } else {
                     $cf_opts.level0_slowdown_writes_trigger =
                         Some($flow_control_cfg.l0_files_threshold as i32);
                 }
-                if $cf_opts.level0_stop_writes_trigger.is_none() {
+                if let Some(v) = $cf_opts.level0_stop_writes_trigger {
+                    if v > $flow_control_cfg.l0_files_threshold as i32 {
+                        return Err(format!(
+                            "{}.level0-stop-writes-trigger ({}) should not be greater than \
+                            storage.flow-control.l0-files-threshold ({})",
+                            stringify!($cf_opts), v, $flow_control_cfg.l0_files_threshold
+                        )
+                        .into());
+                    }
+                } else {
                     $cf_opts.level0_stop_writes_trigger =
                         Some($flow_control_cfg.l0_files_threshold as i32);
                 }
-                if $cf_opts.soft_pending_compaction_bytes_limit.is_none() {
+                if let Some(v) = $cf_opts.soft_pending_compaction_bytes_limit {
+                    if v.0 > $flow_control_cfg.soft_pending_compaction_bytes_limit.0 {
+                        return Err(format!(
+                            "{}.soft-pending-compaction-bytes-limit ({}) should not be greater than \
+                            storage.flow-control.soft-pending-compaction-bytes-limit ({})",
+                            stringify!($cf_opts), v.0, $flow_control_cfg.soft_pending_compaction_bytes_limit.0
+                        )
+                        .into());
+                    }
+                } else {
                     $cf_opts.soft_pending_compaction_bytes_limit =
                         Some($flow_control_cfg.soft_pending_compaction_bytes_limit);
                 }
-                if $cf_opts.hard_pending_compaction_bytes_limit.is_none() {
+                if let Some(v) = $cf_opts.hard_pending_compaction_bytes_limit {
+                    if v.0 > $flow_control_cfg.hard_pending_compaction_bytes_limit.0 {
+                        return Err(format!(
+                            "{}.hard-pending-compaction-bytes-limit ({}) should not be greater than \
+                            storage.flow-control.hard-pending-compaction-bytes-limit ({})",
+                            stringify!($cf_opts), v.0, $flow_control_cfg.hard_pending_compaction_bytes_limit.0
+                        )
+                        .into());
+                    }
+                } else {
                     $cf_opts.hard_pending_compaction_bytes_limit =
                         Some($flow_control_cfg.hard_pending_compaction_bytes_limit);
                 }
@@ -4830,5 +4866,18 @@ mod tests {
             cfg.rocksdb.defaultcf.soft_pending_compaction_bytes_limit,
             Some(ReadableSize::gb(666))
         );
+
+        // Cannot specify larger configurations for RocksDB.
+        let content = r#"
+            [storage.flow-control]
+            enable = true
+            l0-files-threshold = 77
+            soft-pending-compaction-bytes-limit = "777GB"
+            [rocksdb.defaultcf]
+            level0-slowdown-writes-trigger = 88
+            soft-pending-compaction-bytes-limit = "888GB"
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        assert!(cfg.validate().is_err());
     }
 }
