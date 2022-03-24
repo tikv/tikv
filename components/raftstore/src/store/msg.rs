@@ -24,6 +24,7 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, SplitCheckBucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
+#[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
@@ -42,6 +43,7 @@ pub struct WriteResponse {
 }
 
 // Peer's internal stat, for test purpose only
+#[cfg(any(test, feature = "testexport"))]
 #[derive(Debug)]
 pub struct PeerInternalStat {
     pub buckets: Arc<BucketMeta>,
@@ -67,6 +69,7 @@ where
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
+#[cfg(any(test, feature = "testexport"))]
 pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
 /// Variants of callbacks for `Msg`.
@@ -91,6 +94,7 @@ pub enum Callback<S: Snapshot> {
         committed_cb: Option<ExtCallback>,
         request_times: SmallVec<[Instant; 4]>,
     },
+    #[cfg(any(test, feature = "testexport"))]
     /// Test purpose callback
     Test { cb: TestCallback },
 }
@@ -140,6 +144,7 @@ where
                 let resp = WriteResponse { response: resp };
                 cb(resp);
             }
+            #[cfg(any(test, feature = "testexport"))]
             Callback::Test { .. } => (),
         }
     }
@@ -189,6 +194,7 @@ where
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
+            #[cfg(any(test, feature = "testexport"))]
             Callback::Test { .. } => write!(fmt, "Callback::Test(..)"),
         }
     }

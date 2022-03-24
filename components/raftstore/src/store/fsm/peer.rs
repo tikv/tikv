@@ -77,10 +77,12 @@ use crate::store::worker::{
     RegionTask, SplitCheckBucketRange, SplitCheckTask,
 };
 use crate::store::PdTask;
+#[cfg(any(test, feature = "testexport"))]
+use crate::store::PeerInternalStat;
 use crate::store::RaftlogFetchResult;
 use crate::store::{
-    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerInternalStat,
-    PeerMsg, PeerTick, RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
+    util, AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PeerMsg, PeerTick,
+    RaftCmdExtraOpts, RaftCommand, SignificantMsg, SnapKey, StoreMsg,
 };
 use crate::{Error, Result};
 
@@ -4737,10 +4739,11 @@ where
         region_epoch: RegionEpoch,
         mut buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
-        cb: Callback<EK::Snapshot>,
+        _cb: Callback<EK::Snapshot>,
     ) {
-        let test_only_callback = |cb, region_buckets| {
-            if let Callback::Test { cb } = cb {
+        #[cfg(any(test, feature = "testexport"))]
+        let test_only_callback = |_callback, region_buckets| {
+            if let Callback::Test { cb } = _callback {
                 let peer_stat = PeerInternalStat {
                     buckets: region_buckets,
                     bucket_ranges: None,
@@ -4773,18 +4776,22 @@ where
                 "epoch" => ?region_epoch,
                 "current_epoch" => ?region.get_region_epoch(),
             );
-            let default_buckets = BucketStat::default();
+
             // test purpose
-            test_only_callback(
-                cb,
-                self.fsm
-                    .peer
-                    .region_buckets
-                    .as_ref()
-                    .unwrap_or(&default_buckets)
-                    .meta
-                    .clone(),
-            );
+            #[cfg(any(test, feature = "testexport"))]
+            {
+                let default_buckets = BucketStat::default();
+                test_only_callback(
+                    _cb,
+                    self.fsm
+                        .peer
+                        .region_buckets
+                        .as_ref()
+                        .unwrap_or(&default_buckets)
+                        .meta
+                        .clone(),
+                );
+            }
             return;
         }
 
@@ -4889,8 +4896,9 @@ where
             "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
         // test purpose
+        #[cfg(any(test, feature = "testexport"))]
         test_only_callback(
-            cb,
+            _cb,
             self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
         );
     }
@@ -4951,6 +4959,7 @@ where
                 }
                 j += 1;
             }
+
             // if the bucket's write_bytes exceed half of the configured region_bucket_size,
             // add it to the bucket_ranges for checking update
             let bucket_update_diff_size_threshold =
@@ -4971,7 +4980,7 @@ where
         region_epoch: &metapb::RegionEpoch,
         policy: CheckPolicy,
         source: &str,
-        cb: Callback<EK::Snapshot>,
+        _cb: Callback<EK::Snapshot>,
     ) {
         info!(
             "on half split";
@@ -5001,12 +5010,15 @@ where
         }
 
         let split_check_bucket_ranges = self.gen_bucket_range_for_update();
-        if let Callback::Test { cb } = cb {
-            let peer_stat = PeerInternalStat {
-                buckets: Arc::default(),
-                bucket_ranges: split_check_bucket_ranges.clone(),
-            };
-            cb(peer_stat);
+        #[cfg(any(test, feature = "testexport"))]
+        {
+            if let Callback::Test { cb } = _cb {
+                let peer_stat = PeerInternalStat {
+                    buckets: Arc::default(),
+                    bucket_ranges: split_check_bucket_ranges.clone(),
+                };
+                cb(peer_stat);
+            }
         }
         let task =
             SplitCheckTask::split_check(region.clone(), false, policy, split_check_bucket_ranges);

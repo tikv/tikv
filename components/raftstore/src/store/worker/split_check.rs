@@ -525,7 +525,7 @@ where
             &bucket_entry,
         );
         buckets.push(bucket_entry);
-        let _ = self.router.send(   
+        let _ = self.router.send(
             region.get_id(),
             CasualMessage::RefreshRegionBuckets {
                 region_epoch: region.get_region_epoch().clone(),
