@@ -4914,7 +4914,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "oom",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The count of dropped log append messages on memory usage",
           "fieldConfig": {
@@ -4969,7 +4969,7 @@
               "interval": "",
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
-              "metric": "tikv_grpc_msg_duration_seconds_bucket",
+              "metric": "tikv_server_raft_append_rejects",
               "refId": "A",
               "step": 10
             }
