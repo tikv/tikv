@@ -90,7 +90,7 @@ impl WALWriter {
         }
         let batch = &mut self.buf[..];
         let (mut batch_header, batch_payload) = batch.split_at_mut(BATCH_HEADER_SIZE);
-        let checksum = crc32c::crc32c(batch_payload);
+        let checksum = crc32fast::hash(batch_payload);
         batch_header.put_u32_le(self.epoch_id);
         batch_header.put_u32_le(checksum);
         batch_header.put_u32_le(batch_payload.len() as u32);

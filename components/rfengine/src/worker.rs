@@ -97,7 +97,7 @@ impl Worker {
                 self.buf.extend_from_slice(v.chunk());
             }
         }
-        let crc32 = crc32c::crc32c(&self.buf);
+        let crc32 = crc32fast::hash(&self.buf);
         self.buf.put_u32_le(crc32);
         let filename = states_file_name(&self.dir, epoch_id);
         self.writer.write_to_file(&self.buf, filename)?;
@@ -164,7 +164,7 @@ impl Worker {
         );
         self.buf.truncate(0);
         region_data.encode_to(&mut self.buf);
-        let checksum = crc32c::crc32c(&self.buf);
+        let checksum = crc32fast::hash(&self.buf);
         self.buf.put_u32_le(checksum);
         self.writer.write_to_file(&self.buf, filename)?;
         self.epoches[epoch_idx]
@@ -210,8 +210,10 @@ impl Worker {
                 }
             }
         }
-        info!("region {} truncate raft log to {}, remove {} files, retain {} files",
-            region_id, index, remove_cnt, retain_cnt);
+        info!(
+            "region {} truncate raft log to {}, remove {} files, retain {} files",
+            region_id, index, remove_cnt, retain_cnt
+        );
         if removed_epoch_ids.len() == 0 {
             return;
         }

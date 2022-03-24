@@ -145,7 +145,7 @@ impl RFEngine {
         let payload_len = data.len() - 4;
         let checksum = LittleEndian::read_u32(&data[payload_len..]);
         data = &data[..payload_len];
-        if crc32c::crc32c(data) != checksum {
+        if crc32fast::hash(data) != checksum {
             return Err(Error::Checksum);
         }
         while data.len() > 0 {
@@ -189,7 +189,7 @@ fn read_checksum_file(filename: &PathBuf) -> Result<Vec<u8>> {
     let mut bin = fs::read(filename)?;
     let checksum_off = bin.len() - 4;
     let checksum_expect = LittleEndian::read_u32(&bin[checksum_off..]);
-    let checksum_got = crc32c::crc32c(&bin[..checksum_off]);
+    let checksum_got = crc32fast::hash(&bin[..checksum_off]);
     if checksum_got != checksum_expect {
         return Err(Error::Checksum);
     }

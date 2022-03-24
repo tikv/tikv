@@ -15,8 +15,8 @@ use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::time::Instant;
 use tokio::runtime::Runtime;
@@ -121,7 +121,9 @@ impl S3FSCore {
     }
 
     fn tmp_file_path(&self, file_id: u64) -> PathBuf {
-        let tmp_id = self.tmp_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let tmp_id = self
+            .tmp_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.local_dir.join(new_tmp_filename(file_id, tmp_id))
     }
 

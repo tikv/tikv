@@ -10,7 +10,7 @@ use super::super::table::Value;
 use farmhash;
 use xorf::BinaryFuse8;
 
-pub const CRC32_CASTAGNOLI: u8 = 1;
+pub const CRC32_IEEE: u8 = 1;
 pub const PROP_KEY_SMALLEST: &str = "smallest";
 pub const PROP_KEY_BIGGEST: &str = "biggest";
 pub const EXTRA_END: u8 = 255;
@@ -113,7 +113,7 @@ impl Builder {
     pub fn new(fid: u64, opt: TableBuilderOptions) -> Self {
         let mut x = Self::default();
         x.fid = fid;
-        x.checksum_tp = CRC32_CASTAGNOLI;
+        x.checksum_tp = CRC32_IEEE;
         x.block_size = opt.block_size;
         x
     }
@@ -212,8 +212,8 @@ impl Builder {
         buf.put_u32_le(0);
         Builder::add_property(buf, PROP_KEY_SMALLEST.as_bytes(), self.smallest.as_slice());
         Builder::add_property(buf, PROP_KEY_BIGGEST.as_bytes(), self.biggest.as_slice());
-        if self.checksum_tp == CRC32_CASTAGNOLI {
-            let checksum = crc32c::crc32c(&buf[(origin_len + 4)..]);
+        if self.checksum_tp == CRC32_IEEE {
+            let checksum = crc32fast::hash(&buf[(origin_len + 4)..]);
             LittleEndian::write_u32(&mut buf[origin_len..], checksum);
         }
     }
@@ -353,8 +353,8 @@ impl BlockBuilder {
             self.build_entry(i, common_prefix_len);
         }
         let mut checksum = 0u32;
-        if checksum_tp == CRC32_CASTAGNOLI {
-            checksum = crc32c::crc32c(&self.buf[begin_off..]);
+        if checksum_tp == CRC32_IEEE {
+            checksum = crc32fast::hash(&self.buf[begin_off..]);
         }
         let slice = self.buf.as_mut_slice();
         LittleEndian::write_u32(&mut slice[(begin_off - 4)..], checksum);
@@ -442,9 +442,9 @@ impl BlockBuilder {
             self.build_filter(key_hashes);
         }
         self.buf.push(EXTRA_END);
-        if checksum_tp == CRC32_CASTAGNOLI {
+        if checksum_tp == CRC32_IEEE {
             let slice = self.buf.as_mut_slice();
-            LittleEndian::write_u32(slice, crc32c::crc32c(&slice[4..]))
+            LittleEndian::write_u32(slice, crc32fast::hash(&slice[4..]))
         }
     }
 

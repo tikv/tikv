@@ -192,8 +192,5 @@ pub fn new_filename(file_id: u64) -> PathBuf {
 }
 
 pub fn new_tmp_filename(file_id: u64, tmp_id: u64) -> PathBuf {
-    PathBuf::from(format!(
-        "{:016x}.{}.tmp",
-        file_id, tmp_id
-    ))
+    PathBuf::from(format!("{:016x}.{}.tmp", file_id, tmp_id))
 }

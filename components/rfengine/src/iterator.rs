@@ -76,7 +76,7 @@ impl WALIterator {
         self.buf.resize(remained_length, 0);
         reader.read_exact(&mut self.buf[..])?;
         let batch = &self.buf[..length];
-        if checksum != crc32c::crc32c(batch) {
+        if checksum != crc32fast::hash(batch) {
             return Err(Error::EOF);
         }
         self.offset += aligned_length;

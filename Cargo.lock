@@ -1079,21 +1079,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8aebca1129a03dc6dc2b127edd729435bbc4a37e1d5f4d7513165089ceb02634"
 
 [[package]]
-name = "crc32c"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "210cdf933e6a81212bfabf90cd8762f471b5922e5f6b709547673ad8e04b9448"
-dependencies = [
- "rustc_version 0.2.3",
-]
-
-[[package]]
 name = "crc32fast"
-version = "1.2.0"
+version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba125de2af0df55319f41944744ad91c71113bf74a4646efff39afe1f6842db1"
+checksum = "b540bd8bc810d3885c6ea91e2018302f68baba2129ab3e88f32389ee9370880d"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -2646,7 +2637,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "bytes 1.1.0",
- "crc32c",
+ "crc32fast",
  "dashmap",
  "dyn-clone",
  "engine_traits",
@@ -4518,7 +4509,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 1.1.0",
- "crc32c",
+ "crc32fast",
  "dashmap",
  "engine_traits",
  "error_code",
@@ -4544,7 +4535,6 @@ dependencies = [
  "bytes 1.1.0",
  "collections",
  "concurrency_manager",
- "crc32c",
  "crossbeam",
  "dashmap",
  "dyn-clone",
