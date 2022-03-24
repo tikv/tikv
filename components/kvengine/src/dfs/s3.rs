@@ -2,14 +2,13 @@
 
 use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
-use aws_sdk_s3::model::{Tag, Tagging};
-use aws_sdk_s3::{ByteStream, Client, Credentials, Endpoint, Region};
-use aws_smithy_http::result::SdkError;
-use aws_smithy_types::retry::ErrorKind;
-use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Bytes;
 use file_system::{IOOp, IORateLimiter, IOType};
+use futures::StreamExt;
 use http::Uri;
+use hyper::client::HttpConnector;
+use rusoto_core::{Region, RusotoError};
+use rusoto_s3::S3;
 use std::io::Write;
 use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
@@ -19,6 +18,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::time::Instant;
+use tokio::io::AsyncReadExt;
 use tokio::runtime::Runtime;
 
 const MAX_RETRY_COUNT: u32 = 5;
@@ -64,7 +64,7 @@ impl Deref for S3FS {
 pub struct S3FSCore {
     tenant_id: u32,
     local_dir: PathBuf,
-    s3c: aws_sdk_s3::Client,
+    s3c: rusoto_s3::S3Client,
     bucket: String,
     runtime: tokio::runtime::Runtime,
     rate_limiter: Arc<file_system::IORateLimiter>,
@@ -88,17 +88,22 @@ impl S3FSCore {
         if !local_dir.is_dir() {
             panic!("path {:?} is not dir", &local_dir);
         }
-        let credential_provider = Credentials::new(key_id, secret_key, None, None, "config");
-        let shared_provider = SharedCredentialsProvider::new(credential_provider);
-        let mut s3_conf_builder = aws_sdk_s3::Config::builder();
-        s3_conf_builder.set_credentials_provider(Some(shared_provider));
-        s3_conf_builder = s3_conf_builder.region(Region::new(region));
-        if end_point.len() > 0 {
-            let endpoint = Endpoint::immutable(Uri::from_str(end_point.as_str()).unwrap());
-            s3_conf_builder = s3_conf_builder.endpoint_resolver(endpoint);
-        }
-        let cfg = s3_conf_builder.build();
-        let s3c = Client::from_conf(cfg);
+        let credential = rusoto_credential::StaticProvider::new(key_id, secret_key, None, None);
+        let http_connector = hyper::client::connect::HttpConnector::new();
+        let mut config = rusoto_core::HttpConfig::new();
+        config.read_buf_size(256 * 1024);
+        let http_client =
+            rusoto_core::HttpClient::from_connector_with_config(http_connector, config);
+        let end_point = if end_point.is_empty() {
+            format!("http://s3.{}.amazonaws.com", region.as_str())
+        } else {
+            end_point
+        };
+        let mut region = Region::Custom {
+            name: region,
+            endpoint: end_point,
+        };
+        let s3c = rusoto_s3::S3Client::new_with(http_client, credential, region);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -131,27 +136,16 @@ impl S3FSCore {
         format!("{:08x}/{:016x}.t1", self.tenant_id, file_id)
     }
 
-    fn is_err_retryable<T>(&self, sdk_err: &SdkError<T>) -> bool {
-        match sdk_err {
-            SdkError::ConstructionFailure(_) => false,
-            SdkError::TimeoutError(_) => true,
-            SdkError::DispatchFailure(conn_err) => {
-                if conn_err.is_io() || conn_err.is_timeout() {
-                    return true;
-                }
-                match conn_err.is_other() {
-                    None => false,
-                    Some(other_kind) => match other_kind {
-                        ErrorKind::TransientError => true,
-                        ErrorKind::ThrottlingError => true,
-                        ErrorKind::ServerError => true,
-                        ErrorKind::ClientError => false,
-                        _ => false,
-                    },
-                }
-            }
-            SdkError::ResponseError { .. } => false,
-            SdkError::ServiceError { .. } => true,
+    fn is_err_retryable<T>(&self, rustoto_err: &RusotoError<T>) -> bool {
+        match rustoto_err {
+            RusotoError::Service(_) => true,
+            RusotoError::HttpDispatch(_) => true,
+            RusotoError::InvalidDnsName(_) => false,
+            RusotoError::Credentials(_) => false,
+            RusotoError::Validation(_) => false,
+            RusotoError::ParseError(_) => false,
+            RusotoError::Unknown(_) => false,
+            RusotoError::Blocking => false,
         }
     }
 
@@ -213,25 +207,25 @@ impl DFS for S3FS {
         let mut retry_cnt = 0;
         let start_time = Instant::now_coarse();
         loop {
-            let result = self
-                .s3c
-                .get_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .send()
-                .await;
+            let mut req = rusoto_s3::GetObjectRequest::default();
+            req.bucket = self.bucket.clone();
+            req.key = format!("{}/{}", &self.bucket, &key);
+            let result = self.s3c.get_object(req).await;
             if result.is_ok() {
-                return match result.unwrap().body.collect().await {
-                    Ok(agg_data) => {
-                        let data = agg_data.into_bytes();
+                let output = result.unwrap();
+                let body = output.body.unwrap();
+                let length = output.content_length.unwrap_or(0) as usize;
+                let mut buf = Vec::with_capacity(length);
+                return match body.into_async_read().read_to_end(&mut buf).await {
+                    Ok(read_size) => {
                         info!(
                             "read file {}, size {}, takes {:?}, retry {}",
                             file_id,
-                            data.len(),
+                            read_size,
                             start_time.saturating_elapsed(),
                             retry_cnt
                         );
-                        Ok(data)
+                        Ok(Bytes::from(buf))
                     }
                     Err(err) => Err(crate::dfs::Error::S3(err.to_string())),
                 };
@@ -260,22 +254,21 @@ impl DFS for S3FS {
         let key = self.file_key(file_id);
         let mut retry_cnt = 0;
         let start_time = Instant::now();
+        let data_len = data.len();
         loop {
-            let hyper_body = hyper::Body::from(data.clone());
-            let sdk_body = aws_smithy_http::body::SdkBody::from(hyper_body);
-            let result = self
-                .s3c
-                .put_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .body(ByteStream::new(sdk_body))
-                .send()
-                .await;
+            let mut req = rusoto_s3::PutObjectRequest::default();
+            req.key = format!("{}/{}", &self.bucket, &key);
+            req.bucket = self.bucket.clone();
+            req.content_length = Some(data_len as i64);
+            let data = data.clone();
+            let stream = futures::stream::once(async move { Ok(data) });
+            req.body = Some(rusoto_core::ByteStream::new(stream));
+            let result = self.s3c.put_object(req).await;
             if result.is_ok() {
                 info!(
                     "create file {}, size {}, takes {:?}, retry {}",
                     file_id,
-                    data.len(),
+                    data_len,
                     start_time.saturating_elapsed(),
                     retry_cnt
                 );
@@ -310,18 +303,16 @@ impl DFS for S3FS {
         loop {
             let key = self.file_key(file_id);
             let bucket = self.bucket.clone();
-            let tagging = Tagging::builder()
-                .tag_set(Tag::builder().key("deleted").value("true").build())
-                .build();
-            if let Err(err) = self
-                .s3c
-                .put_object_tagging()
-                .bucket(bucket)
-                .key(key)
-                .tagging(tagging)
-                .send()
-                .await
-            {
+            let mut req = rusoto_s3::PutObjectTaggingRequest::default();
+            req.key = format!("{}/{}", &bucket, &key);
+            req.bucket = bucket;
+            req.tagging = rusoto_s3::Tagging {
+                tag_set: vec![rusoto_s3::Tag {
+                    key: "deleted".to_string(),
+                    value: "ture".to_string(),
+                }],
+            };
+            if let Err(err) = self.s3c.put_object_tagging(req).await {
                 if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
                     let retry_sleep = 2u64.pow(retry_cnt as u32) * 100;

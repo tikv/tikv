@@ -3,7 +3,6 @@
 mod s3;
 
 use async_trait::async_trait;
-use aws_sdk_s3::SdkError;
 use bytes::Bytes;
 pub use s3::S3FS;
 use std::fmt::Debug;
@@ -181,8 +180,8 @@ impl From<io::Error> for Error {
     }
 }
 
-impl<E: Debug> From<aws_sdk_s3::SdkError<E>> for Error {
-    fn from(err: SdkError<E>) -> Self {
+impl<E: Debug> From<rusoto_core::RusotoError<E>> for Error {
+    fn from(err: rusoto_core::RusotoError<E>) -> Self {
         Error::S3(format!("{:?}", err))
     }
 }
