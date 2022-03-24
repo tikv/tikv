@@ -232,6 +232,18 @@ impl Statistics {
         }
     }
 
+    pub fn cf_statistics(&self, cf: &str) -> &CfStatistics {
+        if cf.is_empty() {
+            return &self.data;
+        }
+        match cf {
+            CF_DEFAULT => &self.data,
+            CF_LOCK => &self.lock,
+            CF_WRITE => &self.write,
+            _ => unreachable!(),
+        }
+    }
+
     pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
         detail_v2.set_processed_versions(self.write.processed_keys as u64);
         detail_v2.set_total_versions(self.write.total_op_count() as u64);

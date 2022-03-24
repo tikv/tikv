@@ -192,6 +192,7 @@ pub enum PeerTick {
     EntryCacheEvict = 6,
     CheckLeaderLease = 7,
     ReactivateMemoryLock = 8,
+    ReportBuckets = 9,
 }
 
 impl PeerTick {
@@ -209,6 +210,7 @@ impl PeerTick {
             PeerTick::EntryCacheEvict => "entry_cache_evict",
             PeerTick::CheckLeaderLease => "check_leader_lease",
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
+            PeerTick::ReportBuckets => "report_buckets",
         }
     }
 
@@ -223,6 +225,7 @@ impl PeerTick {
             PeerTick::EntryCacheEvict,
             PeerTick::CheckLeaderLease,
             PeerTick::ReactivateMemoryLock,
+            PeerTick::ReportBuckets,
         ];
         TICKS
     }
@@ -389,6 +392,9 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Try renew leader lease
     RenewLease,
+
+    // Snapshot is applied
+    SnapshotApplied,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -446,6 +452,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             }
             CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
+            CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
         }
     }
 }

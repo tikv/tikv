@@ -30,7 +30,7 @@ use engine_traits::{
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
-use pd_client::PdClient;
+use pd_client::{BucketStat, PdClient};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -1048,6 +1048,21 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn must_get_buckets(&mut self, region_id: u64) -> BucketStat {
+        let timer = Instant::now();
+        let timeout = Duration::from_secs(5);
+        let mut tried_times = 0;
+        // At least retry once.
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
+            tried_times += 1;
+            match self.pd_client.get_buckets(region_id) {
+                Some(buckets) => return buckets,
+                None => sleep_ms(100),
+            }
+        }
+        panic!("failed to get buckets for region {}", region_id);
+    }
+
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
@@ -1091,13 +1106,13 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer) {
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
         let timer = Instant::now();
         let mut state;
         loop {
             state = self.region_local_state(region_id, peer.get_store_id());
             if state.get_state() == PeerState::Tombstone
-                && state.get_region().get_peers().contains(&peer)
+                && (!check_exist || state.get_region().get_peers().contains(&peer))
             {
                 return;
             }
@@ -1640,6 +1655,24 @@ impl<T: Simulator> Cluster<T> {
         ctx.set_peer(leader);
         ctx.set_region_epoch(epoch);
         ctx
+    }
+
+    pub fn refresh_region_bucket_keys(
+        &mut self,
+        region: &metapb::Region,
+        bucket_keys: Vec<Vec<u8>>,
+    ) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::RefreshRegionBuckets {
+                region_epoch: region.get_region_epoch().clone(),
+                bucket_keys,
+            },
+        )
+        .unwrap();
     }
 }
 
