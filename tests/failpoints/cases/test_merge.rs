@@ -1676,10 +1676,7 @@ fn test_destroy_source_peer_while_merging() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    let r1 = cluster.run_conf_change();
-    for i in 2..=5 {
-        pd_client.must_add_peer(r1, new_peer(i, i));
-    }
+    cluster.run();
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
@@ -1729,7 +1726,6 @@ fn test_destroy_source_peer_while_merging() {
     // but it is still in tombstone state due to the message filter
     let state = cluster.region_local_state(right.get_id(), 5);
     assert_eq!(state.get_state(), PeerState::Tombstone);
-    assert!(!state.has_merge_state(), "{:?}", state);
 
     // let the peer on store 4 have a larger peer id
     pd_client.must_remove_peer(right.get_id(), new_peer(4, 4));
@@ -1743,6 +1739,7 @@ fn test_destroy_source_peer_while_merging() {
     cluster.add_send_filter(IsolationFilterFactory::new(1));
 
     cluster.must_put(b"k5", b"v5");
+    assert!(!state.has_merge_state(), "{:?}", state);
     for i in 2..=5 {
         must_get_equal(&cluster.get_engine(i), b"k5", b"v5");
     }
