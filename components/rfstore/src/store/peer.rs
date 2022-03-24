@@ -1419,13 +1419,11 @@ impl Peer {
                 store.shard_meta = Some(new_meta.clone());
                 store.initial_flushed = false;
             } else {
-                let mut store_meta = ctx.global.store_meta.lock().unwrap();
-                if store_meta.pending_new_regions.get(&new_meta.id).is_none() {
-                    // new region is already created by raft message.
-                    continue;
+                let raft = &ctx.global.engines.raft;
+                if raft.get_state(new_meta.id, KV_ENGINE_META_KEY).is_none() {
+                    ctx.raft_wb
+                        .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
                 }
-                ctx.raft_wb
-                    .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
             }
         }
     }
