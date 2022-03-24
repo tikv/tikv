@@ -127,7 +127,7 @@ where
 #[derive(Default, Clone, Debug)]
 pub struct BucketRange(pub Vec<u8>, pub Vec<u8>);
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Bucket {
     pub keys: Vec<Vec<u8>>,
     pub size: u64,
@@ -498,29 +498,40 @@ where
     }
 
     fn refresh_approximate_bucket_keys(&self, region: &Region, host: &mut SplitCheckerHost<'_, E>) {
-        let bucket_keys = match host.approximate_bucket_keys(region, &self.engine) {
-            Ok(keys) => keys
-                .into_iter()
-                .map(|k| keys::origin_key(&k).to_vec())
-                .collect(),
+        let mut buckets: Vec<Bucket> = Vec::default();
+        let bucket_entry = match host.approximate_bucket_keys(region, &self.engine) {
+            Ok(entry) => {
+                let keys = entry
+                    .keys
+                    .into_iter()
+                    .map(|k| keys::origin_key(&k).to_vec())
+                    .collect();
+                Bucket {
+                    keys,
+                    size: entry.size,
+                }
+            }
             Err(e) => {
                 error!(%e;
                     "failed to get approximate bucket key";
                     "region_id" => region.get_id(),
                 );
-                vec![]
+                Bucket::default()
             }
         };
         info!(
             "starting approximate_bucket_keys {}, bucket {:?}",
-            bucket_keys.len(),
-            bucket_keys
+            bucket_entry.keys.len(),
+            &bucket_entry,
         );
-        let _ = self.router.send(
+        buckets.push(bucket_entry);
+        let _ = self.router.send(   
             region.get_id(),
             CasualMessage::RefreshRegionBuckets {
                 region_epoch: region.get_region_epoch().clone(),
-                bucket_keys,
+                buckets,
+                bucket_ranges: None,
+                cb: Callback::None,
             },
         );
     }

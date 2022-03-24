@@ -1111,6 +1111,8 @@ fn test_gen_split_check_bucket_ranges() {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
     cluster.cfg.coprocessor.enable_region_bucket = true;
+    // disable report buckets; as it will reset the user traffic stats to randmize the test result
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::secs(5);
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -1131,8 +1133,6 @@ fn test_gen_split_check_bucket_ranges() {
     let buckets = vec![bucket];
 
     // initialize fsm.peer.bucket_regions
-    cluster.send_half_split_region_message(&region, Option::None);
-    sleep_ms(1000);
     cluster.refresh_region_bucket_keys(
         &region,
         buckets.clone(),
