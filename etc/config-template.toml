@@ -853,7 +853,7 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "min-overlapping-ratio"
@@ -876,7 +876,7 @@
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
@@ -935,7 +935,7 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
