@@ -18,7 +18,7 @@ use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
-use tikv_util::{box_err, debug};
+use tikv_util::{box_err, info};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -115,6 +115,7 @@ pub struct ReadIndexQueue<S>
 where
     S: Snapshot,
 {
+    region_id: u64,
     reads: VecDeque<ReadIndexRequest<S>>,
     ready_cnt: usize,
     // How many requests are handled.
@@ -136,6 +137,7 @@ where
             handled_cnt: 0,
             contexts: HashMap::default(),
             retry_countdown: 0,
+            region_id: 0,
         }
     }
 }
@@ -144,6 +146,17 @@ impl<S> ReadIndexQueue<S>
 where
     S: Snapshot,
 {
+    pub fn new(region_id: u64) -> Self {
+        Self {
+            region_id,
+            reads: VecDeque::new(),
+            ready_cnt: 0,
+            handled_cnt: 0,
+            contexts: HashMap::default(),
+            retry_countdown: 0,
+        }
+    }
+
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
     /// 1. more than an election timeout elapsed from the last request push;
@@ -175,6 +188,7 @@ where
     /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
+        info!("[read queue] clear all commands"; "region_id" => self.region_id, "ready_cnt" => self.ready_cnt);
         let mut removed = 0;
         for mut read in self.reads.drain(..) {
             removed += read.cmds.len();
@@ -193,6 +207,7 @@ where
     }
 
     pub fn clear_uncommitted_on_role_change(&mut self, term: u64) {
+        info!("[read queue] clear uncommitted on role change"; "region_id" => self.region_id, "ready_cnt" => self.ready_cnt);
         let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
             removed += read.cmds.len();
@@ -206,6 +221,7 @@ where
     }
 
     pub fn push_back(&mut self, mut read: ReadIndexRequest<S>, is_leader: bool) {
+        info!("[read queue] push read"; "region_id" => self.region_id, "id" => ?read.id, "cnt" => self.reads.len());
         if !is_leader {
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
@@ -235,7 +251,13 @@ where
         T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
         for (uuid, _, index) in states {
-            assert_eq!(uuid, self.reads[self.ready_cnt].id);
+            info!("[read queue] advance leader reads"; "region_id" => self.region_id, "id" => ?uuid, "ready_cnt" => self.ready_cnt);
+
+            assert_eq!(
+                uuid, self.reads[self.ready_cnt].id,
+                "region_id: {}, ready_cnt: {}",
+                self.region_id, self.ready_cnt
+            );
             self.reads[self.ready_cnt].read_index = Some(index);
             self.ready_cnt += 1;
         }
@@ -275,13 +297,15 @@ where
                 max_changed_offset = cmp::max(max_changed_offset, offset);
                 continue;
             }
-            debug!(
-                "cannot find corresponding read from pending reads";
+            info!(
+                "[read queue] cannot find corresponding read from pending reads";
                 "uuid" => ?uuid, "read-index" => index,
             );
         }
 
         if min_changed_offset != usize::MAX {
+            info!("[read queue] advance replica read update ready cnt";
+                "region_id" => self.region_id, "ready_cnt" => self.ready_cnt, "max_changed_offset" => max_changed_offset);
             self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
         }
         if max_changed_offset > 0 {
@@ -327,6 +351,7 @@ where
             .reads
             .pop_front()
             .expect("read_queue is empty but ready_cnt > 0");
+        info!("[read queue] pop read"; "region_id" => self.region_id, "id" => ?res.id, "ready_cnt" => self.ready_cnt, "cnt" => self.reads.len());
         if res.in_contexts {
             res.in_contexts = false;
             self.contexts.remove(&res.id);

@@ -668,7 +668,7 @@ where
             raft_group,
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
-            pending_reads: Default::default(),
+            pending_reads: ReadIndexQueue::new(region.get_id()),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
