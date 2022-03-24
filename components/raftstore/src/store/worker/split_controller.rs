@@ -442,8 +442,8 @@ impl ReadStats {
                 *bucket_stat = new;
             }
             let mut delta = metapb::BucketStats::default();
-            delta.set_write_bytes(vec![write.read_bytes as u64]);
-            delta.set_read_bytes(vec![data.read_bytes as u64]);
+            delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
+            delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
             let start = start.unwrap_or_default();
             let end = end.unwrap_or_default();
             merge_bucket_stats(
