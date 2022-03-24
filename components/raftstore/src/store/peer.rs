@@ -3813,6 +3813,8 @@ where
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         // Should not propose normal in force leader state.
+        // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
+        // if in force leader state.
         assert!(self.force_leader.is_none());
 
         if (self.pending_merge_state.is_some()

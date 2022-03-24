@@ -1319,9 +1319,6 @@ where
             return;
         }
 
-        // become candidate first to increase term
-        self.fsm.peer.raft_group.raft.become_candidate();
-
         // trigger vote request to all voters, will check the vote result in `check_force_leader`
         self.fsm.peer.raft_group.campaign().unwrap();
         assert!(
@@ -1391,14 +1388,14 @@ where
             "peer_id" => self.fsm.peer_id(),
         );
         self.fsm.peer.force_leader = None;
+        // leader lease shouldn't be renewed in force leader state.
+        assert!(self.fsm.peer.leader_lease.is_expired());
         self.fsm
             .peer
             .raft_group
             .raft
-            .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
-        // expire leader lease immediately, because the campaign may choose to be leader at once.
-        // term changes while the old leader lease still holds may cause panic.
-        self.fsm.peer.leader_lease.expire();
+            .become_follower(self.fsm.peer.term() + 1, raft::INVALID_ID);
+
         // let it trigger election immediately.
         let _ = self.fsm.peer.raft_group.campaign();
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
@@ -1525,6 +1522,7 @@ where
                         "peer_id" => self.fsm.peer_id(),
                         "state" => ?r,
                     );
+                    self.fsm.peer.force_leader = None;
                 }
             }
         }
@@ -4359,7 +4357,7 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
-        if let Some(ForceLeaderState::ForceLeader) = self.fsm.peer.force_leader {
+        if self.fsm.peer.force_leader.is_some() {
             // in force leader state, forbid requests to make the recovery progress less error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
