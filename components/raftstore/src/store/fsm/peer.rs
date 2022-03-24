@@ -4804,9 +4804,10 @@ where
                 assert!(i != meta.keys.len());
                 // the bucket size is small and does not have split keys,
                 // then it should be merged with its left neighbor
-                if bucket.keys.is_empty()
-                    && bucket.size <= self.ctx.coprocessor_host.cfg.region_bucket_merge_size.0
-                {
+                let region_bucket_merge_size =
+                    self.ctx.coprocessor_host.cfg.region_bucket_merge_size_ratio
+                        * (self.ctx.coprocessor_host.cfg.region_bucket_size.0 as f64);
+                if bucket.keys.is_empty() && bucket.size <= (region_bucket_merge_size as u64) {
                     meta.sizes[i] = bucket.size;
                     // i is not the last entry (which is end key)
                     assert!(i < meta.keys.len() - 1);

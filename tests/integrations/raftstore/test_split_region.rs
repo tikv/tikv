@@ -1077,7 +1077,7 @@ fn test_refresh_region_bucket_keys() {
         },
         Bucket {
             keys: vec![],
-            size: 1024 * 1024 * 63, // small enough to merge with left bucket
+            size: 1024 * 1024, // small enough to merge with left bucket
         },
     ];
 
@@ -1109,7 +1109,8 @@ fn test_refresh_region_bucket_keys() {
 fn test_gen_split_check_bucket_ranges() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
-    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(2);
+    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
+    cluster.cfg.coprocessor.enable_region_bucket = true;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -1131,6 +1132,7 @@ fn test_gen_split_check_bucket_ranges() {
 
     // initialize fsm.peer.bucket_regions
     cluster.send_half_split_region_message(&region, Option::None);
+    sleep_ms(1000);
     cluster.refresh_region_bucket_keys(
         &region,
         buckets.clone(),

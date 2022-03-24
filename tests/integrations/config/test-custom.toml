@@ -229,7 +229,7 @@ perf-level = 5
 enable-region-bucket = true 
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"
-region-bucket-merge-size = "500KB"
+region-bucket-merge-size-ratio = "0.4"
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"
