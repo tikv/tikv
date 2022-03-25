@@ -130,7 +130,8 @@ impl Config {
             if self.region_bucket_size.0 == 0 {
                 return Err(box_err!("region_bucket size cannot be 0."));
             }
-            if self.region_bucket_merge_size_ratio <= 0.0 || self.region_bucket_merge_size_ratio >= 0.5
+            if self.region_bucket_merge_size_ratio <= 0.0
+                || self.region_bucket_merge_size_ratio >= 0.5
             {
                 return Err(box_err!(
                     "region-bucket-merge-size-ratio should be 0 to 0.5 (not include both ends)."
