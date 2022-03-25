@@ -1386,11 +1386,12 @@ macro_rules! numeric_enum_serializing_mod {
 ///
 /// States:
 ///   1. Init - Only source directory contains Raft data.
-///   2. Migrating - A marker file MIGRATE contains the path of source directory.
-///   3. Completed - Only target directory contains Raft data.
+///   2. Migrating - A marker file MIGRATE contains the path of source directory. Both
+///      source and target directory contains Raft data.
+///   3. Completed - Only target directory contains Raft data. Marker file may exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
-    marker: PathBuf,
+    in_progress_marker: PathBuf,
     source: PathBuf,
     target: PathBuf,
 }
@@ -1398,12 +1399,12 @@ pub struct RaftDataStateMachine {
 impl RaftDataStateMachine {
     pub fn new(root: &str, source: &str, target: &str) -> Self {
         let root = PathBuf::from(root);
-        let marker = root.join("MIGRATE");
+        let in_progress_marker = root.join("MIGRATE");
         let source = PathBuf::from(source);
         let target = PathBuf::from(target);
         Self {
             root,
-            marker,
+            in_progress_marker,
             source,
             target,
         }
@@ -1413,7 +1414,7 @@ impl RaftDataStateMachine {
     pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
         if Self::data_exists(&self.source)
             && Self::data_exists(&self.target)
-            && !self.marker.exists()
+            && !self.in_progress_marker.exists()
         {
             return Err(format!(
                 "Found multiple raft data sets: {}, {}",
@@ -1443,17 +1444,25 @@ impl RaftDataStateMachine {
             }
         }
         if !Self::data_exists(&self.source) {
+            // Recover from Completed state.
+            if self.in_progress_marker.exists() {
+                Self::must_remove(&self.in_progress_marker);
+            }
             return false;
-        } else if self.marker.exists() {
-            let real_source = PathBuf::from(fs::read_to_string(&self.marker).unwrap());
+        } else if self.in_progress_marker.exists() {
+            // Recover from Migrating state.
+            let real_source = PathBuf::from(fs::read_to_string(&self.in_progress_marker).unwrap());
             if real_source == self.target {
+                Self::must_remove(&self.source);
                 return false;
             } else {
-                Self::remove_dir_safe(&self.target);
+                Self::must_remove(&self.target);
             }
+        } else {
+            // Init -> Migrating.
+            fs::write(&self.in_progress_marker, self.source.to_str().unwrap()).unwrap();
+            Self::sync_dir(&self.root);
         }
-        fs::write(&self.marker, self.source.to_str().unwrap()).unwrap();
-        Self::sync_dir(&self.root);
         true
     }
 
@@ -1461,9 +1470,19 @@ impl RaftDataStateMachine {
     pub fn after_dump_data(&mut self) {
         assert!(Self::data_exists(&self.source));
         assert!(Self::data_exists(&self.target));
-        fs::remove_file(&self.marker).unwrap();
-        Self::sync_dir(&self.root);
-        Self::remove_dir_safe(&self.source);
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    // `after_dump_data` involves two atomic operations, insert a check point between
+    // them to test crash safety.
+    #[cfg(test)]
+    fn checked_after_dump_data_with<F: Fn()>(&mut self, check: &F) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        check();
+        Self::must_remove(&self.in_progress_marker);
     }
 
     fn data_exists(path: &Path) -> bool {
@@ -1473,16 +1492,22 @@ impl RaftDataStateMachine {
         fs::read_dir(&path).unwrap().next().is_some()
     }
 
-    fn remove_dir_safe(path: &Path) {
+    fn must_remove(path: &Path) {
         if path.exists() {
-            info!("Removing directory"; "path" => %path.display());
-            let trash = path.with_extension("REMOVE");
-            Self::rename_dir_safe(path, &trash);
-            fs::remove_dir_all(&trash).unwrap();
+            if path.is_dir() {
+                info!("Removing directory"; "path" => %path.display());
+                let trash = path.with_extension("REMOVE");
+                Self::must_rename_dir(path, &trash);
+                fs::remove_dir_all(&trash).unwrap();
+            } else {
+                info!("Removing file"; "path" => %path.display());
+                fs::remove_file(&path).unwrap();
+                Self::sync_dir(&path.parent().unwrap());
+            }
         }
     }
 
-    fn rename_dir_safe(from: &Path, to: &Path) {
+    fn must_rename_dir(from: &Path, to: &Path) {
         fs::rename(from, to).unwrap();
         let mut dir = to.to_path_buf();
         assert!(dir.pop());
@@ -2031,7 +2056,7 @@ yyy = 100
                 }
                 fs::copy(&source_file, &target_file).unwrap();
                 check();
-                state.after_dump_data();
+                state.checked_after_dump_data_with(&check);
             }
             check();
         }
