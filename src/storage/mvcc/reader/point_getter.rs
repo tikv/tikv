@@ -884,7 +884,7 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
+        let mut getter = PointGetterBuilder::new(snapshot, 4.into())
             .isolation_level(IsolationLevel::Si)
             .omit_value(true)
             .build()
