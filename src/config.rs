@@ -18,6 +18,7 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -2464,35 +2465,6 @@ impl LogConfig {
             return Err("Max log file size upper limit to 4096MB".to_string().into());
         }
         Ok(())
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct CausalTsConfig {
-    pub renew_interval: ReadableDuration,
-    pub renew_batch_min_size: u32,
-}
-
-impl CausalTsConfig {
-    fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.renew_interval.is_zero() {
-            return Err("causal-ts.renew_interval can't be zero".into());
-        }
-        if self.renew_batch_min_size == 0 {
-            return Err("causal-ts.renew_batch_init_size should be greater than 0".into());
-        }
-        Ok(())
-    }
-}
-
-impl Default for CausalTsConfig {
-    fn default() -> Self {
-        Self {
-            renew_interval: ReadableDuration::millis(100),
-            renew_batch_min_size: 100,
-        }
     }
 }
 

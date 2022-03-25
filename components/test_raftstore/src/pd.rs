@@ -1290,6 +1290,7 @@ impl TestPdClient {
         self.cluster.wl().check_merge_target_integrity = false;
     }
 
+    /// The next generated TSO will be `ts + 1`. See `get_tso()` and `batch_get_tso()`.
     pub fn set_tso(&self, ts: TimeStamp) {
         let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
         if old > ts.into_inner() {

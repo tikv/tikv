@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
+use causal_ts::Config as CausalTsConfig;
 use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};

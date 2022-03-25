@@ -18,11 +18,11 @@ use crate::metrics::*;
 use crate::CausalTsProvider;
 
 // Renew on every 100ms, to adjust batch size rapidly enough.
-const TSO_BATCH_RENEW_INTERVAL_DEFAULT: Duration = Duration::from_millis(100);
+pub(crate) const TSO_BATCH_RENEW_INTERVAL_DEFAULT: u64 = 100;
 // Batch size on every renew interval.
-// One TSO is required for every batch of Raft put message, so by default 1K tso/s should be enough.
+// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
 // Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
-const TSO_BATCH_MIN_SIZE_DEFAULT: u32 = 100;
+pub(crate) const TSO_BATCH_MIN_SIZE_DEFAULT: u32 = 100;
 // Max batch size of TSO requests. Space of logical timestamp is 262144,
 // exceed this space will cause PD to sleep, waiting for physical clock advance.
 const TSO_BATCH_MAX_SIZE: u32 = 20_0000;
@@ -43,12 +43,19 @@ struct TsoBatch {
 
 impl TsoBatch {
     pub fn pop(&self) -> Option<TimeStamp> {
-        let logical = self.logical_start.fetch_add(1, Ordering::Relaxed);
-        if logical < self.logical_end {
-            Some(TimeStamp::compose(self.physical, logical))
-        } else {
-            None
+        let mut logical = self.logical_start.load(Ordering::Relaxed);
+        while logical < self.logical_end {
+            match self.logical_start.compare_exchange_weak(
+                logical,
+                logical + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(TimeStamp::compose(self.physical, logical)),
+                Err(x) => logical = x,
+            }
         }
+        None
     }
 
     // `last_ts` is the last timestamp of the new batch.
@@ -88,26 +95,26 @@ impl TsoBatch {
     }
 }
 
-pub struct BatchTsoProvider {
-    pd_client: Arc<dyn PdClient>,
+pub struct BatchTsoProvider<C: PdClient> {
+    pd_client: Arc<C>,
     batch: Arc<RwLock<TsoBatch>>,
     batch_min_size: u32,
     renew_worker: Worker,
     renew_interval: Duration,
 }
 
-impl BatchTsoProvider {
-    pub async fn new(pd_client: Arc<dyn PdClient>) -> Result<Self> {
+impl<C: PdClient + 'static> BatchTsoProvider<C> {
+    pub async fn new(pd_client: Arc<C>) -> Result<Self> {
         Self::new_opt(
             pd_client,
-            TSO_BATCH_RENEW_INTERVAL_DEFAULT,
+            Duration::from_millis(TSO_BATCH_RENEW_INTERVAL_DEFAULT),
             TSO_BATCH_MIN_SIZE_DEFAULT,
         )
         .await
     }
 
     pub async fn new_opt(
-        pd_client: Arc<dyn PdClient>,
+        pd_client: Arc<C>,
         renew_interval: Duration,
         batch_min_size: u32,
     ) -> Result<Self> {
@@ -134,7 +141,7 @@ impl BatchTsoProvider {
     }
 
     async fn renew_tso_batch_internal(
-        pd_client: Arc<dyn PdClient>,
+        pd_client: Arc<C>,
         tso_batch: Arc<RwLock<TsoBatch>>,
         batch_min_size: u32,
         need_flush: bool,
@@ -229,7 +236,7 @@ impl BatchTsoProvider {
 
 const GET_TS_MAX_RETRY: u32 = 3;
 
-impl CausalTsProvider for BatchTsoProvider {
+impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
     fn get_ts(&self) -> Result<TimeStamp> {
         let start = Instant::now();
         let mut retries = 0;
@@ -343,7 +350,8 @@ pub mod tests {
         ];
 
         for (i, (batch_size, used_size, expected)) in cases.into_iter().enumerate() {
-            let new_size = BatchTsoProvider::calc_new_batch_size(batch_size, used_size, 100);
+            let new_size =
+                BatchTsoProvider::<TestPdClient>::calc_new_batch_size(batch_size, used_size, 100);
             assert_eq!(new_size, expected, "case {}", i);
         }
     }

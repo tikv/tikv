@@ -16,16 +16,23 @@ use crate::CausalTsProvider;
 /// CausalObserver appends timestamp for RawKV V2 data,
 /// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
-#[derive(Clone)]
-pub struct CausalObserver {
-    causal_ts_provider: Arc<dyn CausalTsProvider>,
+pub struct CausalObserver<TS: CausalTsProvider> {
+    causal_ts_provider: Arc<TS>,
+}
+
+impl<TS: CausalTsProvider> Clone for CausalObserver<TS> {
+    fn clone(&self) -> Self {
+        Self {
+            causal_ts_provider: self.causal_ts_provider.clone(),
+        }
+    }
 }
 
 // Causal observer's priority should be higher than all other observers, to avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
-impl CausalObserver {
-    pub fn new(causal_ts_provider: Arc<dyn CausalTsProvider>) -> Self {
+impl<TS: CausalTsProvider + 'static> CausalObserver<TS> {
+    pub fn new(causal_ts_provider: Arc<TS>) -> Self {
         Self { causal_ts_provider }
     }
 
@@ -40,9 +47,9 @@ impl CausalObserver {
     }
 }
 
-impl Coprocessor for CausalObserver {}
+impl<TS: CausalTsProvider> Coprocessor for CausalObserver<TS> {}
 
-impl QueryObserver for CausalObserver {
+impl<TS: CausalTsProvider> QueryObserver for CausalObserver<TS> {
     fn pre_propose_query(
         &self,
         _: &mut ObserverContext<'_>,
@@ -66,7 +73,7 @@ impl QueryObserver for CausalObserver {
     }
 }
 
-impl RoleObserver for CausalObserver {
+impl<TS: CausalTsProvider> RoleObserver for CausalObserver<TS> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         if role_change.state == StateRole::Leader {
@@ -94,7 +101,7 @@ pub mod tests {
     use test_raftstore::TestPdClient;
     use txn_types::{Key, TimeStamp};
 
-    fn init() -> CausalObserver {
+    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
         pd_cli.set_tso(100.into());
         let causal_ts_provider =
