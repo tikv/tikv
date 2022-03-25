@@ -129,7 +129,10 @@ pub struct BucketRange(pub Vec<u8>, pub Vec<u8>);
 
 #[derive(Default, Clone, Debug)]
 pub struct Bucket {
+    // new proposed split keys under the bucket for split
+    // if it does not need split, it's empty
     pub keys: Vec<Vec<u8>>,
+    // total size of the bucket
     pub size: u64,
 }
 

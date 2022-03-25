@@ -6,7 +6,6 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::ops::Deref;
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
@@ -4795,11 +4794,13 @@ where
             return;
         }
 
-        let current_version = if let Some(region_buckets) = &self.fsm.peer.region_buckets {
-            region_buckets.meta.version
-        } else {
-            0
-        };
+        let current_version = self
+            .fsm
+            .peer
+            .region_buckets
+            .as_ref()
+            .map(|b| b.meta.version)
+            .unwrap_or_default();
         let mut region_buckets: BucketStat;
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
@@ -4807,7 +4808,7 @@ where
             let mut j = 0;
             let buckets = buckets.drain(..);
             region_buckets = self.fsm.peer.region_buckets.as_ref().unwrap().clone();
-            let mut meta = region_buckets.meta.deref().clone();
+            let mut meta = (*region_buckets.meta).clone();
             for mut bucket in buckets {
                 while i < meta.keys.len() && meta.keys[i] != bucket_ranges[j].0 {
                     i += 1;

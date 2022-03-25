@@ -187,19 +187,14 @@ impl BucketStat {
         assert!(idx != 0);
         let val = self.stats.mut_write_keys().remove(idx);
         self.stats.mut_write_keys()[idx - 1] += val;
-
         let val = self.stats.mut_write_bytes().remove(idx);
         self.stats.mut_write_bytes()[idx - 1] += val;
-
         let val = self.stats.mut_read_qps().remove(idx);
         self.stats.mut_read_qps()[idx - 1] += val;
-
         let val = self.stats.mut_write_qps().remove(idx);
         self.stats.mut_write_qps()[idx - 1] += val;
-
         let val = self.stats.mut_read_keys().remove(idx);
         self.stats.mut_read_keys()[idx - 1] += val;
-
         let val = self.stats.mut_read_bytes().remove(idx);
         self.stats.mut_read_bytes()[idx - 1] += val;
     }
