@@ -39,7 +39,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         }
     }
 
-
     /// Set whether or not read operations should fill the cache.
     ///
     /// Defaults to `true`.
