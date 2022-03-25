@@ -2715,7 +2715,7 @@ impl TiKvConfig {
         }
 
         RaftDataStateMachine::new(
-            &self.data_dir,
+            &self.storage.data_dir,
             &self.raft_store.raftdb_path,
             &self.raft_engine.config.dir,
         )

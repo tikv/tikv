@@ -1289,7 +1289,7 @@ impl TiKVServer<RocksEngine> {
             .unwrap();
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &self.config.data_dir,
+            &self.config.storage.data_dir,
             &self.config.raft_engine.config().dir,
             &self.config.raft_store.raftdb_path,
         );
@@ -1379,7 +1379,7 @@ impl TiKVServer<RaftLogEngine> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
-            &self.config.data_dir,
+            &self.config.storage.data_dir,
             &self.config.raft_store.raftdb_path,
             &self.config.raft_engine.config().dir,
         );
