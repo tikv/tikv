@@ -1386,8 +1386,8 @@ macro_rules! numeric_enum_serializing_mod {
 ///
 /// States:
 ///   1. Init - Only source directory contains Raft data.
-///   2. Migrating - A marker file MIGRATE contains the path of source directory. Both
-///      source and target directory contains Raft data.
+///   2. Migrating - A marker file contains the path of source directory. Both source
+///      and target directory contains Raft data.
 ///   3. Completed - Only target directory contains Raft data. Marker file may exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
@@ -1399,7 +1399,7 @@ pub struct RaftDataStateMachine {
 impl RaftDataStateMachine {
     pub fn new(root: &str, source: &str, target: &str) -> Self {
         let root = PathBuf::from(root);
-        let in_progress_marker = root.join("MIGRATE");
+        let in_progress_marker = root.join("MIGRATING-RAFT");
         let source = PathBuf::from(source);
         let target = PathBuf::from(target);
         Self {
@@ -1433,8 +1433,8 @@ impl RaftDataStateMachine {
         Ok(())
     }
 
-    /// Enters the `Migrating` state and returns whether a migration is needed.
-    /// Otherwise prepares the target directory for opening.
+    /// Returns whether a migration is needed. When it's needed, enters the `Migrating`
+    /// state. Otherwise prepares the target directory for opening.
     pub fn before_open_target(&mut self) -> bool {
         // Clean up trash directory if there is any.
         for p in [&self.source, &self.target] {
@@ -1485,13 +1485,6 @@ impl RaftDataStateMachine {
         Self::must_remove(&self.in_progress_marker);
     }
 
-    fn data_exists(path: &Path) -> bool {
-        if !path.exists() || !path.is_dir() {
-            return false;
-        }
-        fs::read_dir(&path).unwrap().next().is_some()
-    }
-
     fn must_remove(path: &Path) {
         if path.exists() {
             if path.is_dir() {
@@ -1502,7 +1495,7 @@ impl RaftDataStateMachine {
             } else {
                 info!("Removing file"; "path" => %path.display());
                 fs::remove_file(&path).unwrap();
-                Self::sync_dir(&path.parent().unwrap());
+                Self::sync_dir(path.parent().unwrap());
             }
         }
     }
@@ -1512,6 +1505,13 @@ impl RaftDataStateMachine {
         let mut dir = to.to_path_buf();
         assert!(dir.pop());
         Self::sync_dir(&dir);
+    }
+
+    fn data_exists(path: &Path) -> bool {
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        fs::read_dir(&path).unwrap().next().is_some()
     }
 
     fn sync_dir(dir: &Path) {
