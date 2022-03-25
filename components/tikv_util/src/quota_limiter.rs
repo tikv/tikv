@@ -9,7 +9,9 @@ use super::timer::GLOBAL_TIMER_HANDLE;
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
 
-const CPU_LIMITER_REFILL_DURATION: Duration = Duration::from_millis(50);
+// TODO: This value is fixed based on experience of AWS 4vCPU TPC-C bench test.
+// It's better to use a universal approach.
+const CPU_LIMITER_REFILL_DURATION: Duration = Duration::from_millis(100);
 
 // Quota limiter allows users to obtain stable performance by increasing the
 // completion time of tasks through restrictions of different metrics.
