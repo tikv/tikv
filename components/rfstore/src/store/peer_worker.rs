@@ -3,8 +3,10 @@
 use super::*;
 use crate::RaftRouter;
 use crossbeam::channel::RecvTimeoutError;
+use raftstore::store::local_metrics::StoreWriteMetrics;
 use raftstore::store::metrics::{
-    STORE_WRITE_RAFTDB_DURATION_HISTOGRAM, STORE_WRITE_SEND_DURATION_HISTOGRAM,
+    STORE_RAFT_READY_COUNTER, STORE_WRITE_RAFTDB_DURATION_HISTOGRAM,
+    STORE_WRITE_SEND_DURATION_HISTOGRAM, STORE_WRITE_TRIGGER_SIZE_HISTOGRAM,
 };
 use raftstore::store::util;
 use std::collections::HashMap;
@@ -118,8 +120,12 @@ impl RaftWorker {
     pub(crate) fn run(&mut self) {
         let mut inboxes = Inboxes::new();
         loop {
-            if self.receive_msgs(&mut inboxes).is_err() {
-                return;
+            let loop_start: tikv_util::time::Instant;
+            match self.receive_msgs(&mut inboxes) {
+                Ok(start_time) => {
+                    loop_start = start_time;
+                }
+                Err(_) => return,
             }
             inboxes.inboxes.iter_mut().for_each(|(_, inbox)| {
                 self.process_inbox(inbox);
@@ -128,12 +134,20 @@ impl RaftWorker {
                 self.ctx.global.trans.flush();
             }
             self.persist_state();
+            self.ctx
+                .raft_metrics
+                .store_time
+                .observe(duration_to_sec(loop_start.saturating_elapsed()));
+            self.ctx.raft_metrics.flush();
             self.ctx.current_time = None;
         }
     }
 
     /// return true means channel is disconnected, return outer loop.
-    fn receive_msgs(&mut self, inboxes: &mut Inboxes) -> std::result::Result<(), RecvTimeoutError> {
+    fn receive_msgs(
+        &mut self,
+        inboxes: &mut Inboxes,
+    ) -> std::result::Result<tikv_util::time::Instant, RecvTimeoutError> {
         inboxes.inboxes.retain(|_, inbox| -> bool {
             if inbox.msgs.len() == 0 {
                 false
@@ -143,6 +157,7 @@ impl RaftWorker {
             }
         });
         let res = self.receiver.recv_timeout(Duration::from_millis(10));
+        let receive_time = tikv_util::time::Instant::now();
         let router = &self.router;
         match res {
             Ok((region_id, msg)) => {
@@ -166,7 +181,7 @@ impl RaftWorker {
                 inboxes.append_msg(router, region_id, PeerMsg::Tick);
             }
         }
-        return Ok(());
+        return Ok(receive_time);
     }
 
     fn process_inbox(&mut self, inbox: &mut PeerInbox) {
@@ -188,6 +203,7 @@ impl RaftWorker {
                 msgs: mem::take(&mut self.ctx.apply_msgs.msgs),
                 applier: applier.clone(),
                 applying_cnt: peer_fsm.applying_cnt.clone(),
+                send_time: tikv_util::time::Instant::now(),
             };
             peer_batch
                 .applying_cnt
@@ -231,19 +247,32 @@ impl ApplyWorker {
     }
 
     pub(crate) fn run(&mut self) {
+        let mut loop_cnt = 0u64;
         loop {
             let res = self.receiver.recv();
             if res.is_err() {
                 return;
             }
             let mut batch = res.unwrap();
+            let timer = tikv_util::time::Instant::now();
+            self.ctx.apply_wait.observe(duration_to_sec(
+                timer.saturating_duration_since(batch.send_time),
+            ));
             let mut applier = batch.applier.lock().unwrap();
             for msg in batch.msgs.drain(..) {
                 applier.handle_msg(&mut self.ctx, msg);
             }
+            self.ctx
+                .apply_time
+                .observe(duration_to_sec(timer.saturating_elapsed()));
             batch
                 .applying_cnt
                 .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            loop_cnt += 1;
+            if loop_cnt % 128 == 0 {
+                self.ctx.apply_wait.flush();
+                self.ctx.apply_time.flush();
+            }
         }
     }
 }
@@ -323,9 +352,10 @@ impl IOWorker {
     fn handle_task(&mut self, task: IOTask) {
         if !task.raft_wb.is_empty() {
             let timer = tikv_util::time::Instant::now();
-            self.engine.persist(task.raft_wb).unwrap();
+            let write_size = self.engine.persist(task.raft_wb).unwrap();
             let write_raft_db_time = duration_to_sec(timer.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_db_time);
+            STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(write_size as f64);
         }
         let timer = tikv_util::time::Instant::now();
         for mut ready in task.readies {

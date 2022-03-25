@@ -36,6 +36,7 @@ use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
 use raftstore::store::util::is_region_initialized;
+use tikv_util::time::duration_to_sec;
 use txn_types::{Key, WriteBatchFlags};
 
 /// Limits the maximum number of regions returned by error.
@@ -175,6 +176,11 @@ impl<'a> PeerMsgHandler<'a> {
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
+                    self.ctx
+                        .raft_metrics
+                        .propose
+                        .request_wait_time
+                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
                     self.propose_raft_command(cmd.request, cmd.callback);
                 }
                 PeerMsg::Tick => self.on_tick(),

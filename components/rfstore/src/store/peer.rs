@@ -1195,6 +1195,10 @@ impl Peer {
         }
         let mut ready = self.raft_group.ready();
         self.on_role_changed(ctx, &ready);
+        ctx.raft_metrics.ready.has_ready_region += 1;
+        ctx.raft_metrics.ready.commit += ready.committed_entries().len() as u64;
+        ctx.raft_metrics.ready.append += ready.entries().len() as u64;
+        ctx.raft_metrics.ready.message += ready.messages().len() as u64;
 
         // TODO(x) on leader commit index change.
 

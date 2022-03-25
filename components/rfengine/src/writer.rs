@@ -118,6 +118,10 @@ impl WALWriter {
         self.file_off = 0;
         Ok(())
     }
+
+    pub(crate) fn buf_size(&mut self) -> usize {
+        self.buf.len()
+    }
 }
 
 pub(crate) fn get_wal_file_path(dir: &Path, epoch_id: u32) -> Result<PathBuf> {

@@ -14,6 +14,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, BatchSplitResponse,
     ChangePeerRequest, RaftCmdRequest, RaftCmdResponse, RaftResponseHeader,
 };
+use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, EntryType};
 use raft::StateRole;
@@ -28,6 +29,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::vec::Drain;
+use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 use time::Timespec;
@@ -162,6 +164,7 @@ pub(crate) struct ApplyBatch {
     pub(crate) applier: Arc<Mutex<Applier>>,
     pub(crate) msgs: Vec<ApplyMsg>,
     pub(crate) applying_cnt: Arc<AtomicU64>,
+    pub(crate) send_time: Instant,
 }
 
 /// The Applier of a Region which is responsible for handling committed
@@ -1437,6 +1440,8 @@ pub(crate) struct ApplyContext {
     pub(crate) exec_log_index: u64,
     pub(crate) exec_log_term: u64,
     pub(crate) wb: KVWriteBatch,
+    pub(crate) apply_wait: LocalHistogram,
+    pub(crate) apply_time: LocalHistogram,
 }
 
 impl ApplyContext {
@@ -1453,6 +1458,8 @@ impl ApplyContext {
             exec_log_index: Default::default(),
             exec_log_term: Default::default(),
             wb: KVWriteBatch::new(),
+            apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
+            apply_time: APPLY_TIME_HISTOGRAM.local(),
         }
     }
 

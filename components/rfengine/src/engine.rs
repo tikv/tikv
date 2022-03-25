@@ -180,23 +180,24 @@ impl RFEngine {
         Ok(en)
     }
 
-    pub fn write(&self, wb: WriteBatch) -> Result<()> {
+    pub fn write(&self, wb: WriteBatch) -> Result<usize> {
         self.apply(&wb);
         self.persist(wb)
     }
 
-    pub fn persist(&self, wb: WriteBatch) -> Result<()> {
+    pub fn persist(&self, wb: WriteBatch) -> Result<usize> {
         let mut writer = self.writer.lock().unwrap();
         let epoch_id = writer.epoch_id;
         for (_, data) in &wb.regions {
             writer.append_region_data(data);
         }
+        let size = writer.buf_size();
         let rotated = writer.flush()?;
         drop(writer);
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
         }
-        Ok(())
+        Ok(size)
     }
 
     // apply applies the write batch to the memory before persist, so it can be retrieved

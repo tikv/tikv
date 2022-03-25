@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Debug;
-use std::time::Instant;
 
 use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot};
 use kvenginepb::ChangeSet;
@@ -14,6 +13,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::{metapb, pdpb, raft_serverpb as rspb};
 use raft_proto::eraftpb;
 use raftstore::store::util::KeysInfoFormatter;
+use tikv_util::time::Instant;
 
 use super::{Peer, RaftApplyState};
 
