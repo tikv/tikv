@@ -16,6 +16,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref PD_BUCKETS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_pd_buckets_message_total",
+        "Total number of PD buckets messages.",
+        &["type"]
+    )
+    .unwrap();
     pub static ref PD_RECONNECT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_pd_reconnect_total",
         "Total number of PD reconnections.",
@@ -25,6 +31,11 @@ lazy_static! {
     pub static ref PD_PENDING_HEARTBEAT_GAUGE: IntGauge = register_int_gauge!(
         "tikv_pd_pending_heartbeat_total",
         "Total number of pending region heartbeat"
+    )
+    .unwrap();
+    pub static ref PD_PENDING_BUCKETS_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_pd_pending_buckets_total",
+        "Total number of pending region buckets"
     )
     .unwrap();
     pub static ref PD_VALIDATE_PEER_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(

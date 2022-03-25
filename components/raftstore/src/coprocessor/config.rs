@@ -107,22 +107,24 @@ impl Config {
                 self.region_split_keys
             ));
         }
-        if self.region_split_size.0 < self.region_bucket_size.0 {
-            return Err(box_err!(
-                "region split size {} must >= region bucket size {}",
-                self.region_split_size.0,
-                self.region_bucket_size.0
-            ));
-        }
-        if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
-            return Err(box_err!(
-                "large region threshold size {} must >= region bucket size {}",
-                self.region_size_threshold_for_approximate.0,
-                self.region_bucket_size.0
-            ));
-        }
-        if self.region_bucket_size.0 == 0 {
-            return Err(box_err!("region_bucket size cannot be 0."));
+        if self.enable_region_bucket {
+            if self.region_split_size.0 < self.region_bucket_size.0 {
+                return Err(box_err!(
+                    "region split size {} must >= region bucket size {}",
+                    self.region_split_size.0,
+                    self.region_bucket_size.0
+                ));
+            }
+            if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
+                return Err(box_err!(
+                    "large region threshold size {} must >= region bucket size {}",
+                    self.region_size_threshold_for_approximate.0,
+                    self.region_bucket_size.0
+                ));
+            }
+            if self.region_bucket_size.0 == 0 {
+                return Err(box_err!("region_bucket size cannot be 0."));
+            }
         }
         Ok(())
     }
@@ -166,5 +168,11 @@ mod tests {
         cfg.region_max_keys = 10;
         cfg.region_split_keys = 20;
         assert!(cfg.validate().is_err());
+
+        cfg = Config::default();
+        cfg.enable_region_bucket = false;
+        cfg.region_split_size = ReadableSize(20);
+        cfg.region_bucket_size = ReadableSize(30);
+        assert!(cfg.validate().is_ok());
     }
 }

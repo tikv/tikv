@@ -262,6 +262,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             config.quota.foreground_cpu_time,
             config.quota.foreground_write_bandwidth,
             config.quota.foreground_read_bandwidth,
+            config.quota.max_delay_duration,
         ));
 
         TiKVServer {
