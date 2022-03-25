@@ -7,7 +7,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
-use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
+use engine_traits::{
+    EncryptionKeyManager, EncryptionMethod as DBEncryptionMethod, FileEncryptionInfo,
+};
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -591,7 +593,12 @@ impl DataKeyManager {
             writer,
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
-            Iv::from_slice(&file.iv)?,
+            if file.iv.is_empty() {
+                debug_assert!(file.method == DBEncryptionMethod::Plaintext);
+                Iv::Empty
+            } else {
+                Iv::from_slice(&file.iv)?
+            },
         )
     }
 
@@ -616,7 +623,12 @@ impl DataKeyManager {
             reader,
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
-            Iv::from_slice(&file.iv)?,
+            if file.iv.is_empty() {
+                debug_assert!(file.method == DBEncryptionMethod::Plaintext);
+                Iv::Empty
+            } else {
+                Iv::from_slice(&file.iv)?
+            },
         )
     }
 
