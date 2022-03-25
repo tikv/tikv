@@ -1477,7 +1477,7 @@ impl RaftDataStateMachine {
     // `after_dump_data` involves two atomic operations, insert a check point between
     // them to test crash safety.
     #[cfg(test)]
-    fn checked_after_dump_data_with<F: Fn()>(&mut self, check: &F) {
+    fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
         assert!(Self::data_exists(&self.source));
         assert!(Self::data_exists(&self.target));
         Self::must_remove(&self.source); // Enters the `Completed` state.
@@ -2056,7 +2056,7 @@ yyy = 100
                 }
                 fs::copy(&source_file, &target_file).unwrap();
                 check();
-                state.checked_after_dump_data_with(&check);
+                state.after_dump_data_with_check(&check);
             }
             check();
         }
