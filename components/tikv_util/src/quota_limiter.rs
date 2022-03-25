@@ -181,8 +181,8 @@ mod tests {
 
     #[test]
     fn test_quota_limiter() {
-        // refill duration = 50ms
-        // bucket capacity = 50
+        // refill duration = 100ms
+        // bucket capacity = 100
         let quota_limiter = QuotaLimiter::new(
             1000,
             ReadableSize::kb(1),
@@ -193,22 +193,22 @@ mod tests {
         let thread_start_time = ThreadTime::now();
 
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(20));
+        sample.add_cpu_time(Duration::from_millis(60));
         let should_delay = block_on(quota_limiter.async_consume(sample));
         assert_eq!(should_delay, Duration::ZERO);
 
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(30));
+        sample.add_cpu_time(Duration::from_millis(40));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(50));
+        assert_eq!(should_delay, Duration::from_millis(100));
 
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(30));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        // should less 20+30+30
-        assert!(should_delay < Duration::from_millis(80));
+        // should less 60+40+30
+        assert!(should_delay < Duration::from_millis(130));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
