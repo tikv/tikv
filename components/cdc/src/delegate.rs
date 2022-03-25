@@ -762,6 +762,8 @@ impl Delegate {
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
             if downstreams.is_empty() {
+                // Stop observing when the last downstream is removed. Otherwise the observer
+                // will keep pushing events to the delegate.
                 self.stop_observing();
             }
             return Some(downstream);
