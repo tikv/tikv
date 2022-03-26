@@ -3073,10 +3073,11 @@ impl TiKvConfig {
             .infer_raft_engine_path(None)
             .map_err(|e| e.to_string())?;
 
-        // FIXME: We cannot reliably determine the actual value of `last_cfg.raft_engine.enable`,
-        // because some old versions don't have this field (so it is automatically interpreted as
-        // the current default value). To be safe, we will check both engines regardless of whether
-        // raft engine is enabled.
+        // FIXME: We cannot reliably determine the actual value of
+        // `last_cfg.raft_engine.enable`, because some old versions don't have
+        // this field (so it is automatically interpreted as the current
+        // default value). To be safe, we will check both engines regardless
+        // of whether raft engine is enabled.
         if last_raftdb_dir != self.raft_store.raftdb_path {
             return Err(format!(
                 "raft db dir have been changed, former is '{}', \
@@ -3091,7 +3092,7 @@ impl TiKvConfig {
                 last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
             ));
         }
-        if !last_raft_engine_dir.is_empty() && last_raft_engine_dir != self.raft_engine.config.dir {
+        if last_raft_engine_dir != self.raft_engine.config.dir {
             return Err(format!(
                 "raft engine dir have been changed, former is '{}', \
                  current is '{}', please check if it is expected.",
