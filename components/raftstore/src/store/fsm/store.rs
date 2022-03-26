@@ -854,29 +854,30 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 inspector.record_store_process(dur);
             }
         }
-        if self.poll_ctx.has_ready && self.poll_ctx.sync_write_worker.is_some() {
-            match &mut self.poll_ctx.sync_write_worker {
-                Some(write_worker) => {
-                    let write_begin = TiInstant::now();
-                    write_worker.write_to_db(false);
-                    let write_finish = TiInstant::now();
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.has_ready {
+                let write_begin = TiInstant::now();
+                write_worker.write_to_db(false);
+                let write_finish = TiInstant::now();
 
-                    if !latency_inspect.is_empty() {
-                        for mut inspector in latency_inspect {
-                            inspector.record_store_write(
-                                write_finish.saturating_duration_since(write_begin),
-                            );
-                            inspector.finish();
-                        }
-                    }
-
-                    for peer in peers.iter_mut().flatten() {
-                        PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
+                if !latency_inspect.is_empty() {
+                    for mut inspector in latency_inspect {
+                        inspector.record_store_write(
+                            write_finish.saturating_duration_since(write_begin),
+                        );
+                        inspector.finish();
                     }
                 }
-                None => {}
+
+                for peer in peers.iter_mut().flatten() {
+                    PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
+                }
+            } else {
+                for inspector in latency_inspect {
+                    inspector.finish();
+                }
             }
-        } else if !latency_inspect.is_empty() {
+        } else {
             let now = TiInstant::now();
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
             if let Err(err) =
@@ -889,7 +890,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
         dur = self.timer.saturating_elapsed();
-
         if self.poll_ctx.has_ready {
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
