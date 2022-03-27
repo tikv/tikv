@@ -38,8 +38,8 @@ use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
-    self, GetEntriesContext, Progress, ProgressState, ReadState, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
+    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
 };
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
@@ -4405,7 +4405,7 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
-        let mut probing = false;
+        let mut disconnected = false;
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
@@ -4418,8 +4418,8 @@ where
                     alive_cache_idx = p.matched;
                 }
             }
-            if p.state == ProgressState::Probe {
-                probing = true;
+            if !p.recent_active {
+                disconnected = true;
             }
         }
         // When an election happened or a new peer is added, replicated_idx can be 0.
@@ -4447,9 +4447,9 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        let mut compact_idx = if force_compact && replicated_idx > first_idx && !probing {
+        let mut compact_idx = if force_compact && replicated_idx > first_idx && !disconnected {
             replicated_idx
-        } else if force_compact && probing {
+        } else if force_compact && disconnected {
             std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
         } else if (applied_idx > first_idx
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
