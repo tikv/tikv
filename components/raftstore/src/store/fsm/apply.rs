@@ -3458,7 +3458,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         catch_up_logs: CatchUpLogs,
     ) {
-        fail_point!("after_handle_catch_up_logs_for_merge");
+        fail_point!("after_handle_catch_up_logs_for_merge", |_| {});
         fail_point!(
             "after_handle_catch_up_logs_for_merge_1003",
             self.delegate.id() == 1003,
