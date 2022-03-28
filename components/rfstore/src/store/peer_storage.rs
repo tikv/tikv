@@ -218,7 +218,7 @@ impl PeerStorage {
             let meta = kvengine::ShardMeta::new(&change_set);
             shard_meta = Some(meta);
         }
-        let last_term = init_last_term(&engines.raft, &region, raft_state)?;
+        let last_term = init_last_term(&engines, &region, raft_state)?;
         let mut initial_flushed = false;
         if let Some(shard) = engines.kv.get_shard(region.get_id()) {
             initial_flushed = shard.get_initial_flushed();
@@ -531,12 +531,7 @@ fn init_raft_state(raft_engine: &rfengine::RFEngine, region: &metapb::Region) ->
 fn init_apply_state(kv_engine: &kvengine::Engine, region: &metapb::Region) -> RaftApplyState {
     if let Some(shard) = kv_engine.get_shard(region.get_id()) {
         let mut term_bin = shard.get_property(TERM_KEY).unwrap();
-        let mut applied_index = shard.get_write_sequence();
-        if applied_index < shard.get_meta_sequence() {
-            // When a shard's last raft log is meta change,
-            // the write sequence is less than meta sequence.
-            applied_index = shard.get_meta_sequence();
-        }
+        let applied_index = shard.get_write_sequence();
         return RaftApplyState::new(applied_index, term_bin.get_u64_le());
     }
     if region.get_peers().len() > 0 {
@@ -546,7 +541,7 @@ fn init_apply_state(kv_engine: &kvengine::Engine, region: &metapb::Region) -> Ra
 }
 
 fn init_last_term(
-    rf: &rfengine::RFEngine,
+    engines: &Engines,
     region: &metapb::Region,
     raft_state: RaftState,
 ) -> Result<u64> {
@@ -558,15 +553,19 @@ fn init_last_term(
     } else {
         assert!(last_index > RAFT_INIT_LOG_INDEX)
     }
-    let term = rf.get_term(region.get_id(), last_index);
-    if term.is_none() {
-        return Err(box_err!(
-            "region {} at index {} doesn't exists, may lost data",
-            region.get_id(),
-            last_index
-        ));
+    let term = engines.raft.get_term(region.get_id(), last_index);
+    if term.is_some() {
+        return Ok(term.unwrap());
     }
-    Ok(term.unwrap())
+    if let Some(shard) = engines.kv.get_shard(region.get_id()) {
+        let term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
+        return Ok(term);
+    }
+    return Err(box_err!(
+        "region {} at index {} doesn't exists, may lost data",
+        region.get_id(),
+        last_index
+    ));
 }
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
