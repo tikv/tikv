@@ -10,7 +10,7 @@ use tikv_util::info;
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
-const DEFAULT_SAMPLE_NUM: usize = 20;
+pub const DEFAULT_SAMPLE_NUM: usize = 20;
 const DEFAULT_QPS_THRESHOLD: usize = 3000;
 const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
 

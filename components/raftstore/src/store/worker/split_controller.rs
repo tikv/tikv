@@ -632,6 +632,7 @@ impl AutoSplitController {
 mod tests {
     use super::*;
     use crate::store::util::build_key_range;
+    use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
     use txn_types::Key;
 
     enum Position {
