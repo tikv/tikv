@@ -41,7 +41,7 @@ use raftstore::{
 };
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -263,11 +263,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !txn_extra.is_empty() {
-                tx.schedule(txn_extra);
-            }
-        }
+        self.schedule_txn_extra(txn_extra);
 
         let cb = StoreCallback::write_ext(
             Box::new(move |resp| {
@@ -486,6 +482,14 @@ where
         let end = keys::data_end_key(end);
         self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
+    }
+
+    fn schedule_txn_extra(&self, txn_extra: TxnExtra) {
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
     }
 }
 
