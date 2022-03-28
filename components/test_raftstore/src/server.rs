@@ -348,6 +348,7 @@ impl Simulator for ServerCluster {
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
+            cfg.quota.max_delay_duration,
         ));
         let store = create_raft_storage(
             engine,
