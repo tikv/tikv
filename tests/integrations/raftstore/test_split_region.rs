@@ -15,7 +15,7 @@ use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
-use raftstore::store::{Bucket, Callback, SplitCheckBucketRange, WriteResponse};
+use raftstore::store::{Bucket, Callback, BucketRange, WriteResponse};
 use raftstore::Result;
 use test_raftstore::*;
 use tikv::storage::kv::SnapshotExt;
@@ -1031,8 +1031,8 @@ fn test_refresh_region_bucket_keys() {
     // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more buckets
     let region = pd_client.get_region(b"k11").unwrap();
     let bucket_ranges = vec![
-        SplitCheckBucketRange(vec![], b"k12".to_vec()),
-        SplitCheckBucketRange(b"k12".to_vec(), vec![]),
+        BucketRange(vec![], b"k12".to_vec()),
+        BucketRange(b"k12".to_vec(), vec![]),
     ];
     let buckets = vec![
         Bucket {
@@ -1082,9 +1082,9 @@ fn test_refresh_region_bucket_keys() {
     ];
 
     let bucket_ranges = vec![
-        SplitCheckBucketRange(b"k11".to_vec(), b"k12".to_vec()),
-        SplitCheckBucketRange(b"k121".to_vec(), b"k122".to_vec()),
-        SplitCheckBucketRange(b"k122".to_vec(), vec![]),
+        BucketRange(b"k11".to_vec(), b"k12".to_vec()),
+        BucketRange(b"k121".to_vec(), b"k122".to_vec()),
+        BucketRange(b"k122".to_vec(), vec![]),
     ];
     expected_buckets.set_keys(
         vec![
@@ -1143,8 +1143,8 @@ fn test_gen_split_check_bucket_ranges() {
     cluster.must_put(b"k12", b"v1");
 
     let expected_bucket_ranges = vec![
-        SplitCheckBucketRange(vec![], b"k11".to_vec()),
-        SplitCheckBucketRange(b"k11".to_vec(), vec![]),
+        BucketRange(vec![], b"k11".to_vec()),
+        BucketRange(b"k11".to_vec(), vec![]),
     ];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 

@@ -391,11 +391,15 @@ where
         let mut buckets = Vec::new();
         let mut bucket = Bucket::default();
         let empty_bucket = vec![];
-        let (mut skip, bucket_range_list) = if let Some(ref bucket_range_list) = bucket_ranges {
-            (bucket_range_list.is_empty(), bucket_range_list)
-        } else {
-            (false, &empty_bucket)
-        };
+        let (mut skip_check_bucket, bucket_range_list) =
+            if let Some(ref bucket_range_list) = bucket_ranges {
+                (
+                    bucket_range_list.is_empty() || !host.enable_region_bucket(),
+                    bucket_range_list,
+                )
+            } else {
+                (!host.enable_region_bucket(), &empty_bucket)
+            };
 
         MergedIterator::<<E as Iterable>::Iterator>::new(
             &self.engine,
@@ -409,13 +413,17 @@ where
             let mut keys = 0;
             let mut bucket_size: u64 = 0;
             let mut bucket_range_idx = 0;
+            let mut skip_on_kv = false;
             while let Some(e) = iter.next() {
-                if host.on_kv(region, &e) {
+                if skip_on_kv && skip_check_bucket {
                     return;
+                }
+                if !skip_on_kv && host.on_kv(region, &e) {
+                    skip_on_kv = true;
                 }
                 size += e.entry_size() as u64;
                 keys += 1;
-                if host.enable_region_bucket() && !skip {
+                if !skip_check_bucket {
                     let origin_key = keys::origin_key(e.key());
                     if bucket_range_list.is_empty() {
                         bucket_size += e.entry_size() as u64;
@@ -437,7 +445,7 @@ where
                             }
                         }
                         if bucket_range_idx == bucket_range_list.len() {
-                            skip = true;
+                            skip_check_bucket = true;
                         } else if origin_key >= bucket_range_list[bucket_range_idx].0.as_slice() {
                             // e.key() is between bucket_range_list[bucket_range_idx].0, bucket_range_list[bucket_range_idx].1
                             bucket_size += e.entry_size() as u64;

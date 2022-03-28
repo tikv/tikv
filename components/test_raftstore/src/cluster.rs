@@ -1685,7 +1685,7 @@ impl<T: Simulator> Cluster<T> {
         &mut self,
         region: &metapb::Region,
         buckets: Vec<Bucket>,
-        bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        bucket_ranges: Option<Vec<BucketRange>>,
         expect_buckets: Option<Buckets>,
     ) -> u64 {
         let leader = self.leader_of_region(region.get_id()).unwrap();
@@ -1720,7 +1720,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn send_half_split_region_message(
         &mut self,
         region: &metapb::Region,
-        expected_bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        expected_bucket_ranges: Option<Vec<BucketRange>>,
     ) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();

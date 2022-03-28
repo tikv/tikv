@@ -240,7 +240,7 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{
-        CasualMessage, KeyEntry, SplitCheckBucketRange, SplitCheckRunner, SplitCheckTask,
+        CasualMessage, KeyEntry, BucketRange, SplitCheckRunner, SplitCheckTask,
     };
     use collections::HashSet;
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
@@ -334,7 +334,7 @@ pub mod tests {
 
     pub fn must_generate_buckets_approximate(
         rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
-        bucket_range: Option<SplitCheckBucketRange>,
+        bucket_range: Option<BucketRange>,
         min_leap: i32,
         max_leap: i32,
     ) {
@@ -580,10 +580,10 @@ pub mod tests {
             region.clone(),
             true,
             CheckPolicy::Approximate,
-            Some(vec![SplitCheckBucketRange(start.clone(), end.clone())]),
+            Some(vec![BucketRange(start.clone(), end.clone())]),
         ));
 
-        must_generate_buckets_approximate(&rx, Some(SplitCheckBucketRange(start, end)), 150, 450);
+        must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450);
         drop(rx);
     }
 

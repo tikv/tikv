@@ -22,7 +22,7 @@ use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
-use crate::store::worker::{Bucket, SplitCheckBucketRange};
+use crate::store::worker::{Bucket, BucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
@@ -47,7 +47,7 @@ pub struct WriteResponse {
 #[derive(Debug)]
 pub struct PeerInternalStat {
     pub buckets: Arc<BucketMeta>,
-    pub bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+    pub bucket_ranges: Option<Vec<BucketRange>>,
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -409,7 +409,7 @@ pub enum CasualMessage<EK: KvEngine> {
     RefreshRegionBuckets {
         region_epoch: RegionEpoch,
         buckets: Vec<Bucket>,
-        bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        bucket_ranges: Option<Vec<BucketRange>>,
         cb: Callback<EK::Snapshot>,
     },
 

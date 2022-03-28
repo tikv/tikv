@@ -35,7 +35,7 @@ pub use self::refresh_config::{
 };
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
 pub use self::split_check::{
-    Bucket, BucketRange as SplitCheckBucketRange, KeyEntry, Runner as SplitCheckRunner,
+    Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner,
     Task as SplitCheckTask,
 };
 pub use self::split_config::{SplitConfig, SplitConfigManager};

@@ -133,7 +133,7 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::store::{SplitCheckBucketRange, SplitCheckRunner, SplitCheckTask};
+    use crate::store::{BucketRange, SplitCheckRunner, SplitCheckTask};
     use engine_traits::{MiscExt, SyncMutable};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
@@ -251,7 +251,7 @@ mod tests {
         let start = format!("{:04}", 1).into_bytes();
         let end = format!("{:04}", 2).into_bytes();
         exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
-        let bucket_range = SplitCheckBucketRange(
+        let bucket_range = BucketRange(
             Key::from_raw(&start).as_encoded().clone(),
             Key::from_raw(&end).as_encoded().clone(),
         );

@@ -73,7 +73,7 @@ use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
     Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
-    RegionTask, SplitCheckBucketRange, SplitCheckTask,
+    RegionTask, BucketRange, SplitCheckTask,
 };
 use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]
@@ -4737,7 +4737,7 @@ where
         &mut self,
         region_epoch: RegionEpoch,
         mut buckets: Vec<Bucket>,
-        bucket_ranges: Option<Vec<SplitCheckBucketRange>>,
+        bucket_ranges: Option<Vec<BucketRange>>,
         _cb: Callback<EK::Snapshot>,
     ) {
         #[cfg(any(test, feature = "testexport"))]
@@ -4913,7 +4913,7 @@ where
     }
 
     // generate bucket range list to run split-check (to further split buckets)
-    fn gen_bucket_range_for_update(&self) -> Option<Vec<SplitCheckBucketRange>> {
+    fn gen_bucket_range_for_update(&self) -> Option<Vec<BucketRange>> {
         if !self.ctx.coprocessor_host.cfg.enable_region_bucket {
             return None;
         }
@@ -4967,9 +4967,9 @@ where
                 self.ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
             if diff_in_bytes >= bucket_update_diff_size_threshold {
                 if i == stats.write_bytes.len() - 1 {
-                    bucket_ranges.push(SplitCheckBucketRange(keys[i].clone(), vec![]));
+                    bucket_ranges.push(BucketRange(keys[i].clone(), vec![]));
                 } else {
-                    bucket_ranges.push(SplitCheckBucketRange(keys[i].clone(), keys[i + 1].clone()));
+                    bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
                 }
             }
         }
