@@ -1460,7 +1460,7 @@ impl RaftDataStateMachine {
                     return true;
                 }
             } else {
-                // Halfway between Init and Migrating. Rollback to Init.
+                // Halfway between Init and Migrating.
                 assert!(!Self::data_exists(&self.target));
             }
         }
