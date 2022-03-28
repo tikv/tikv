@@ -1343,8 +1343,8 @@ fn test_resolve_lock_deadline() {
     // Resolve lock, this needs two rounds, two process_read and two process_write.
     // So it needs more than 400ms. It will exceed the deadline.
     ctx.max_execution_duration_ms = 300;
-    fail::cfg("txn_before_process_read", "sleep(100)").unwrap();
-    fail::cfg("txn_before_process_write", "sleep(100)").unwrap();
+    fail::cfg("txn_before_process_read", "1*sleep(100)->sleep(200)").unwrap();
+    fail::cfg("txn_before_process_write", "1*sleep(100)->sleep(500)").unwrap();
     let (tx, rx) = channel();
     let mut txn_status = HashMap::default();
     txn_status.insert(TimeStamp::new(10), TimeStamp::new(0));
