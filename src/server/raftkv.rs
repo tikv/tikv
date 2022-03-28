@@ -21,6 +21,7 @@ use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_DEFAULT, CF_L
 use kvproto::{
     errorpb,
     kvrpcpb::Context,
+    kvrpcpb::IsolationLevel,
     metapb,
     raft_cmdpb::{
         CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -40,7 +41,7 @@ use raftstore::{
 };
 use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, WriteBatchFlags};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -262,11 +263,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !txn_extra.is_empty() {
-                tx.schedule(txn_extra);
-            }
-        }
+        self.schedule_txn_extra(txn_extra);
 
         let cb = StoreCallback::write_ext(
             Box::new(move |resp| {
@@ -486,6 +483,14 @@ where
         self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
     }
+
+    fn schedule_txn_extra(&self, txn_extra: TxnExtra) {
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -532,6 +537,9 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
+                // The replica read is not compatible with `RcCheckTs` isolation level yet.
+                // It's ensured in the tidb side when `RcCheckTs` is enabled for read requests,
+                // the replica read would not be enabled at the same time.
                 let res = self.concurrency_manager.read_range_check(
                     start_key.as_ref(),
                     end_key.as_ref(),
@@ -541,6 +549,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             key,
                             start_ts,
                             &Default::default(),
+                            IsolationLevel::Si,
                         )
                     },
                 );

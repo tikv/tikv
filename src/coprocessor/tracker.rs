@@ -2,6 +2,7 @@
 
 use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::ScanDetailV2;
+use pd_client::BucketMeta;
 
 use crate::storage::kv::PerfStatisticsDelta;
 
@@ -68,6 +69,8 @@ pub struct Tracker {
     slow_log_threshold: Duration,
     scan_process_time_ms: u64,
 
+    pub buckets: Option<Arc<BucketMeta>>,
+
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
 }
@@ -95,6 +98,7 @@ impl Tracker {
             scan_process_time_ms: 0,
             slow_log_threshold,
             req_ctx,
+            buckets: None,
         }
     }
 
@@ -326,7 +330,6 @@ impl Tracker {
             .observe(total_storage_stats.write.processed_keys as f64);
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
-        tls_collect_read_flow(self.req_ctx.context.get_region_id(), &total_storage_stats);
         tls_collect_perf_stats(self.req_ctx.tag, &self.total_perf_stats);
 
         let peer = self.req_ctx.context.get_peer();
@@ -345,6 +348,13 @@ impl Tracker {
             Key::from_raw(start_key).as_encoded(),
             Key::from_raw(end_key).as_encoded(),
             reverse_scan,
+        );
+        tls_collect_read_flow(
+            self.req_ctx.context.get_region_id(),
+            Some(start_key),
+            Some(end_key),
+            &total_storage_stats,
+            self.buckets.as_ref(),
         );
         self.current_stage = TrackerState::Tracked;
     }
