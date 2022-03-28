@@ -1453,9 +1453,11 @@ impl RaftDataStateMachine {
             if let Some(real_source) = self.read_marker() {
                 // Recover from Migrating state.
                 if real_source == self.target {
+                    assert!(Self::data_exists(&self.target));
                     Self::must_remove(&self.source);
                     return false;
                 } else {
+                    assert!(real_source == self.source);
                     Self::must_remove(&self.target);
                     return true;
                 }
@@ -2071,6 +2073,15 @@ yyy = 100
             // Dump to target.
             if state.before_open_target() {
                 check();
+                // Simulate partial writes.
+                let marker = root.join("MIGRATING-RAFT");
+                if marker.exists() {
+                    let backup_marker = fs::read_to_string(&marker).unwrap();
+                    fs::write(&marker, "").unwrap();
+                    check();
+                    fs::write(&marker, backup_marker).unwrap();
+                }
+
                 let source_file = source.join("file");
                 let target_file = target.join("file");
                 if !target.exists() {
@@ -2111,16 +2122,17 @@ yyy = 100
         let source_file = source.join("file");
         File::create(&source_file).unwrap();
 
-        let shadow = dir.path().join("shadow");
-        let shadow_source = shadow.join("source");
-        let shadow_target = shadow.join("target");
+        let backup = dir.path().join("backup");
 
         run_migration(&root, &source, &target, || {
+            copy_dir(&root, &backup).unwrap();
+
             // Simulate restart and migrate in halfway.
-            copy_dir(&root, &shadow).unwrap();
-            run_migration(&shadow, &shadow_source, &shadow_target, || {});
-            copy_dir(&root, &shadow).unwrap();
-            run_migration(&shadow, &shadow_target, &shadow_source, || {});
+            run_migration(&root, &source, &target, || {});
+            copy_dir(&backup, &root).unwrap();
+            //
+            run_migration(&root, &source, &target, || {});
+            copy_dir(&backup, &root).unwrap();
         });
     }
 }
