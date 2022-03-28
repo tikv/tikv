@@ -498,7 +498,9 @@ impl Applier {
             }
             _ => panic!("unknown custom log type"),
         }
+        let timer = Instant::now();
         ctx.engine.write(wb);
+        ctx.apply_time.observe(timer.saturating_elapsed_secs());
         // self.metrics.written_bytes += wb.estimated_size() as u64;
         // self.metrics.written_keys += wb.num_entries() as u64;
         wb.reset();

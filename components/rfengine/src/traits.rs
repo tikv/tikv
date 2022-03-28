@@ -2,11 +2,13 @@
 
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::*;
 use crate::{RFEngine, WriteBatch};
 use engine_traits::Error::EntriesUnavailable;
 use engine_traits::{RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
+use std::time::Instant;
 
 impl RaftEngineReadOnly for RFEngine {
     fn get_raft_state(&self, _raft_group_id: u64) -> Result<Option<RaftLocalState>> {
@@ -36,6 +38,7 @@ impl RaftEngineReadOnly for RFEngine {
         if map_ref.is_none() {
             return Ok(0);
         }
+        let timer = Instant::now();
         let map_ref = map_ref.unwrap();
         let region_data = map_ref.read().unwrap();
         for i in low..high {
@@ -50,6 +53,8 @@ impl RaftEngineReadOnly for RFEngine {
                 }
             }
         }
+        drop(region_data);
+        ENGINE_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         return Ok(buf.len() - old_len);
     }
 }

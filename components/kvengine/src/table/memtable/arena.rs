@@ -1,10 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::metrics::{elapsed_secs, ENGINE_ARENA_GROW_DURATION_HISTOGRAM};
 use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use std::{mem, ptr, slice};
 
 use super::super::table::Value;
@@ -206,6 +208,7 @@ impl ArenaSegment {
     }
 
     fn grow(&self, min_size: u32) {
+        let timer = Instant::now();
         let block_idx = self.block_idx.load(Ordering::Acquire) as usize;
         let new_block_idx = block_idx + 1;
         let mut new_block_size = block_cap(block_idx);
@@ -216,6 +219,7 @@ impl ArenaSegment {
         self.blocks[new_block_idx].store(new_block, Ordering::Release);
         self.block_idx
             .store(new_block_idx as u32, Ordering::Release);
+        ENGINE_ARENA_GROW_DURATION_HISTOGRAM.observe(elapsed_secs(timer))
     }
 
     #[inline(always)]

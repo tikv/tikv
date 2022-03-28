@@ -10,6 +10,7 @@ use slog_global::info;
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fs,
@@ -21,6 +22,7 @@ use std::{
 };
 use thiserror::Error as ThisError;
 
+use crate::metrics::*;
 use crate::*;
 
 #[derive(Clone)]
@@ -186,6 +188,7 @@ impl RFEngine {
     }
 
     pub fn persist(&self, wb: WriteBatch) -> Result<usize> {
+        let timer = Instant::now();
         let mut writer = self.writer.lock().unwrap();
         let epoch_id = writer.epoch_id;
         for (_, data) in &wb.regions {
@@ -197,6 +200,7 @@ impl RFEngine {
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
         }
+        ENGINE_PERSIST_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         Ok(size)
     }
 
@@ -204,6 +208,7 @@ impl RFEngine {
     // before persist.
     // It is used for async I/O that persist the write batch in another thread.
     pub fn apply(&self, wb: &WriteBatch) {
+        let timer = Instant::now();
         for (region_id, batch_data) in &wb.regions {
             let region_id = *region_id;
             let data_ref = self.get_or_init_region_data(region_id);
@@ -214,6 +219,7 @@ impl RFEngine {
                 self.task_sender.send(Task::Truncate { region_id }).unwrap();
             }
         }
+        ENGINE_APPLY_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
     }
 
     pub fn is_empty(&self) -> bool {

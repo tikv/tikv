@@ -4,16 +4,12 @@ use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
 use async_trait::async_trait;
 use bytes::Bytes;
 use file_system::{IOOp, IORateLimiter, IOType};
-use futures::StreamExt;
-use http::Uri;
-use hyper::client::HttpConnector;
 use rusoto_core::{Region, RusotoError};
 use rusoto_s3::S3;
 use std::io::Write;
 use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,7 +95,7 @@ impl S3FSCore {
         } else {
             end_point
         };
-        let mut region = Region::Custom {
+        let region = Region::Custom {
             name: region,
             endpoint: end_point,
         };

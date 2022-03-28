@@ -25,6 +25,7 @@ extern crate serde_derive;
 extern crate slog_global;
 extern crate core;
 
+mod metrics;
 #[cfg(test)]
 mod tests;
 

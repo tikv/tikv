@@ -40,6 +40,26 @@ impl PeerMsg {
             _ => Callback::None,
         }
     }
+
+    pub(crate) fn size(&self) -> usize {
+        match self {
+            PeerMsg::RaftMessage(msg) => {
+                let entries = msg.get_message().get_entries();
+                let mut size = 0;
+                for entry in entries {
+                    size += entry.data.len();
+                }
+                size
+            }
+            PeerMsg::RaftCommand(cmd) => {
+                if cmd.request.has_custom_request() {
+                    return cmd.request.get_custom_request().data.len();
+                }
+                0
+            }
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Debug)]

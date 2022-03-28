@@ -3,10 +3,9 @@
 use super::*;
 use crate::RaftRouter;
 use crossbeam::channel::RecvTimeoutError;
-use raftstore::store::local_metrics::StoreWriteMetrics;
 use raftstore::store::metrics::{
-    STORE_RAFT_READY_COUNTER, STORE_WRITE_RAFTDB_DURATION_HISTOGRAM,
-    STORE_WRITE_SEND_DURATION_HISTOGRAM, STORE_WRITE_TRIGGER_SIZE_HISTOGRAM,
+    STORE_WRITE_RAFTDB_DURATION_HISTOGRAM, STORE_WRITE_SEND_DURATION_HISTOGRAM,
+    STORE_WRITE_TRIGGER_SIZE_HISTOGRAM,
 };
 use raftstore::store::util;
 use std::collections::HashMap;
@@ -83,6 +82,9 @@ pub(crate) struct RaftWorker {
     last_tick: Instant,
     tick_millis: u64,
 }
+
+const MAX_BATCH_COUNT: usize = 1024;
+const MAX_BATCH_SIZE: usize = 4 * 1024 * 1024;
 
 impl RaftWorker {
     pub(crate) fn new(
@@ -161,10 +163,17 @@ impl RaftWorker {
         let router = &self.router;
         match res {
             Ok((region_id, msg)) => {
+                let mut batch_size = msg.size();
+                let mut batch_cnt = 1;
                 inboxes.append_msg(router, region_id, msg);
                 loop {
                     if let Ok((region_id, msg)) = self.receiver.try_recv() {
+                        batch_size += msg.size();
+                        batch_cnt += 1;
                         inboxes.append_msg(router, region_id, msg);
+                        if batch_cnt > MAX_BATCH_COUNT || batch_size > MAX_BATCH_SIZE {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -262,9 +271,6 @@ impl ApplyWorker {
             for msg in batch.msgs.drain(..) {
                 applier.handle_msg(&mut self.ctx, msg);
             }
-            self.ctx
-                .apply_time
-                .observe(duration_to_sec(timer.saturating_elapsed()));
             batch
                 .applying_cnt
                 .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);

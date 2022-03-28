@@ -9,13 +9,12 @@ use std::time::{Duration, Instant};
 
 use super::keys::raft_state_key;
 use crate::store::{
-    get_preprocess_cmd, region_state_key, Engines, ProposalContext, RaftApplyState, RaftContext,
-    RaftState, RegionIDVer, RegionTask, KV_ENGINE_META_KEY, TERM_KEY,
+    get_preprocess_cmd, region_state_key, Engines, RaftApplyState, RaftContext, RaftState,
+    RegionIDVer, RegionTask, KV_ENGINE_META_KEY, TERM_KEY,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
-use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::PeerState;
 use protobuf::Message;
 use raft::StorageError;

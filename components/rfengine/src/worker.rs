@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
     fs, mem,
@@ -180,6 +181,7 @@ impl Worker {
         if map_ref.is_none() {
             return;
         }
+        let timer = Instant::now();
         let map_ref = map_ref.unwrap();
         let mut region_data = map_ref.write().unwrap();
         if !region_data.need_truncate() {
@@ -188,6 +190,7 @@ impl Worker {
         let index = region_data.truncated_idx;
         region_data.truncate(index);
         drop(region_data);
+        ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         self.truncated_idx.insert(region_id, index);
         let mut removed_epoch_ids = HashSet::new();
         let mut remove_cnt = 0;
