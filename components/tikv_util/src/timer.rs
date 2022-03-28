@@ -255,6 +255,12 @@ mod tests {
         block_on(delay.compat()).unwrap();
         let end = t.clock.now();
         let elapsed = end.duration_since(start);
-        assert!(elapsed >= Duration::from_millis(100), "{:?} {:?} {:?}", start, end, elapsed);
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "{:?} {:?} {:?}",
+            start,
+            end,
+            elapsed
+        );
     }
 }
