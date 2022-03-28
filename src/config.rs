@@ -3058,7 +3058,7 @@ impl TiKvConfig {
         }
         if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "db wal dir have been changed, former db wal_dir is '{}', \
+                "db wal dir have been changed, former is '{}', \
                  current db wal_dir is '{}', please guarantee all data wal logs \
                  have been moved to destination directory.",
                 last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
