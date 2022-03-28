@@ -1387,7 +1387,7 @@ macro_rules! numeric_enum_serializing_mod {
 /// States:
 ///   1. Init - Only source directory contains Raft data.
 ///   2. Migrating - A marker file contains the path of source directory. The source
-///      directory contains a complete copy of Raft data.
+///      directory contains a complete copy of Raft data. Target directory may exist.
 ///   3. Completed - Only target directory contains Raft data. Marker file may exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
@@ -1453,9 +1453,12 @@ impl RaftDataStateMachine {
             if let Some(real_source) = self.read_marker() {
                 // Recover from Migrating state.
                 if real_source == self.target {
-                    assert!(Self::data_exists(&self.target));
-                    Self::must_remove(&self.source);
-                    return false;
+                    if Self::data_exists(&self.target) {
+                        Self::must_remove(&self.source);
+                        return false;
+                    }
+                    // It's actually in Completed state, just in the reverse direction.
+                    // Equivalent to Init state.
                 } else {
                     assert!(real_source == self.source);
                     Self::must_remove(&self.target);
@@ -2133,7 +2136,7 @@ yyy = 100
             run_migration(&root, &source, &target, || {});
             copy_dir(&backup, &root).unwrap();
             //
-            run_migration(&root, &source, &target, || {});
+            run_migration(&root, &target, &source, || {});
             copy_dir(&backup, &root).unwrap();
         });
     }
