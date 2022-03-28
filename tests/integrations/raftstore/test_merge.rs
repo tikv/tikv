@@ -8,12 +8,7 @@ use std::time::*;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
-<<<<<<< HEAD
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-=======
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use raft::eraftpb::ConfChangeType;
->>>>>>> 31d20bfc5... raftstore: fix stale message cause panic (#12054)
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
