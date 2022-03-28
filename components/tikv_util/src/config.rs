@@ -1386,8 +1386,8 @@ macro_rules! numeric_enum_serializing_mod {
 ///
 /// States:
 ///   1. Init - Only source directory contains Raft data.
-///   2. Migrating - A marker file contains the path of source directory. Both source
-///      and target directory contains Raft data.
+///   2. Migrating - A marker file contains the path of source directory. The source
+///      directory contains a complete copy of Raft data.
 ///   3. Completed - Only target directory contains Raft data. Marker file may exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
@@ -1450,19 +1450,22 @@ impl RaftDataStateMachine {
             }
             return false;
         } else if self.in_progress_marker.exists() {
-            // Recover from Migrating state.
-            let real_source = PathBuf::from(fs::read_to_string(&self.in_progress_marker).unwrap());
-            if real_source == self.target {
-                Self::must_remove(&self.source);
-                return false;
+            if let Some(real_source) = self.read_marker() {
+                // Recover from Migrating state.
+                if real_source == self.target {
+                    Self::must_remove(&self.source);
+                    return false;
+                } else {
+                    Self::must_remove(&self.target);
+                    return true;
+                }
             } else {
-                Self::must_remove(&self.target);
+                // Halfway between Init and Migrating. Rollback to Init.
+                assert!(!Self::data_exists(&self.target));
             }
-        } else {
-            // Init -> Migrating.
-            fs::write(&self.in_progress_marker, self.source.to_str().unwrap()).unwrap();
-            Self::sync_dir(&self.root);
         }
+        // Init -> Migrating.
+        self.write_marker();
         true
     }
 
@@ -1483,6 +1486,26 @@ impl RaftDataStateMachine {
         Self::must_remove(&self.source); // Enters the `Completed` state.
         check();
         Self::must_remove(&self.in_progress_marker);
+    }
+
+    fn write_marker(&self) {
+        use std::io::Write;
+        let marker = format!("{}//", self.source.display());
+        let mut f = fs::File::create(&self.in_progress_marker).unwrap();
+        f.write_all(marker.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+        Self::sync_dir(&self.root);
+    }
+
+    // Assumes there is a marker file. Returns None when the content of marker file is
+    // incomplete.
+    fn read_marker(&self) -> Option<PathBuf> {
+        let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
+        if marker.ends_with("//") {
+            Some(PathBuf::from(&marker[..marker.len() - 2]))
+        } else {
+            None
+        }
     }
 
     fn must_remove(path: &Path) {
