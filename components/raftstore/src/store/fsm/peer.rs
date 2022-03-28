@@ -72,8 +72,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    Bucket, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
-    RegionTask, BucketRange, SplitCheckTask,
+    Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate,
+    ReadProgress, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]

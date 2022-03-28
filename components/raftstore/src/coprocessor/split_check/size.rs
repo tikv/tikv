@@ -239,9 +239,7 @@ fn get_approximate_split_keys(
 pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::store::{
-        CasualMessage, KeyEntry, BucketRange, SplitCheckRunner, SplitCheckTask,
-    };
+    use crate::store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use collections::HashSet;
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;

@@ -15,7 +15,7 @@ use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
-use raftstore::store::{Bucket, Callback, BucketRange, WriteResponse};
+use raftstore::store::{Bucket, BucketRange, Callback, WriteResponse};
 use raftstore::Result;
 use test_raftstore::*;
 use tikv::storage::kv::SnapshotExt;

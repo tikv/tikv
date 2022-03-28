@@ -69,6 +69,6 @@ pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
     ReadStats, SplitConfig, SplitConfigManager, TrackVer, WriteStats,
 };
-pub use self::worker::{Bucket, KeyEntry, LocalReader, RegionTask, BucketRange};
+pub use self::worker::{Bucket, BucketRange, KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};
