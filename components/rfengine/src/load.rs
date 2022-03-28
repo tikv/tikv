@@ -24,13 +24,7 @@ pub(crate) struct Epoch {
     pub(crate) id: u32,
     pub(crate) has_state_file: bool,
     pub(crate) has_wal_file: bool,
-    pub(crate) raft_log_files: Mutex<HashMap<u64, RaftLogRange>>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RaftLogRange {
-    pub(crate) start_index: u64,
-    pub(crate) end_index: u64,
+    pub(crate) raft_log_files: Mutex<HashMap<u64, (u64, u64)>>,
 }
 
 pub(crate) fn get_epoch(epoches: &mut HashMap<u32, Epoch>, epoch_id: u32) -> &mut Epoch {
@@ -68,13 +62,10 @@ impl Epoch {
             let start_index = u64::from_str_radix(start_index_buf, 16)?;
             let end_index_buf = &filename_str[END_INDEX_OFFSET..END_INDEX_OFFSET + END_INDEX_LEN];
             let end_index = u64::from_str_radix(end_index_buf, 16)?;
-            self.raft_log_files.lock().unwrap().insert(
-                region_id,
-                RaftLogRange {
-                    start_index,
-                    end_index,
-                },
-            );
+            self.raft_log_files
+                .lock()
+                .unwrap()
+                .insert(region_id, (start_index, end_index));
         }
         Ok(())
     }
@@ -117,8 +108,8 @@ impl RFEngine {
             wal_off = self.load_wal_file(ep.id)?;
         } else {
             let raft_log_files = ep.raft_log_files.lock().unwrap();
-            for (k, v) in raft_log_files.iter() {
-                self.load_raft_log_file(ep.id, *k, *v)?;
+            for (k, (first, end)) in raft_log_files.iter() {
+                self.load_raft_log_file(ep.id, *k, *first, *end)?;
             }
         }
         if ep.has_state_file {
@@ -130,9 +121,8 @@ impl RFEngine {
     pub(crate) fn load_wal_file(&mut self, epoch_id: u32) -> Result<u64> {
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
         it.iterate(|new_data| {
-            let map_ref = self.get_or_init_region_data(new_data.region_id);
-            let mut region_data = map_ref.write().unwrap();
-            region_data.merge(&new_data);
+            let region_data = self.get_or_init_region_data(new_data.region_id);
+            region_data.apply(&new_data);
             region_data.truncate_self()
         })?;
         Ok(it.offset)
@@ -159,11 +149,9 @@ impl RFEngine {
             data = &data[4..];
             let val = &data[..val_len];
             data = &data[val_len..];
-            let map_ref = self.get_or_init_region_data(region_id);
-            let mut region_data = map_ref.write().unwrap();
-            region_data
-                .states
-                .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(val));
+            let region_data = self.get_or_init_region_data(region_id);
+            let mut states = region_data.states.write().unwrap();
+            states.insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(val));
         }
         Ok(())
     }
@@ -172,14 +160,14 @@ impl RFEngine {
         &mut self,
         epoch_id: u32,
         region_id: u64,
-        raft_log_range: RaftLogRange,
+        first: u64,
+        end: u64,
     ) -> Result<()> {
-        let rlog_filename = raft_log_file_name(&self.dir, epoch_id, region_id, raft_log_range);
+        let rlog_filename = raft_log_file_name(&self.dir, epoch_id, region_id, first, end);
         let bin = read_checksum_file(&rlog_filename)?;
-        let new_data = RegionData::decode(&bin);
-        let map_ref = self.get_or_init_region_data(new_data.region_id);
-        let mut old_data = map_ref.write().unwrap();
-        old_data.merge(&new_data);
+        let new_data = RegionBatch::decode(&bin);
+        let old_data = self.get_or_init_region_data(new_data.region_id);
+        old_data.apply(&new_data);
         old_data.truncate_self();
         Ok(())
     }

@@ -75,11 +75,11 @@ impl WALWriter {
         let _ = mem::replace(&mut self.buf, new_buf);
     }
 
-    pub(crate) fn append_region_data(&mut self, region_data: &RegionData) {
-        if self.buf.len() + region_data.encoded_len() > self.buf.capacity() {
+    pub(crate) fn append_region_data(&mut self, region_batch: &RegionBatch) {
+        if self.buf.len() + region_batch.encoded_len() > self.buf.capacity() {
             self.reallocate();
         }
-        region_data.encode_to(&mut self.buf);
+        region_batch.encode_to(&mut self.buf);
     }
 
     pub(crate) fn flush(&mut self) -> Result<bool> {

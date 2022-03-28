@@ -31,7 +31,7 @@ impl WALIterator {
 
     pub(crate) fn iterate<F>(&mut self, mut f: F) -> Result<()>
     where
-        F: FnMut(RegionData),
+        F: FnMut(RegionBatch),
     {
         let filename = wal_file_name(&self.dir, self.epoch_id);
         let fd = fs::File::open(filename)?;
@@ -50,7 +50,7 @@ impl WALIterator {
                         return Ok(());
                     }
                     while batch.len() > 0 {
-                        let region_data = RegionData::decode(batch);
+                        let region_data = RegionBatch::decode(batch);
                         batch = &batch[region_data.encoded_len()..];
                         f(region_data);
                     }

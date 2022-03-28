@@ -20,8 +20,7 @@ impl RaftEngineReadOnly for RFEngine {
         if map_ref.is_none() {
             return Ok(None);
         }
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
+        let region_data = map_ref.unwrap();
         Ok(region_data.get(index))
     }
 
@@ -39,8 +38,7 @@ impl RaftEngineReadOnly for RFEngine {
             return Ok(0);
         }
         let timer = Instant::now();
-        let map_ref = map_ref.unwrap();
-        let region_data = map_ref.read().unwrap();
+        let region_data = map_ref.unwrap();
         for i in low..high {
             let res = region_data.get(i);
             if res.is_none() {
@@ -53,7 +51,6 @@ impl RaftEngineReadOnly for RFEngine {
                 }
             }
         }
-        drop(region_data);
         ENGINE_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         return Ok(buf.len() - old_len);
     }

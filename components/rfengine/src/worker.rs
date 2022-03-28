@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
@@ -20,7 +20,7 @@ use crate::*;
 pub(crate) struct Worker {
     dir: PathBuf,
     epoches: Vec<Epoch>,
-    region_data: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
+    region_data: Arc<dashmap::DashMap<u64, RegionData>>,
     truncated_idx: HashMap<u64, u64>,
     writer: DirectWriter,
     task_rx: Receiver<Task>,
@@ -33,7 +33,7 @@ impl Worker {
         dir: PathBuf,
         epoches: Vec<Epoch>,
         task_rx: Receiver<Task>,
-        region_data: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
+        region_data: Arc<dashmap::DashMap<u64, RegionData>>,
         all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
     ) -> Self {
         let rate_limiter = Arc::new(file_system::IORateLimiter::new(
@@ -122,16 +122,16 @@ impl Worker {
         let epoch_id = self.epoches[epoch_idx].id;
         let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
-        it.iterate(|mut region_data| {
-            if let Some(truncated_idx) = self.truncated_idx.get(&region_data.region_id) {
-                region_data.truncate(*truncated_idx);
+        it.iterate(|mut region_batch| {
+            if let Some(truncated_idx) = self.truncated_idx.get(&region_batch.region_id) {
+                region_batch.truncate(*truncated_idx);
             }
-            batch.merge_region(&region_data);
+            batch.merge_region(region_batch);
         })?;
         let mut generated_files = 0;
-        for (_, mut region_data) in batch.regions {
-            let new_states = mem::replace(&mut region_data.states, BTreeMap::default());
-            let region_states = self.get_region_states(region_data.region_id);
+        for (_, mut region_batch) in batch.regions {
+            let new_states = mem::replace(&mut region_batch.states, BTreeMap::default());
+            let region_states = self.get_region_states(region_batch.region_id);
             for (k, v) in &new_states {
                 if v.len() == 0 {
                     region_states.remove(k);
@@ -139,8 +139,8 @@ impl Worker {
                     region_states.insert(k.clone(), v.clone());
                 }
             }
-            if region_data.raft_logs.len() > 0 {
-                self.write_raft_log_file(epoch_idx, &region_data)?;
+            if region_batch.raft_logs.len() > 0 {
+                self.write_raft_log_file(epoch_idx, region_batch)?;
                 generated_files += 1;
             }
         }
@@ -155,16 +155,13 @@ impl Worker {
         Ok(())
     }
 
-    fn write_raft_log_file(&mut self, epoch_idx: usize, region_data: &RegionData) -> Result<()> {
+    fn write_raft_log_file(&mut self, epoch_idx: usize, region_batch: RegionBatch) -> Result<()> {
         let epoch_id = self.epoches[epoch_idx].id;
-        let filename = raft_log_file_name(
-            &self.dir,
-            epoch_id,
-            region_data.region_id,
-            region_data.range,
-        );
+        let first = region_batch.raft_logs.front().unwrap().index;
+        let end = region_batch.raft_logs.back().unwrap().index + 1;
+        let filename = raft_log_file_name(&self.dir, epoch_id, region_batch.region_id, first, end);
         self.buf.truncate(0);
-        region_data.encode_to(&mut self.buf);
+        region_batch.encode_to(&mut self.buf);
         let checksum = crc32fast::hash(&self.buf);
         self.buf.put_u32_le(checksum);
         self.writer.write_to_file(&self.buf, filename)?;
@@ -172,7 +169,7 @@ impl Worker {
             .raft_log_files
             .lock()
             .unwrap()
-            .insert(region_data.region_id, region_data.range);
+            .insert(region_batch.region_id, (first, end));
         Ok(())
     }
 
@@ -182,14 +179,12 @@ impl Worker {
             return;
         }
         let timer = Instant::now();
-        let map_ref = map_ref.unwrap();
-        let mut region_data = map_ref.write().unwrap();
+        let region_data = map_ref.unwrap();
         if !region_data.need_truncate() {
             return;
         }
-        let index = region_data.truncated_idx;
-        region_data.truncate(index);
-        drop(region_data);
+        let index = region_data.load_truncate_idx();
+        region_data.store_truncate_idx(index);
         ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         self.truncated_idx.insert(region_id, index);
         let mut removed_epoch_ids = HashSet::new();
@@ -197,9 +192,9 @@ impl Worker {
         let mut retain_cnt = 0;
         for ep in &mut self.epoches {
             let mut raft_log_files = ep.raft_log_files.lock().unwrap();
-            if let Some(range) = raft_log_files.get(&region_id) {
-                if range.end_index <= index {
-                    let filename = raft_log_file_name(&self.dir, ep.id, region_id, *range);
+            if let Some((first, end)) = raft_log_files.get(&region_id) {
+                if *end <= index {
+                    let filename = raft_log_file_name(&self.dir, ep.id, region_id, *first, *end);
                     if let Err(err) = fs::remove_file(filename.clone()) {
                         error!("failed to remove rlog file {:?}, {:?}", filename, err);
                     }
@@ -229,11 +224,12 @@ pub(crate) fn raft_log_file_name(
     dir: &PathBuf,
     epoch_id: u32,
     region_id: u64,
-    raft_log_range: RaftLogRange,
+    first: u64,
+    end: u64,
 ) -> PathBuf {
     dir.join(format!(
         "{:08x}_{:016x}_{:016x}_{:016x}.rlog",
-        epoch_id, region_id, raft_log_range.start_index, raft_log_range.end_index
+        epoch_id, region_id, first, end,
     ))
 }
 
