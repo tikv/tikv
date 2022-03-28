@@ -3660,7 +3660,8 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#3d94cb5cf0492da4947546b0c2a0b083edbf9328"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a27c16860a320789970c9113070f024ce4d731bfb8a5a64d1cb1104d91a20e7"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3690,7 +3691,8 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#3d94cb5cf0492da4947546b0c2a0b083edbf9328"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df4b44c9eef66d50090923642d940c6e40dd978d018075ab17bcf62ab8d505c7"
 dependencies = [
  "clap 3.1.6",
  "raft-engine",
