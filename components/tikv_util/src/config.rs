@@ -1492,9 +1492,10 @@ impl RaftDataStateMachine {
 
     fn write_marker(&self) {
         use std::io::Write;
-        let marker = format!("{}//", self.source.display());
         let mut f = fs::File::create(&self.in_progress_marker).unwrap();
-        f.write_all(marker.as_bytes()).unwrap();
+        f.write_all(self.source.to_str().unwrap().as_bytes()).unwrap();
+        f.sync_all().unwrap();
+        f.write_all(b"//").unwrap();
         f.sync_all().unwrap();
         Self::sync_dir(&self.root);
     }
