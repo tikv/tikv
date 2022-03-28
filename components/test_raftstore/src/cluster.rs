@@ -10,7 +10,9 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
+use kvproto::raft_serverpb::{
+    PeerState, RaftApplyState, RaftMessage, RaftTruncatedState, RegionLocalState,
+};
 use tempdir::TempDir;
 
 use engine::rocks;
@@ -951,6 +953,31 @@ impl<T: Simulator> Cluster<T> {
         let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
         self.call_command_on_leader(req, Duration::from_secs(3))
             .unwrap()
+    }
+
+    pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        self.get_engine(store_id)
+            .get_msg_cf::<RegionLocalState>(engine::CF_RAFT, &keys::region_state_key(region_id))
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn must_peer_state(&self, region_id: u64, store_id: u64, peer_state: PeerState) {
+        for _ in 0..100 {
+            let state = self
+                .get_engine(store_id)
+                .get_msg_cf::<RegionLocalState>(engine::CF_RAFT, &keys::region_state_key(region_id))
+                .unwrap()
+                .unwrap();
+            if state.get_state() == peer_state {
+                return;
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, peer_state
+        );
     }
 
     /// Make sure region exists on that store.
