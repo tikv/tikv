@@ -87,11 +87,14 @@ where
     }
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
-        Ok(box_try!(get_approximate_split_keys(
-            engine,
-            region,
-            self.batch_split_limit,
-        )))
+        if self.batch_split_limit != 0 {
+            return Ok(box_try!(get_approximate_split_keys(
+                engine,
+                region,
+                self.batch_split_limit,
+            )));
+        }
+        Ok(vec![])
     }
 }
 
@@ -174,16 +177,21 @@ where
                 "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
+            let batch_split_limit = if region_size >= host.cfg.region_max_size.0 {
+                host.cfg.batch_split_limit
+            } else {
+                0
+            };
             if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit
                 || region_size >= host.cfg.region_size_threshold_for_approximate.0
             {
-                policy = CheckPolicy::Approximate
+                policy = CheckPolicy::Approximate;
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size.0,
                 host.cfg.region_split_size.0,
-                host.cfg.batch_split_limit,
+                batch_split_limit,
                 policy,
             )));
         } else {
