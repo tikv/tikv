@@ -454,12 +454,10 @@ pub struct ReadyResult {
     pub has_write_ready: bool,
 }
 
+#[derive(Debug)]
 pub enum ForceLeaderState {
-    PreForceLeader {
-        term: u64,
-        expected_alive_voter: HashSet<u64>,
-    },
-    ForceLeader,
+    PreForceLeader { expected_alive_voter: HashSet<u64> },
+    ForceLeader { expected_alive_voter: HashSet<u64> },
 }
 
 pub struct Peer<EK, ER>
@@ -1622,6 +1620,34 @@ where
         false
     }
 
+    fn force_forward_commit_index(&mut self) {
+        let expected_alive_voter = match &self.force_leader {
+            Some(ForceLeaderState::ForceLeader {
+                expected_alive_voter,
+            }) => expected_alive_voter,
+            _ => unreachable!(),
+        };
+
+        let mut replicated_idx = self.raft_group.raft.raft_log.persisted;
+        for (peer_id, p) in self.raft_group.raft.prs().iter() {
+            let store_id = self
+                .region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == *peer_id)
+                .unwrap()
+                .get_store_id();
+            if !expected_alive_voter.contains(&store_id) {
+                continue;
+            }
+            if replicated_idx > p.matched {
+                replicated_idx = p.matched;
+            }
+        }
+        self.raft_group.raft.raft_log.committed =
+            std::cmp::max(self.raft_group.raft.raft_log.committed, replicated_idx);
+    }
+
     pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
@@ -2512,10 +2538,9 @@ where
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
 
-            if let Some(ForceLeaderState::ForceLeader) = self.force_leader {
-                // forward commit index, the committed entries will be applied in the raft base tick round
-                self.raft_group.raft.raft_log.committed =
-                    std::cmp::max(self.raft_group.raft.raft_log.committed, persist_index);
+            if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+                // forward commit index, the committed entries will be applied in the next raft base tick round
+                self.force_forward_commit_index();
             }
         }
 
@@ -2555,10 +2580,9 @@ where
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
-        if let Some(ForceLeaderState::ForceLeader) = self.force_leader {
-            // forward commit index, the committed entries will be applied in the raft base tick round
-            self.raft_group.raft.raft_log.committed =
-                std::cmp::max(self.raft_group.raft.raft_log.committed, persist_index);
+        if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
+            // forward commit index, the committed entries will be applied in the next raft base tick round
+            self.force_forward_commit_index();
         }
         self.mut_store().update_cache_persisted(persist_index);
 
@@ -3815,7 +3839,12 @@ where
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
-        assert!(self.force_leader.is_none());
+        if self.force_leader.is_some() {
+            panic!(
+                "{} propose normal in force leader state {:?}",
+                self.tag, self.force_leader
+            );
+        };
 
         if (self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge)

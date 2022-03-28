@@ -107,7 +107,7 @@ fn test_force_leader_three_nodes() {
 
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // marjority is lost, can't propose command successfully.
+    // majority is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
@@ -177,7 +177,7 @@ fn test_force_leader_five_nodes() {
 
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // marjority is lost, can't propose command successfully.
+    // majority is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
@@ -244,7 +244,7 @@ fn test_force_leader_for_learner() {
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
-    let peer_on_store1 = find_peer(&region, 5).unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap();
     // replace one peer with learner
     cluster
         .pd_client
@@ -285,7 +285,7 @@ fn test_force_leader_for_learner() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     cluster.exit_force_leader(region.get_id(), 1);
 
-    // marjority is formed, can propose command successfully now
+    // majority is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
@@ -374,4 +374,162 @@ fn test_force_leader_on_wrong_leader() {
 
     // peer on node2 still doesn't have the latest committed log.
     must_get_none(&cluster.get_engine(2), b"k2");
+}
+
+#[test]
+fn test_force_leader_twice_on_different_peers() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    // restart to clean lease
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+    cluster.stop_node(2);
+    cluster.run_node(2).unwrap();
+
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    std::thread::sleep(Duration::from_millis(100));
+    // enter force leader on a different peer
+    cluster.enter_force_leader(region.get_id(), 2, HashSet::from_iter(vec![3, 4, 5]));
+    // leader is the peer of store 2
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap(),
+        *find_peer(&region, 2).unwrap()
+    );
+
+    // peer of store 1 should exit force leader state, and propose conf-change on it should fail
+    let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
+    let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), conf_change);
+    req.mut_header()
+        .set_peer(find_peer(&region, 1).unwrap().clone());
+    let resp = cluster
+        .call_command(req, Duration::from_millis(10))
+        .unwrap();
+    let mut not_leader = kvproto::errorpb::NotLeader {
+        region_id: region.get_id(),
+        ..Default::default()
+    };
+    not_leader.set_leader(find_peer(&region, 2).unwrap().clone());
+    assert_eq!(resp.get_header().get_error().get_not_leader(), &not_leader,);
+
+    // remove the peers on failed nodes
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 2);
+
+    // majority is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
+#[test]
+fn test_force_leader_twice_on_same_peer() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    // restart to clean lease
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+    cluster.stop_node(2);
+    cluster.run_node(2).unwrap();
+
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    std::thread::sleep(Duration::from_millis(100));
+    // enter force leader on the same peer
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    // remove the peers on failed nodes
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // majority is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
+#[test]
+fn test_force_leader_multiple_election_rounds() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    // wait multiple election rounds
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 2,
+    ));
+
+    cluster.clear_send_filters();
+    // remove the peers on failed nodes
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // majority is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
