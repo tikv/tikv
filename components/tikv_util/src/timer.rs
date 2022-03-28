@@ -250,9 +250,17 @@ mod tests {
     #[test]
     fn test_global_steady_timer() {
         let t = SteadyTimer::default();
-        let timer = t.clock.now();
+        let start = t.clock.now();
         let delay = t.delay(Duration::from_millis(100));
         block_on(delay.compat()).unwrap();
-        assert!(timer.elapsed() >= Duration::from_millis(100));
+        let end = t.clock.now();
+        let elapsed = end.duration_since(start);
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "{:?} {:?} {:?}",
+            start,
+            end,
+            elapsed
+        );
     }
 }
