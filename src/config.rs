@@ -2714,8 +2714,12 @@ impl TiKvConfig {
             return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
-        RaftDataStateMachine::new(&self.raft_store.raftdb_path, &self.raft_engine.config.dir)
-            .validate(RocksEngine::exists(&kv_db_path))?;
+        RaftDataStateMachine::new(
+            &self.storage.data_dir,
+            &self.raft_store.raftdb_path,
+            &self.raft_engine.config.dir,
+        )
+        .validate(RocksEngine::exists(&kv_db_path))?;
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
