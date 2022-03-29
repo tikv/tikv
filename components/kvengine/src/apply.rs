@@ -157,6 +157,7 @@ impl Engine {
         let runtime = fs.get_runtime();
         for (id, cover) in del_files {
             if cover {
+                self.remove_local_file(id);
                 let fs_n = fs.clone();
                 runtime.spawn(async move { fs_n.remove(id, opts).await });
             }
@@ -189,6 +190,8 @@ impl Engine {
             }
             let file = self.fs.open(create.id, opts)?;
             let tbl = sstable::SSTable::new(file, Some(self.cache.clone()))?;
+            assert_eq!(tbl.smallest(), create.smallest.as_slice());
+            assert_eq!(tbl.biggest(), create.biggest.as_slice());
             new_level.tables.push(tbl);
             need_update = true;
         }
@@ -256,7 +259,11 @@ impl Engine {
         if cs.has_initial_flush() {
             self.collect_snap_ids(cs.get_initial_flush(), &mut ids);
         }
-        pre_load_files_by_ids(self.fs.clone(), cs.shard_id, cs.shard_ver, ids)
+        ids.retain(|id| {
+            let local_path = self.local_file_path(*id);
+            !local_path.exists()
+        });
+        self.pre_load_files_by_ids(cs.shard_id, cs.shard_ver, ids)
     }
 
     pub fn collect_snap_ids(&self, snap: &pb::Snapshot, ids: &mut Vec<u64>) {
@@ -265,6 +272,13 @@ impl Engine {
         }
         for ln in snap.get_table_creates() {
             ids.push(ln.id);
+        }
+    }
+
+    pub fn remove_local_file(&self, file_id: u64) {
+        let local_file_path = self.local_file_path(file_id);
+        if let Err(err) = std::fs::remove_file(&local_file_path) {
+            error!("failed to remove local file {:?}", err);
         }
     }
 }
@@ -280,6 +294,15 @@ pub(crate) fn check_tables_order(tables: &Vec<SSTable>) -> bool {
             || ti.smallest() >= tj.smallest()
             || ti.biggest() >= tj.biggest()
         {
+            error!(
+                "check table fail table ti {} smallest {:?}, biggest {:?}, tj {} smallest {:?}, biggest {:?}",
+                ti.id(),
+                ti.smallest(),
+                ti.biggest(),
+                tj.id(),
+                tj.smallest(),
+                tj.biggest(),
+            );
             return false;
         }
     }

@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use clap::{App, Arg};
-use file_system::IORateLimitMode;
 use hyper::service::{make_service_fn, service_fn};
 use slog_global::{error, info};
 use std::path::PathBuf;
@@ -39,12 +38,6 @@ fn main() {
         config.local_dir = "/tmp".to_string();
     }
     info!("config is {:?}", &config);
-
-    let limiter = Arc::new(file_system::IORateLimiter::new(
-        IORateLimitMode::WriteOnly,
-        false,
-        false,
-    ));
     let dfs = Arc::new(kvengine::dfs::S3FS::new(
         config.tenant_id,
         PathBuf::from(config.local_dir),
@@ -53,7 +46,6 @@ fn main() {
         config.s3_secret_key,
         config.s3_region,
         config.s3_bucket,
-        limiter,
     ));
 
     let thread_pool = tokio::runtime::Builder::new_multi_thread()

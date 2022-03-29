@@ -347,9 +347,9 @@ mod tests {
     #[test]
     fn test_arena() {
         let arena = Arena::new();
-        let addr = arena.keys.alloc(8);
-        let buf = arena.keys.get_mut_bytes(addr);
+        let addr = arena.nodes.alloc(8);
+        let buf = arena.nodes.get_mut_bytes(addr);
         buf[0] = 3;
-        println!("{:?}", arena.keys.get_bytes(addr))
+        println!("{:?}", arena.nodes.get_bytes(addr))
     }
 }

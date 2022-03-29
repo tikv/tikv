@@ -18,9 +18,6 @@ pub trait DFS: Sync + Send {
     // It may take a long time if the file need to be cached in local disk.
     fn open(&self, file_id: u64, opts: Options) -> Result<Arc<dyn File>>;
 
-    // prefetch fetches the data from remote server to local disk cache for lower read latency.
-    async fn prefetch(&self, file_id: u64, opts: Options) -> Result<()>;
-
     // read_file reads the whole file to memory.
     // It can be used by remote compaction server that doesn't have local disk.
     async fn read_file(&self, file_id: u64, opts: Options) -> Result<Bytes>;
@@ -78,13 +75,6 @@ impl DFS for InMemFS {
             return Ok(file.clone());
         }
         Err(Error::NotExists(file_id))
-    }
-
-    async fn prefetch(&self, file_id: u64, _opts: Options) -> Result<()> {
-        if self.files.contains_key(&file_id) {
-            return Ok(());
-        }
-        return Err(Error::NotExists(file_id));
     }
 
     async fn read_file(&self, file_id: u64, _opts: Options) -> Result<Bytes> {

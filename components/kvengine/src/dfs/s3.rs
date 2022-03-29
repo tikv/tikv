@@ -1,16 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::dfs::{new_filename, new_tmp_filename, File, Options, DFS};
+use crate::dfs::{new_filename, File, Options, DFS};
 use async_trait::async_trait;
 use bytes::Bytes;
-use file_system::{IOOp, IORateLimiter, IOType};
 use rusoto_core::{Region, RusotoError};
 use rusoto_s3::S3;
-use std::io::Write;
 use std::ops::Deref;
-use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::time::Instant;
@@ -33,17 +30,9 @@ impl S3FS {
         secret_key: String,
         region: String,
         bucket: String,
-        rate_limiter: Arc<IORateLimiter>,
     ) -> Self {
         let core = Arc::new(S3FSCore::new(
-            tenant_id,
-            local_dir,
-            end_point,
-            key_id,
-            secret_key,
-            region,
-            bucket,
-            rate_limiter,
+            tenant_id, local_dir, end_point, key_id, secret_key, region, bucket,
         ));
         Self { core }
     }
@@ -63,8 +52,6 @@ pub struct S3FSCore {
     s3c: rusoto_s3::S3Client,
     bucket: String,
     runtime: tokio::runtime::Runtime,
-    rate_limiter: Arc<file_system::IORateLimiter>,
-    tmp_id: AtomicU64,
 }
 
 impl S3FSCore {
@@ -76,14 +63,7 @@ impl S3FSCore {
         secret_key: String,
         region: String,
         bucket: String,
-        rate_limiter: Arc<file_system::IORateLimiter>,
     ) -> Self {
-        if !local_dir.exists() {
-            std::fs::create_dir_all(&local_dir).unwrap();
-        }
-        if !local_dir.is_dir() {
-            panic!("path {:?} is not dir", &local_dir);
-        }
         let credential = rusoto_credential::StaticProvider::new(key_id, secret_key, None, None);
         let http_connector = hyper::client::connect::HttpConnector::new();
         let mut config = rusoto_core::HttpConfig::new();
@@ -101,7 +81,7 @@ impl S3FSCore {
         };
         let s3c = rusoto_s3::S3Client::new_with(http_client, credential, region);
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(1)
             .enable_all()
             .thread_name("s3")
             .build()
@@ -112,20 +92,11 @@ impl S3FSCore {
             s3c,
             bucket,
             runtime,
-            rate_limiter,
-            tmp_id: AtomicU64::new(0),
         }
     }
 
     fn local_file_path(&self, file_id: u64) -> PathBuf {
         self.local_dir.join(new_filename(file_id))
-    }
-
-    fn tmp_file_path(&self, file_id: u64) -> PathBuf {
-        let tmp_id = self
-            .tmp_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.local_dir.join(new_tmp_filename(file_id, tmp_id))
     }
 
     fn file_key(&self, file_id: u64) -> String {
@@ -143,25 +114,6 @@ impl S3FSCore {
             RusotoError::Unknown(_) => false,
             RusotoError::Blocking => false,
         }
-    }
-
-    fn write_local_file(&self, file_name: &PathBuf, data: Bytes) -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .custom_flags(libc::O_DSYNC)
-            .open(file_name)?;
-        let mut start_off = 0;
-        let write_batch_size = 256 * 1024;
-        while start_off < data.len() {
-            self.rate_limiter
-                .request(IOType::Compaction, IOOp::Write, write_batch_size);
-            let end_off = std::cmp::min(start_off + write_batch_size, data.len());
-            file.write(&data[start_off..end_off])?;
-            start_off = end_off;
-        }
-        Ok(())
     }
 }
 
@@ -184,18 +136,6 @@ impl DFS for S3FS {
                 Err(err.into())
             }
         }
-    }
-
-    async fn prefetch(&self, file_id: u64, opts: Options) -> crate::dfs::Result<()> {
-        let local_file_path = self.local_file_path(file_id);
-        if local_file_path.exists() {
-            return Ok(());
-        }
-        let data = self.read_file(file_id, opts).await?;
-        let tmp_file_path = self.tmp_file_path(file_id);
-        self.write_local_file(&tmp_file_path, data)?;
-        std::fs::rename(tmp_file_path, &local_file_path)?;
-        Ok(())
     }
 
     async fn read_file(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<Bytes> {
@@ -291,10 +231,6 @@ impl DFS for S3FS {
     }
 
     async fn remove(&self, file_id: u64, _opts: Options) {
-        let local_file_path = self.local_file_path(file_id);
-        if let Err(err) = std::fs::remove_file(&local_file_path) {
-            error!("failed to remove local file {:?}", err);
-        }
         let mut retry_cnt = 0;
         loop {
             let key = self.file_key(file_id);
@@ -379,8 +315,6 @@ mod tests {
         if !local_dir.exists() {
             std::fs::create_dir(&local_dir).unwrap();
         }
-        let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
-        rate_limiter.set_io_rate_limit(0);
         let s3fs = S3FS::new(
             123,
             local_dir,
@@ -389,7 +323,6 @@ mod tests {
             "minioadmin".into(),
             "local".into(),
             "shard-db".into(),
-            rate_limiter,
         );
         let file_data = "abcdefgh".to_string().into_bytes();
         let (tx, rx) = tikv_util::mpsc::bounded(1);

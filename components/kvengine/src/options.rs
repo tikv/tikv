@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use dyn_clone::DynClone;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::table::sstable;
@@ -12,6 +13,7 @@ use crate::*;
 // work for most applications. Consider using that as a starting point before
 // customizing it for your own needs.
 pub struct Options {
+    pub local_dir: PathBuf,
     // base_size is th maximum L1 size before trigger a compaction.
     // The L2 size is 10x of the base size, L3 size is 100x of the base size.
     pub base_size: u64,
@@ -43,6 +45,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            local_dir: PathBuf::from("/tmp"),
             base_size: 64 << 20,
             num_mem_tables: 16,
             max_block_cache_size: 0,

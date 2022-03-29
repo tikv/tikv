@@ -9,7 +9,7 @@ use raft_proto::eraftpb;
 use slog_global::info;
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use std::{
@@ -704,10 +704,6 @@ impl RaftLogs {
         }
         entry.set_data(op.data.clone());
         Some(entry)
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.m.len()
     }
 }
 

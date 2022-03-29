@@ -673,17 +673,14 @@ impl TiKVServer {
         let wal_size = conf.raft_engine.config().target_file_size.0 as usize;
         let rf_engine = RFEngine::open(raft_db_path, wal_size).unwrap();
         let dfs_conf = &conf.dfs;
-        let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
-        rate_limiter.set_io_rate_limit(conf.storage.io_rate_limit.max_bytes_per_sec.0 as usize);
         let dfs = Arc::new(kvengine::dfs::S3FS::new(
             dfs_conf.tenant_id,
-            kv_engine_path,
+            kv_engine_path.clone(),
             dfs_conf.s3_endpoint.clone(),
             dfs_conf.s3_key_id.clone(),
             dfs_conf.s3_secret_key.clone(),
             dfs_conf.s3_region.clone(),
             dfs_conf.s3_bucket.clone(),
-            rate_limiter,
         ));
         let mut kv_opts = kvengine::Options::default();
         let capacity = match conf.storage.block_cache.capacity.0 {
@@ -693,6 +690,7 @@ impl TiKVServer {
             }
             Some(c) => c.0 as usize,
         };
+        kv_opts.local_dir = kv_engine_path;
         kv_opts.num_compactors = conf.rocksdb.max_background_jobs as usize;
         kv_opts.max_mem_table_size_factor = 16;
         kv_opts.max_block_cache_size = capacity as i64;
@@ -705,6 +703,8 @@ impl TiKVServer {
         let meta_change_listener = Box::new(MetaChangeListener {
             sender: sender.clone(),
         });
+        let rate_limiter = Arc::new(IORateLimiter::new(IORateLimitMode::WriteOnly, true, false));
+        rate_limiter.set_io_rate_limit(conf.storage.io_rate_limit.max_bytes_per_sec.0 as usize);
         let kv_engine = kvengine::Engine::open(
             dfs,
             opts,
@@ -712,6 +712,7 @@ impl TiKVServer {
             recoverer,
             id_allocator,
             meta_change_listener,
+            rate_limiter,
         )
         .unwrap();
         Engines::new(kv_engine, rf_engine, (sender, receiver))

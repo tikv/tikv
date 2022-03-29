@@ -2,13 +2,17 @@
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use file_system::{IOOp, IORateLimiter, IOType};
 use fslock;
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::io::Write;
 use std::iter::Iterator;
 use std::ops::Deref;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -50,9 +54,16 @@ impl Engine {
         recoverer: impl RecoverHandler,
         id_allocator: Arc<dyn IDAllocator>,
         meta_change_listener: Box<dyn MetaChangeListener>,
+        rate_limiter: Arc<IORateLimiter>,
     ) -> Result<Engine> {
         info!("open KVEngine");
-        let lock_path = fs.local_dir().join("LOCK");
+        if !opts.local_dir.exists() {
+            std::fs::create_dir_all(&opts.local_dir).unwrap();
+        }
+        if !opts.local_dir.is_dir() {
+            panic!("path {:?} is not dir", &opts.local_dir);
+        }
+        let lock_path = opts.local_dir.join("LOCK");
         let mut x = fslock::LockFile::open(&lock_path)?;
         x.lock()?;
         let mut max_capacity =
@@ -71,6 +82,8 @@ impl Engine {
             comp_client: CompactionClient::new(fs.clone(), opts.remote_compactor_addr.clone()),
             id_allocator,
             managed_safe_ts: AtomicU64::new(0),
+            tmp_file_id: AtomicU64::new(0),
+            rate_limiter,
         };
         let en = Engine {
             core: Arc::new(core),
@@ -128,6 +141,8 @@ pub struct EngineCore {
     pub(crate) comp_client: CompactionClient,
     pub(crate) id_allocator: Arc<dyn IDAllocator>,
     pub(crate) managed_safe_ts: AtomicU64,
+    pub(crate) tmp_file_id: AtomicU64,
+    pub(crate) rate_limiter: Arc<IORateLimiter>,
 }
 
 impl EngineCore {
@@ -154,7 +169,7 @@ impl EngineCore {
             let scf_builder = ShardCFBuilder::new(cf);
             scf_builders.push(scf_builder);
         }
-        pre_load_files_by_ids(self.fs.clone(), meta.id, meta.ver, meta.all_files())?;
+        self.pre_load_files_by_ids(meta.id, meta.ver, meta.all_files())?;
         for (fid, fm) in &meta.files {
             let file = self.fs.open(*fid, dfs_opts)?;
             if fm.cf == -1 {
@@ -267,35 +282,84 @@ impl EngineCore {
             })
             .unwrap();
     }
+
+    pub(crate) fn pre_load_files_by_ids(
+        &self,
+        shard_id: u64,
+        shard_ver: u64,
+        ids: Vec<u64>,
+    ) -> Result<()> {
+        let length = ids.len();
+        let (result_tx, result_rx) = tikv_util::mpsc::bounded(length);
+        let runtime = self.fs.get_runtime();
+        for id in &ids {
+            let fs = self.fs.clone();
+            let opts = dfs::Options::new(shard_id, shard_ver);
+            let tx = result_tx.clone();
+            let id = *id;
+            runtime.spawn(async move {
+                let res = fs.read_file(id, opts).await;
+                tx.send(res.map(|data| (id, data))).unwrap();
+            });
+        }
+        let mut errors = vec![];
+        for _ in 0..length {
+            match result_rx.recv().unwrap() {
+                Ok((id, data)) => {
+                    if let Err(err) = self.write_local_file(id, data) {
+                        error!("write local file failed {:?}", &err);
+                        errors.push(err.into());
+                    }
+                }
+                Err(err) => {
+                    error!("prefetch failed {:?}", &err);
+                    errors.push(err);
+                }
+            }
+        }
+        if errors.len() > 0 {
+            return Err(errors.pop().unwrap().into());
+        }
+        Ok(())
+    }
+
+    fn write_local_file(&self, id: u64, data: Bytes) -> std::io::Result<()> {
+        let local_file_name = self.local_file_path(id);
+        let tmp_file_name = self.tmp_file_path(id);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .custom_flags(libc::O_DSYNC)
+            .open(&tmp_file_name)?;
+        let mut start_off = 0;
+        let write_batch_size = 256 * 1024;
+        while start_off < data.len() {
+            self.rate_limiter
+                .request(IOType::Compaction, IOOp::Write, write_batch_size);
+            let end_off = std::cmp::min(start_off + write_batch_size, data.len());
+            file.write(&data[start_off..end_off])?;
+            start_off = end_off;
+        }
+        std::fs::rename(&tmp_file_name, &local_file_name)
+    }
+
+    pub(crate) fn local_file_path(&self, file_id: u64) -> PathBuf {
+        self.opts.local_dir.join(new_filename(file_id))
+    }
+
+    fn tmp_file_path(&self, file_id: u64) -> PathBuf {
+        let tmp_id = self
+            .tmp_file_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.opts.local_dir.join(new_tmp_filename(file_id, tmp_id))
+    }
 }
 
-pub(crate) fn pre_load_files_by_ids(
-    fs: Arc<dyn dfs::DFS>,
-    shard_id: u64,
-    shard_ver: u64,
-    ids: Vec<u64>,
-) -> Result<()> {
-    let length = ids.len();
-    let (result_tx, result_rx) = tikv_util::mpsc::bounded(length);
-    let runtime = fs.get_runtime();
-    for id in ids {
-        let fs = fs.clone();
-        let opts = dfs::Options::new(shard_id, shard_ver);
-        let tx = result_tx.clone();
-        runtime.spawn(async move {
-            let res = fs.prefetch(id, opts).await;
-            tx.send(res).unwrap();
-        });
-    }
-    let mut errors = vec![];
-    for _ in 0..length {
-        if let Err(err) = result_rx.recv().unwrap() {
-            error!("prefetch failed {:?}", &err);
-            errors.push(err);
-        }
-    }
-    if errors.len() > 0 {
-        return Err(errors.pop().unwrap().into());
-    }
-    Ok(())
+pub fn new_filename(file_id: u64) -> PathBuf {
+    PathBuf::from(format!("{:016x}.sst", file_id))
+}
+
+pub fn new_tmp_filename(file_id: u64, tmp_id: u64) -> PathBuf {
+    PathBuf::from(format!("{:016x}.{}.tmp", file_id, tmp_id))
 }

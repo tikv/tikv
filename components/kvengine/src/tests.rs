@@ -2,6 +2,7 @@
 
 use crate::{dfs::InMemFS, *};
 use bytes::Buf;
+use file_system::IORateLimiter;
 use kvenginepb as pb;
 use kvenginepb::ChangeSet;
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ fn test_engine() {
     let meta_change_listener = Box::new(TestMetaChangeListener {
         sender: listener_tx,
     });
+    let rate_limiter = Arc::new(IORateLimiter::new_for_test());
     let engine = Engine::open(
         tester.fs.clone(),
         tester.opts.clone(),
@@ -41,6 +43,7 @@ fn test_engine() {
         tester.clone(),
         tester.core.clone(),
         meta_change_listener,
+        rate_limiter,
     )
     .unwrap();
     {
