@@ -178,13 +178,13 @@ impl Worker {
         if map_ref.is_none() {
             return;
         }
-        let timer = Instant::now();
         let region_data = map_ref.unwrap();
         if !region_data.need_truncate() {
             return;
         }
+        let timer = Instant::now();
         let index = region_data.load_truncate_idx();
-        region_data.store_truncate_idx(index);
+        region_data.truncate_self();
         ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         self.truncated_idx.insert(region_id, index);
         let mut removed_epoch_ids = HashSet::new();

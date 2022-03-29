@@ -106,6 +106,7 @@ impl RegionBatch {
             }
             self.raft_logs.pop_front();
         }
+        self.truncated_idx = idx;
     }
 
     pub fn set_state(&mut self, key: &[u8], val: &[u8]) {
@@ -680,11 +681,15 @@ impl RaftLogs {
         }
         let truncate_end = std::cmp::min(end, index);
         self.store_first(truncate_end);
+        let mut to_be_removed = Vec::with_capacity(self.m.len());
         for x in &self.m {
             let idx = x.index;
             if idx < truncate_end {
-                self.m.remove(&idx);
+                to_be_removed.push(idx);
             }
+        }
+        for id in &to_be_removed {
+            self.m.remove(id);
         }
     }
 
