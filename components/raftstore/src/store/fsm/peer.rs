@@ -1868,6 +1868,18 @@ where
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && (from_peer_id != msg.get_message().get_from()
+                    || from_peer_id == 0
+                    || from_peer_id == self.fsm.peer_id())
+            {
+                warn!(
+                    "suspicious read index detected";
+                    "msg" => ?msg,
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+            }
             self.fsm.peer.step(self.ctx, msg.take_message())
         };
 

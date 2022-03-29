@@ -4604,6 +4604,15 @@ where
 
         send_msg.set_to_peer(to_peer);
 
+        if msg.get_msg_type() == MessageType::MsgReadIndex && msg.get_from() != self.peer.get_id() {
+            warn!(
+                "suspicious read index detected";
+                "msg" => ?msg,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
+
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet
         // 2. Target peer is added newly due to member change or region split, but it's not
