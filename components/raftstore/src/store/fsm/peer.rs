@@ -1431,17 +1431,17 @@ where
 
     #[inline]
     fn check_force_leader(&mut self) {
-        if self.fsm.peer.raft_group.raft.election_elapsed + 1
-            < self.ctx.cfg.raft_election_timeout_ticks
-        {
-            // wait as longer as it can to collect responses of request vote
-            return;
-        }
-
         if let Some(ForceLeaderState::PreForceLeader {
             expected_alive_voter,
         }) = &self.fsm.peer.force_leader
         {
+            if self.fsm.peer.raft_group.raft.election_elapsed + 1
+                < self.ctx.cfg.raft_election_timeout_ticks
+            {
+                // wait as longer as it can to collect responses of request vote
+                return;
+            }
+
             let check = || {
                 if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
                     Err(format!(
