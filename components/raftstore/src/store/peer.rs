@@ -1737,12 +1737,13 @@ where
                         );
                     }
                 }
-                StateRole::Follower | StateRole::Candidate | StateRole::PreCandidate => {
+                StateRole::Follower => {
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
                 }
+                _ => {}
             }
             self.on_leader_changed(ss.leader_id, self.term());
             ctx.coprocessor_host.on_role_change(

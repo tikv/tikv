@@ -502,10 +502,6 @@ impl Lease {
         matches!(self.bound, Some(Either::Left(_)))
     }
 
-    pub fn is_expired(&self) -> bool {
-        self.bound.is_none()
-    }
-
     /// Inspect the lease state for the ts or now.
     pub fn inspect(&self, ts: Option<Timespec>) -> LeaseState {
         match self.bound {

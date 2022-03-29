@@ -71,7 +71,7 @@ use crate::store::peer::{
 };
 use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter};
+use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
 use crate::store::worker::{
     ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask,
     SplitCheckTask,
@@ -1332,10 +1332,7 @@ where
         self.fsm.peer.raft_group.raft.pre_vote = false;
         // trigger vote request to all voters, will check the vote result in `check_force_leader`
         self.fsm.peer.raft_group.campaign().unwrap();
-        assert!(
-            self.fsm.peer.raft_group.raft.state == StateRole::PreCandidate
-                || self.fsm.peer.raft_group.raft.state == StateRole::Candidate
-        );
+        assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
         if !self
             .fsm
             .peer
@@ -1377,10 +1374,8 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
-        assert!(!self.fsm.peer.is_leader());
+        assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
 
-        // become candidate first to increase term
-        self.fsm.peer.raft_group.raft.become_candidate();
         self.fsm.peer.raft_group.raft.become_leader();
         assert!(self.fsm.peer.is_leader());
         self.fsm.peer.raft_group.raft.set_check_quorum(false);
@@ -1415,17 +1410,20 @@ where
         // make sure it's not hibernated
         self.reset_raft_tick(GroupState::Ordered);
         // leader lease shouldn't be renewed in force leader state.
-        assert!(self.fsm.peer.leader_lease.is_expired());
+        assert_eq!(
+            self.fsm.peer.leader_lease.inspect(None),
+            LeaseState::Expired
+        );
         self.fsm
             .peer
             .raft_group
             .raft
             .become_follower(self.fsm.peer.term() + 1, raft::INVALID_ID);
 
-        // let it trigger election immediately.
-        let _ = self.fsm.peer.raft_group.campaign();
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.peer.raft_group.raft.pre_vote = true;
+        // let it trigger election immediately.
+        let _ = self.fsm.peer.raft_group.campaign();
         self.fsm.has_ready = true;
     }
 
