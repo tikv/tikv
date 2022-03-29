@@ -68,7 +68,7 @@ prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine", branch = "0.1.x" }
+raft-engine-ctl = "0.1.0"
 raftstore = { path = "../../components/raftstore", default-features = false }
 rand = "0.8"
 regex = "1"

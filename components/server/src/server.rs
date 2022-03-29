@@ -262,6 +262,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             config.quota.foreground_cpu_time,
             config.quota.foreground_write_bandwidth,
             config.quota.foreground_read_bandwidth,
+            config.quota.max_delay_duration,
         ));
 
         TiKVServer {
@@ -1305,10 +1306,11 @@ impl TiKVServer<RocksEngine> {
             .unwrap();
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &self.config.storage.data_dir,
             &self.config.raft_engine.config().dir,
             &self.config.raft_store.raftdb_path,
         );
-        let dump_source = raft_data_state_machine.before_open_target();
+        let should_dump = raft_data_state_machine.before_open_target();
 
         let raft_db_path = &self.config.raft_store.raftdb_path;
         let config_raftdb = &self.config.raftdb;
@@ -1321,11 +1323,9 @@ impl TiKVServer<RocksEngine> {
         let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
         raftdb.set_shared_block_cache(shared_block_cache);
 
-        if let Some(source) = dump_source {
-            let mut raft_engine_config = self.config.raft_engine.config();
-            raft_engine_config.dir = source.to_str().unwrap().to_owned();
+        if should_dump {
             let raft_engine = RaftLogEngine::new(
-                raft_engine_config,
+                self.config.raft_engine.config(),
                 self.encryption_key_manager.clone(),
                 None,
             )
@@ -1396,10 +1396,11 @@ impl TiKVServer<RaftLogEngine> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &self.config.storage.data_dir,
             &self.config.raft_store.raftdb_path,
             &self.config.raft_engine.config().dir,
         );
-        let dump_source = raft_data_state_machine.before_open_target();
+        let should_dump = raft_data_state_machine.before_open_target();
 
         let raft_config = self.config.raft_engine.config();
         let raft_engine = RaftLogEngine::new(
@@ -1409,13 +1410,13 @@ impl TiKVServer<RaftLogEngine> {
         )
         .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
 
-        if let Some(source) = dump_source {
+        if should_dump {
             let config_raftdb = &self.config.raftdb;
             let mut raft_db_opts = config_raftdb.build_opt();
             raft_db_opts.set_env(env.clone());
             let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
             let raftdb = engine_rocks::raw_util::new_engine_opt(
-                source.to_str().unwrap(),
+                &self.config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
             )

@@ -178,7 +178,7 @@ fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
 
 #[inline]
 fn is_valid_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
-    is_valid_encoded_bytes(&encoded_key.as_encoded()[..], with_ts)
+    is_valid_encoded_bytes(encoded_key.as_encoded(), with_ts)
 }
 
 #[inline]

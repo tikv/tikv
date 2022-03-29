@@ -18,6 +18,7 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -962,6 +963,9 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
+    // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
+    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
+    // in RocksDB has been removed.
     #[online_config(skip)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
@@ -1014,8 +1018,8 @@ impl Default for DbConfig {
             max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: true,
-            enable_multi_batch_write: true,
+            enable_pipelined_write: false,
+            enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1074,11 +1078,9 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(
-            (self.enable_pipelined_write || self.enable_multi_batch_write)
-                && !self.enable_unordered_write,
-        );
-        opts.enable_multi_batch_write(self.enable_multi_batch_write);
+        opts.enable_pipelined_write(self.enable_pipelined_write);
+        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
@@ -1121,9 +1123,7 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            if self.enable_pipelined_write || self.enable_multi_batch_write {
-                return Err("pipelined_write is not compatible with unordered_write".into());
-            }
+            self.enable_pipelined_write = false;
         }
 
         // Since the following configuration supports online update, in order to
@@ -2471,39 +2471,11 @@ impl LogConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct CausalTsConfig {
-    pub renew_interval: ReadableDuration,
-    pub renew_batch_min_size: u32,
-}
-
-impl CausalTsConfig {
-    fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.renew_interval.is_zero() {
-            return Err("causal-ts.renew_interval can't be zero".into());
-        }
-        if self.renew_batch_min_size == 0 {
-            return Err("causal-ts.renew_batch_init_size should be greater than 0".into());
-        }
-        Ok(())
-    }
-}
-
-impl Default for CausalTsConfig {
-    fn default() -> Self {
-        Self {
-            renew_interval: ReadableDuration::millis(100),
-            renew_batch_min_size: 100,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
     pub foreground_cpu_time: usize,
     pub foreground_write_bandwidth: ReadableSize,
     pub foreground_read_bandwidth: ReadableSize,
+    pub max_delay_duration: ReadableDuration,
 }
 
 impl Default for QuotaConfig {
@@ -2512,6 +2484,7 @@ impl Default for QuotaConfig {
             foreground_cpu_time: 0,
             foreground_write_bandwidth: ReadableSize(0),
             foreground_read_bandwidth: ReadableSize(0),
+            max_delay_duration: ReadableDuration::millis(500),
         }
     }
 }
@@ -2746,8 +2719,12 @@ impl TiKvConfig {
             return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
-        RaftDataStateMachine::new(&self.raft_store.raftdb_path, &self.raft_engine.config.dir)
-            .validate(RocksEngine::exists(&kv_db_path))?;
+        RaftDataStateMachine::new(
+            &self.storage.data_dir,
+            &self.raft_store.raftdb_path,
+            &self.raft_engine.config.dir,
+        )
+        .validate(RocksEngine::exists(&kv_db_path))?;
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
@@ -3075,24 +3052,6 @@ impl TiKvConfig {
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
-        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
-            return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is '{}', \
-                 current db wal_dir is '{}', please guarantee all data wal logs \
-                 have been moved to destination directory.",
-                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            ));
-        }
-
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
-            return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
-                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
-                 have been moved to destination directory.",
-                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ));
-        }
-
         if last_cfg.storage.data_dir != self.storage.data_dir {
             // In tikv 3.0 the default value of storage.data-dir changed
             // from "" to "./"
@@ -3107,32 +3066,50 @@ impl TiKvConfig {
                 ));
             }
         }
-
-        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path
-            && !last_cfg.raft_engine.enable
-        {
+        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "raft db dir have been changed, former is '{}', \
-                 current is '{}', please check if it is expected.",
-                last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+                "db wal dir have been changed, former is '{}', \
+                 current db wal_dir is '{}', please guarantee all data wal logs \
+                 have been moved to destination directory.",
+                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
             ));
         }
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir && !last_cfg.raft_engine.enable {
+
+        // It's possible that `last_cfg` is not fully validated.
+        let last_raftdb_dir = last_cfg
+            .infer_raft_db_path(None)
+            .map_err(|e| e.to_string())?;
+        let last_raft_engine_dir = last_cfg
+            .infer_raft_engine_path(None)
+            .map_err(|e| e.to_string())?;
+
+        // FIXME: We cannot reliably determine the actual value of
+        // `last_cfg.raft_engine.enable`, because some old versions don't have
+        // this field (so it is automatically interpreted as the current
+        // default value). To be safe, we will check both engines regardless
+        // of whether raft engine is enabled.
+        if last_raftdb_dir != self.raft_store.raftdb_path {
+            return Err(format!(
+                "raft db dir have been changed, former is '{}', \
+                current is '{}', please check if it is expected.",
+                last_raftdb_dir, self.raft_store.raftdb_path
+            ));
+        }
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
                 "raft db wal dir have been changed, former is '{}', \
-                 current is '{}', please check if it is expected.",
+                current is '{}', please check if it is expected.",
                 last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
             ));
         }
-        if last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
-            && last_cfg.raft_engine.enable
-        {
+        if last_raft_engine_dir != self.raft_engine.config.dir {
             return Err(format!(
                 "raft engine dir have been changed, former is '{}', \
                  current is '{}', please check if it is expected.",
-                last_cfg.raft_engine.config.dir, self.raft_engine.config.dir
+                last_raft_engine_dir, self.raft_engine.config.dir
             ));
         }
+
         if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
             return Err("can't disable ttl on a ttl instance".to_owned());
         } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
@@ -3215,7 +3192,9 @@ pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // changes, user must guarantee relevant works have been done.
     if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
         cfg.compatible_adjust();
-        let _ = cfg.validate();
+        if let Err(e) = cfg.validate() {
+            warn!("last_tikv.toml is invalid but ignored: {:?}", e);
+        }
         config.check_critical_cfg_with(&cfg)?;
     }
     Ok(())
@@ -3651,46 +3630,65 @@ mod tests {
     #[test]
     fn test_check_critical_cfg_with() {
         let mut tikv_cfg = TiKvConfig::default();
-        let mut last_cfg = TiKvConfig::default();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        let last_cfg = TiKvConfig::default();
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = "/data1".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.storage.data_dir = "/data1".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Enable Raft Engine.
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.raft_engine.enable = true;
         last_cfg.raft_engine.enable = true;
 
         tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Disable Raft Engine and uses RocksDB.
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.raft_engine.enable = false;
         last_cfg.raft_engine.enable = false;
 
         tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
-use std::{cmp, io};
+use std::{cmp, io, mem};
 
 use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
 #[cfg(feature = "failpoints")]
@@ -42,11 +42,11 @@ use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
-use pd_client::{Error, PdClient, RegionStat};
+use pd_client::{merge_bucket_stats, BucketStat, Error, PdClient, RegionStat};
 use protobuf::Message;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::time::UnixSecs;
+use tikv_util::time::{Instant as TiInstant, UnixSecs};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
@@ -176,6 +176,7 @@ where
         store_id: u64,
         min_resolved_ts: u64,
     },
+    ReportBuckets(BucketStat),
 }
 
 pub struct StoreStat {
@@ -352,6 +353,9 @@ where
                     "report min resolved ts: store {}, resolved ts {}",
                     store_id, min_resolved_ts
                 )
+            }
+            Task::ReportBuckets(ref buckets) => {
+                write!(f, "report buckets: {:?}", buckets)
             }
         }
     }
@@ -755,6 +759,7 @@ where
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
     region_peers: HashMap<u64, PeerStat>,
+    region_buckets: HashMap<u64, BucketStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Records the boot time.
@@ -819,6 +824,7 @@ where
             router,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
+            region_buckets: HashMap::default(),
             store_stat: StoreStat::default(),
             start_ts: UnixSecs::now(),
             scheduler,
@@ -1468,6 +1474,9 @@ where
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
         }
+        for (_, region_buckets) in mem::take(&mut read_stats.region_buckets) {
+            self.merge_buckets(region_buckets);
+        }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
                 if sender.send(read_stats).is_err() {
@@ -1611,6 +1620,50 @@ where
             }
         };
         self.remote.spawn(f);
+    }
+
+    fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
+        let region_id = region_buckets.meta.region_id;
+        self.merge_buckets(region_buckets);
+        let buckets = self.region_buckets.get_mut(&region_id).unwrap();
+        let now = TiInstant::now();
+        let period = now.duration_since(buckets.last_report_time);
+        buckets.last_report_time = now;
+        let meta = buckets.meta.clone();
+        let resp = self.pd_client.report_region_buckets(buckets, period);
+        let f = async move {
+            if let Err(e) = resp.await {
+                debug!(
+                    "failed to send buckets";
+                    "region_id" => region_id,
+                    "version" => meta.version,
+                    "region_epoch" => ?meta.region_epoch,
+                    "err" => ?e
+                );
+            }
+        };
+        self.remote.spawn(f);
+    }
+
+    fn merge_buckets(&mut self, mut buckets: BucketStat) {
+        use std::cmp::Ordering;
+
+        let region_id = buckets.meta.region_id;
+        self.region_buckets
+            .entry(region_id)
+            .and_modify(|current| {
+                if current.meta.cmp(&buckets.meta) == Ordering::Less {
+                    mem::swap(current, &mut buckets);
+                }
+
+                merge_bucket_stats(
+                    &current.meta.keys,
+                    &mut current.stats,
+                    &buckets.meta.keys,
+                    &buckets.stats,
+                );
+            })
+            .or_insert(buckets);
     }
 }
 
@@ -1838,6 +1891,9 @@ where
                 store_id,
                 min_resolved_ts,
             } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+            Task::ReportBuckets(buckets) => {
+                self.handle_report_region_buckets(buckets);
+            }
         };
     }
 
@@ -1889,7 +1945,7 @@ where
             }),
         );
         let msg = StoreMsg::LatencyInspect {
-            send_time: tikv_util::time::Instant::now(),
+            send_time: TiInstant::now(),
             inspector,
         };
         if let Err(e) = self.router.send_control(msg) {

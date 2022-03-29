@@ -63,6 +63,7 @@ async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
+causal_ts = { path = "components/causal_ts" }
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
 concurrency_manager = { path = "components/concurrency_manager", default-features = false }
@@ -159,7 +160,6 @@ walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
 seahash = "4.1.0"
-causal_ts = { path = "components/causal_ts" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec"] }
@@ -194,7 +194,7 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.

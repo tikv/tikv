@@ -284,13 +284,9 @@ impl Records {
     }
 
     /// Whether `Records` is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
-        if self.records.is_empty() {
-            assert!(self.others.is_empty());
-            true
-        } else {
-            false
-        }
+        self.records.is_empty() && self.others.is_empty()
     }
 }
 
@@ -505,5 +501,74 @@ mod tests {
         assert_eq!(others.cpu_time, 111 + 444 + 777);
         assert_eq!(others.read_keys, 222 + 555 + 888);
         assert_eq!(others.write_keys, 333 + 666 + 999);
+    }
+
+    // Issue: https://github.com/tikv/tikv/issues/12234
+    #[test]
+    fn test_issue_12234() {
+        let tag1 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: b"a".to_vec(),
+        });
+        let tag2 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: b"b".to_vec(),
+        });
+        let tag3 = Arc::new(TagInfos {
+            store_id: 0,
+            region_id: 0,
+            peer_id: 0,
+            key_ranges: vec![],
+            extra_attachment: b"c".to_vec(),
+        });
+
+        // Keep cpu_time same for all tags.
+        let mut raw_records = RawRecords {
+            begin_unix_time_secs: 0,
+            duration: Duration::new(0, 0),
+            records: HashMap::default(),
+        };
+        raw_records.records.insert(
+            tag1,
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 111,
+                write_keys: 111,
+            },
+        );
+        raw_records.records.insert(
+            tag2,
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 111,
+                write_keys: 111,
+            },
+        );
+        raw_records.records.insert(
+            tag3,
+            RawRecord {
+                cpu_time: 111,
+                read_keys: 111,
+                write_keys: 111,
+            },
+        );
+
+        // top.len() == 0
+        // evicted.len() == 3
+        let (top, evicted) = raw_records.top_k(1);
+
+        let mut records = Records::default();
+        records.append(0, top);
+        let others = records.others.entry(0).or_default();
+        evicted.for_each(|(_, v)| {
+            others.merge(v);
+        });
+        assert!(!records.is_empty());
     }
 }

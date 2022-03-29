@@ -1059,6 +1059,7 @@ where
             PeerTick::EntryCacheEvict => self.on_entry_cache_evict_tick(),
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
+            PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
         }
     }
 
@@ -1080,6 +1081,7 @@ where
         {
             self.fsm.has_ready = true;
         }
+        self.fsm.peer.maybe_gen_approximate_buckets(self.ctx);
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -1381,6 +1383,7 @@ where
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
                 self.register_check_leader_lease_tick();
+                self.register_report_region_buckets_tick();
             }
         }
     }
@@ -1609,8 +1612,8 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
-                if let Some(delta) = res.bucket_stat {
-                    let buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+                let buckets = self.fsm.peer.region_buckets.as_mut();
+                if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
                     merge_bucket_stats(
                         &buckets.meta.keys,
                         &mut buckets.stats,
@@ -1762,6 +1765,11 @@ where
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
+            fail_point!(
+                "memtrace_raft_messages_overflow_check_peer_recv",
+                MEMTRACE_RAFT_MESSAGES.sum() < heap_size,
+                |_| {}
+            );
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
@@ -1993,6 +2001,7 @@ where
         self.register_raft_base_tick();
         if self.fsm.peer.is_leader() {
             self.register_check_leader_lease_tick();
+            self.register_report_region_buckets_tick();
         }
     }
 
@@ -4434,13 +4443,13 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        let mut compact_idx = if force_compact
-            // Too many logs between applied index and first index.
-            || (applied_idx > first_idx && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
-            // Raft log size ecceeds the limit.
+        let mut compact_idx = if force_compact && replicated_idx > first_idx {
+            replicated_idx
+        } else if (applied_idx > first_idx
+            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
         {
-            std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
             // In the current implementation one compaction can't delete all stale Raft logs.
             // There will be at least 3 entries left after one compaction:
@@ -4737,6 +4746,9 @@ where
         let stats = new_bucket_stats(&meta);
         let meta = Arc::new(meta);
         let region_buckets = BucketStat::new(meta.clone(), stats);
+        if self.fsm.peer.region_buckets.is_none() {
+            self.register_report_region_buckets_tick();
+        }
         self.fsm.peer.region_buckets = Some(region_buckets);
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
@@ -4947,6 +4959,38 @@ where
             drop(pessimistic_locks);
             self.register_reactivate_memory_lock_tick();
         }
+    }
+
+    fn on_report_region_buckets_tick(&mut self) {
+        if !self.fsm.peer.is_leader()
+            || self.fsm.peer.region_buckets.is_none()
+            || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+
+        let region_id = self.region_id();
+        let peer_id = self.fsm.peer_id();
+        let region_buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+        if let Err(e) = self
+            .ctx
+            .pd_scheduler
+            .schedule(PdTask::ReportBuckets(region_buckets.clone()))
+        {
+            error!(
+                "failed to report region buckets";
+                "region_id" => region_id,
+                "peer_id" => peer_id,
+                "err" => ?e,
+            );
+        }
+        region_buckets.stats = new_bucket_stats(&region_buckets.meta);
+
+        self.register_report_region_buckets_tick();
+    }
+
+    fn register_report_region_buckets_tick(&mut self) {
+        self.schedule_tick(PeerTick::ReportBuckets)
     }
 }
 

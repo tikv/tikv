@@ -3,13 +3,14 @@
 #[macro_use]
 extern crate tikv_util;
 
+mod config;
+pub use config::*;
 mod errors;
-
 pub use errors::*;
-
 mod tso;
 pub use tso::*;
-
+mod metrics;
+pub use metrics::*;
 mod observer;
 pub use observer::*;
 

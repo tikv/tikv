@@ -30,7 +30,7 @@ use engine_traits::{
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
-use pd_client::PdClient;
+use pd_client::{BucketStat, PdClient};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
@@ -1048,6 +1048,21 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn must_get_buckets(&mut self, region_id: u64) -> BucketStat {
+        let timer = Instant::now();
+        let timeout = Duration::from_secs(5);
+        let mut tried_times = 0;
+        // At least retry once.
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
+            tried_times += 1;
+            match self.pd_client.get_buckets(region_id) {
+                Some(buckets) => return buckets,
+                None => sleep_ms(100),
+            }
+        }
+        panic!("failed to get buckets for region {}", region_id);
+    }
+
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
@@ -1139,6 +1154,28 @@ impl<T: Simulator> Cluster<T> {
             )
             .unwrap()
             .unwrap()
+    }
+
+    pub fn must_peer_state(&self, region_id: u64, store_id: u64, peer_state: PeerState) {
+        for _ in 0..100 {
+            let state = self
+                .get_engine(store_id)
+                .c()
+                .get_msg_cf::<RegionLocalState>(
+                    engine_traits::CF_RAFT,
+                    &keys::region_state_key(region_id),
+                )
+                .unwrap()
+                .unwrap();
+            if state.get_state() == peer_state {
+                return;
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, peer_state
+        );
     }
 
     pub fn wait_last_index(

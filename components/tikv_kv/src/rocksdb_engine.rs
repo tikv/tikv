@@ -14,8 +14,8 @@ use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
 use file_system::IORateLimiter;
-use kvproto::kvrpcpb::Context;
-use kvproto::{metapb, raft_cmdpb};
+use kvproto::{metapb, raft_cmdpb, kvrpcpb::Context};
+use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
@@ -208,7 +208,7 @@ impl Engine for RocksEngine {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
 
-        // Trigger "pre_propose_query" observers.
+        // Trigger "pre_propose_query" observers for RawKV API V2.
         let requests = batch
             .modifies
             .into_iter()

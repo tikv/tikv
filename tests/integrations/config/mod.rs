@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
+use causal_ts::Config as CausalTsConfig;
 use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
@@ -234,6 +235,7 @@ fn test_serde_custom_tikv_config() {
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
         reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
         reactive_memory_lock_timeout_tick: 8,
+        report_region_buckets_tick_interval: ReadableDuration::secs(1234),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -288,7 +290,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        enable_multi_batch_write: false,
+        enable_multi_batch_write: true,
         enable_unordered_write: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
