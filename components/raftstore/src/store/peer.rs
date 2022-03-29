@@ -38,6 +38,7 @@ use raft::{
     self, Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
+use raft::History;
 use raft_proto::ConfChangeI;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
@@ -2649,6 +2650,7 @@ where
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.send_read_command(ctx, read_cmd);
+                read.history.take().unwrap().record("readed with additional request");
                 continue;
             }
 
@@ -2658,8 +2660,10 @@ where
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
+                read.history.take().unwrap().record("respond non-replica read");
                 self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                read.history.take().unwrap().record("respond replica read");
                 self.response_read(&mut read, ctx, true);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
@@ -2720,6 +2724,7 @@ where
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
+                    read.history.take().unwrap().record("apply reads");
                     self.response_read(&mut read, ctx, false);
                 }
             }
@@ -2785,6 +2790,7 @@ where
             self.post_pending_read_index_on_replica(ctx)
         } else if self.ready_to_handle_read() {
             while let Some(mut read) = self.pending_reads.pop_front() {
+                read.history.take().unwrap().record("post apply");
                 self.response_read(&mut read, ctx, false);
             }
         }
@@ -3326,12 +3332,15 @@ where
 
         let read = self.pending_reads.back_mut().unwrap();
         debug_assert!(read.read_index.is_none());
+        read.history.as_ref().unwrap().record("choose to follower retry");
+        let history = History::default();
+        history.record("creating for follower retrying");
         self.raft_group
             .read_index(ReadIndexContext::fields_to_bytes(
                 read.id,
                 read.addition_request.as_deref(),
                 None,
-            ));
+            ), history);
         debug!(
             "request to get a read index";
             "request_id" => ?read.id,
@@ -3453,16 +3462,20 @@ where
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let (id, dropped) = self.propose_read_index(request.as_ref(), None);
+        let history = History::default();
+        history.record("created for req");
+        let (id, dropped) = self.propose_read_index(request.as_ref(), None, history.clone());
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
             poll_ctx.raft_metrics.propose.dropped_read_index += 1;
+            history.record("drop as drop internally in raft");
             return false;
         }
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
+        read.history = Some(history);
         self.push_pending_read(read, self.is_leader());
         self.should_wake_up = true;
 
@@ -3500,13 +3513,14 @@ where
         &mut self,
         request: Option<&raft_cmdpb::ReadIndexRequest>,
         locked: Option<&LockInfo>,
+        history: History,
     ) -> (Uuid, bool) {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = Uuid::new_v4();
         self.raft_group
-            .read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
+            .read_index(ReadIndexContext::fields_to_bytes(id, request, locked), history);
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();

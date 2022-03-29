@@ -14,6 +14,7 @@ use engine_traits::Snapshot;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{self, RaftCmdRequest};
 use protobuf::Message;
+use raft::History;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -34,6 +35,7 @@ where
     pub read_index: Option<u64>,
     pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
     pub locked: Option<Box<LockInfo>>,
+    pub history: Option<History>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
 
@@ -72,22 +74,9 @@ where
             read_index: None,
             addition_request: None,
             locked: None,
+            history: None,
             in_contexts: false,
             cmds_heap_size,
-        }
-    }
-
-    pub fn noop(id: Uuid, propose_time: Timespec) -> Self {
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        ReadIndexRequest {
-            id,
-            cmds: MustConsumeVec::new("noop"),
-            propose_time,
-            read_index: None,
-            in_contexts: false,
-            addition_request: None,
-            locked: None,
-            cmds_heap_size: 0,
         }
     }
 
@@ -107,6 +96,9 @@ where
 {
     fn drop(&mut self) {
         let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
+        if let Some(h) = &self.history {
+            h.record("drop for unknown reason");
+        }
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }
@@ -176,6 +168,11 @@ where
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
         let mut removed = 0;
+        let log = if notify_removed.is_some() {
+            "drop for clear all notified"
+        } else {
+            "drop for clear all unnotified"
+        };
         for mut read in self.reads.drain(..) {
             removed += read.cmds.len();
             if let Some(region_id) = notify_removed {
@@ -185,6 +182,7 @@ where
             } else {
                 read.cmds.clear();
             }
+            read.history.take().unwrap().record(log);
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
         self.contexts.clear();
@@ -199,6 +197,7 @@ where
             for (_, cb, _) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
+            read.history.take().unwrap().record("drop for clear uncommitted");
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
         // For a follower changes to leader, and then changes to followr again.
@@ -210,6 +209,9 @@ where
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
+        }
+        if let Some(his) = &read.history {
+            his.record("push back");
         }
         self.reads.push_back(read);
         self.retry_countdown = usize::MAX;
@@ -232,10 +234,10 @@ where
 
     pub fn advance_leader_reads<T>(&mut self, tag: &str, states: T)
     where
-        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64, History)>,
     {
         let mut states_iter = states.into_iter();
-        while let Some((uuid, info, index)) = states_iter.next() {
+        while let Some((uuid, info, index, history)) = states_iter.next() {
             let invalid_id = match self.reads.get_mut(self.ready_cnt) {
                 Some(r) if r.id == uuid => {
                     r.read_index = Some(index);
@@ -249,14 +251,14 @@ where
             error!("{} unexpected uuid detected", tag; "current_id" => ?invalid_id);
             let mut expect_id_track = vec![];
             for i in (0..self.ready_cnt).rev().take(10).rev() {
-                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
+                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time, r.history.clone()))));
             }
             for i in (self.ready_cnt..self.reads.len()).take(10) {
-                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
+                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time, r.history.clone()))));
             }
-            let mut actual_id_track = vec![(uuid, info.is_some(), index)];
+            let mut actual_id_track = vec![(uuid, info.is_some(), index, history)];
             for (id, info, index) in states_iter.take(20) {
-                actual_id_track.push((id, info.is_some(), index));
+                actual_id_track.push((id, info.is_some(), index, history));
             }
             error!("context around"; "expect_id_track" => ?expect_id_track, "actual_id_track" => ?actual_id_track);
             panic!(
@@ -352,6 +354,9 @@ where
             .reads
             .pop_front()
             .expect("read_queue is empty but ready_cnt > 0");
+        if let Some(his) = &res.history {
+            his.record("pop front");
+        }
         if res.in_contexts {
             res.in_contexts = false;
             self.contexts.remove(&res.id);
@@ -362,6 +367,9 @@ where
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
         debug_assert!(read.read_index.is_some());
+        if let Some(his) = &read.history {
+            his.record("push front");
+        }
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;

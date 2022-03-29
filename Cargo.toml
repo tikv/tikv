@@ -175,8 +175,8 @@ hyper-openssl = "0.9"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+raft = { git = "https://github.com/busyjay/raft-rs", branch = "add-read-only-history" }
+raft-proto = { git = "https://github.com/busyjay/raft-rs", branch = "add-read-only-history" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 pprof = { git = "https://github.com/tikv/pprof-rs.git" }

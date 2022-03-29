@@ -3645,9 +3645,10 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/busyjay/raft-rs?branch=add-read-only-history#5e5237ec823f090426238541d788e720f237aca0"
 dependencies = [
  "bytes 1.0.1",
+ "crossbeam-queue",
  "fxhash",
  "getset",
  "protobuf",
@@ -3655,6 +3656,7 @@ dependencies = [
  "rand 0.8.3",
  "slog",
  "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -3701,7 +3703,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/busyjay/raft-rs?branch=add-read-only-history#5e5237ec823f090426238541d788e720f237aca0"
 dependencies = [
  "bytes 1.0.1",
  "protobuf",
