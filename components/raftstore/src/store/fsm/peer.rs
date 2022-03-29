@@ -4806,7 +4806,6 @@ where
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut i = 0;
             let mut j = 0;
-            let buckets = buckets.drain(..);
             region_buckets = self.fsm.peer.region_buckets.as_ref().unwrap().clone();
             let mut meta = (*region_buckets.meta).clone();
             for mut bucket in buckets {
@@ -4923,29 +4922,19 @@ where
 
         let empty_last_keys = vec![];
         let empty_last_stats = metapb::BucketStats::default();
-        let (last_keys, last_stats, stats_reset) = if self.fsm.peer.last_region_buckets.is_some() {
-            (
-                &self
-                    .fsm
-                    .peer
-                    .last_region_buckets
-                    .as_ref()
-                    .unwrap()
-                    .meta
-                    .keys,
-                &self.fsm.peer.last_region_buckets.as_ref().unwrap().stats,
-                region_buckets.last_report_time
-                    != self
-                        .fsm
-                        .peer
-                        .last_region_buckets
-                        .as_ref()
-                        .unwrap()
-                        .last_report_time,
-            )
-        } else {
-            (&empty_last_keys, &empty_last_stats, false)
-        };
+        let (last_keys, last_stats, stats_reset) = self
+            .fsm
+            .peer
+            .last_region_buckets
+            .as_ref()
+            .map(|b| {
+                (
+                    &b.meta.keys,
+                    &b.stats,
+                    region_buckets.last_report_time != b.last_report_time,
+                )
+            })
+            .unwrap_or((&empty_last_keys, &empty_last_stats, false));
 
         let mut bucket_ranges = vec![];
         let mut j = 0;

@@ -211,63 +211,19 @@ where
         region: &Region,
         host: &mut SplitCheckerHost<'_, E>,
         bucket_ranges: Option<Vec<BucketRange>>,
-    ) {
-        let mut buckets: Vec<Bucket> = Vec::default();
-        let mut skip = false;
-        if let Some(ref bucket_ranges) = bucket_ranges {
-            skip = bucket_ranges.is_empty();
-            for bucket_range in bucket_ranges {
-                let mut bucket = region.clone();
-                bucket.set_start_key(bucket_range.0.clone());
-                bucket.set_end_key(bucket_range.1.clone());
-                let bucket_entry = match host.approximate_bucket_keys(&bucket, &self.engine) {
-                    Ok(entry) => {
-                        let keys = entry
-                            .keys
-                            .into_iter()
-                            .map(|k| keys::origin_key(&k).to_vec())
-                            .collect();
-                        Bucket {
-                            keys,
-                            size: entry.size,
-                        }
-                    }
-                    Err(e) => {
-                        error!(%e;
-                            "failed to get approximate bucket key";
-                            "region_id" => region.get_id(),
-                        );
-                        Bucket::default()
-                    }
-                };
-                debug!(
-                    "bucket_entry size {} keys count {}",
-                    bucket_entry.size,
-                    bucket_entry.keys.len()
-                );
-                buckets.push(bucket_entry);
-            }
-        } else {
-            let bucket_entry = match host.approximate_bucket_keys(region, &self.engine) {
-                Ok(entry) => {
-                    let keys = entry
-                        .keys
-                        .into_iter()
-                        .map(|k| keys::origin_key(&k).to_vec())
-                        .collect();
-                    Bucket {
-                        keys,
-                        size: entry.size,
-                    }
-                }
-                Err(e) => {
-                    error!(%e;
-                        "failed to get approximate bucket key";
-                        "region_id" => region.get_id(),
-                    );
-                    Bucket::default()
-                }
-            };
+    ) -> Result<()> {
+        let ranges = bucket_ranges.clone().unwrap_or_else(|| {
+            vec![BucketRange(
+                region.get_start_key().to_vec(),
+                region.get_end_key().to_vec(),
+            )]
+        });
+        let mut buckets = vec![];
+        for range in ranges {
+            let mut bucket = region.clone();
+            bucket.set_start_key(range.0);
+            bucket.set_end_key(range.1);
+            let bucket_entry = host.approximate_bucket_keys(&bucket, &self.engine)?;
             debug!(
                 "bucket_entry size {} keys count {}",
                 bucket_entry.size,
@@ -276,8 +232,8 @@ where
             buckets.push(bucket_entry);
         }
 
-        if !skip {
-            let _ = self.router.send(
+        if !buckets.is_empty() {
+            return self.router.send(
                 region.get_id(),
                 CasualMessage::RefreshRegionBuckets {
                     region_epoch: region.get_region_epoch().clone(),
@@ -287,6 +243,7 @@ where
                 },
             );
         }
+        return Ok(());
     }
 
     /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
@@ -330,7 +287,15 @@ where
             CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine) {
                 Ok(keys) => {
                     if host.enable_region_bucket() {
-                        self.approximate_check_bucket(region, &mut host, bucket_ranges);
+                        match self.approximate_check_bucket(region, &mut host, bucket_ranges) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                error!(%e;
+                                    "approximate_check_bucket failed";
+                                    "region_id" => region_id,
+                                );
+                            }
+                        }
                     }
                     keys.into_iter()
                         .map(|k| keys::origin_key(&k).to_vec())
@@ -507,45 +472,6 @@ where
         );
         self.coprocessor.cfg.update(change);
     }
-
-    fn refresh_approximate_bucket_keys(&self, region: &Region, host: &mut SplitCheckerHost<'_, E>) {
-        let mut buckets: Vec<Bucket> = Vec::default();
-        let bucket_entry = match host.approximate_bucket_keys(region, &self.engine) {
-            Ok(entry) => {
-                let keys = entry
-                    .keys
-                    .into_iter()
-                    .map(|k| keys::origin_key(&k).to_vec())
-                    .collect();
-                Bucket {
-                    keys,
-                    size: entry.size,
-                }
-            }
-            Err(e) => {
-                error!(%e;
-                    "failed to get approximate bucket key";
-                    "region_id" => region.get_id(),
-                );
-                Bucket::default()
-            }
-        };
-        info!(
-            "starting approximate_bucket_keys {}, bucket {:?}",
-            bucket_entry.keys.len(),
-            &bucket_entry,
-        );
-        buckets.push(bucket_entry);
-        let _ = self.router.send(
-            region.get_id(),
-            CasualMessage::RefreshRegionBuckets {
-                region_epoch: region.get_region_epoch().clone(),
-                buckets,
-                bucket_ranges: None,
-                cb: Callback::None,
-            },
-        );
-    }
 }
 
 impl<E, S> Runnable for Runner<E, S>
@@ -572,7 +498,15 @@ where
                         false,
                         CheckPolicy::Approximate,
                     );
-                    self.refresh_approximate_bucket_keys(&region, &mut host);
+                    match self.approximate_check_bucket(&region, &mut host, None) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            error!(%e;
+                                "approximate_check_bucket failed";
+                                "region_id" => region.get_id(),
+                            );
+                        }
+                    }
                 }
             }
             #[cfg(any(test, feature = "testexport"))]

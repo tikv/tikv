@@ -102,7 +102,10 @@ impl<'a, E> Host<'a, E> {
             return bucket_checker
                 .approximate_split_keys(region, engine)
                 .map(|keys| Bucket {
-                    keys,
+                    keys: keys
+                        .into_iter()
+                        .map(|k| ::keys::origin_key(&k).to_vec())
+                        .collect(),
                     size: region_size,
                 });
         }
