@@ -34,11 +34,11 @@ use kvproto::replication_modepb::{
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType};
+use raft::History;
 use raft::{
     self, Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
-use raft::History;
 use raft_proto::ConfChangeI;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
@@ -1378,7 +1378,7 @@ where
         let from_id = m.get_from();
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
-        self.raft_group.step(m)?;
+        self.raft_group.step(m, None)?;
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let mut for_balance = false;
@@ -2650,7 +2650,10 @@ where
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.send_read_command(ctx, read_cmd);
-                read.history.take().unwrap().record("readed with additional request");
+                read.history
+                    .take()
+                    .unwrap()
+                    .record("readed with additional request");
                 continue;
             }
 
@@ -2660,7 +2663,10 @@ where
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
-                read.history.take().unwrap().record("respond non-replica read");
+                read.history
+                    .take()
+                    .unwrap()
+                    .record("respond non-replica read");
                 self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                 read.history.take().unwrap().record("respond replica read");
@@ -2707,7 +2713,12 @@ where
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
             let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
-            (read_index_ctx.id, read_index_ctx.locked, state.index)
+            (
+                read_index_ctx.id,
+                read_index_ctx.locked,
+                state.index,
+                state.history.clone(),
+            )
         });
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
@@ -3332,15 +3343,16 @@ where
 
         let read = self.pending_reads.back_mut().unwrap();
         debug_assert!(read.read_index.is_none());
-        read.history.as_ref().unwrap().record("choose to follower retry");
+        read.history
+            .as_ref()
+            .unwrap()
+            .record("choose to follower retry");
         let history = History::default();
         history.record("creating for follower retrying");
-        self.raft_group
-            .read_index(ReadIndexContext::fields_to_bytes(
-                read.id,
-                read.addition_request.as_deref(),
-                None,
-            ), history);
+        self.raft_group.read_index(
+            ReadIndexContext::fields_to_bytes(read.id, read.addition_request.as_deref(), None),
+            history,
+        );
         debug!(
             "request to get a read index";
             "request_id" => ?read.id,
@@ -3519,8 +3531,10 @@ where
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = Uuid::new_v4();
-        self.raft_group
-            .read_index(ReadIndexContext::fields_to_bytes(id, request, locked), history);
+        self.raft_group.read_index(
+            ReadIndexContext::fields_to_bytes(id, request, locked),
+            history,
+        );
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
