@@ -11,7 +11,8 @@ use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
