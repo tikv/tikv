@@ -43,6 +43,7 @@ tokio = { version = "1.5", features = ["time", "fs", "process"] }
 tokio-util = { version = "0.6", features = ["compat"] }
 url = "2.0"
 async-trait = "0.1"
+openssl = "0.10"
 
 [dev-dependencies]
 structopt = "0.3"

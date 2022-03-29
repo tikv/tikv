@@ -526,7 +526,7 @@ where
                             import_err
                                 .set_message("failed to complete raft command".to_string());
                             // FIXME: if there are many errors, we may lose some of them here.
-                            import_err 
+                            import_err
                                 .set_store_error(err.clone());
                             warn!("failed to apply the file to the store"; "error" => ?err, "file" => %meta.get_name());
                             resp.set_error(import_err);

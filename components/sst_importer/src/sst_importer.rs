@@ -212,6 +212,7 @@ impl SSTImporter {
         src_file_name: &str,
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
+        expect_sha256: Option<Vec<u8>>,
         file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
     ) -> Result<()> {
@@ -235,6 +236,7 @@ impl SSTImporter {
             src_file_name,
             dst_file.clone(),
             file_length,
+            expect_sha256,
             speed_limiter,
             file_crypter,
         );
@@ -271,12 +273,16 @@ impl SSTImporter {
         let name = meta.get_name();
         let path = self.dir.get_import_path(name)?;
         let start = Instant::now();
+        let sha256 = meta.get_sha256().to_vec();
+        let expected_sha256 = if sha256.len() > 0 { Some(sha256) } else { None };
+
         self.download_file_from_external_storage(
             // don't check file length after download file for now.
             meta.get_length(),
             name,
             path.temp.clone(),
             backend,
+            expected_sha256,
             // don't support encrypt for now.
             None,
             speed_limiter,
@@ -416,6 +422,7 @@ impl SSTImporter {
             name,
             path.temp.clone(),
             backend,
+            None,
             file_crypter,
             speed_limiter,
         )?;
@@ -709,6 +716,7 @@ mod tests {
         SeekKey, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use file_system::File;
+    use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
@@ -1062,11 +1070,17 @@ mod tests {
         let mut input = data;
         let mut output = Vec::new();
         let input_len = input.len() as u64;
+
+        let mut hasher = Hasher::new(MessageDigest::sha256()).unwrap();
+        hasher.update(data);
+        let hash256 = hasher.finish().unwrap().to_vec();
+
         block_on_external_io(external_storage_export::read_external_storage_into_file(
             &mut input,
             &mut output,
             &Limiter::new(f64::INFINITY),
             input_len,
+            Some(hash256),
             8192,
         ))
         .unwrap();
@@ -1084,6 +1098,7 @@ mod tests {
             &mut output,
             &Limiter::new(f64::INFINITY),
             0,
+            None,
             usize::MAX,
         ))
         .unwrap_err();

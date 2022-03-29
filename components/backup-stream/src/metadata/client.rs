@@ -13,7 +13,6 @@ use kvproto::brpb::StreamBackupTaskInfo;
 use tikv_util::{defer, time::Instant, warn};
 use tokio_stream::StreamExt;
 
-
 use crate::errors::{Error, Result};
 
 /// Some operations over stream backup metadata key space.

@@ -1590,6 +1590,7 @@ dependencies = [
  "lazy_static",
  "libloading",
  "matches",
+ "openssl",
  "prometheus",
  "protobuf",
  "rand 0.8.3",
@@ -2550,7 +2551,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#72f70645bb04ae590d279080a5794eba56a24d54"
+source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#b87187a88066427469e0e5bb82994d5b74c39ed2"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5020,6 +5021,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "openssl",
  "prometheus",
  "serde",
  "serde_derive",

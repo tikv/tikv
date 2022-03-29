@@ -69,6 +69,7 @@ pub async fn restore_inner(
         output,
         &limiter,
         expected_length,
+        None,
         MINIMUM_READ_SPEED,
     )
     .await;

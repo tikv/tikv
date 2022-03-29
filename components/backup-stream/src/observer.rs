@@ -243,7 +243,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::{
         Cmd, CmdBatch, CmdObserveInfo, CmdObserver, ObserveHandle, ObserveLevel, ObserverContext,
-        RegionChangeEvent, RegionChangeObserver, RoleObserver, RoleChange,
+        RegionChangeEvent, RegionChangeObserver, RoleChange, RoleObserver,
     };
 
     use tikv_util::worker::dummy_scheduler;

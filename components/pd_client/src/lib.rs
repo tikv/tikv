@@ -21,8 +21,8 @@ pub use self::util::{merge_bucket_stats, new_bucket_stats};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;

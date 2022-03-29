@@ -1019,7 +1019,7 @@ impl DataFile {
         self.set_storage_path(file_key.file_name(self.min_ts, self.max_ts));
 
         let mut meta = DataFileInfo::new();
-        meta.set_sha_256(
+        meta.set_sha256(
             self.sha256
                 .finish()
                 .map(|bytes| bytes.to_vec())
