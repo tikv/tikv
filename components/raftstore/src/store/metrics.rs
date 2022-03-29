@@ -163,6 +163,7 @@ make_auto_flush_static_metric! {
         reserve_log,
         compact_idx_too_small,
         threshold_limit,
+        force_compacted,
     }
 
     pub struct RaftEventDuration : LocalHistogram {

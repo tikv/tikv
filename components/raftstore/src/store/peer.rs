@@ -1485,7 +1485,6 @@ where
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
-            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 let elapsed = instant.saturating_elapsed();
                 if elapsed >= max_duration {

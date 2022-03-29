@@ -374,6 +374,7 @@ pub struct RaftLogGcSkippedMetrics {
     pub reserve_log: u64,
     pub threshold_limit: u64,
     pub compact_idx_too_small: u64,
+    pub force_compacted: u64,
 }
 
 impl RaftLogGcSkippedMetrics {
@@ -393,6 +394,12 @@ impl RaftLogGcSkippedMetrics {
                 .compact_idx_too_small
                 .inc_by(self.compact_idx_too_small);
             self.compact_idx_too_small = 0;
+        }
+        if self.force_compacted > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .force_compacted
+                .inc_by(self.force_compacted);
+            self.force_compacted = 0;
         }
     }
 }
