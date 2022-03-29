@@ -243,7 +243,7 @@ where
                 },
             );
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
