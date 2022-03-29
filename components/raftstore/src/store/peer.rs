@@ -34,7 +34,6 @@ use kvproto::replication_modepb::{
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType};
-use raft::History;
 use raft::{
     self, Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
@@ -1378,7 +1377,7 @@ where
         let from_id = m.get_from();
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
-        self.raft_group.step(m, None)?;
+        self.raft_group.step(m)?;
         self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
 
         let mut for_balance = false;
@@ -2650,10 +2649,6 @@ where
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.send_read_command(ctx, read_cmd);
-                read.history
-                    .take()
-                    .unwrap()
-                    .record("readed with additional request");
                 continue;
             }
 
@@ -2663,13 +2658,8 @@ where
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
-                read.history
-                    .take()
-                    .unwrap()
-                    .record("respond non-replica read");
                 self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                read.history.take().unwrap().record("respond replica read");
                 self.response_read(&mut read, ctx, true);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
@@ -2713,12 +2703,7 @@ where
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
             let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
-            (
-                read_index_ctx.id,
-                read_index_ctx.locked,
-                state.index,
-                state.history.clone(),
-            )
+            (read_index_ctx.id, read_index_ctx.locked, state.index)
         });
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
@@ -2735,7 +2720,6 @@ where
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
-                    read.history.take().unwrap().record("apply reads");
                     self.response_read(&mut read, ctx, false);
                 }
             }
@@ -2801,7 +2785,6 @@ where
             self.post_pending_read_index_on_replica(ctx)
         } else if self.ready_to_handle_read() {
             while let Some(mut read) = self.pending_reads.pop_front() {
-                read.history.take().unwrap().record("post apply");
                 self.response_read(&mut read, ctx, false);
             }
         }
@@ -3343,16 +3326,12 @@ where
 
         let read = self.pending_reads.back_mut().unwrap();
         debug_assert!(read.read_index.is_none());
-        read.history
-            .as_ref()
-            .unwrap()
-            .record("choose to follower retry");
-        let history = History::default();
-        history.record("creating for follower retrying");
-        self.raft_group.read_index(
-            ReadIndexContext::fields_to_bytes(read.id, read.addition_request.as_deref(), None),
-            history,
-        );
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                read.id,
+                read.addition_request.as_deref(),
+                None,
+            ));
         debug!(
             "request to get a read index";
             "request_id" => ?read.id,
@@ -3417,6 +3396,7 @@ where
                             && read.addition_request.is_none()
                             && read.propose_time + max_lease > now
                         {
+                            debug!("batching up"; "region_id" => self.region_id, "peer_id" => self.peer.get_id());
                             // A read request proposed in the current lease is found; combine the new
                             // read request to that previous one, so that no proposing needed.
                             read.push_command(req, cb, commit_index);
@@ -3474,20 +3454,16 @@ where
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let history = History::default();
-        history.record("created for req");
-        let (id, dropped) = self.propose_read_index(request.as_ref(), None, history.clone());
+        let (id, dropped) = self.propose_read_index(request.as_ref(), None);
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
             poll_ctx.raft_metrics.propose.dropped_read_index += 1;
-            history.record("drop as drop internally in raft");
             return false;
         }
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
-        read.history = Some(history);
         self.push_pending_read(read, self.is_leader());
         self.should_wake_up = true;
 
@@ -3525,16 +3501,13 @@ where
         &mut self,
         request: Option<&raft_cmdpb::ReadIndexRequest>,
         locked: Option<&LockInfo>,
-        history: History,
     ) -> (Uuid, bool) {
         let last_pending_read_count = self.raft_group.raft.pending_read_count();
         let last_ready_read_count = self.raft_group.raft.ready_read_count();
 
         let id = Uuid::new_v4();
-        self.raft_group.read_index(
-            ReadIndexContext::fields_to_bytes(id, request, locked),
-            history,
-        );
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -4604,10 +4577,12 @@ where
 
         send_msg.set_to_peer(to_peer);
 
-        if msg.get_msg_type() == MessageType::MsgReadIndex && msg.get_from() != self.peer.get_id() {
-            warn!(
-                "suspicious read index detected";
-                "msg" => ?msg,
+        if msg.get_from() != self.peer.get_id() {
+            debug!(
+                "redirecting message";
+                "msg_type" => ?msg.get_msg_type(),
+                "from" => msg.get_from(),
+                "to" => msg.get_to(),
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );

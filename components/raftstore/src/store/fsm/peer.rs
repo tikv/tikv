@@ -1019,7 +1019,7 @@ where
                 }
             }
             CasualMessage::RenewLease => {
-                self.try_renew_leader_lease();
+                self.try_renew_leader_lease("casual message");
                 self.reset_raft_tick(GroupState::Ordered);
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
@@ -1689,7 +1689,13 @@ where
     }
 
     // If lease expired, we will send a noop read index to renew lease.
-    fn try_renew_leader_lease(&mut self) {
+    fn try_renew_leader_lease(&mut self, reason: &str) {
+        debug!(
+            "renew lease";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "reason" => reason,
+        );
         if !self.fsm.peer.is_leader() {
             return;
         }
@@ -1868,17 +1874,14 @@ where
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
+            // This can be a message that sent when it's still a follower. Nevertheleast,
+            // it's meaningless to continue to handle the request as callbacks are cleared.
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
-                && (from_peer_id != msg.get_message().get_from()
-                    || from_peer_id == 0
-                    || from_peer_id == self.fsm.peer_id())
+                && (msg.get_message().get_from() == 0
+                    || msg.get_message().get_from() == self.fsm.peer_id())
             {
-                warn!(
-                    "suspicious read index detected";
-                    "msg" => ?msg,
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                );
+                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                return Ok(());
             }
             self.fsm.peer.step(self.ctx, msg.take_message())
         };
@@ -4536,7 +4539,7 @@ where
         {
             return;
         }
-        self.try_renew_leader_lease();
+        self.try_renew_leader_lease("tick");
         self.register_check_leader_lease_tick();
     }
 

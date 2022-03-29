@@ -14,7 +14,6 @@ use engine_traits::Snapshot;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{self, RaftCmdRequest};
 use protobuf::Message;
-use raft::History;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::memory::HeapSize;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -35,7 +34,6 @@ where
     pub read_index: Option<u64>,
     pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
     pub locked: Option<Box<LockInfo>>,
-    pub history: Option<History>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
 
@@ -74,7 +72,6 @@ where
             read_index: None,
             addition_request: None,
             locked: None,
-            history: None,
             in_contexts: false,
             cmds_heap_size,
         }
@@ -96,9 +93,6 @@ where
 {
     fn drop(&mut self) {
         let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
-        if let Some(h) = &self.history {
-            h.record("drop for unknown reason");
-        }
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }
@@ -168,11 +162,6 @@ where
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
         let mut removed = 0;
-        let log = if notify_removed.is_some() {
-            "drop for clear all notified"
-        } else {
-            "drop for clear all unnotified"
-        };
         for mut read in self.reads.drain(..) {
             removed += read.cmds.len();
             if let Some(region_id) = notify_removed {
@@ -181,9 +170,6 @@ where
                 }
             } else {
                 read.cmds.clear();
-            }
-            if let Some(his) = read.history.take() {
-                his.record(log);
             }
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
@@ -199,10 +185,6 @@ where
             for (_, cb, _) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
-            read.history
-                .take()
-                .unwrap()
-                .record("drop for clear uncommitted");
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
         // For a follower changes to leader, and then changes to followr again.
@@ -214,9 +196,6 @@ where
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
-        }
-        if let Some(his) = &read.history {
-            his.record("push back");
         }
         self.reads.push_back(read);
         self.retry_countdown = usize::MAX;
@@ -239,42 +218,39 @@ where
 
     pub fn advance_leader_reads<T>(&mut self, tag: &str, states: T)
     where
-        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64, History)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
         let mut states_iter = states.into_iter();
-        while let Some((uuid, info, index, history)) = states_iter.next() {
+        while let Some((uuid, info, index)) = states_iter.next() {
             let invalid_id = match self.reads.get_mut(self.ready_cnt) {
                 Some(r) if r.id == uuid => {
                     r.read_index = Some(index);
                     self.ready_cnt += 1;
-                    history.record("advanced as leader");
                     continue;
                 }
                 Some(r) => Some((r.id, r.propose_time)),
                 None => None,
             };
 
+            if !self.contexts.contains_key(&uuid) {
+                debug!(
+                    "cannot find corresponding read from pending reads";
+                    "uuid" => ?uuid, "read-index" => index, "tag" => tag
+                );
+                continue;
+            }
+
             error!("{} unexpected uuid detected", tag; "current_id" => ?invalid_id);
             let mut expect_id_track = vec![];
             for i in (0..self.ready_cnt).rev().take(10).rev() {
-                expect_id_track.push((
-                    i,
-                    self.reads
-                        .get(i)
-                        .map(|r| (r.id, r.propose_time, r.history.clone())),
-                ));
+                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
             }
             for i in (self.ready_cnt..self.reads.len()).take(10) {
-                expect_id_track.push((
-                    i,
-                    self.reads
-                        .get(i)
-                        .map(|r| (r.id, r.propose_time, r.history.clone())),
-                ));
+                expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
             }
-            let mut actual_id_track = vec![(uuid, info.is_some(), index, history)];
-            for (id, info, index, history) in states_iter.take(20) {
-                actual_id_track.push((id, info.is_some(), index, history));
+            let mut actual_id_track = vec![(uuid, info.is_some(), index)];
+            for (id, info, index) in states_iter.take(20) {
+                actual_id_track.push((id, info.is_some(), index));
             }
             error!("context around"; "expect_id_track" => ?expect_id_track, "actual_id_track" => ?actual_id_track);
             panic!(
@@ -287,12 +263,11 @@ where
     /// update the read index of the requests that before the specified id.
     pub fn advance_replica_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64, History)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
         let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
-        for (uuid, locked, index, history) in states {
+        for (uuid, locked, index) in states {
             if let Some(raw_offset) = self.contexts.remove(&uuid) {
-                history.record("advanced as replica");
                 let offset = match raw_offset.checked_sub(self.handled_cnt) {
                     Some(offset) => offset,
                     None => panic!(
@@ -319,7 +294,6 @@ where
                 max_changed_offset = cmp::max(max_changed_offset, offset);
                 continue;
             }
-            history.record("advanced as lost");
             debug!(
                 "cannot find corresponding read from pending reads";
                 "uuid" => ?uuid, "read-index" => index,
@@ -372,9 +346,6 @@ where
             .reads
             .pop_front()
             .expect("read_queue is empty but ready_cnt > 0");
-        if let Some(his) = &res.history {
-            his.record("pop front");
-        }
         if res.in_contexts {
             res.in_contexts = false;
             self.contexts.remove(&res.id);
@@ -385,9 +356,6 @@ where
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
         debug_assert!(read.read_index.is_some());
-        if let Some(his) = &read.history {
-            his.record("push front");
-        }
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;
@@ -576,27 +544,27 @@ mod tests {
         queue.advance_replica_reads(Vec::new());
         assert_eq!(queue.ready_cnt, 0);
 
-        queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100, History::default())]);
+        queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 1);
 
-        queue.advance_replica_reads(vec![(queue.reads[1].id, None, 100, History::default())]);
+        queue.advance_replica_reads(vec![(queue.reads[1].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[80].id, None, 80, History::default()),
-            (queue.reads[84].id, None, 100, History::default()),
-            (queue.reads[82].id, None, 70, History::default()),
-            (queue.reads[78].id, None, 120, History::default()),
-            (queue.reads[77].id, None, 40, History::default()),
+            (queue.reads[80].id, None, 80),
+            (queue.reads[84].id, None, 100),
+            (queue.reads[82].id, None, 70),
+            (queue.reads[78].id, None, 120),
+            (queue.reads[77].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[20].id, None, 80, History::default()),
-            (queue.reads[24].id, None, 100, History::default()),
-            (queue.reads[22].id, None, 70, History::default()),
-            (queue.reads[18].id, None, 120, History::default()),
-            (queue.reads[17].id, None, 40, History::default()),
+            (queue.reads[20].id, None, 80),
+            (queue.reads[24].id, None, 100),
+            (queue.reads[22].id, None, 70),
+            (queue.reads[18].id, None, 120),
+            (queue.reads[17].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
@@ -632,7 +600,7 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        queue.advance_leader_reads("", vec![(id, None, 10, History::default())]);
+        queue.advance_leader_reads("", vec![(id, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -647,14 +615,14 @@ mod tests {
         );
         queue.push_back(req, true);
         let last_id = queue.reads.back().map(|t| t.id).unwrap();
-        queue.advance_leader_reads("", vec![(last_id, None, 10, History::default())]);
+        queue.advance_leader_reads("", vec![(last_id, None, 10)]);
         assert_eq!(queue.ready_cnt, 1);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
         // Shouldn't panic when call `advance_replica_reads` with `id` again.
-        queue.advance_replica_reads(vec![(id, None, 10, History::default())]);
+        queue.advance_replica_reads(vec![(id, None, 10)]);
     }
 
     #[test]
@@ -675,7 +643,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
-        queue.advance_leader_reads("", vec![(id, None, 10, History::default())]);
+        queue.advance_leader_reads("", vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
         queue.clear_uncommitted_on_role_change(10);
@@ -692,7 +660,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        queue.advance_leader_reads("", vec![(id_1, None, 10, History::default())]);
+        queue.advance_leader_reads("", vec![(id_1, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -717,12 +685,61 @@ mod tests {
             queue.push_back(req, false);
         }
 
-        queue.advance_replica_reads(vec![(ids[1], None, 100, History::default())]);
+        queue.advance_replica_reads(vec![(ids[1], None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
-        queue.advance_replica_reads(vec![(ids[0], None, 100, History::default())]);
+        queue.advance_replica_reads(vec![(ids[0], None, 100)]);
+    }
+
+    /// Tests if a stale follower read index will corrupt pending read queue.
+    #[test]
+    fn test_advance_leader_reads_out_of_order() {
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
+
+        let follower_ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
+        for id in &follower_ids {
+            // Push a pending read comand when the peer is follower.
+            let req = ReadIndexRequest::with_command(
+                *id,
+                RaftCmdRequest::default(),
+                Callback::None,
+                Timespec::new(0, 0),
+            );
+            queue.push_back(req, false);
+        }
+
+        queue.advance_replica_reads(vec![(follower_ids[0], None, 100)]);
+        queue.clear_uncommitted_on_role_change(1);
+
+        let leader_ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
+        for id in &leader_ids {
+            // Push a pending read comand when the peer is follower.
+            let req = ReadIndexRequest::with_command(
+                *id,
+                RaftCmdRequest::default(),
+                Callback::None,
+                Timespec::new(0, 0),
+            );
+            queue.push_back(req, true);
+        }
+        queue.advance_leader_reads(
+            "tests",
+            vec![
+                (follower_ids[1], None, 102),
+                (leader_ids[0], None, 103),
+                (leader_ids[1], None, 104),
+            ],
+        );
+        assert_eq!(queue.ready_cnt, 3);
+
+        while let Some(mut read) = queue.pop_front() {
+            read.cmds.clear();
+        }
     }
 }
