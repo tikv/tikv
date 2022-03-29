@@ -1376,17 +1376,50 @@ where
         );
         assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
 
-        self.fsm.peer.raft_group.raft.become_leader();
-        assert!(self.fsm.peer.is_leader());
-        self.fsm.peer.raft_group.raft.set_check_quorum(false);
-
-        // make sure it's not hibernated
-        self.reset_raft_tick(GroupState::Ordered);
-
         if let Some(ForceLeaderState::PreForceLeader {
             expected_alive_voter,
         }) = self.fsm.peer.force_leader.take()
         {
+            let peer_ids: Vec<_> = self
+                .fsm
+                .peer
+                .raft_group
+                .raft
+                .prs()
+                .conf()
+                .voters()
+                .ids()
+                .iter()
+                .collect();
+            for peer_id in peer_ids {
+                let store_id = self
+                    .region()
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == peer_id)
+                    .unwrap()
+                    .get_store_id();
+
+                if expected_alive_voter.contains(&store_id) {
+                    continue;
+                }
+
+                // make fake vote response
+                let mut msg = raft::eraftpb::Message::new();
+                msg.msg_type = MessageType::MsgRequestVoteResponse;
+                msg.reject = false;
+                msg.term = self.fsm.peer.term();
+                msg.from = peer_id;
+                msg.to = self.fsm.peer.peer_id();
+                self.fsm.peer.raft_group.step(msg).unwrap();
+            }
+            // after receiving all votes, should become leader
+            assert!(self.fsm.peer.is_leader());
+            self.fsm.peer.raft_group.raft.set_check_quorum(false);
+
+            // make sure it's not hibernated
+            self.reset_raft_tick(GroupState::Ordered);
+
             self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader {
                 expected_alive_voter,
             });

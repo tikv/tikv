@@ -251,7 +251,7 @@ fn test_force_leader_for_learner() {
         .must_remove_peer(region.get_id(), peer_on_store1.clone());
     cluster.pd_client.must_add_peer(
         region.get_id(),
-        new_learner_peer(peer_on_store1.get_id(), 1),
+        new_learner_peer(peer_on_store1.get_store_id(), peer_on_store1.get_id()),
     );
 
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
