@@ -3396,7 +3396,6 @@ where
                             && read.addition_request.is_none()
                             && read.propose_time + max_lease > now
                         {
-                            debug!("batching up"; "region_id" => self.region_id, "peer_id" => self.peer.get_id());
                             // A read request proposed in the current lease is found; combine the new
                             // read request to that previous one, so that no proposing needed.
                             read.push_command(req, cb, commit_index);
