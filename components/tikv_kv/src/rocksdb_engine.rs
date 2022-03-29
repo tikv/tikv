@@ -14,7 +14,7 @@ use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
 use file_system::IORateLimiter;
-use kvproto::{metapb, raft_cmdpb, kvrpcpb::Context};
+use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -27,7 +27,6 @@ use super::{
 };
 
 pub use engine_rocks::RocksSnapshot;
-use raftstore::coprocessor::CoprocessorHost;
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
