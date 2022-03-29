@@ -8,6 +8,7 @@ use tikv_alloc::{
     mem_trace,
     trace::{Id, MemoryTrace},
 };
+use tikv_util::info;
 use tikv_util::sys::memory_usage_reaches_high_water;
 
 lazy_static! {
@@ -66,6 +67,22 @@ pub fn needs_evict_entry_cache(evict_cache_on_memory_ratio: f64) -> bool {
     if memory_usage_reaches_high_water(&mut usage) {
         let ec_usage = MEMTRACE_ENTRY_CACHE.sum() as u64;
         if ec_usage as f64 > usage as f64 * evict_cache_on_memory_ratio {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn apply_need_flow_control(applys_memory_ratio: f64) -> bool {
+    // 0.0 means disable.
+    if applys_memory_ratio < f64::EPSILON {
+        return false;
+    }
+    let mut usage = 0;
+    if memory_usage_reaches_high_water(&mut usage) {
+        let applys_usage = MEMTRACE_APPLYS.sum() as u64;
+        if applys_usage as f64 > usage as f64 * applys_memory_ratio {
+            info!("apply flow control start");
             return true;
         }
     }

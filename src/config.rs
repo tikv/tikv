@@ -2623,7 +2623,7 @@ impl Default for TiKvConfig {
             enable_io_snoop: true,
             abort_on_panic: false,
             memory_usage_limit: None,
-            memory_usage_high_water: 0.9,
+            memory_usage_high_water: 0.8,
             log: LogConfig::default(),
             quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),

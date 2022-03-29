@@ -605,6 +605,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let apply_flow_control = apply_need_flow_control(self.ctx.cfg.applys_memory_ratio);
+        if apply_flow_control {
+            self.fsm.peer.has_pending_committed_entries = true;
+        } else {
+            self.fsm.peer.has_pending_committed_entries = false;
+        }
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -1415,6 +1421,10 @@ where
                 self.fsm.peer.leader_unreachable = false;
             }
 
+            if r.has_pending_committed_entries {
+                self.schedule_tick(PeerTick::Raft);
+            }
+
             return r.has_write_ready;
         }
         false
@@ -1502,6 +1512,12 @@ where
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
         }
+
+        // if committed entries not be sent to appply cause of memory flow control,
+        // we need re-set has ready to deal with ready().
+        if self.fsm.peer.has_pending_committed_entries {
+            self.fsm.has_ready = true;
+        }
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
@@ -1511,6 +1527,12 @@ where
             self.fsm.missing_ticks = 0;
             self.register_raft_base_tick();
             return;
+        }
+
+        // When having pending committed entries not sent to apply, set has ready.
+        if self.fsm.peer.has_pending_committed_entries {
+            self.fsm.has_ready = true;
+            self.register_raft_base_tick();
         }
 
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
@@ -2341,7 +2363,9 @@ where
             // It must be ensured that all logs have been applied.
             // Suppose apply fsm is applying a `CommitMerge` log and this snapshot is generated after
             // merge, its corresponding source peer can not be destroy by this snapshot.
-            && self.fsm.peer.ready_to_handle_pending_snap();
+            && self.fsm.peer.ready_to_handle_pending_snap()
+            // When has_pending_committed_entries, cannnot destroy peer now, wait until all committed entries applyed.
+            && !self.fsm.peer.has_pending_committed_entries;
         for exist_region in meta
             .region_ranges
             .range((Excluded(snap_enc_start_key), Unbounded::<Vec<u8>>))

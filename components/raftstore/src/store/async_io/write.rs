@@ -415,6 +415,12 @@ where
                 self.clear_latency_inspect();
                 continue;
             }
+            if self.batch.get_raft_size() > 1_000_000_000 {
+                info!(
+                    "async io worker get a huge write batch, size = {}MB",
+                    self.batch.get_raft_size() / 1024 / 1024
+                );
+            }
 
             STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));

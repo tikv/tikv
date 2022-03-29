@@ -452,6 +452,7 @@ pub struct ReadyResult {
     pub state_role: Option<StateRole>,
     pub has_new_entries: bool,
     pub has_write_ready: bool,
+    pub has_pending_committed_entries: bool,
 }
 
 pub struct Peer<EK, ER>
@@ -480,6 +481,9 @@ where
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
+
+    /// if apply takes to much memory, store will stop sending apply tasks.
+    pub has_pending_committed_entries: bool,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -679,6 +683,7 @@ where
             approximate_keys: None,
             has_calculated_region_size: false,
             compaction_declined_bytes: 0,
+            has_pending_committed_entries: false,
             leader_unreachable: false,
             pending_remove: false,
             should_wake_up: false,
@@ -1795,6 +1800,8 @@ where
 
     #[inline]
     pub fn ready_to_handle_pending_snap(&self) -> bool {
+        // when has_pending_committed_entries, the last_applying_idx will not update to the latest committed entrires.
+        // which needs to be excluded by caller.
         // If apply worker is still working, written apply state may be overwritten
         // by apply worker. So we have to wait here.
         // Please note that commit_index can't be used here. When applying a snapshot,
@@ -1983,73 +1990,83 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<ReadyResult> {
-        if self.pending_remove {
-            return None;
-        }
-
-        if !self.check_snap_status(ctx) {
-            return None;
-        }
-
         let mut destroy_regions = vec![];
-        if self.has_pending_snapshot() {
-            if !self.ready_to_handle_pending_snap() {
-                let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
-                debug!(
-                    "not ready to apply snapshot";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "applied_index" => self.get_store().applied_index(),
-                    "last_applying_index" => self.last_applying_idx,
-                    "pending_request_snapshot_count" => count,
-                );
+        // Preconditions: when recv a snap, it means current peer wants log index which leader has gc'ed.
+        // So, when has_pending_committed_entries is true, we can always wait it to become false, and then apply snap.
+        if !self.has_pending_committed_entries {
+            if self.pending_remove {
                 return None;
             }
 
-            if !self.unpersisted_readies.is_empty() {
-                debug!(
-                    "not ready to apply snapshot because there are some unpersisted readies";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "unpersisted_readies" => ?self.unpersisted_readies,
-                );
+            // if has_pending_committed_entries, then will not start snapshot apply, so no need check it.
+            if !self.check_snap_status(ctx) {
                 return None;
             }
 
-            let meta = ctx.store_meta.lock().unwrap();
-            // For merge process, the stale source peer is destroyed asynchronously when applying
-            // snapshot or creating new peer. So here checks whether there is any overlap, if so,
-            // wait and do not handle raft ready.
-            if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
-                for (source_region_id, is_ready) in wait_destroy_regions {
-                    if !is_ready {
-                        info!(
-                            "snapshot range overlaps, wait source destroy finish";
-                            "region_id" => self.region_id,
-                            "peer_id" => self.peer.get_id(),
-                            "apply_index" => self.get_store().applied_index(),
-                            "last_applying_index" => self.last_applying_idx,
-                            "overlap_region_id" => source_region_id,
-                        );
-                        return None;
+            // If has_pending_committed_entries, self.last_applying_idx will not equal to self.get_store().applied_index() always.
+            // But, we need gen ready to handle the entries committed but not sent to apply always.
+            // So, if has_pending_committed_entries, we will not deal with snapshot.
+            if self.has_pending_snapshot() {
+                if !self.ready_to_handle_pending_snap() {
+                    let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
+                    debug!(
+                        "not ready to apply snapshot";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "applied_index" => self.get_store().applied_index(),
+                        "last_applying_index" => self.last_applying_idx,
+                        "pending_request_snapshot_count" => count,
+                    );
+                    return None;
+                }
+
+                if !self.unpersisted_readies.is_empty() {
+                    debug!(
+                        "not ready to apply snapshot because there are some unpersisted readies";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "unpersisted_readies" => ?self.unpersisted_readies,
+                    );
+                    return None;
+                }
+
+                let meta = ctx.store_meta.lock().unwrap();
+                // For merge process, the stale source peer is destroyed asynchronously when applying
+                // snapshot or creating new peer. So here checks whether there is any overlap, if so,
+                // wait and do not handle raft ready.
+                if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
+                    for (source_region_id, is_ready) in wait_destroy_regions {
+                        if !is_ready {
+                            info!(
+                                "snapshot range overlaps, wait source destroy finish";
+                                "region_id" => self.region_id,
+                                "peer_id" => self.peer.get_id(),
+                                "apply_index" => self.get_store().applied_index(),
+                                "last_applying_index" => self.last_applying_idx,
+                                "overlap_region_id" => source_region_id,
+                            );
+                            return None;
+                        }
+                        destroy_regions.push(meta.regions[source_region_id].clone());
                     }
-                    destroy_regions.push(meta.regions[source_region_id].clone());
                 }
             }
-        }
 
-        if !self.raft_group.has_ready() {
-            fail_point!("before_no_ready_gen_snap_task", |_| None);
-            // Generating snapshot task won't set ready for raft group.
-            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            // If committed entires not being sent to apply loop, raft tick will trigger it to be dealt with in next loop.
+            // Apply flow control will not set RaoNode ready flag, so here need recheck it.
+            // And committed entries will be generated in ready() by commit_since_index which has not been advanced yet.
+            if !self.raft_group.has_ready() {
+                fail_point!("before_no_ready_gen_snap_task", |_| None);
+                // Generating snapshot task won't set ready for raft group.
+                if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                    self.pending_request_snapshot_count
+                        .fetch_add(1, Ordering::SeqCst);
+                    ctx.apply_router
+                        .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+                }
+                return None;
             }
-            return None;
         }
-
         fail_point!(
             "before_handle_raft_ready_1003",
             self.peer.get_id() == 1003 && self.is_leader(),
@@ -2115,6 +2132,8 @@ where
 
         self.apply_reads(ctx, &ready);
 
+        // to simplify it, committed_entries wil be generated each time ready() called.
+        // and destroy here.
         if !ready.committed_entries().is_empty() {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
@@ -2122,11 +2141,15 @@ where
         // needs to be sent to the apply system.
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        // Skip it now when there are committed entries which not be sent to apply loop.
+        // Keep the order of sending apply tasks between committed entries and snapshot.
+        if !self.has_pending_committed_entries {
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
         }
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
@@ -2288,6 +2311,7 @@ where
             state_role,
             has_new_entries,
             has_write_ready,
+            has_pending_committed_entries: self.has_pending_committed_entries,
         })
     }
 
@@ -2310,11 +2334,16 @@ where
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
+
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
         for entry in committed_entries.iter().rev() {
-            // raft meta is very small, can be ignored.
-            self.raft_log_size_hint += entry.get_data().len() as u64;
+            if !self.has_pending_committed_entries {
+                // This flag what is applied but not compacted yet should not update when apply flow control.
+                // Prevent to compact log entries which not applyed.
+                // raft meta is very small, can be ignored.
+                self.raft_log_size_hint += entry.get_data().len() as u64;
+            }
             if lease_to_be_updated {
                 let propose_time = self
                     .proposals
@@ -2344,7 +2373,13 @@ where
                 |_| {}
             );
         }
+
         if let Some(last_entry) = committed_entries.last() {
+            // check apply memory usage.
+            if self.has_pending_committed_entries {
+                // deal with the log entries that have been commmitted but not sent to apply in next loop.
+                return;
+            }
             self.last_applying_idx = last_entry.get_index();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
                 // Urgent requests are flushed, make it lazy again.
@@ -2516,6 +2551,7 @@ where
 
         self.persisted_number = ready.number();
 
+        // if has_pending_committed_entries, don't handle snapshot, but need stable unstables.
         if !ready.snapshot().is_empty() {
             self.raft_group.advance_append_async(ready);
             // The ready is persisted, but we don't want to handle following light
@@ -2778,7 +2814,10 @@ where
         let diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
         self.size_diff_hint = cmp::max(diff, 0) as u64;
 
-        if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
+        // If has_pending_committed_entries, then set the PeerFsm has ready.
+        if self.has_pending_snapshot() && self.ready_to_handle_pending_snap()
+            || self.has_pending_committed_entries
+        {
             has_ready = true;
         }
         if !self.is_leader() {
