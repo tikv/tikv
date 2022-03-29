@@ -690,6 +690,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
+            kv_api: 1,
         };
 
         let raft_router = self.raft_router.clone();

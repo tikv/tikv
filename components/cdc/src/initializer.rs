@@ -6,7 +6,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
     KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection, TablePropertiesExt,
-    UserCollectedProperties, CF_DEFAULT, CF_WRITE,
+    UserCollectedProperties, CF_DEFAULT, CF_WRITE, IterOptions,
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
@@ -17,8 +17,9 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
-use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
+use tikv::storage::kv::{PerfStatisticsInstant, Snapshot, Iterator};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
+use tikv::storage::raw::raw_mvcc::RawMvccSnapshot;
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv::storage::Statistics;
 use tikv_kv::PerfStatisticsDelta;
@@ -28,7 +29,7 @@ use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use tokio::sync::Semaphore;
-use txn_types::{Key, Lock, LockType, OldValue, TimeStamp};
+use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
 use crate::channel::CdcEvent;
 use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
@@ -47,6 +48,11 @@ struct ScanStat {
     disk_read: Option<usize>,
     // Perf delta for RocksDB.
     perf_delta: PerfStatisticsDelta,
+}
+
+pub(crate) enum KvEntry {
+    TxnEntry(TxnEntry),
+    RawKvEntry(KvPair),
 }
 
 pub(crate) struct Initializer<E> {
@@ -69,6 +75,8 @@ pub(crate) struct Initializer<E> {
 
     pub(crate) build_resolver: bool,
     pub(crate) ts_filter_ratio: f64,
+
+    pub(crate) kv_api: i32,// TODO modify to cdcpb
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -168,6 +176,7 @@ impl<E: KvEngine> Initializer<E> {
         }
     }
 
+
     pub(crate) async fn async_incremental_scan<S: Snapshot + 'static>(
         &mut self,
         snap: S,
@@ -176,6 +185,7 @@ impl<E: KvEngine> Initializer<E> {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
         let observe_id = self.observe_id;
+        let kv_api = self.kv_api;
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -197,24 +207,16 @@ impl<E: KvEngine> Initializer<E> {
             old_value_cursors = Some(OldValueCursors::new(wc, dc));
         }
 
-        // Time range: (checkpoint_ts, max]
-        let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
-            .fill_cache(false)
-            .range(None, None)
-            .hint_min_ts(hint_min_ts)
-            .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
-            .unwrap();
-
-        fail_point!("cdc_incremental_scan_start");
-        let conn_id = self.conn_id;
-        let mut done = false;
-        let start = Instant::now_coarse();
-
         let curr_state = self.downstream_state.load();
         assert!(matches!(
             curr_state,
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
+
+        fail_point!("cdc_incremental_scan_start");
+        let conn_id = self.conn_id;
+        let start = Instant::now_coarse();
+
         let on_cancel = || -> Result<()> {
             info!("cdc async incremental scan canceled";
                 "region_id" => region_id,
@@ -224,22 +226,51 @@ impl<E: KvEngine> Initializer<E> {
             Err(box_err!("scan canceled"))
         };
 
-        while !done {
-            // When downstream_state is Stopped, it means the corresponding
-            // delegate is stopped. The initialization can be safely canceled.
-            if self.downstream_state.load() == DownstreamState::Stopped {
-                return on_cancel();
+        if kv_api == 1 {
+            // Time range: (checkpoint_ts, max]
+            let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
+                .fill_cache(false)
+                .range(None, None)
+                .hint_min_ts(hint_min_ts)
+                .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
+                .unwrap();
+
+            let mut done = false;
+            while !done {
+                // When downstream_state is Stopped, it means the corresponding
+                // delegate is stopped. The initialization can be safely canceled.
+                if self.downstream_state.load() == DownstreamState::Stopped {
+                    return on_cancel();
+                }
+                let cursors = old_value_cursors.as_mut();
+                let resolver = resolver.as_mut();
+                let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
+                if let Some(None) = entries.last() {
+                    // If the last element is None, it means scanning is finished.
+                    done = true;
+                }
+                debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+                fail_point!("before_schedule_incremental_scan");
+                self.sink_scan_events(entries, done).await?;
             }
-            let cursors = old_value_cursors.as_mut();
-            let resolver = resolver.as_mut();
-            let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
-            if let Some(None) = entries.last() {
-                // If the last element is None, it means scanning is finished.
-                done = true;
+        } else {
+            let mut entries = Vec::with_capacity(self.max_scan_batch_size);
+            let iter_opt = IterOptions::default();
+            let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snap);
+            let mut iter = raw_mvcc_snapshot.iter(iter_opt).unwrap();
+            iter.seek_to_first().unwrap();
+            while iter.valid().unwrap() {
+                let key = iter.key().to_owned();
+                let value = iter.value().to_owned();
+                iter.next().unwrap();
+                // TODO: filter deleted key
+
+                entries.push(Some(KvEntry::RawKvEntry((key.to_vec(), value.to_vec()))))
             }
+            entries.push(None);
+
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
-            fail_point!("before_schedule_incremental_scan");
-            self.sink_scan_events(entries, done).await?;
+            self.sink_scan_events(entries, true).await?;
         }
 
         if !post_init_downstream(&self.downstream_state) {
@@ -267,7 +298,7 @@ impl<E: KvEngine> Initializer<E> {
         &self,
         scanner: &mut DeltaScanner<S>,
         mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
-        entries: &mut Vec<Option<TxnEntry>>,
+        entries: &mut Vec<Option<KvEntry>>,
     ) -> Result<ScanStat> {
         let mut read_old_value = |v: &mut OldValue, stats: &mut Statistics| -> Result<()> {
             let (wc, dc) = match old_value_cursors {
@@ -296,7 +327,7 @@ impl<E: KvEngine> Initializer<E> {
                 Some(mut entry) => {
                     read_old_value(entry.old_value(), &mut stats)?;
                     total_bytes += entry.size();
-                    entries.push(Some(entry));
+                    entries.push(Some(KvEntry::TxnEntry(entry)));
                 }
                 None => {
                     entries.push(None);
@@ -324,7 +355,7 @@ impl<E: KvEngine> Initializer<E> {
         scanner: &mut DeltaScanner<S>,
         old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         resolver: Option<&mut Resolver>,
-    ) -> Result<Vec<Option<TxnEntry>>> {
+    ) -> Result<Vec<Option<KvEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
         let ScanStat {
             emit,
@@ -346,21 +377,23 @@ impl<E: KvEngine> Initializer<E> {
         if let Some(resolver) = resolver {
             // Track the locks.
             for entry in entries.iter().flatten() {
-                if let TxnEntry::Prewrite { ref lock, .. } = entry {
-                    let (encoded_key, value) = lock;
-                    let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
-                    let lock = Lock::parse(value)?;
-                    match lock.lock_type {
-                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key, None),
-                        _ => (),
-                    };
+                if let KvEntry::TxnEntry(txn_entry) = entry {
+                    if let TxnEntry::Prewrite { ref lock, .. } = txn_entry {
+                        let (encoded_key, value) = lock;
+                        let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
+                        let lock = Lock::parse(value)?;
+                        match lock.lock_type {
+                            LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key, None),
+                            _ => (),
+                        };
+                    }
                 }
             }
         }
         Ok(entries)
     }
 
-    async fn sink_scan_events(&mut self, entries: Vec<Option<TxnEntry>>, done: bool) -> Result<()> {
+    async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
         let mut events = Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries);
         if done {
@@ -572,6 +605,7 @@ mod tests {
             max_scan_batch_size: 1024,
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
+            kv_api: 1,
         };
 
         (receiver_worker, pool, initializer, rx, drain)

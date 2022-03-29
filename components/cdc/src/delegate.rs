@@ -25,6 +25,7 @@ use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
+use crate::initializer::KvEntry;
 use crate::metrics::*;
 use crate::old_value::{OldValueCache, OldValueCallback};
 use crate::service::ConnID;
@@ -451,65 +452,73 @@ impl Delegate {
     pub(crate) fn convert_to_grpc_events(
         region_id: u64,
         request_id: u64,
-        entries: Vec<Option<TxnEntry>>,
+        entries: Vec<Option<KvEntry>>,
     ) -> Vec<CdcEvent> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                }) => {
-                    let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
-                    if skip {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row);
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
-                    }
-                    current_rows_size += row_size;
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    rows.last_mut().unwrap().push(row);
+                Some(KvEntry::RawKvEntry(raw_entry)) => {
+                    // TODO: finish here
                 }
-                Some(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                }) => {
-                    let mut row = EventRow::default();
-                    let skip = decode_write(write.0, &write.1, &mut row, false);
-                    if skip {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row);
 
-                    // This type means the row is self-contained, it has,
-                    //   1. start_ts
-                    //   2. commit_ts
-                    //   3. key
-                    //   4. value
-                    if row.get_type() == EventLogType::Rollback {
-                        // We dont need to send rollbacks to downstream,
-                        // because downstream does not needs rollback to clean
-                        // prewrite as it drops all previous stashed data.
-                        continue;
+                Some(KvEntry::TxnEntry(txn_entry)) => {
+                    match txn_entry {
+                        TxnEntry::Prewrite {
+                            default,
+                            lock,
+                            old_value,
+                        } => {
+                            let mut row = EventRow::default();
+                            let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
+                            if skip {
+                                continue;
+                            }
+                            decode_default(default.1, &mut row);
+                            let row_size = row.key.len() + row.value.len();
+                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                                rows.push(Vec::with_capacity(entries_len));
+                                current_rows_size = 0;
+                            }
+                            current_rows_size += row_size;
+                            row.old_value = old_value.finalized().unwrap_or_default();
+                            rows.last_mut().unwrap().push(row);
+                        }
+                        TxnEntry::Commit {
+                            default,
+                            write,
+                            old_value,
+                        } => {
+                            let mut row = EventRow::default();
+                            let skip = decode_write(write.0, &write.1, &mut row, false);
+                            if skip {
+                                continue;
+                            }
+                            decode_default(default.1, &mut row);
+
+                            // This type means the row is self-contained, it has,
+                            //   1. start_ts
+                            //   2. commit_ts
+                            //   3. key
+                            //   4. value
+                            if row.get_type() == EventLogType::Rollback {
+                                // We dont need to send rollbacks to downstream,
+                                // because downstream does not needs rollback to clean
+                                // prewrite as it drops all previous stashed data.
+                                continue;
+                            }
+                            set_event_row_type(&mut row, EventLogType::Committed);
+                            row.old_value = old_value.finalized().unwrap_or_default();
+                            let row_size = row.key.len() + row.value.len();
+                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                                rows.push(Vec::with_capacity(entries_len));
+                                current_rows_size = 0;
+                            }
+                            current_rows_size += row_size;
+                            rows.last_mut().unwrap().push(row);
+                        }
                     }
-                    set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
-                    }
-                    current_rows_size += row_size;
-                    rows.last_mut().unwrap().push(row);
                 }
                 None => {
                     let mut row = EventRow::default();
