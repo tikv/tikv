@@ -182,7 +182,9 @@ where
             } else {
                 read.cmds.clear();
             }
-            read.history.take().unwrap().record(log);
+            if let Some(his) = read.history.take() {
+                his.record(log);
+            }
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
         self.contexts.clear();
