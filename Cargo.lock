@@ -2016,9 +2016,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6b007f9db2cf73dae2664bc723b4dd21c67d7a97024e07cca7b9d4171c395c0"
+checksum = "d3e636f21532a4a55b3c43d8852014686f54898dd0ea083e40a6b040bbc6d737"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2053,9 +2053,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.0+1.44.0"
+version = "0.10.1+1.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "842c75c8037bee3058ce0998b4e3d7c8d2554f2c26135aa9297fe64fab3079d3"
+checksum = "925586932dbbea927e913783da0be160ee74e0b0519d7b20cec35547a0a84631"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -3660,7 +3660,8 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#3d94cb5cf0492da4947546b0c2a0b083edbf9328"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a27c16860a320789970c9113070f024ce4d731bfb8a5a64d1cb1104d91a20e7"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3690,7 +3691,8 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#3d94cb5cf0492da4947546b0c2a0b083edbf9328"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df4b44c9eef66d50090923642d940c6e40dd978d018075ab17bcf62ab8d505c7"
 dependencies = [
  "clap 3.1.6",
  "raft-engine",
