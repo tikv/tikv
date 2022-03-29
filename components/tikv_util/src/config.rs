@@ -1386,66 +1386,43 @@ macro_rules! numeric_enum_serializing_mod {
 ///
 /// States:
 ///   1. Init - Only source directory contains Raft data.
-///   2. Migrating - Source staging directory contains Raft data. Source and
-///      target staging directory does not contains Raft data.
-///   3. Completed - Only target directory contains Raft data.
-///   4. InvMigrating - Inverse of Migrating. Only occurs when an ongoing
-///      migration is interrupted and reopened in the reverse direction.
+///   2. Migrating - A marker file contains the path of source directory. The source
+///      directory contains a complete copy of Raft data. Target directory may exist.
+///   3. Completed - Only target directory contains Raft data. Marker file may exist.
 pub struct RaftDataStateMachine {
+    root: PathBuf,
+    in_progress_marker: PathBuf,
     source: PathBuf,
-    source_staging: PathBuf,
     target: PathBuf,
-    target_staging: PathBuf,
 }
 
 impl RaftDataStateMachine {
-    pub fn new(source: &str, target: &str) -> Self {
+    pub fn new(root: &str, source: &str, target: &str) -> Self {
+        let root = PathBuf::from(root);
+        let in_progress_marker = root.join("MIGRATING-RAFT");
         let source = PathBuf::from(source);
-        let source_staging = source.with_extension("STAGING");
         let target = PathBuf::from(target);
-        let target_staging = target.with_extension("STAGING");
         Self {
+            root,
+            in_progress_marker,
             source,
-            source_staging,
             target,
-            target_staging,
         }
     }
 
     /// Checks if the current condition is a valid state.
     pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
-        if Self::data_exists(&self.source) && Self::data_exists(&self.target) {
+        if Self::data_exists(&self.source)
+            && Self::data_exists(&self.target)
+            && !self.in_progress_marker.exists()
+        {
             return Err(format!(
                 "Found multiple raft data sets: {}, {}",
                 self.source.display(),
                 self.target.display()
             ));
         }
-        if Self::data_exists(&self.source_staging) && Self::data_exists(&self.target_staging) {
-            return Err(format!(
-                "Found multiple raft data sets: {}, {}",
-                self.source_staging.display(),
-                self.target_staging.display()
-            ));
-        }
-        if Self::data_exists(&self.source_staging) && Self::data_exists(&self.source) {
-            return Err(format!(
-                "Found multiple raft data sets: {}, {}",
-                self.source_staging.display(),
-                self.source.display()
-            ));
-        }
-        if Self::data_exists(&self.target_staging) && Self::data_exists(&self.target) {
-            return Err(format!(
-                "Found multiple raft data sets: {}, {}",
-                self.target_staging.display(),
-                self.target.display()
-            ));
-        }
-        let exists = Self::data_exists(&self.source_staging)
-            || Self::data_exists(&self.target_staging)
-            || Self::data_exists(&self.source)
-            || Self::data_exists(&self.target);
+        let exists = Self::data_exists(&self.source) || Self::data_exists(&self.target);
         if exists != should_exist {
             if should_exist {
                 return Err("Cannot find raft data set.".to_owned());
@@ -1456,46 +1433,108 @@ impl RaftDataStateMachine {
         Ok(())
     }
 
-    /// Enters the `Migrating` state and returns the source directory if a
-    /// migration is needed. Otherwise prepares the target directory for
-    /// opening.
-    pub fn before_open_target(&mut self) -> Option<PathBuf> {
+    /// Returns whether a migration is needed. When it's needed, enters the `Migrating`
+    /// state. Otherwise prepares the target directory for opening.
+    pub fn before_open_target(&mut self) -> bool {
         // Clean up trash directory if there is any.
-        for p in [
-            &self.source,
-            &self.source_staging,
-            &self.target,
-            &self.target_staging,
-        ] {
+        for p in [&self.source, &self.target] {
             let trash = p.with_extension("REMOVE");
             if trash.exists() {
                 fs::remove_dir_all(&trash).unwrap();
             }
         }
-        if Self::data_exists(&self.target_staging) {
-            // InvMigrating -> Completed
-            assert!(!Self::data_exists(&self.source_staging));
-            Self::remove_dir_safe(&self.source);
-            Self::rename_dir_safe(&self.target_staging, &self.target);
-            return None;
+        if !Self::data_exists(&self.source) {
+            // Recover from Completed state.
+            if self.in_progress_marker.exists() {
+                Self::must_remove(&self.in_progress_marker);
+            }
+            return false;
+        } else if self.in_progress_marker.exists() {
+            if let Some(real_source) = self.read_marker() {
+                // Recover from Migrating state.
+                if real_source == self.target {
+                    if Self::data_exists(&self.target) {
+                        Self::must_remove(&self.source);
+                        return false;
+                    }
+                    // It's actually in Completed state, just in the reverse direction.
+                    // Equivalent to Init state.
+                } else {
+                    assert!(real_source == self.source);
+                    Self::must_remove(&self.target);
+                    return true;
+                }
+            } else {
+                // Halfway between Init and Migrating.
+                assert!(!Self::data_exists(&self.target));
+            }
         }
-        if Self::data_exists(&self.source) {
-            // Init -> Migrating
-            assert!(!Self::data_exists(&self.source_staging));
-            Self::rename_dir_safe(&self.source, &self.source_staging);
-        } else if !Self::data_exists(&self.source_staging) {
-            // No source data.
-            return None;
-        }
-        Some(self.source_staging.clone())
+        // Init -> Migrating.
+        self.write_marker();
+        true
     }
 
     /// Exits the `Migrating` state and enters the `Completed` state.
     pub fn after_dump_data(&mut self) {
+        assert!(Self::data_exists(&self.source));
         assert!(Self::data_exists(&self.target));
-        assert!(!Self::data_exists(&self.source));
-        assert!(!Self::data_exists(&self.target_staging));
-        Self::remove_dir_safe(&self.source_staging);
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    // `after_dump_data` involves two atomic operations, insert a check point between
+    // them to test crash safety.
+    #[cfg(test)]
+    fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        check();
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    fn write_marker(&self) {
+        use std::io::Write;
+        let mut f = fs::File::create(&self.in_progress_marker).unwrap();
+        f.write_all(self.source.to_str().unwrap().as_bytes())
+            .unwrap();
+        f.sync_all().unwrap();
+        f.write_all(b"//").unwrap();
+        f.sync_all().unwrap();
+        Self::sync_dir(&self.root);
+    }
+
+    // Assumes there is a marker file. Returns None when the content of marker file is
+    // incomplete.
+    fn read_marker(&self) -> Option<PathBuf> {
+        let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
+        if marker.ends_with("//") {
+            Some(PathBuf::from(&marker[..marker.len() - 2]))
+        } else {
+            None
+        }
+    }
+
+    fn must_remove(path: &Path) {
+        if path.exists() {
+            if path.is_dir() {
+                info!("Removing directory"; "path" => %path.display());
+                let trash = path.with_extension("REMOVE");
+                Self::must_rename_dir(path, &trash);
+                fs::remove_dir_all(&trash).unwrap();
+            } else {
+                info!("Removing file"; "path" => %path.display());
+                fs::remove_file(&path).unwrap();
+                Self::sync_dir(path.parent().unwrap());
+            }
+        }
+    }
+
+    fn must_rename_dir(from: &Path, to: &Path) {
+        fs::rename(from, to).unwrap();
+        let mut dir = to.to_path_buf();
+        assert!(dir.pop());
+        Self::sync_dir(&dir);
     }
 
     fn data_exists(path: &Path) -> bool {
@@ -1505,19 +1544,7 @@ impl RaftDataStateMachine {
         fs::read_dir(&path).unwrap().next().is_some()
     }
 
-    fn remove_dir_safe(path: &Path) {
-        if path.exists() {
-            info!("Removing directory"; "path" => %path.display());
-            let trash = path.with_extension("REMOVE");
-            Self::rename_dir_safe(path, &trash);
-            fs::remove_dir_all(&trash).unwrap();
-        }
-    }
-
-    fn rename_dir_safe(from: &Path, to: &Path) {
-        fs::rename(from, to).unwrap();
-        let mut dir = to.to_path_buf();
-        assert!(dir.pop());
+    fn sync_dir(dir: &Path) {
         fs::File::open(&dir).and_then(|d| d.sync_all()).unwrap();
     }
 }
@@ -2040,23 +2067,35 @@ yyy = 100
 
     #[test]
     fn test_raft_data_migration() {
-        fn run_migration<F: Fn()>(source: &Path, target: &Path, check: F) {
-            let mut state =
-                RaftDataStateMachine::new(source.to_str().unwrap(), target.to_str().unwrap());
+        fn run_migration<F: Fn()>(root: &Path, source: &Path, target: &Path, check: F) {
+            let mut state = RaftDataStateMachine::new(
+                root.to_str().unwrap(),
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+            );
             state.validate(true).unwrap();
             check();
             // Dump to target.
-            if let Some(new_source) = state.before_open_target() {
+            if state.before_open_target() {
                 check();
-                let new_source_file = new_source.join("file");
+                // Simulate partial writes.
+                let marker = root.join("MIGRATING-RAFT");
+                if marker.exists() {
+                    let backup_marker = fs::read_to_string(&marker).unwrap();
+                    fs::write(&marker, "").unwrap();
+                    check();
+                    fs::write(&marker, backup_marker).unwrap();
+                }
+
+                let source_file = source.join("file");
                 let target_file = target.join("file");
                 if !target.exists() {
                     fs::create_dir_all(&target).unwrap();
                     check();
                 }
-                fs::copy(&new_source_file, &target_file).unwrap();
+                fs::copy(&source_file, &target_file).unwrap();
                 check();
-                state.after_dump_data();
+                state.after_dump_data_with_check(&check);
             }
             check();
         }
@@ -2088,16 +2127,17 @@ yyy = 100
         let source_file = source.join("file");
         File::create(&source_file).unwrap();
 
-        let shadow = dir.path().join("shadow");
-        let shadow_source = shadow.join("source");
-        let shadow_target = shadow.join("target");
+        let backup = dir.path().join("backup");
 
-        run_migration(&source, &target, || {
+        run_migration(&root, &source, &target, || {
+            copy_dir(&root, &backup).unwrap();
+
             // Simulate restart and migrate in halfway.
-            copy_dir(&root, &shadow).unwrap();
-            run_migration(&shadow_source, &shadow_target, || {});
-            copy_dir(&root, &shadow).unwrap();
-            run_migration(&shadow_target, &shadow_source, || {});
+            run_migration(&root, &source, &target, || {});
+            copy_dir(&backup, &root).unwrap();
+            //
+            run_migration(&root, &target, &source, || {});
+            copy_dir(&backup, &root).unwrap();
         });
     }
 }

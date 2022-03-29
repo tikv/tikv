@@ -326,6 +326,10 @@ pub trait Engine: Send + Clone + 'static {
     ) -> Option<MvccProperties> {
         None
     }
+
+    // Some engines have a `TxnExtraScheduler`. This method is to send the extra
+    // to the scheduler.
+    fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in time.
