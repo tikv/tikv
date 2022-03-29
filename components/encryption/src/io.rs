@@ -133,8 +133,14 @@ impl<W> EncrypterWriter<W> {
         self.0.finalize()
     }
 
+    #[inline]
     pub fn inner(&self) -> &W {
         &self.0.writer
+    }
+
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.0.writer
     }
 }
 

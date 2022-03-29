@@ -366,3 +366,59 @@ fn test_tombstone_block_list() {
         raft_client.send(message).unwrap_err()
     );
 }
+
+#[test]
+fn test_store_allowlist() {
+    let pd_server = test_pd::Server::new(1);
+    let eps = pd_server.bind_addrs();
+    let pd_client = Arc::new(test_pd::util::new_client(eps, None));
+    let bg_worker = WorkerBuilder::new(thd_name!("background"))
+        .thread_count(2)
+        .create();
+    let resolver =
+        resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
+    let mut raft_client = get_raft_client(RaftStoreBlackHole, resolver);
+
+    let msg_count1 = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count1 = Arc::new(AtomicUsize::new(0));
+    let service1 = MockKvForRaft::new(Arc::clone(&msg_count1), Arc::clone(&batch_msg_count1), true);
+    let (_mock_server1, port1) = create_mock_server(service1, 60200, 60300).unwrap();
+
+    let msg_count2 = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count2 = Arc::new(AtomicUsize::new(0));
+    let service2 = MockKvForRaft::new(Arc::clone(&msg_count2), Arc::clone(&batch_msg_count2), true);
+    let (_mock_server2, port2) = create_mock_server(service2, 60300, 60400).unwrap();
+
+    let mut store1 = metapb::Store::default();
+    store1.set_id(1);
+    store1.set_address(format!("127.0.0.1:{}", port1));
+    pd_server.default_handler().add_store(store1.clone());
+
+    let mut store2 = metapb::Store::default();
+    store2.set_id(2);
+    store2.set_address(format!("127.0.0.1:{}", port2));
+    pd_server.default_handler().add_store(store2.clone());
+
+    for _ in 0..10 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        raft_client.send(raft_m).unwrap();
+    }
+    raft_client.flush();
+    check_msg_count(500, &msg_count1, 10);
+
+    raft_client.set_store_allowlist(vec![2, 3]);
+    for _ in 0..3 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(1);
+        assert!(raft_client.send(raft_m).is_err());
+    }
+    for _ in 0..5 {
+        let mut raft_m = RaftMessage::default();
+        raft_m.mut_to_peer().set_store_id(2);
+        raft_client.send(raft_m).unwrap();
+    }
+    raft_client.flush();
+    check_msg_count(500, &msg_count1, 10);
+    check_msg_count(500, &msg_count2, 5);
+}

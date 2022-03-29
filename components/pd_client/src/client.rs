@@ -31,7 +31,7 @@ use yatp::ThreadPool;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, Client, PdConnector};
-use super::{Config, FeatureGate, PdFuture, UnixSecs};
+use super::{BucketStat, Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
 const CQ_COUNT: usize = 1;
@@ -927,6 +927,83 @@ impl PdClient for RpcClient {
                 check_resp_header(resp.get_header())?;
                 Ok(())
             }) as PdFuture<_>
+        };
+
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn report_region_buckets(&self, bucket_stat: &BucketStat, period: Duration) -> PdFuture<()> {
+        PD_BUCKETS_COUNTER_VEC.with_label_values(&["send"]).inc();
+
+        let mut buckets = metapb::Buckets::default();
+        buckets.set_region_id(bucket_stat.meta.region_id);
+        buckets.set_version(bucket_stat.meta.version);
+        buckets.set_keys(bucket_stat.meta.keys.clone().into());
+        buckets.set_period_in_ms(period.as_millis() as u64);
+        buckets.set_stats(bucket_stat.stats.clone());
+        let mut req = pdpb::ReportBucketsRequest::default();
+        req.set_header(self.header());
+        req.set_buckets(buckets);
+        req.set_region_epoch(bucket_stat.meta.region_epoch.clone());
+
+        let executor = |client: &Client, req: pdpb::ReportBucketsRequest| {
+            let mut inner = client.inner.wl();
+            if let Either::Left(ref mut left) = inner.buckets_sender {
+                debug!("region buckets sender is refreshed");
+                let sender = left.take().expect("expect report region buckets sink");
+                let (tx, rx) = mpsc::unbounded();
+                let pending_buckets = Arc::new(AtomicU64::new(0));
+                inner.buckets_sender = Either::Right(tx);
+                inner.pending_buckets = pending_buckets.clone();
+                let resp = inner.buckets_resp.take().unwrap();
+                inner.client_stub.spawn(async {
+                    let res = resp.await;
+                    warn!("region buckets stream exited: {:?}", res);
+                });
+                inner.client_stub.spawn(async move {
+                    let mut sender = sender.sink_map_err(Error::Grpc);
+                    let mut last_report = u64::MAX;
+                    let result = sender
+                        .send_all(&mut rx.map(|r| {
+                            let last = pending_buckets.fetch_sub(1, Ordering::Relaxed);
+                            // Sender will update pending at every send operation, so as long as
+                            // pending task is increasing, pending count should be reported by
+                            // sender.
+                            if last + 10 < last_report || last == 1 {
+                                PD_PENDING_BUCKETS_GAUGE.set(last as i64 - 1);
+                                last_report = last;
+                            }
+                            if last > last_report {
+                                last_report = last - 1;
+                            }
+                            Ok((r, WriteFlags::default()))
+                        }))
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            sender.get_mut().cancel();
+                            info!("cancel region buckets sender");
+                        }
+                        Err(e) => {
+                            error!(?e; "failed to send region buckets");
+                        }
+                    };
+                });
+            }
+
+            let last = inner.pending_buckets.fetch_add(1, Ordering::Relaxed);
+            PD_PENDING_BUCKETS_GAUGE.set(last as i64 + 1);
+            let sender = inner
+                .buckets_sender
+                .as_mut()
+                .right()
+                .expect("expect region buckets sender");
+            let ret = sender
+                .unbounded_send(req)
+                .map_err(|e| Error::Other(Box::new(e)));
+            Box::pin(future::ready(ret)) as PdFuture<_>
         };
 
         self.pd_client

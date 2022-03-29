@@ -111,6 +111,7 @@ impl TestEngineBuilder {
             Some(cfs_opts),
             cache.is_some(),
             self.io_rate_limiter,
+            None, /* CFOptions */
         )
     }
 }
