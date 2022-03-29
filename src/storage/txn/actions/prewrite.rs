@@ -501,12 +501,15 @@ impl<'a> PrewriteMutation<'a> {
 
         match (self.assertion, write) {
             (Assertion::Exist, None) => {
+                info!("assertion failed: exist, previous write record not found";);
                 self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())?
             }
             (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
+                info!("assertion failed: exist"; "write" => ?w, "commit_ts" => commit_ts);
                 self.assertion_failed_error(w.start_ts, *commit_ts)?;
             }
             (Assertion::NotExist, Some((w, commit_ts))) if w.write_type == WriteType::Put => {
+                info!("assertion failed: not exist"; "write" => ?w, "commit_ts" => commit_ts);
                 self.assertion_failed_error(w.start_ts, *commit_ts)?;
             }
             _ => (),
