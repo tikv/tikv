@@ -4385,7 +4385,9 @@ where
         // do not clean up the cache, it may keep growing.
         let drop_cache_duration =
             self.ctx.cfg.raft_heartbeat_interval() + self.ctx.cfg.raft_entry_cache_life_time.0;
-        let cache_alive_limit = Instant::now() - drop_cache_duration;
+        let now = Instant::now();
+        let cache_alive_limit = now - drop_cache_duration;
+        let down_peer_limit = now - self.ctx.cfg.max_peer_down_duration.0;
 
         // Leader will replicate the compact log command to followers,
         // If we use current replicated_index (like 10) as the compact index,
@@ -4405,7 +4407,7 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
-        let mut disconnected = false;
+        let mut has_down_peer = false;
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
@@ -4417,9 +4419,9 @@ where
                 {
                     alive_cache_idx = p.matched;
                 }
-            }
-            if !p.recent_active {
-                disconnected = true;
+                if *last_heartbeat < down_peer_limit {
+                    has_down_peer = true;
+                }
             }
         }
         // When an election happened or a new peer is added, replicated_idx can be 0.
@@ -4447,10 +4449,10 @@ where
 
         let first_idx = self.fsm.peer.get_store().first_index();
 
-        let mut compact_idx = if force_compact && replicated_idx > first_idx && !disconnected {
+        let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
-        } else if force_compact && disconnected {
-            std::cmp::max(first_idx + (last_idx - first_idx) / 4, replicated_idx)
+        } else if force_compact && has_down_peer {
+            std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if (applied_idx > first_idx
             && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit)
             || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0)
