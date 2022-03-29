@@ -791,7 +791,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
-                                .multi(false)
                                 .bypass_locks(bypass_locks)
                                 .access_locks(access_locks)
                                 .build()
