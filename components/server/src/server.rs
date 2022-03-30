@@ -853,7 +853,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         let split_config_manager =
-            SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
+            SplitConfigManager::new(Arc::new(VersionTrack::new(self.config.split.clone())));
         cfg_controller.register(
             tikv::config::Module::Split,
             Box::new(split_config_manager.clone()),
