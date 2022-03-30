@@ -113,6 +113,8 @@ use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
 use causal_ts;
 
+use causal_ts;
+
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
@@ -795,7 +797,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
-                                .multi(false)
                                 .bypass_locks(bypass_locks)
                                 .access_locks(access_locks)
                                 .build()

@@ -12,12 +12,14 @@ use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use raftstore::store::ReadIndexContext;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
+use uuid::Uuid;
 
 #[derive(Default)]
 struct CommitToFilter {
@@ -506,4 +508,65 @@ fn test_read_local_after_snapshpot_replace_peer() {
     }
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v3");
+}
+
+/// The case checks if a malformed request should not corrupt the leader's read queue.
+#[test]
+fn test_malformed_read_index() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), None);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.hibernate_regions = true;
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    // Wait till lease expires.
+    std::thread::sleep(
+        cluster
+            .cfg
+            .raft_store
+            .raft_store_max_leader_lease()
+            .to_std()
+            .unwrap(),
+    );
+    let region = cluster.get_region(b"k1");
+    // Send a malformed request to leader
+    let mut raft_msg = raft::eraftpb::Message::default();
+    raft_msg.set_msg_type(MessageType::MsgReadIndex);
+    let rctx = ReadIndexContext {
+        id: Uuid::new_v4(),
+        request: None,
+        locked: None,
+    };
+    let mut e = raft::eraftpb::Entry::default();
+    e.set_data(rctx.to_bytes().into());
+    raft_msg.mut_entries().push(e);
+    raft_msg.from = 1;
+    raft_msg.to = 1;
+    let mut message = RaftMessage::default();
+    message.set_region_id(region_id);
+    message.set_from_peer(new_peer(1, 1));
+    message.set_to_peer(new_peer(1, 1));
+    message.set_region_epoch(region.get_region_epoch().clone());
+    message.set_message(raft_msg);
+    // So the read won't be handled soon.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.send_raft_msg(message).unwrap();
+    // Also send a correct request. If the malformed request doesn't corrupt
+    // the read queue, the correct request should be responded.
+    let resp = async_read_on_peer(&mut cluster, new_peer(1, 1), region, b"k1", true, false);
+    cluster.clear_send_filters();
+    let resp = resp.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
 }

@@ -196,6 +196,99 @@ impl From<raft_cmdpb::Request> for Modify {
     }
 }
 
+impl From<Modify> for raft_cmdpb::Request {
+    fn from(m: Modify) -> raft_cmdpb::Request {
+        let mut req = raft_cmdpb::Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = raft_cmdpb::DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                let mut put = raft_cmdpb::PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                put.set_cf(CF_LOCK.to_string());
+                req.set_cmd_type(raft_cmdpb::CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = raft_cmdpb::DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        };
+        req
+    }
+}
+
+// For test purpose only.
+// It's used to simulate observer actions in `rocksdb_engine`. See `RocksEngine::async_write_ext()`.
+impl From<raft_cmdpb::Request> for Modify {
+    fn from(mut req: raft_cmdpb::Request) -> Modify {
+        let name_to_cf = |name: &str| -> Option<CfName> {
+            engine_traits::name_to_cf(name).or_else(|| {
+                for c in TEST_ENGINE_CFS {
+                    if name == *c {
+                        return Some(c);
+                    }
+                }
+                None
+            })
+        };
+
+        match req.get_cmd_type() {
+            raft_cmdpb::CmdType::Delete => {
+                let delete = req.mut_delete();
+                Modify::Delete(
+                    name_to_cf(delete.get_cf()).unwrap(),
+                    Key::from_encoded(delete.take_key()),
+                )
+            }
+            raft_cmdpb::CmdType::Put => {
+                let put = req.mut_put();
+                Modify::Put(
+                    name_to_cf(put.get_cf()).unwrap(),
+                    Key::from_encoded(put.take_key()),
+                    put.take_value(),
+                )
+            }
+            raft_cmdpb::CmdType::DeleteRange => {
+                let delete_range = req.mut_delete_range();
+                Modify::DeleteRange(
+                    name_to_cf(delete_range.get_cf()).unwrap(),
+                    Key::from_encoded(delete_range.take_start_key()),
+                    Key::from_encoded(delete_range.take_end_key()),
+                    delete_range.get_notify_only(),
+                )
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
+}
+
 impl PessimisticLockPair for Modify {
     fn as_pair(&self) -> (&Key, &PessimisticLock) {
         match self {

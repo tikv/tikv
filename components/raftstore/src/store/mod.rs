@@ -4,9 +4,9 @@ pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
 pub mod memory;
+pub mod metrics;
 pub mod msg;
 pub mod transport;
-
 #[macro_use]
 pub mod util;
 
@@ -15,7 +15,6 @@ mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
 mod local_metrics;
-mod metrics;
 mod peer;
 mod peer_storage;
 mod read_queue;
