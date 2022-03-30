@@ -1878,7 +1878,7 @@ where
             // it's meaningless to continue to handle the request as callbacks are cleared.
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
                 && self.fsm.peer.is_leader()
-                && (msg.get_message().get_from() == 0
+                && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.fsm.peer_id())
             {
                 self.ctx.raft_metrics.message_dropped.stale_msg += 1;
