@@ -403,7 +403,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
             CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
-            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst | CmdType::SingleDelete => {
                 is_write = true
             }
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),

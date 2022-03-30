@@ -44,7 +44,7 @@ online_config = { path = "../online_config" }
 tempfile = "3.0"
 serde = "1.0"
 serde_derive = "1.0"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 protobuf = "2"
 fail = "0.5"

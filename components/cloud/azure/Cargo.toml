@@ -14,7 +14,7 @@ chrono = "0.4"
 cloud = { path = "../", default-features = false }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 oauth2 = { version = "4.0.0", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

@@ -10,7 +10,7 @@ bitflags = "1.0.1"
 farmhash = "1.1.5"
 error_code = { path = "../error_code", default-features = false }
 codec = { path = "../codec", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 slog = "2.3"
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }

@@ -10,6 +10,6 @@ engine_traits = { path = "../engine_traits", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 txn_types = { path = "../txn_types", default-features = false }

@@ -53,7 +53,7 @@ engine_traits = { path = "../../components/engine_traits", default-features = fa
 error_code = { path = "../../components/error_code", default-features = false }
 file_system = { path = "../../components/file_system", default-features = false }
 futures = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 gag = "1.0"
 grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }

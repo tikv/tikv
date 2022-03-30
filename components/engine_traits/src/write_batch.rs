@@ -34,6 +34,9 @@ pub trait Mutable: Send {
     /// Delete a key/value in a given column family
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()>;
 
+    /// Single Delete a key/value in a given column family
+    fn single_delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()>;
+
     /// Delete a range of key/values in the default column family
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()>;
 

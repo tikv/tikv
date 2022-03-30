@@ -285,6 +285,9 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 let v = lock.into_lock().to_bytes();
                 cf_tree.write().unwrap().insert(k, v);
             }
+            Modify::SingleDelete(..) => {
+                unimplemented!();
+            }
             Modify::DeleteRange(_cf, _start_key, _end_key, _notify_only) => unimplemented!(),
         };
     }

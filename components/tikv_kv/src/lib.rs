@@ -72,12 +72,14 @@ pub enum Modify {
     PessimisticLock(Key, PessimisticLock),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
+    SingleDelete(CfName, Key),
 }
 
 impl Modify {
     pub fn size(&self) -> usize {
         let cf = match self {
             Modify::Delete(cf, _) => cf,
+            Modify::SingleDelete(cf, _) => cf,  // todo: verify
             Modify::Put(cf, ..) => cf,
             Modify::PessimisticLock(..) => &CF_LOCK,
             Modify::DeleteRange(..) => unreachable!(),
@@ -86,6 +88,7 @@ impl Modify {
 
         match self {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
+            Modify::SingleDelete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
             Modify::DeleteRange(..) => unreachable!(),
@@ -527,6 +530,9 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                 } else {
                     Ok(())
                 }
+            }
+            Modify::SingleDelete(..) => {
+                unimplemented!();
             }
         };
         // TODO: turn the error into an engine error.

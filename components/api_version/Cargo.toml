@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 bitflags = "1.0.1"
 codec = { path = "../codec", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }

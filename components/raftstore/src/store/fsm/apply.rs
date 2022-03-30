@@ -1440,6 +1440,7 @@ where
             match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
                 CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::SingleDelete => self.handle_single_delete(ctx, req),
                 CmdType::DeleteRange => {
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
@@ -1543,6 +1544,39 @@ where
         Ok(())
     }
 
+    fn handle_single_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+        // todo: This is needed or should be modified???
+        PEER_WRITE_CMD_COUNTER.delete.inc();
+        let key = req.get_single_delete().get_key();
+        // region key range has no data prefix, so we must use origin key to check.
+        util::check_key_in_region(key, &self.region)?;
+        if let Some(s) = self.buckets.as_mut() {
+            s.write_key(key, 0);
+        }
+
+        keys::data_key_with_buffer(key, &mut ctx.key_buffer);
+        let key = ctx.key_buffer.as_slice();
+
+        // since size_diff_hint is not accurate, so we just skip calculate the value size.
+        self.metrics.size_diff_hint -= key.len() as i64;
+        if !req.get_single_delete().get_cf().is_empty() {
+            let cf = req.get_single_delete().get_cf();
+            assert!(!cf.is_empty());
+            ctx.kv_wb.single_delete_cf(cf, key).unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to single delete {}: {}",
+                    self.tag,
+                    log_wrappers::Value::key(key),
+                    e
+                )
+            });
+        } else {
+            // handle_single_delete is used for unlock usage now, so here is unreachable
+            unreachable!()
+        }
+        Ok(())
+    }
+
     fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
@@ -1568,7 +1602,6 @@ where
                     e
                 )
             });
-
             if cf == CF_LOCK {
                 // delete is a kind of write for RocksDB.
                 self.metrics.lock_cf_written_bytes += key.len() as u64;

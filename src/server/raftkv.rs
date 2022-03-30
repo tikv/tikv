@@ -25,7 +25,7 @@ use kvproto::{
     metapb,
     raft_cmdpb::{
         CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-        RaftRequestHeader, Request, Response,
+        RaftRequestHeader, Request, Response, SingleDeleteRequest,
     },
 };
 use raftstore::{
@@ -358,6 +358,7 @@ where
                     let bytes = keys::data_end_key(key2.as_encoded());
                     *key2 = Key::from_encoded(bytes);
                 }
+                Modify::SingleDelete(..) => unimplemented!()
             }
         }
         write_modifies(&self.engine, modifies)
@@ -578,6 +579,15 @@ pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
                 }
                 req.set_cmd_type(CmdType::Delete);
                 req.set_delete(delete);
+            }
+            Modify::SingleDelete(cf, k) => {
+                let mut single_delete = SingleDeleteRequest::default();
+                single_delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    single_delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::SingleDelete);
+                req.set_single_delete(single_delete);
             }
             Modify::Put(cf, k, v) => {
                 let mut put = PutRequest::default();

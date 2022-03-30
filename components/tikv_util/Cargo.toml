@@ -53,7 +53,7 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = "0.1"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 url = "2"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 protobuf = "2"
 cpu-time = "1.0.0"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

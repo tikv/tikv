@@ -109,10 +109,17 @@ impl MvccTxn {
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
         let released = ReleasedLock::new(&key, pessimistic);
-        let write = Modify::Delete(CF_LOCK, key);
+        // let write = Modify::Delete(CF_LOCK, key.clone());
+        // self.write_size += write.size();
+        // self.modifies.push(write);
+        self.single_delete_lock(key);
+        Some(released)
+    }
+
+    pub(crate) fn single_delete_lock(&mut self, key: Key) {
+        let write = Modify::SingleDelete(CF_LOCK, key);
         self.write_size += write.size();
         self.modifies.push(write);
-        Some(released)
     }
 
     pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
@@ -138,6 +145,7 @@ impl MvccTxn {
         self.write_size += write.size();
         self.modifies.push(write);
     }
+
 
     /// Add the timestamp of the current rollback operation to another transaction's lock if
     /// necessary.

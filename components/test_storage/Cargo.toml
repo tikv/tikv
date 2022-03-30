@@ -15,7 +15,7 @@ test-engines-panic = [
 
 [dependencies]
 futures = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 raftstore = { path = "../raftstore", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
 test_raftstore = { path = "../test_raftstore", default-features = false }

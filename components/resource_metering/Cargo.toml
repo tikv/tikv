@@ -10,7 +10,7 @@ libc = "0.2"
 crossbeam = "0.8"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 tikv_util = { path = "../tikv_util" }
 grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 online_config = { path = "../online_config" }

@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 log_wrappers = { path = "../log_wrappers" }
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }

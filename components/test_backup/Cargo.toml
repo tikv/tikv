@@ -22,7 +22,7 @@ futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }

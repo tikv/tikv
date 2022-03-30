@@ -11,7 +11,7 @@ time = "0.1"
 derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 lazy_static = "1.3"

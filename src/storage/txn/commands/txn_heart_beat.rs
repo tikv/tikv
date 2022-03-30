@@ -63,6 +63,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             Some(mut lock) if lock.ts == self.start_ts => {
                 if lock.ttl < self.advise_ttl {
                     lock.ttl = self.advise_ttl;
+                    txn.single_delete_lock(self.primary_key.clone());
                     txn.put_lock(self.primary_key.clone(), &lock);
                 }
                 lock

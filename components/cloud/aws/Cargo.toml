@@ -21,7 +21,7 @@ grpcio = { version = "0.10",  default-features = false, features = ["openssl-ven
 http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 rusoto_core = "0.46.0"
 rusoto_credential = "0.46.0"
 rusoto_kms = { version = "0.46.0", features = ["serialize_structs"] }

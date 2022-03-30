@@ -30,7 +30,7 @@ futures = "0.3"
 getset = "0.1"
 grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 keys = { path = "../keys" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 pd_client = { path = "../pd_client", default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }

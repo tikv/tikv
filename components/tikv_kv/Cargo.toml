@@ -27,7 +27,7 @@ fail = "0.5"
 file_system = { path = "../file_system" }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 into_other = { path = "../into_other", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/SpadeA-Tang/kvproto.git" }
 log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client" }
 prometheus = { version = "0.13", features = ["nightly"] }
