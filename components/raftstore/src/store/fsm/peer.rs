@@ -4407,7 +4407,7 @@ where
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
-        let mut can_force_compact = true;
+        let mut can_force_compact = false;
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
@@ -4419,11 +4419,16 @@ where
                 {
                     alive_cache_idx = p.matched;
                 }
+                if *last_heartbeat < down_peer_limit {
+                    can_force_compact = true;
+                }
             }
         }
-        if let Some(last_snapshot) = &self.fsm.peer.last_snapshot_time {
-            if *last_snapshot >= down_peer_limit {
-                can_force_compact = false;
+        if can_force_compact {
+            if let Some(last_snapshot) = &self.fsm.peer.last_snapshot_time {
+                if *last_snapshot >= down_peer_limit {
+                    can_force_compact = false;
+                }
             }
         }
         // When an election happened or a new peer is added, replicated_idx can be 0.
