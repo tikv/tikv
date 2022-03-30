@@ -26,6 +26,7 @@ mod test_snap;
 mod test_split_region;
 mod test_stale_peer;
 mod test_stale_read;
+mod test_stats;
 mod test_storage;
 mod test_transaction;
 mod test_transfer_leader;
