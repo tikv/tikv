@@ -503,6 +503,11 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                     wb.delete_cf(cf, k.as_encoded())
                 }
             }
+            Modify::SingleDelete(cf, k) => {
+                assert!(cf == CF_LOCK);
+                trace!("RocksEngine: single delete"; "key" => %k);
+                wb.single_delete_cf(cf, k.as_encoded())
+            }
             Modify::Put(cf, k, v) => {
                 if cf == CF_DEFAULT {
                     trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
@@ -530,9 +535,6 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                 } else {
                     Ok(())
                 }
-            }
-            Modify::SingleDelete(..) => {
-                unimplemented!();
             }
         };
         // TODO: turn the error into an engine error.

@@ -344,6 +344,10 @@ where
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
+                Modify::SingleDelete(_, ref mut key) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
                 Modify::Put(_, ref mut key, _) => {
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
@@ -358,7 +362,6 @@ where
                     let bytes = keys::data_end_key(key2.as_encoded());
                     *key2 = Key::from_encoded(bytes);
                 }
-                Modify::SingleDelete(..) => unimplemented!(),
             }
         }
         write_modifies(&self.engine, modifies)

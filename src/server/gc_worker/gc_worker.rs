@@ -1099,6 +1099,10 @@ mod tests {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
                     }
+                    Modify::SingleDelete(_, ref mut key) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
                     Modify::Put(_, ref mut key, _) => {
                         let bytes = keys::data_key(key.as_encoded());
                         *key = Key::from_encoded(bytes);
@@ -1113,7 +1117,6 @@ mod tests {
                         let bytes = keys::data_end_key(key2.as_encoded());
                         *key2 = Key::from_encoded(bytes);
                     }
-                    Modify::SingleDelete(..) => unimplemented!(),
                 }
             }
             write_modifies(&self.kv_engine(), modifies)
@@ -1129,6 +1132,9 @@ mod tests {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
+                Modify::SingleDelete(_, ref mut key) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
                 Modify::Put(_, ref mut key, _) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
@@ -1139,7 +1145,6 @@ mod tests {
                     *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
-                Modify::SingleDelete(..) => unimplemented!(),
             });
             self.0.async_write(ctx, batch, callback)
         }
