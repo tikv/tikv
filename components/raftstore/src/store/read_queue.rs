@@ -232,14 +232,6 @@ where
                 None => None,
             };
 
-            if !self.contexts.contains_key(&uuid) {
-                debug!(
-                    "cannot find corresponding read from pending reads";
-                    "uuid" => ?uuid, "read-index" => index, "tag" => tag
-                );
-                continue;
-            }
-
             error!("{} unexpected uuid detected", tag; "current_id" => ?invalid_id);
             let mut expect_id_track = vec![];
             for i in (0..self.ready_cnt).rev().take(10).rev() {
