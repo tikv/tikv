@@ -91,6 +91,9 @@ fn test_rpc_client() {
     let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
+    let ts100 = block_on(client.batch_get_tso(100)).unwrap();
+    assert_eq!(ts.logical() + 100, ts100.logical());
+
     let mut prev_id = 0;
     for _ in 0..100 {
         let client = new_client(eps.clone(), None);

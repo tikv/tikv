@@ -638,6 +638,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 
 [[package]]
+name = "causal_ts"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "futures 0.3.15",
+ "kvproto",
+ "lazy_static",
+ "parking_lot 0.12.0",
+ "pd_client",
+ "prometheus",
+ "raft",
+ "raftstore",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "test_raftstore",
+ "thiserror",
+ "tikv_alloc",
+ "tikv_util",
+ "txn_types",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4601,6 +4628,7 @@ name = "server"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "causal_ts",
  "cdc",
  "chrono",
  "clap 2.33.0",
@@ -5261,6 +5289,7 @@ dependencies = [
  "arrow",
  "batch-system",
  "byteorder",
+ "causal_ts",
  "cdc",
  "collections",
  "concurrency_manager",
@@ -5543,6 +5572,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "case_macros",
+ "causal_ts",
  "chrono",
  "codec",
  "collections",
