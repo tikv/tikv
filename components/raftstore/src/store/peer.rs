@@ -520,6 +520,7 @@ where
 
     /// The counter records pending snapshot requests.
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub last_snapshot_time: Option<Instant>,
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     /// The index of last compacted raft log. It is used for the next compact log task.
@@ -685,6 +686,7 @@ where
             pending_merge_state: None,
             want_rollback_merge_peers: HashSet::default(),
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
+            last_snapshot_time: None,
             prepare_merge_fence: 0,
             pending_prepare_merge: None,
             last_committed_prepare_merge_idx: 0,
@@ -2041,6 +2043,7 @@ where
             fail_point!("before_no_ready_gen_snap_task", |_| None);
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.last_snapshot_time = Some(Instant::now());
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
                 ctx.apply_router
@@ -2122,6 +2125,7 @@ where
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
         if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            self.last_snapshot_time = Some(Instant::now());
             self.pending_request_snapshot_count
                 .fetch_add(1, Ordering::SeqCst);
             ctx.apply_router
