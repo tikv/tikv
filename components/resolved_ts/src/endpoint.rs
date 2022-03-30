@@ -245,7 +245,9 @@ impl ObserveRegion {
 }
 
 pub struct Endpoint<T, E: KvEngine, C> {
+    store_id: Option<u64>,
     cfg: ResolvedTsConfig,
+    cfg_version: usize,
     store_meta: Arc<Mutex<StoreMeta>>,
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
@@ -273,7 +275,10 @@ where
         security_mgr: Arc<SecurityManager>,
         sinker: C,
     ) -> Self {
-        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
+        let (region_read_progress, store_id) = {
+            let meta = store_meta.lock().unwrap();
+            (meta.region_read_progress.clone(), meta.store_id)
+        };
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
             scheduler.clone(),
@@ -285,7 +290,9 @@ where
         );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, raft_router);
         let ep = Self {
+            store_id,
             cfg: cfg.clone(),
+            cfg_version: 0,
             scheduler,
             store_meta,
             region_read_progress,
@@ -295,7 +302,7 @@ where
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
-        ep.register_advance_event();
+        ep.register_advance_event(ep.cfg_version);
         ep
     }
 
@@ -354,7 +361,7 @@ where
                         entries,
                         apply_index,
                     })
-                    .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
+                    .unwrap_or_else(|e| warn!("schedule resolved ts task failed"; "err" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
             }),
             on_error: Some(Box::new(move |observe_id, _region, e| {
@@ -364,7 +371,7 @@ where
                         observe_id,
                         cause: format!("met error while handle scan task {:?}", e),
                     })
-                    .unwrap();
+                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re-register cause" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
@@ -377,9 +384,10 @@ where
                 resolver_status,
                 ..
             } = observe_region;
+
             info!(
                 "deregister observe region";
-                "store_id" => ?self.store_meta.lock().unwrap().store_id,
+                "store_id" => ?self.get_or_init_store_id(),
                 "region_id" => region_id,
                 "observe_id" => ?handle.id
             );
@@ -444,6 +452,7 @@ where
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
+
             info!(
                 "register region again";
                 "region_id" => region_id,
@@ -472,7 +481,7 @@ where
 
         let mut min_ts = TimeStamp::max();
         for region_id in regions.iter() {
-            if let Some(observe_region) = self.regions.get_mut(&region_id) {
+            if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let resolved_ts = observe_region.resolver.resolve(ts);
                     if resolved_ts < min_ts {
@@ -497,7 +506,7 @@ where
             .into_iter()
             .filter_map(|batch| {
                 if !batch.is_empty() {
-                    if let Some(observe_region) = self.regions.get_mut(&batch.region.get_id()) {
+                    if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
                         let observe_id = batch.rts_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.handle.id == observe_id {
@@ -513,7 +522,7 @@ where
                             });
                         } else {
                             debug!("resolved ts CmdBatch discarded";
-                                "region_id" => batch.region.get_id(),
+                                "region_id" => batch.region_id,
                                 "observe_id" => ?batch.rts_id,
                                 "current" => ?observe_region.handle.id,
                             );
@@ -548,10 +557,40 @@ where
         }
     }
 
-    fn register_advance_event(&self) {
+    fn register_advance_event(&self, cfg_version: usize) {
+        // Ignore advance event that registered with previous `advance_ts_interval` config
+        if self.cfg_version != cfg_version {
+            return;
+        }
         let regions = self.regions.keys().into_iter().copied().collect();
+        self.advance_worker.advance_ts_for_regions(regions);
         self.advance_worker
-            .register_advance_event(self.cfg.advance_ts_interval.0, regions);
+            .register_next_event(self.cfg.advance_ts_interval.0, self.cfg_version);
+    }
+
+    fn handle_change_config(&mut self, change: ConfigChange) {
+        let prev = format!("{:?}", self.cfg);
+        let prev_advance_ts_interval = self.cfg.advance_ts_interval;
+        self.cfg.update(change);
+        if self.cfg.advance_ts_interval != prev_advance_ts_interval {
+            // Increase the `cfg_version` to reject advance event that registered before
+            self.cfg_version += 1;
+            // Advance `resolved-ts` immediately after `advance_ts_interval` changed
+            self.register_advance_event(self.cfg_version);
+        }
+        info!(
+            "resolved-ts config changed";
+            "prev" => prev,
+            "current" => ?self.cfg,
+        );
+    }
+
+    fn get_or_init_store_id(&mut self) -> Option<u64> {
+        self.store_id.or_else(|| {
+            let meta = self.store_meta.lock().unwrap();
+            self.store_id = meta.store_id;
+            meta.store_id
+        })
     }
 }
 
@@ -569,7 +608,9 @@ pub enum Task<S: Snapshot> {
         observe_id: ObserveID,
         cause: String,
     },
-    RegisterAdvanceEvent,
+    RegisterAdvanceEvent {
+        cfg_version: usize,
+    },
     AdvanceResolvedTs {
         regions: Vec<u64>,
         ts: TimeStamp,
@@ -639,7 +680,9 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("observe_id", &observe_id)
                 .field("apply_index", &apply_index)
                 .finish(),
-            Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
+            Task::RegisterAdvanceEvent { .. } => {
+                de.field("name", &"register_advance_event").finish()
+            }
             Task::ChangeConfig { ref change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
@@ -685,16 +728,8 @@ where
                 entries,
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
-            Task::RegisterAdvanceEvent => self.register_advance_event(),
-            Task::ChangeConfig { change } => {
-                let prev = format!("{:?}", self.cfg);
-                self.cfg.update(change);
-                info!(
-                    "resolved-ts config changed";
-                    "prev" => prev,
-                    "current" => ?self.cfg,
-                );
-            }
+            Task::RegisterAdvanceEvent { cfg_version } => self.register_advance_event(cfg_version),
+            Task::ChangeConfig { change } => self.handle_change_config(change),
         }
     }
 }
@@ -725,10 +760,14 @@ where
     C: CmdSinker<E::Snapshot>,
 {
     fn on_timeout(&mut self) {
+        let store_id = self.get_or_init_store_id();
         let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
+        let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
-                let ts = read_progress.safe_ts();
+                let (peers, leader_info) = read_progress.dump_leader_info();
+                let leader_store_id = crate::util::find_store_id(&peers, leader_info.peer_id);
+                let ts = leader_info.get_read_state().get_safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
                     continue;
@@ -736,6 +775,13 @@ where
                 if ts < oldest_ts {
                     oldest_ts = ts;
                     oldest_region = *region_id;
+                }
+
+                if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
+                    if leader_store_id == store_id && ts < oldest_leader_ts {
+                        oldest_leader_ts = ts;
+                        oldest_leader_region = *region_id;
+                    }
                 }
             }
         });
@@ -762,9 +808,16 @@ where
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
         RTS_MIN_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64
-                / 1000i64,
+            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64,
         );
+
+        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
+        RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_GAP.set(
+            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_leader_ts).physical())
+                as i64,
+        );
+
         RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
         RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
             .with_label_values(&["resolved"])

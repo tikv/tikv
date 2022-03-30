@@ -69,9 +69,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     /// When errors are returned, it means there are errors during the evaluation. Currently
     /// we treat this situation as "completely failed".
     fn handle_src_result(&mut self, src_result: &mut BatchExecuteResult) -> Result<()> {
-        // When there are errors in `src_result`, it means that the first several rows do not
-        // have error, which should be filtered according to predicate in this executor.
-        // So we actually don't care whether or not there are errors from src executor.
+        // We handle errors in next_batch, so we can ingore it here.
 
         // TODO: Avoid allocation.
         let mut src_logical_rows_copy = Vec::with_capacity(src_result.logical_rows.len());
@@ -135,7 +133,7 @@ fn update_logical_rows_by_vector_value<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRe
     logical_rows: &mut Vec<usize>,
     ctx: &mut EvalContext,
     eval_result: T,
-    eval_result_logical_rows: LogicalRows,
+    eval_result_logical_rows: LogicalRows<'_>,
 ) -> tidb_query_common::error::Result<()>
 where
     Option<TT>: AsMySQLBool,

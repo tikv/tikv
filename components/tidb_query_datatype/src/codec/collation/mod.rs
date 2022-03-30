@@ -2,6 +2,7 @@
 
 mod charset;
 pub mod collator;
+pub mod encoding;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -11,6 +12,7 @@ use std::ops::Deref;
 use codec::prelude::*;
 use num::Unsigned;
 
+use crate::codec::data_type::{Bytes, BytesGuard, BytesRef, BytesWriter};
 use crate::codec::Result;
 
 #[macro_export]
@@ -27,6 +29,28 @@ macro_rules! match_template_collator {
                 Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
                 Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
                 Latin1Bin => CollatorLatin1Bin,
+                GbkBin => CollatorGbkBin,
+                GbkChineseCi => CollatorGbkChineseCi,
+            ],
+            $($tail)*
+         }
+     }}
+}
+
+#[macro_export]
+macro_rules! match_template_charset {
+     ($t:tt, $($tail:tt)*) => {{
+         #[allow(unused_imports)]
+         use $crate::codec::collation::encoding::*;
+
+         match_template::match_template! {
+             $t = [
+                 UTF8 => EncodingUTF8,
+                 UTF8Mb4 => EncodingUTF8Mb4,
+                 Latin1 => EncodingLatin1,
+                 GBK => EncodingGBK,
+                 Binary => EncodingBinary,
+                 Ascii => EncodingAscii,
             ],
             $($tail)*
          }
@@ -69,6 +93,29 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
     ///
     /// WARN: `sort_hash(str) != hash(sort_key(str))`.
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()>;
+}
+
+pub trait Encoding {
+    /// decode convert bytes from a specific charset to utf-8 charset.
+    fn decode(data: BytesRef<'_>) -> Result<Bytes>;
+
+    /// encode convert bytes from utf-8 charset to a specific charset.
+    #[inline]
+    fn encode(data: BytesRef<'_>) -> Result<Bytes> {
+        Ok(Bytes::from(data))
+    }
+
+    #[inline]
+    fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
+        let res = s.chars().flat_map(char::to_lowercase);
+        writer.write_from_char_iter(res)
+    }
+
+    #[inline]
+    fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
+        let res = s.chars().flat_map(char::to_uppercase);
+        writer.write_from_char_iter(res)
+    }
 }
 
 #[derive(Debug)]
@@ -156,7 +203,7 @@ where
 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
             == std::cmp::Ordering::Equal
     }
 }
@@ -169,7 +216,7 @@ where
 {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).ok()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).ok()
     }
 }
 
@@ -179,7 +226,7 @@ where
 {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        C::sort_compare(&self.inner.as_ref(), &other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
     }
 }
 

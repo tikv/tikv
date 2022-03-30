@@ -4,6 +4,8 @@ use crate::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::Entry;
 
+pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
 
@@ -18,6 +20,15 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize>;
+
+    /// Get all available entries in the region.
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
+}
+
+pub struct RaftLogGCTask {
+    pub raft_group_id: u64,
+    pub from: u64,
+    pub to: u64,
 }
 
 pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
@@ -44,6 +55,7 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
@@ -58,6 +70,14 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Like `cut_logs` but the range could be very large. Return the deleted count.
     /// Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
+
+    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+        let mut total = 0;
+        for task in tasks {
+            total += self.gc(task.raft_group_id, task.from, task.to)?;
+        }
+        Ok(total)
+    }
 
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.
@@ -93,7 +113,14 @@ pub trait RaftLogBatch: Send {
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
+    /// The data size of this RaftLogBatch.
+    fn persist_size(&self) -> usize;
+
+    /// Whether it is empty or not.
     fn is_empty(&self) -> bool;
+
+    /// Merge another RaftLogBatch to itself.
+    fn merge(&mut self, _: Self);
 }
 
 #[derive(Clone, Copy, Default)]

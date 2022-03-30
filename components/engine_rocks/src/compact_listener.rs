@@ -43,6 +43,10 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
         self.0.input_file_count()
     }
 
+    fn num_input_files_at_output_level(&self) -> usize {
+        self.0.num_input_files_at_output_level()
+    }
+
     fn input_file_at(&self, pos: usize) -> &Path {
         self.0.input_file_at(pos)
     }
@@ -53,6 +57,10 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
 
     fn output_file_at(&self, pos: usize) -> &Path {
         self.0.output_file_at(pos)
+    }
+
+    fn base_input_level(&self) -> i32 {
+        self.0.base_input_level()
     }
 
     fn table_properties(&self) -> &Self::TablePropertiesCollectionView {
@@ -105,7 +113,7 @@ pub struct RocksCompactedEvent {
 
 impl RocksCompactedEvent {
     pub fn new(
-        info: &RocksCompactionJobInfo,
+        info: &RocksCompactionJobInfo<'_>,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         input_props: Vec<RangeProperties>,
@@ -189,7 +197,7 @@ impl CompactedEvent for RocksCompactedEvent {
     }
 }
 
-pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
+pub type Filter = fn(&RocksCompactionJobInfo<'_>) -> bool;
 
 pub struct CompactionListener {
     ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,

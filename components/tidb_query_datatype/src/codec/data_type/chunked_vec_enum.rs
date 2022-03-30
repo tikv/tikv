@@ -31,7 +31,7 @@ pub struct ChunkedVecEnum {
 
 impl ChunkedVecEnum {
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<EnumRef> {
+    pub fn get(&self, idx: usize) -> Option<EnumRef<'_>> {
         assert!(idx < self.len());
         if let Some(value) = self.values.get_option_ref(idx) {
             let name = self.names.get(idx).unwrap();
@@ -135,7 +135,7 @@ impl<'a> ChunkRef<'a, EnumRef<'a>> for &'a ChunkedVecEnum {
     }
 
     fn get_bit_vec(self) -> &'a BitVec {
-        &self.values.get_bit_vec()
+        self.values.get_bit_vec()
     }
 
     #[inline]

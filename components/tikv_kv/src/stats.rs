@@ -232,6 +232,18 @@ impl Statistics {
         }
     }
 
+    pub fn cf_statistics(&self, cf: &str) -> &CfStatistics {
+        if cf.is_empty() {
+            return &self.data;
+        }
+        match cf {
+            CF_DEFAULT => &self.data,
+            CF_LOCK => &self.lock,
+            CF_WRITE => &self.write,
+            _ => unreachable!(),
+        }
+    }
+
     pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
         detail_v2.set_processed_versions(self.write.processed_keys as u64);
         detail_v2.set_total_versions(self.write.total_op_count() as u64);
@@ -250,4 +262,24 @@ impl StatisticsSummary {
         self.stat.add(v);
         self.count += 1;
     }
+}
+
+/// Latency indicators for multi-execution-stages.
+///
+/// The detailed meaning of the indicators is as follows:
+///
+/// ```text
+/// ------> Begin ------> Scheduled ------> SnapshotReceived ------> Finished ------>
+/// |----- schedule_wait_time -----|
+///                                |-- snapshot_wait_time --|
+/// |------------------- wait_wall_time --------------------|
+///                                                         |-- process_wall_time --|
+/// |------------------------------ kv_read_wall_time ------------------------------|
+/// ```
+#[derive(Debug, Default, Copy, Clone)]
+pub struct StageLatencyStats {
+    pub schedule_wait_time_ms: u64,
+    pub snapshot_wait_time_ms: u64,
+    pub wait_wall_time_ms: u64,
+    pub process_wall_time_ms: u64,
 }

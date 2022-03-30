@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use async_trait::async_trait;
 use std::io;
 use std::time::Duration;
+use thiserror::Error;
 
 use fail::fail_point;
 use futures_util::{
@@ -14,12 +16,17 @@ use rusoto_core::{
 };
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
+use std::error::Error as StdError;
 use tokio::time::{sleep, timeout};
 
-use cloud::blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, StringNonEmpty};
-pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+use cloud::blob::{
+    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+};
+use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
-use tikv_util::stream::{block_on_external_io, error_stream, retry};
+use tikv_util::stream::{error_stream, retry};
+use tikv_util::time::Instant;
 
 use crate::util;
 
@@ -50,6 +57,7 @@ pub struct Config {
     force_path_style: bool,
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
+    multi_part_size: usize,
 }
 
 impl Config {
@@ -63,6 +71,7 @@ impl Config {
             force_path_style: false,
             sse_kms_key_id: None,
             storage_class: None,
+            multi_part_size: MINIMUM_PART_SIZE,
         }
     }
 
@@ -94,6 +103,7 @@ impl Config {
             access_key_pair,
             force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
+            multi_part_size: MINIMUM_PART_SIZE,
         })
     }
 
@@ -125,13 +135,14 @@ impl Config {
             access_key_pair,
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
+            multi_part_size: MINIMUM_PART_SIZE,
         })
     }
 }
 
 impl BlobConfig for Config {
     fn name(&self) -> &'static str {
-        &STORAGE_NAME
+        STORAGE_NAME
     }
 
     fn url(&self) -> io::Result<url::Url> {
@@ -157,6 +168,14 @@ impl S3Storage {
 
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
         Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
+    }
+
+    pub fn set_multi_part_size(&mut self, mut size: usize) {
+        if size < MINIMUM_PART_SIZE {
+            // default multi_part_size is 5MB, S3 cannot allow a smaller size.
+            size = MINIMUM_PART_SIZE
+        }
+        self.config.multi_part_size = size;
     }
 
     /// Create a new S3 storage for the given config.
@@ -220,9 +239,27 @@ struct S3Uploader<'client> {
     server_side_encryption: Option<StringNonEmpty>,
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
+    multi_part_size: usize,
 
     upload_id: String,
     parts: Vec<CompletedPart>,
+}
+
+/// The errors a uploader can meet.
+/// This was made for make the result of [S3Uploader::run] get [Send].
+#[derive(Debug, Error)]
+enum UploadError {
+    #[error("io error {0}")]
+    Io(#[from] io::Error),
+    #[error("rusoto error {0}")]
+    // Maybe make it a trait if needed?
+    Rusoto(String),
+}
+
+impl<T: 'static + StdError> From<RusotoError<T>> for UploadError {
+    fn from(r: RusotoError<T>) -> Self {
+        Self::Rusoto(format!("{}", r))
+    }
 }
 
 /// Specifies the minimum size to use multi-part upload.
@@ -240,6 +277,7 @@ impl<'client> S3Uploader<'client> {
             server_side_encryption: config.sse.as_ref().cloned(),
             sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
             storage_class: config.storage_class.as_ref().cloned(),
+            multi_part_size: config.multi_part_size,
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
@@ -248,10 +286,10 @@ impl<'client> S3Uploader<'client> {
     /// Executes the upload process.
     async fn run(
         mut self,
-        reader: &mut (dyn AsyncRead + Unpin),
+        reader: &mut (dyn AsyncRead + Unpin + Send),
         est_len: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if est_len <= MINIMUM_PART_SIZE as u64 {
+    ) -> Result<(), UploadError> {
+        if est_len <= self.multi_part_size as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
@@ -261,7 +299,7 @@ impl<'client> S3Uploader<'client> {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry(|| self.begin()).await?;
             let upload_res = async {
-                let mut buf = vec![0; MINIMUM_PART_SIZE];
+                let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
                 loop {
                     let data_size = reader.read(&mut buf).await?;
@@ -365,18 +403,25 @@ impl<'client> S3Uploader<'client> {
         part_number: i64,
         data: &[u8],
     ) -> Result<CompletedPart, RusotoError<UploadPartError>> {
-        match timeout(
-            Self::get_timeout(),
-            self.client.upload_part(UploadPartRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                part_number,
-                content_length: Some(data.len() as i64),
-                body: Some(data.to_vec().into()),
-                ..Default::default()
-            }),
-        )
+        match timeout(Self::get_timeout(), async {
+            let start = Instant::now();
+            let r = self
+                .client
+                .upload_part(UploadPartRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    part_number,
+                    content_length: Some(data.len() as i64),
+                    body: Some(data.to_vec().into()),
+                    ..Default::default()
+                })
+                .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "upload_part"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            r
+        })
         .await
         {
             Ok(part) => Ok(CompletedPart {
@@ -415,7 +460,9 @@ impl<'client> S3Uploader<'client> {
                 Err(RusotoError::ParseError("failed to put object".to_owned()))
             });
 
-            self.client
+            let start = Instant::now();
+            let r = self
+                .client
                 .put_object(PutObjectRequest {
                     bucket: self.bucket.clone(),
                     key: self.key.clone(),
@@ -430,7 +477,11 @@ impl<'client> S3Uploader<'client> {
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
-                .await
+                .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "put_object"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            r
         })
         .await
         .map_err(|_| {
@@ -450,23 +501,33 @@ impl<'client> S3Uploader<'client> {
 
 const STORAGE_NAME: &str = "s3";
 
+#[async_trait]
 impl BlobStorage for S3Storage {
     fn config(&self) -> Box<dyn BlobConfig> {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    fn put(
+    async fn put(
         &self,
         name: &str,
-        mut reader: Box<dyn AsyncRead + Send + Unpin>,
+        mut reader: PutResource,
         content_length: u64,
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
 
         let uploader = S3Uploader::new(&self.client, &self.config, key);
-        block_on_external_io(uploader.run(&mut *reader, content_length)).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("failed to put object {}", e))
+        let result = uploader.run(&mut reader, content_length).await;
+        result.map_err(|e| {
+            let error_code = if let UploadError::Io(ref io_error) = e {
+                io_error.kind()
+            } else {
+                io::ErrorKind::Other
+            };
+            // Even we can check whether there is an `io::Error` internal and extract it directly,
+            // We still need to keep the message 'failed to put object' here for adapting the string-matching based
+            // retry logic in BR :(
+            io::Error::new(error_code, format!("failed to put object {}", e))
         })
     }
 
@@ -504,9 +565,9 @@ impl BlobStorage for S3Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::io::AsyncReadExt;
     use rusoto_core::signature::SignedRequest;
-    use rusoto_mock::MockRequestDispatcher;
+    use rusoto_mock::{MockRequestDispatcher, MultipleMockRequestDispatcher};
+    use tikv_util::stream::block_on_external_io;
 
     #[test]
     fn test_s3_config() {
@@ -519,13 +580,75 @@ mod tests {
             access_key: StringNonEmpty::required("abc".to_string()).unwrap(),
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
         });
-        assert!(S3Storage::new(config.clone()).is_ok());
+        let mut s = S3Storage::new(config.clone()).unwrap();
+        // set a less than 5M value not work
+        s.set_multi_part_size(1024);
+        assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
+        // set 8M
+        s.set_multi_part_size(8 * 1024 * 1024);
+        assert_eq!(s.config.multi_part_size, 8 * 1024 * 1024);
+        // set 6M
+        s.set_multi_part_size(6 * 1024 * 1024);
+        assert_eq!(s.config.multi_part_size, 6 * 1024 * 1024);
+        // set a less than 5M value will fallback to 5M
+        s.set_multi_part_size(1024);
+        assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
+
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
         assert!(S3Storage::new(config).is_err());
     }
 
-    #[test]
-    fn test_s3_storage() {
+    #[tokio::test]
+    async fn test_s3_storage_multi_part() {
+        let magic_contents = "567890";
+
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let bucket = BucketConf::default(bucket_name);
+        let mut config = Config::default(bucket);
+        let multi_part_size = 2;
+        // set multi_part_size to use upload_part function
+        config.multi_part_size = multi_part_size;
+
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3 part + 1 complete)
+        let dispatcher = MultipleMockRequestDispatcher::new(vec![
+            MockRequestDispatcher::with_status(200).with_body(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+               <root>
+                 <UploadId>1</UploadId>
+               </root>"#,
+            ),
+            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200),
+        ]);
+
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
+        assert!(resp.is_ok());
+        assert_eq!(
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .get_metric_with_label_values(&["s3", "upload_part"])
+                .unwrap()
+                .get_sample_count(),
+            // length of magic_contents
+            (magic_contents.len() / multi_part_size) as u64,
+        );
+    }
+
+    #[cfg(feature = "failpoints")]
+    #[tokio::test]
+    async fn test_s3_storage() {
         let magic_contents = "5678";
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
@@ -547,24 +670,28 @@ mod tests {
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         s.put(
             "mykey",
-            Box::new(magic_contents.as_bytes()),
+            PutResource(Box::new(magic_contents.as_bytes())),
             magic_contents.len() as u64,
         )
+        .await
         .unwrap();
+
         let mut reader = s.get("mykey");
         let mut buf = Vec::new();
-        let ret = block_on_external_io(reader.read_to_end(&mut buf));
+        let ret = reader.read_to_end(&mut buf).await;
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
 
         // inject put error
         let s3_put_obj_err_fp = "s3_put_obj_err";
         fail::cfg(s3_put_obj_err_fp, "return").unwrap();
-        let resp = s.put(
-            "mykey",
-            Box::new(magic_contents.as_bytes()),
-            magic_contents.len() as u64,
-        );
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
         fail::remove(s3_put_obj_err_fp);
         assert!(resp.is_err());
 
@@ -576,22 +703,26 @@ mod tests {
         fail::cfg(s3_timeout_injected_fp, "return(100)").unwrap();
         // inject 200ms delay
         fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
-        let resp = s.put(
-            "mykey",
-            Box::new(magic_contents.as_bytes()),
-            magic_contents.len() as u64,
-        );
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
         fail::remove(s3_sleep_injected_fp);
         // timeout occur due to delay 200ms
         assert!(resp.is_err());
 
         // inject 50ms delay
         fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();
-        let resp = s.put(
-            "mykey",
-            Box::new(magic_contents.as_bytes()),
-            magic_contents.len() as u64,
-        );
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
         // no timeout
@@ -619,11 +750,11 @@ mod tests {
         let credentials_provider =
             StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
-        s.put(
+        block_on_external_io(s.put(
             "key2",
-            Box::new(magic_contents.as_bytes()),
+            PutResource(Box::new(magic_contents.as_bytes())),
             magic_contents.len() as u64,
-        )
+        ))
         .unwrap();
     }
 
@@ -633,7 +764,6 @@ mod tests {
     // reliable way to test s3 (rusoto_mock requires custom logic to verify the
     // body stream which itself can have bug)
     fn test_real_s3_storage() {
-        use std::f64::INFINITY;
         use tikv_util::time::Limiter;
 
         let bucket = BucketConf {
@@ -649,7 +779,7 @@ mod tests {
             ..Config::default()
         };
 
-        let limiter = Limiter::new(INFINITY);
+        let limiter = Limiter::new(f64::INFINITY);
 
         let storage = S3Storage::new(&s3).unwrap();
         const LEN: usize = 1024 * 1024 * 4;
@@ -664,7 +794,7 @@ mod tests {
 
         let mut reader = storage.get("huge_file");
         let mut buf = Vec::new();
-        block_on_external_io(reader.read_to_end(&mut buf)).unwrap();
+        reader.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf.len(), LEN);
         assert_eq!(buf.iter().position(|b| *b != 50_u8), None);
     }

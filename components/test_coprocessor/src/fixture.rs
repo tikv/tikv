@@ -2,17 +2,22 @@
 
 use super::*;
 
+use std::sync::Arc;
+
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 
 use engine_rocks::PerfLevel;
+use resource_metering::ResourceTagFactory;
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::storage::{Engine, TestEngineBuilder};
+use tikv::storage::lock_manager::DummyLockManager;
+use tikv::storage::{Engine, TestEngineBuilder, TestStorageBuilder};
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::thread_group::GroupProperties;
 
 #[derive(Clone)]
@@ -42,6 +47,12 @@ impl ProductTable {
     }
 }
 
+impl Default for ProductTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::ops::Deref for ProductTable {
     type Target = Table;
 
@@ -68,12 +79,16 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let mut store = Store::from_engine(engine);
+    let storage =
+        TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {}, ApiVersion::V1)
+            .build()
+            .unwrap();
+    let mut store = Store::from_storage(storage);
 
     store.begin();
     for &(id, name, count) in vals {
         store
-            .insert_into(&tbl)
+            .insert_into(tbl)
             .set(&tbl["id"], Datum::I64(id))
             .set(&tbl["name"], name.map(str::as_bytes).into())
             .set(&tbl["count"], Datum::I64(count))
@@ -89,7 +104,14 @@ pub fn init_data_with_details<E: Engine>(
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
-    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    let copr = Endpoint::new(
+        cfg,
+        pool.handle(),
+        cm,
+        PerfLevel::EnableCount,
+        ResourceTagFactory::new_for_test(),
+        Arc::new(QuotaLimiter::default()),
+    );
     (store, copr)
 }
 

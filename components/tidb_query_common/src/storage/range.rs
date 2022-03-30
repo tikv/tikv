@@ -48,7 +48,7 @@ pub struct IntervalRange {
 }
 
 impl std::fmt::Debug for IntervalRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
         write!(
             f,
@@ -91,7 +91,7 @@ impl<'a, 'b> From<(&'a str, &'b str)> for IntervalRange {
 pub struct PointRange(pub Vec<u8>);
 
 impl std::fmt::Debug for PointRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", &log_wrappers::Value::key(self.0.as_slice()))
     }
 }

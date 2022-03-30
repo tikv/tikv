@@ -216,7 +216,6 @@ fn test_prevote_reboot_minority_followers() {
 }
 
 // Test isolating a minority of the cluster and make sure that the remove themselves.
-#[cfg(feature = "protobuf-codec")]
 fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -236,8 +235,6 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_remove_region(5, region);
 }
 
-// FIXME(nrc) failing on CI only
-#[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_server_pair_isolated() {
     let mut cluster = new_server_cluster(0, 5);

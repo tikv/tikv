@@ -139,7 +139,7 @@
 //!
 //! # The porting process
 //!
-//! These are some guidelines that seem to make the porting managable. As the
+//! These are some guidelines that seem to make the porting manageable. As the
 //! process continues new strategies are discovered and written here. This is a
 //! big refactoring and will take many monthse.
 //!
@@ -252,13 +252,10 @@
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
+#![feature(assert_matches)]
 
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_derive;
-extern crate slog_global;
+#[macro_use(fail_point)]
+extern crate fail;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -288,14 +285,10 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
-mod properties;
-pub use crate::properties::*;
 mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
@@ -306,6 +299,10 @@ mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
 pub use crate::perf_context::*;
+mod flow_control_factors;
+pub use crate::flow_control_factors::*;
+mod table_properties;
+pub use crate::table_properties::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -331,15 +328,16 @@ pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
 mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch};
+pub use raft_engine::{
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, RAFT_LOG_MULTI_GET_CNT,
+};
 
 // These modules need further scrutiny
 
 pub mod compaction_job;
+pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
-
-pub mod config;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

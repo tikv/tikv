@@ -1,27 +1,49 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 use futures_io::AsyncRead;
-pub use kvproto::backup::CloudDynamic;
+pub use kvproto::brpb::CloudDynamic;
 use std::io;
 use std::marker::Unpin;
+use std::pin::Pin;
+use std::task::Poll;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
     fn url(&self) -> io::Result<url::Url>;
 }
 
+/// PutResource is a simple wrapper for put.
+/// It is identity to [external_storage::UnpinReader],
+/// only for decoupling external_storage and cloud package.
+///
+/// See the documentation of [external_storage::UnpinReader] for why those wrappers exists.
+pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
+
+impl AsyncRead for PutResource {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<std::result::Result<usize, futures_io::Error>> {
+        Pin::new(&mut *self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl From<Box<dyn AsyncRead + Send + Unpin>> for PutResource {
+    fn from(s: Box<dyn AsyncRead + Send + Unpin>) -> Self {
+        Self(s)
+    }
+}
+
 /// An abstraction for blob storage.
 /// Currently the same as ExternalStorage
+#[async_trait]
 pub trait BlobStorage: 'static + Send + Sync {
     fn config(&self) -> Box<dyn BlobConfig>;
 
     /// Write all contents of the read to the given path.
-    fn put(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()>;
+    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
@@ -37,18 +59,15 @@ impl BlobConfig for dyn BlobStorage {
     }
 }
 
+#[async_trait]
 impl BlobStorage for Box<dyn BlobStorage> {
     fn config(&self) -> Box<dyn BlobConfig> {
         (**self).config()
     }
 
-    fn put(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        (**self).put(name, reader, content_length)
+    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
+        let fut = (**self).put(name, reader, content_length);
+        fut.await
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
@@ -136,7 +155,7 @@ impl BucketConf {
         let path = none_to_empty(self.prefix.clone());
         if let Some(ep) = &self.endpoint {
             let mut u =
-                url::Url::parse(&ep).map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
+                url::Url::parse(ep).map_err(|e| format!("invalid endpoint {}: {}", &ep, e))?;
             u.set_path(&format!(
                 "{}/{}",
                 &self.bucket.trim_end_matches('/'),

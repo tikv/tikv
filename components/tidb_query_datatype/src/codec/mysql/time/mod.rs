@@ -77,7 +77,7 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
 fn round_components(parts: &mut [u32]) -> Option<()> {
     debug_assert_eq!(parts.len(), 7);
     let modulus = [
-        std::u32::MAX,
+        u32::MAX,
         12,
         last_day_of_month(parts[0], parts[1]),
         // hms[.fraction]
@@ -100,6 +100,7 @@ fn round_components(parts: &mut [u32]) -> Option<()> {
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn chrono_datetime<T: TimeZone>(
     time_zone: &T,
     year: u32,
@@ -310,7 +311,7 @@ mod parser {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_digit())
-            .unwrap_or_else(|| input.len());
+            .unwrap_or(input.len());
         (end != 0).as_option()?;
         Some((&input[end..], &input[..end]))
     }
@@ -719,7 +720,7 @@ mod parser {
             991_232..=99_991_231 => input * 1_000_000,
             101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
             700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
-            1_000_000_000_000..=std::i64::MAX => input,
+            1_000_000_000_000..=i64::MAX => input,
             _ => return None,
         };
 
@@ -1342,6 +1343,13 @@ impl Time {
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
     }
 
+    pub fn from_local_time(ctx: &mut EvalContext, time_type: TimeType, fsp: i8) -> Result<Time> {
+        let fsp = check_fsp(fsp)?;
+        let utc = Local::now();
+        let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
+        Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
+    }
+
     pub fn from_year(
         ctx: &mut EvalContext,
         year: u32,
@@ -1684,14 +1692,14 @@ impl Time {
     #[inline]
     pub fn to_numeric_string(self) -> String {
         let mut buffer = String::with_capacity(15);
-        write!(&mut buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
+        write!(buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
         if self.get_time_type() != TimeType::Date {
-            write!(&mut buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
+            write!(buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
         }
         let fsp = usize::from(self.fsp());
         if fsp > 0 {
             write!(
-                &mut buffer,
+                buffer,
                 ".{:0width$}",
                 self.micro() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
@@ -1963,7 +1971,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     struct TimeEnv {
         strict_mode: bool,
         no_zero_in_date: bool,
@@ -1971,19 +1979,6 @@ mod tests {
         allow_invalid_date: bool,
         ignore_truncate: bool,
         time_zone: Option<Tz>,
-    }
-
-    impl Default for TimeEnv {
-        fn default() -> TimeEnv {
-            TimeEnv {
-                strict_mode: false,
-                no_zero_in_date: false,
-                no_zero_date: false,
-                allow_invalid_date: false,
-                ignore_truncate: false,
-                time_zone: None,
-            }
-        }
     }
 
     impl From<TimeEnv> for EvalContext {
@@ -2727,6 +2722,23 @@ mod tests {
     }
 
     #[test]
+    fn test_from_local_time() -> Result<()> {
+        let mut ctx = EvalContext::default();
+        for i in 2..10 {
+            let actual = Time::from_local_time(&mut ctx, TimeType::DateTime, i % MAX_FSP)?;
+            let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
+
+            //2022-02-15 07:45:48.581699 NonFixed(UTC)   c_datetime
+            //2022-02-15 07:45:48.581933075 UTC          Utc::now()
+            //We compare length 22 of then; Exceed it may be not equal ( in milli seconds ).
+            let now0 = &c_datetime.to_string()[0..22];
+            let now1 = &Utc::now().to_string()[0..22];
+            assert_eq!(now0, now1);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_round_frac() -> Result<()> {
         let cases = vec![
             ("121231113045.123345", 6, "2012-12-31 11:30:45.123345"),
@@ -3018,7 +3030,7 @@ mod tests {
             let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let get: f64 = t.convert(&mut ctx).unwrap();
             assert!(
-                (expect - get).abs() < std::f64::EPSILON,
+                (expect - get).abs() < f64::EPSILON,
                 "expect: {}, got: {}",
                 expect,
                 get

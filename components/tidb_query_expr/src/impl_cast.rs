@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::num::IntErrorKind;
 
+use byteorder::{BigEndian, ByteOrder};
 use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
@@ -13,6 +14,7 @@ use tipb::{Expr, FieldType};
 use crate::types::RpnExpressionBuilder;
 use crate::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use tidb_query_common::Result;
+use tidb_query_datatype::codec::collation::Encoding;
 use tidb_query_datatype::codec::convert::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
@@ -113,6 +115,8 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Int, EvalType::Bytes) => {
             if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
                 cast_year_as_string_fn_meta()
+            } else if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Bit {
+                cast_bit_as_string_fn_meta()
             } else if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
             } else {
@@ -350,7 +354,7 @@ fn cast_string_as_int(
                 match parse_res {
                     Ok(x) => {
                         if !is_str_neg {
-                            if !is_unsigned && x as u64 > std::i64::MAX as u64 {
+                            if !is_unsigned && x as u64 > i64::MAX as u64 {
                                 ctx.warnings
                                     .append_warning(Error::cast_as_signed_overflow())
                             }
@@ -370,9 +374,9 @@ fn cast_string_as_int(
                             let warn_err = Error::truncated_wrong_val("INTEGER", val);
                             ctx.handle_overflow_err(warn_err).map_err(|_| err)?;
                             let val = if is_str_neg {
-                                std::i64::MIN
+                                i64::MIN
                             } else {
-                                std::u64::MAX as i64
+                                u64::MAX as i64
                             };
                             Ok(Some(val))
                         }
@@ -515,12 +519,11 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64;
-            if val.is_empty() {
-                r = 0.0;
+            let r = if val.is_empty() {
+                0.0
             } else {
-                r = val.convert(ctx)?;
-            }
+                val.convert(ctx)?
+            };
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -640,6 +643,31 @@ fn cast_year_as_string(
         val.to_string().into_bytes()
     };
     cast_as_string_helper(ctx, extra, cast)
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_bit_as_string(
+    _ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Int>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let mut buf = [0; 8];
+            BigEndian::write_u64(&mut buf, *val as u64);
+            let flen = extra.ret_field_type.as_accessor().flen();
+            if flen > 0 && flen <= 8 {
+                let start_idx: usize = (8 - flen) as usize;
+                let buf = &buf[start_idx..8];
+                Ok(Some(buf.to_vec()))
+            } else {
+                // The length of casting bit to string should between 0 and 8.
+                Err(other_err!("Unsupported ret_field_type.Flen {:?}", flen))
+            }
+        }
+    }
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1437,6 +1465,18 @@ fn cast_enum_as_json(extra: &RpnFnCallExtra, val: Option<EnumRef>) -> Result<Opt
     }
 }
 
+#[rpn_fn]
+#[inline]
+fn to_binary<E: Encoding>(val: BytesRef) -> Result<Option<Bytes>> {
+    Ok(Some(E::encode(val)?))
+}
+
+#[rpn_fn]
+#[inline]
+fn from_binary<E: Encoding>(val: BytesRef) -> Result<Option<Bytes>> {
+    Ok(Some(E::decode(val)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::Result;
@@ -1545,24 +1585,13 @@ mod tests {
         assert!(r.is_none());
     }
 
+    #[derive(Default)]
     struct CtxConfig {
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
         in_insert_stmt: bool,
         in_update_or_delete_stmt: bool,
-    }
-
-    impl Default for CtxConfig {
-        fn default() -> Self {
-            CtxConfig {
-                overflow_as_warning: false,
-                truncate_as_warning: false,
-                should_clip_to_zero: false,
-                in_insert_stmt: false,
-                in_update_or_delete_stmt: false,
-            }
-        }
     }
 
     impl From<CtxConfig> for EvalContext {
@@ -3241,7 +3270,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input={:?}",
                 input
             );
@@ -3424,7 +3453,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input:{:?}, expected:{:?}, flen:{:?}, decimal:{:?}, truncated:{:?}, overflow:{:?}, in_union:{:?}",
                 input,
                 expected,
@@ -3550,7 +3579,7 @@ mod tests {
                 );
             let output: Option<Real> = result.unwrap().into();
             assert!(
-                (output.unwrap().into_inner() - expected).abs() < std::f64::EPSILON,
+                (output.unwrap().into_inner() - expected).abs() < f64::EPSILON,
                 "input={:?}",
                 input
             );
@@ -3597,7 +3626,7 @@ mod tests {
             if let Some(exp) = expected {
                 assert!(output.is_ok(), "input: {:?}", input);
                 assert!(
-                    (output.unwrap().unwrap().into_inner() - exp).abs() < std::f64::EPSILON,
+                    (output.unwrap().unwrap().into_inner() - exp).abs() < f64::EPSILON,
                     "input={:?}",
                     input
                 );
@@ -4266,6 +4295,65 @@ mod tests {
     }
 
     #[test]
+    fn test_to_binary() {
+        let cases = vec![
+            ("a".as_bytes().to_vec(), "utf8mb4", Some(vec![0x61])),
+            ("a".as_bytes().to_vec(), "gbk", Some(vec![0x61])),
+            (
+                "一".as_bytes().to_vec(),
+                "utf8mb4",
+                Some(vec![0xe4, 0xb8, 0x80]),
+            ),
+            ("一".as_bytes().to_vec(), "gbk", Some(vec![0xd2, 0xbb])),
+        ];
+
+        for (v, charset, expected) in cases {
+            let result = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    v,
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .charset(charset)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::ToBinary)
+                .unwrap();
+            assert_eq!(expected, result);
+        }
+    }
+
+    #[test]
+    fn test_from_binary() {
+        let cases = vec![
+            (vec![0x61], "utf8mb4", Some("a".as_bytes().to_vec())),
+            (vec![0x61], "gbk", Some("a".as_bytes().to_vec())),
+            (
+                vec![0xe4, 0xb8, 0x80],
+                "utf8mb4",
+                Some("一".as_bytes().to_vec()),
+            ),
+            (vec![0xd2, 0xbb], "gbk", Some("一".as_bytes().to_vec())),
+        ];
+
+        for (v, charset, expected) in cases {
+            let result = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    v,
+                    FieldTypeBuilder::new().tp(FieldTypeTp::String).build(),
+                )
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::String)
+                        .charset(charset)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::FromBinary)
+                .unwrap();
+            assert_eq!(expected, result);
+        }
+    }
+
+    #[test]
     fn test_decimal_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Decimal>);
 
@@ -4864,7 +4952,7 @@ mod tests {
                         overflow_as_warning,
                         truncate_as_warning,
                         warning_err_code,
-                        expect.to_string(),
+                        expect,
                         pd_res_log,
                         cast_func_res_log
                     );
@@ -6096,13 +6184,12 @@ mod tests {
                     Ok(v) => match v {
                         Some(dur) => {
                             if expect_max {
-                                let max_val_str: &str;
-                                if dur.is_neg() {
-                                    max_val_str = "-838:59:59";
+                                let max_val_str = if dur.is_neg() {
+                                    "-838:59:59"
                                 } else {
-                                    max_val_str = "838:59:59";
-                                }
-                                let max_expect = Duration::parse(&mut ctx, &max_val_str, fsp);
+                                    "838:59:59"
+                                };
+                                let max_expect = Duration::parse(&mut ctx, max_val_str, fsp);
                                 let log = format!(
                                     "func_name: {}, input: {}, output: {:?}, output_warn: {:?}, expect: {:?}",
                                     func_name,

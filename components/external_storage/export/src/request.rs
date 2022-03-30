@@ -6,13 +6,9 @@ use external_storage::request::file_name_for_write;
 use file_system::File;
 use futures::executor::block_on;
 use futures_io::AsyncRead;
-use kvproto::backup as proto;
-#[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-#[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+use kvproto::brpb as proto;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use slog_global::info;
-use std::f64::INFINITY;
 use std::io::{self};
 use tikv_util::time::Limiter;
 use tokio::runtime::Runtime;
@@ -67,7 +63,7 @@ pub async fn restore_inner(
     // a "TimedOut" error.
     // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
     const MINIMUM_READ_SPEED: usize = 8192;
-    let limiter = Limiter::new(INFINITY);
+    let limiter = Limiter::new(f64::INFINITY);
     let x = read_external_storage_into_file(
         &mut storage.read(object_name),
         output,

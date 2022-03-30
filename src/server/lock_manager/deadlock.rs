@@ -20,6 +20,7 @@ use kvproto::deadlock::*;
 use kvproto::metapb::Region;
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
+use raftstore::coprocessor::RoleChange;
 use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
@@ -82,7 +83,7 @@ impl Locks {
 
     /// Returns true if the `Locks` is expired.
     fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
-        now.duration_since(self.last_detect_time) >= ttl
+        now.saturating_duration_since(self.last_detect_time) >= ttl
     }
 
     /// Generate a `WaitForEntry` for the lock.
@@ -327,7 +328,8 @@ impl DetectTable {
     /// Iterates the whole table to remove all expired entries.
     fn active_expire(&mut self) {
         if self.wait_for_map.len() >= Self::ACTIVE_EXPIRE_THRESHOLD
-            && self.now.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
+            && self.now.saturating_duration_since(self.last_active_expire)
+                >= Self::ACTIVE_EXPIRE_INTERVAL
         {
             let now = self.now;
             let ttl = self.ttl;
@@ -529,13 +531,13 @@ impl RoleChangeNotifier {
 impl Coprocessor for RoleChangeNotifier {}
 
 impl RoleObserver for RoleChangeNotifier {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         let region = ctx.region();
         // A region is created first, so the leader region id must be valid.
         if Self::is_leader_region(region)
             && *self.leader_region_id.lock().unwrap() == region.get_id()
         {
-            self.scheduler.change_role(role.into());
+            self.scheduler.change_role(role_change.state.into());
         }
     }
 }
@@ -1288,7 +1290,7 @@ pub mod tests {
         };
 
         // Detect specified edges sequentially, and expects the last one will cause the deadlock.
-        let test_once = |edges: &[Edge]| {
+        let test_once = |edges: &[Edge<'_>]| {
             let mut detect_table = DetectTable::new(Duration::from_millis(100));
             let mut edge_map = HashMap::default();
 
@@ -1492,19 +1494,19 @@ pub mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         check_role(Role::Follower);
         for &follower_role in &follower_roles {
-            host.on_role_change(&region, follower_role);
+            host.on_role_change(&region, RoleChange::new(follower_role));
             check_role(Role::Follower);
-            host.on_role_change(&invalid, StateRole::Leader);
+            host.on_role_change(&invalid, RoleChange::new(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&other, StateRole::Leader);
+            host.on_role_change(&other, RoleChange::new(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&region, StateRole::Leader);
+            host.on_role_change(&region, RoleChange::new(StateRole::Leader));
             check_role(Role::Leader);
-            host.on_role_change(&invalid, follower_role);
+            host.on_role_change(&invalid, RoleChange::new(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&other, follower_role);
+            host.on_role_change(&other, RoleChange::new(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&region, follower_role);
+            host.on_role_change(&region, RoleChange::new(follower_role));
             check_role(Role::Follower);
         }
 

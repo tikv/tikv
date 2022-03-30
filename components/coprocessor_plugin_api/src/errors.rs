@@ -30,18 +30,18 @@ pub enum PluginError {
     ///
     /// If such an error appears, plugins can run some cleanup code and return early from the
     /// request. The error will be passed to the client and the client might retry the request.
-    Other(Box<dyn Any>),
+    Other(String, Box<dyn Any>),
 }
 
 impl fmt::Display for PluginError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PluginError::KeyNotInRegion { key, region_id, .. } => {
                 write!(f, "Key {:?} not found in region {:?}", key, region_id)
             }
             PluginError::Timeout(d) => write!(f, "timeout after {:?}", d),
             PluginError::Canceled => write!(f, "request canceled"),
-            PluginError::Other(e) => write!(f, "{:?}", e),
+            PluginError::Other(s, _) => write!(f, "{}", s),
         }
     }
 }

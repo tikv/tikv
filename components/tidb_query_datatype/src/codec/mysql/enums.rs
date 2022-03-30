@@ -162,7 +162,7 @@ impl<'a> PartialEq for EnumRef<'a> {
 
 impl<'a> Ord for EnumRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.value.cmp(&other.value)
+        self.value.cmp(other.value)
     }
 }
 
@@ -190,7 +190,7 @@ impl<'a> ToString for EnumRef<'a> {
 
 pub trait EnumEncoder: NumberEncoder {
     #[inline]
-    fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
+    fn write_enum_uint(&mut self, data: EnumRef<'_>) -> Result<()> {
         self.write_u64(*data.value)?;
         Ok(())
     }

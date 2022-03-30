@@ -1,15 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::raw;
-use crate::storage::raw::ttl::convert_to_expire_ts;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
+use api_version::{match_template_api_version, APIVersion, RawValue};
+use engine_traits::raw_ttl::ttl_to_expire_ts;
 use engine_traits::CfName;
+use kvproto::kvrpcpb::ApiVersion;
+use raw::RawStore;
+use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
 command! {
@@ -24,7 +29,8 @@ command! {
             key: Key,
             previous_value: Option<Value>,
             value: Value,
-            ttl: Option<u64>,
+            ttl: u64,
+            api_version: ApiVersion,
         }
 }
 
@@ -43,18 +49,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let expire_ts = self.ttl.map(convert_to_expire_ts);
-        let old_value = if expire_ts.is_some() {
-            raw::TTLSnapshot::from(snapshot).get_cf(cf, &key)?
-        } else {
-            snapshot.get_cf(cf, &key)?
-        };
+        let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
+            cf,
+            &key,
+            &mut Statistics::default(),
+        )?;
 
         let pr = if old_value == previous_value {
-            let mut m = Modify::Put(cf, key, value);
-            if let Some(ts) = expire_ts {
-                m.with_ttl(ts);
-            }
+            let raw_value = RawValue {
+                user_value: value,
+                expire_ts: ttl_to_expire_ts(self.ttl),
+                is_delete: false,
+            };
+            let encoded_raw_value = match_template_api_version!(
+                API,
+                match self.api_version {
+                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                }
+            );
+            let m = Modify::Put(cf, key, encoded_raw_value);
             data.push(m);
             ProcessResult::RawCompareAndSwapRes {
                 previous_value: old_value,
@@ -68,7 +81,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         };
         fail_point!("txn_commands_compare_and_swap");
         let rows = data.len();
-        let to_be_write = WriteData::from_modifies(data);
+        let mut to_be_write = WriteData::from_modifies(data);
+        to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -92,6 +106,12 @@ mod tests {
 
     #[test]
     fn test_cas_basic() {
+        test_cas_basic_impl(ApiVersion::V1);
+        test_cas_basic_impl(ApiVersion::V1ttl);
+        test_cas_basic_impl(ApiVersion::V2);
+    }
+
+    fn test_cas_basic_impl(api_version: ApiVersion) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"k";
@@ -101,7 +121,8 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             None,
             b"v1".to_vec(),
-            None,
+            0,
+            api_version,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -113,7 +134,8 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             None,
             b"v2".to_vec(),
-            None,
+            1,
+            api_version,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -125,7 +147,8 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             Some(b"v1".to_vec()),
             b"v3".to_vec(),
-            None,
+            2,
+            api_version,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();

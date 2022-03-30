@@ -5,28 +5,10 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "aws/protobuf-codec",
-  "cloud/protobuf-codec",
-  "encryption/protobuf-codec",
-  "error_code/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "file_system/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "aws/prost-codec",
-  "cloud/prost-codec",
-  "encryption/prost-codec",
-  "error_code/prost-codec",
-  "kvproto/prost-codec",
-  "file_system/prost-codec",
-  "tikv_util/prost-codec",
-]
+default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = ["aws"]
 cloud-gcp = []
+cloud-azure = []
 
 [dependencies]
 async-trait = "0.1"
@@ -36,9 +18,9 @@ derive_more = "0.99.3"
 encryption = { path = "../", default-features = false }
 error_code = { path = "../../error_code", default-features = false }
 file_system = { path = "../../file_system", default-features = false }
-kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 openssl = "0.10"
-protobuf = "2.8"
+protobuf = { version = "2.8", features = ["bytes"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

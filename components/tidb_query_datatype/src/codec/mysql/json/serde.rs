@@ -159,7 +159,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        if v > (std::i64::MAX as u64) {
+        if v > (i64::MAX as u64) {
             Ok(Json::from_f64(v as f64).map_err(de::Error::custom)?)
         } else {
             Ok(Json::from_i64(v as i64).map_err(de::Error::custom)?)

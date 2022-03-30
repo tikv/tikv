@@ -10,7 +10,8 @@ pub use self::reader::tests as reader_tests;
 pub use self::reader::{MvccReader, SnapshotReader};
 pub use self::scanner::test_util;
 pub use self::scanner::{
-    has_data_in_range, seek_for_valid_write, DeltaScanner, EntryScanner, Scanner, ScannerBuilder,
+    has_data_in_range, near_load_data_by_write, seek_for_valid_write, DeltaScanner, EntryScanner,
+    Scanner, ScannerBuilder,
 };
 
 use txn_types::{TimeStamp, Write, WriteType};

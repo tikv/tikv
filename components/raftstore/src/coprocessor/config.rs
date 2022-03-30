@@ -3,7 +3,8 @@
 use super::Result;
 use crate::store::SplitCheckTask;
 
-use engine_traits::{config as engine_config, PerfLevel};
+use engine_traits::perf_level_serde;
+use engine_traits::PerfLevel;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::{Deserialize, Serialize};
 
@@ -39,9 +40,15 @@ pub struct Config {
     #[online_config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
 
-    #[serde(with = "engine_config::perf_level_serde")]
+    #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub perf_level: PerfLevel,
+
+    // enable subsplit ranges (aka bucket) within the region
+    pub enable_region_bucket: bool,
+    pub region_bucket_size: ReadableSize,
+    // region size threshold for using approximate size instead of scan
+    pub region_size_threshold_for_approximate: ReadableSize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,6 +69,9 @@ pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
+pub const DEFAULT_LARGE_REGION_SIZE_THRESHOLD: ReadableSize = ReadableSize::mb(500);
+
 impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(SPLIT_SIZE_MB);
@@ -74,6 +84,9 @@ impl Default for Config {
             region_max_keys: SPLIT_KEYS / 2 * 3,
             consistency_check_method: ConsistencyCheckMethod::Mvcc,
             perf_level: PerfLevel::EnableCount,
+            enable_region_bucket: false,
+            region_bucket_size: DEFAULT_BUCKET_SIZE,
+            region_size_threshold_for_approximate: DEFAULT_LARGE_REGION_SIZE_THRESHOLD,
         }
     }
 }
@@ -93,6 +106,25 @@ impl Config {
                 self.region_max_keys,
                 self.region_split_keys
             ));
+        }
+        if self.enable_region_bucket {
+            if self.region_split_size.0 < self.region_bucket_size.0 {
+                return Err(box_err!(
+                    "region split size {} must >= region bucket size {}",
+                    self.region_split_size.0,
+                    self.region_bucket_size.0
+                ));
+            }
+            if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
+                return Err(box_err!(
+                    "large region threshold size {} must >= region bucket size {}",
+                    self.region_size_threshold_for_approximate.0,
+                    self.region_bucket_size.0
+                ));
+            }
+            if self.region_bucket_size.0 == 0 {
+                return Err(box_err!("region_bucket size cannot be 0."));
+            }
         }
         Ok(())
     }
@@ -136,5 +168,11 @@ mod tests {
         cfg.region_max_keys = 10;
         cfg.region_split_keys = 20;
         assert!(cfg.validate().is_err());
+
+        cfg = Config::default();
+        cfg.enable_region_bucket = false;
+        cfg.region_split_size = ReadableSize(20);
+        cfg.region_bucket_size = ReadableSize(30);
+        assert!(cfg.validate().is_ok());
     }
 }

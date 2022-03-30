@@ -3,7 +3,6 @@
 use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use kvproto::metapb::{Peer, Region};
@@ -11,11 +10,12 @@ use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
+use tikv::storage::Statistics;
 use tikv_util::worker::Scheduler;
 use tikv_util::{error, warn};
 
 use crate::endpoint::{Deregister, Task};
-use crate::old_value::{self, OldValueCache, OldValueReader};
+use crate::old_value::{self, OldValueCache};
 use crate::Error as CdcError;
 
 /// An Observer for CDC.
@@ -43,7 +43,7 @@ impl CdcObserver {
         }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
         // use 0 as the priority of the cmd observer. CDC should have a higher priority than
         // the `resolved-ts`'s cmd observer
         coprocessor_host
@@ -60,7 +60,7 @@ impl CdcObserver {
     /// Subscribe an region, the observer will sink events of the region into
     /// its scheduler.
     ///
-    /// Return pervious ObserveID if there is one.
+    /// Return previous ObserveID if there is one.
     pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
         self.observe_regions
             .write()
@@ -120,9 +120,11 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         // Create a snapshot here for preventing the old value was GC-ed.
         // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
         let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
-        let reader = OldValueReader::new(snapshot);
-        let get_old_value = move |key, query_ts, old_value_cache: &mut OldValueCache| {
-            old_value::get_old_value(&reader, key, query_ts, old_value_cache)
+        let get_old_value = move |key,
+                                  query_ts,
+                                  old_value_cache: &mut OldValueCache,
+                                  statistics: &mut Statistics| {
+            old_value::get_old_value(&snapshot, key, query_ts, old_value_cache, statistics)
         };
         if let Err(e) = self.sched.schedule(Task::MultiBatch {
             multi: cmd_batches,
@@ -136,12 +138,23 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
 }
 
 impl RoleObserver for CdcObserver {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
-        if role != StateRole::Leader {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
+        if role_change.state != StateRole::Leader {
             let region_id = ctx.region().get_id();
             if let Some(observe_id) = self.is_subscribed(region_id) {
+                let leader_id = if role_change.leader_id != raft::INVALID_ID {
+                    Some(role_change.leader_id)
+                } else if role_change.prev_lead_transferee == role_change.vote {
+                    Some(role_change.prev_lead_transferee)
+                } else {
+                    None
+                };
+                let leader = leader_id
+                    .and_then(|x| ctx.region().get_peers().iter().find(|p| p.id == x))
+                    .cloned();
+
                 // Unregister all downstreams.
-                let store_err = RaftStoreError::NotLeader(region_id, None);
+                let store_err = RaftStoreError::NotLeader(region_id, leader);
                 let deregister = Deregister::Delegate {
                     region_id,
                     observe_id,
@@ -185,6 +198,8 @@ mod tests {
     use super::*;
     use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
+    use raftstore::coprocessor::RoleChange;
+    use raftstore::store::util::new_peer;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
 
@@ -195,7 +210,7 @@ mod tests {
         let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
@@ -213,7 +228,7 @@ mod tests {
 
         // Stop observing cmd
         observe_info.cdc_id.stop_observing();
-        let mut cb = CmdBatch::new(&observe_info, Region::default());
+        let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
@@ -229,28 +244,73 @@ mod tests {
         // Does not send unsubscribed region events.
         let mut region = Region::default();
         region.set_id(1);
+        region.mut_peers().push(new_peer(2, 2));
+        region.mut_peers().push(new_peer(3, 3));
+
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveID::new();
         observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+
+        // NotLeader error should contains the new leader.
+        observer.on_role_change(
+            &mut ctx,
+            &RoleChange {
+                state: StateRole::Follower,
+                leader_id: 2,
+                prev_lead_transferee: raft::INVALID_ID,
+                vote: raft::INVALID_ID,
+            },
+        );
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::Deregister(Deregister::Delegate {
                 region_id,
                 observe_id,
-                ..
+                err,
             }) => {
                 assert_eq!(region_id, 1);
                 assert_eq!(observe_id, oid);
+                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(2, 2)));
+                match err {
+                    CdcError::Request(err) => assert_eq!(*err, store_err.into()),
+                    _ => panic!("unexpected err"),
+                }
+            }
+            _ => panic!("unexpected task"),
+        };
+
+        // NotLeader error should includes leader transferee.
+        observer.on_role_change(
+            &mut ctx,
+            &RoleChange {
+                state: StateRole::Follower,
+                leader_id: raft::INVALID_ID,
+                prev_lead_transferee: 3,
+                vote: 3,
+            },
+        );
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::Deregister(Deregister::Delegate {
+                region_id,
+                observe_id,
+                err,
+            }) => {
+                assert_eq!(region_id, 1);
+                assert_eq!(observe_id, oid);
+                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(3, 3)));
+                match err {
+                    CdcError::Request(err) => assert_eq!(*err, store_err.into()),
+                    _ => panic!("unexpected err"),
+                }
             }
             _ => panic!("unexpected task"),
         };
 
         // No event if it changes to leader.
-        observer.on_role_change(&mut ctx, StateRole::Leader);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // unsubscribed fail if observer id is different.
@@ -259,13 +319,13 @@ mod tests {
         // No event if it is unsubscribed.
         let oid_ = observer.unsubscribe_region(1, oid).unwrap();
         assert_eq!(oid_, oid);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // No event if it is unsubscribed.
         region.set_id(999);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, StateRole::Follower);
+        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
 }

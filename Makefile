@@ -59,6 +59,9 @@ endif
 ifeq ($(shell uname -p),arm)
 ROCKSDB_SYS_SSE=0
 endif
+ifeq ($(shell uname -p),arm64)
+ROCKSDB_SYS_SSE=0
+endif
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
@@ -75,17 +78,6 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
-ifeq ($(BCC_IOSNOOP),1)
-ENABLE_FEATURES += bcc-iosnoop
-endif
-
-# Use Prost instead of rust-protobuf to encode and decode protocol buffers.
-ifeq ($(PROST),1)
-ENABLE_FEATURES += prost-codec
-else
-ENABLE_FEATURES += protobuf-codec
-endif
-
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb
@@ -96,6 +88,7 @@ endif
 ifneq ($(NO_CLOUD),1)
 ENABLE_FEATURES += cloud-aws
 ENABLE_FEATURES += cloud-gcp
+ENABLE_FEATURES += cloud-azure
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -287,6 +280,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@./scripts/check-redact-log
+	@./scripts/check-docker-build
 	@./scripts/clippy-all
 
 pre-audit:
@@ -322,7 +316,7 @@ ctl:
 # Actually use make to track dependencies! This saves half a second.
 error_code_files := $(shell find $(PROJECT_DIR)/components/error_code/ -type f )
 etc/error_code.toml: $(error_code_files)
-	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
+	cargo run --manifest-path components/error_code/Cargo.toml
 
 error-code: etc/error_code.toml
 

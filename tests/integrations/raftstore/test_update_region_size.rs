@@ -25,21 +25,30 @@ fn test_update_region_size<T: Simulator>(cluster: &mut Cluster<T>) {
         .level0_file_num_compaction_trigger = 10;
     cluster.start().unwrap();
 
+    let batch_put = |cluster: &mut Cluster<T>, mut start, end| {
+        while start < end {
+            let next = std::cmp::min(end, start + 50);
+            let requests = (start..next)
+                .map(|i| {
+                    new_put_cmd(
+                        &format!("k{}", i).into_bytes(),
+                        &format!("value{}", i).into_bytes(),
+                    )
+                })
+                .collect();
+            cluster
+                .batch_put(&format!("k{}", start).into_bytes(), requests)
+                .unwrap();
+            start = next;
+        }
+    };
+
     for _ in 0..2 {
-        for i in 0..1000 {
-            let (k, v) = (format!("k{}", i), format!("value{}", i));
-            cluster.must_put(k.as_bytes(), v.as_bytes());
-        }
+        batch_put(cluster, 0, 1000);
         flush(cluster);
-        for i in 1000..2000 {
-            let (k, v) = (format!("k{}", i), format!("value{}", i));
-            cluster.must_put(k.as_bytes(), v.as_bytes());
-        }
+        batch_put(cluster, 1000, 2000);
         flush(cluster);
-        for i in 2000..3000 {
-            let (k, v) = (format!("k{}", i), format!("value{}", i));
-            cluster.must_put(k.as_bytes(), v.as_bytes());
-        }
+        batch_put(cluster, 2000, 3000);
         flush(cluster);
     }
 

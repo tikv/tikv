@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use byteorder::{BigEndian, ByteOrder};
 use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -9,7 +10,6 @@ use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
 
-#[cfg(not(feature = "prost-codec"))]
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
     match method {
         EncryptionMethod::Plaintext => DBEncryptionMethod::Plaintext,
@@ -30,33 +30,8 @@ pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -
     }
 }
 
-#[cfg(not(feature = "prost-codec"))]
 pub fn compat(method: EncryptionMethod) -> EncryptionMethod {
     method
-}
-
-#[cfg(feature = "prost-codec")]
-pub fn encryption_method_to_db_encryption_method(
-    method: i32, /* EncryptionMethod */
-) -> DBEncryptionMethod {
-    match method {
-        1/* EncryptionMethod::Plaintext */ => DBEncryptionMethod::Plaintext,
-        2/* EncryptionMethod::Aes128Ctr */ => DBEncryptionMethod::Aes128Ctr,
-        3/* EncryptionMethod::Aes192Ctr */ => DBEncryptionMethod::Aes192Ctr,
-        4/* EncryptionMethod::Aes256Ctr */ => DBEncryptionMethod::Aes256Ctr,
-        _/* EncryptionMethod::Unknown */ => DBEncryptionMethod::Unknown,
-    }
-}
-
-#[cfg(feature = "prost-codec")]
-pub fn compat(method: EncryptionMethod) -> i32 {
-    match method {
-        EncryptionMethod::Unknown => 0,
-        EncryptionMethod::Plaintext => 1,
-        EncryptionMethod::Aes128Ctr => 2,
-        EncryptionMethod::Aes192Ctr => 3,
-        EncryptionMethod::Aes256Ctr => 4,
-    }
 }
 
 pub fn get_method_key_length(method: EncryptionMethod) -> usize {
@@ -118,9 +93,20 @@ impl Iv {
             Iv::Gcm(iv) => iv,
         }
     }
+
+    pub fn add_offset(&mut self, offset: u64) -> Result<()> {
+        match self {
+            Iv::Ctr(iv) => {
+                let v = BigEndian::read_u128(iv);
+                BigEndian::write_u128(iv, v.wrapping_add(offset as u128));
+                Ok(())
+            }
+            Iv::Gcm(_) => Err(box_err!("offset addition is not supported for GCM mode")),
+        }
+    }
 }
 
-// The length GCM tag must be 16 btyes.
+// The length GCM tag must be 16 bytes.
 const GCM_TAG_LEN: usize = 16;
 
 pub struct AesGcmTag([u8; GCM_TAG_LEN]);
@@ -162,7 +148,7 @@ impl<'k> AesGcmCrypter<'k> {
             &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
-            &pt,
+            pt,
             &mut tag.0,
         )?;
         Ok((ciphertext, tag))
@@ -175,7 +161,7 @@ impl<'k> AesGcmCrypter<'k> {
             &self.key.0,
             Some(self.iv.as_slice()),
             &[], /* AAD */
-            &ct,
+            ct,
             &tag.0,
         )?;
         Ok(plaintext)

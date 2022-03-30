@@ -16,10 +16,12 @@ required-features = ["testexport"]
 
 [features]
 default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "test-raftstore-proxy"]
+default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure", "test-raftstore-proxy"]
 test-raftstore-proxy = ["raftstore/test-raftstore-proxy"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = [ "external_storage_export/cloud-aws" ]
 cloud-gcp = [ "external_storage_export/cloud-gcp" ]
+cloud-azure = [ "external_storage_export/cloud-azure" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 protobuf-codec = [
   "protobuf/bytes",
@@ -56,6 +58,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
 ]
+profiling = ["profiler/profiling"]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",
 ]
@@ -70,22 +73,24 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
-fail = "0.4"
+api_version = { path = "../components/api_version", default-features = false }
+fail = "0.5"
 batch-system = { path = "../components/batch-system", default-features = false }
 crc64fast = "0.1"
 crossbeam = "0.8"
 online_config = { path = "../components/online_config", default-features = false }
 encryption = { path = "../components/encryption", default-features = false }
 futures = "0.3"
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored"] }
-grpcio-health = { version = "0.9", default-features = false }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio-health = { version = "0.10", default-features = false }
 log_wrappers = { path = "../components/log_wrappers" }
-kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 paste = "1.0"
 pd_client = { path = "../components/pd_client", default-features = false }
-protobuf = "2.8"
+protobuf = { version = "2.8", features = ["bytes"] }
 more-asserts = "0.2"
-raft = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.8.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -96,11 +101,16 @@ tikv_util = { path = "../components/tikv_util", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 collections = { path = "../components/collections" }
 file_system = { path = "../components/file_system" }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
 toml = "0.5"
 txn_types = { path = "../components/txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 time = "0.1"
 mock-engine-store = { path = "../mock-engine-store", default-features = false }
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage

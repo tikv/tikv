@@ -54,15 +54,16 @@ fn test_region_meta_endpoint() {
         StatusServer::new(
             &*helperptr,
             1,
-            None,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             router.unwrap(),
+            std::env::temp_dir(),
         )
         .unwrap()
     };
+
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    assert!(status_server.start(addr.clone(), addr).is_ok());
+    assert!(status_server.start(addr).is_ok());
     let check_task = check(status_server.listening_addr(), region_id);
     let rt = tokio::runtime::Runtime::new().unwrap();
     if let Err(err) = rt.block_on(check_task) {

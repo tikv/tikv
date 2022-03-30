@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
@@ -16,7 +16,7 @@ use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -108,7 +108,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     } else {
                         TxnExtraOp::Noop
                     };
-                    let mut scanner = ScannerBuilder::new(snap, TimeStamp::max(), false)
+                    let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
                         .range(None, None)
                         .build_delta_scanner(task.checkpoint_ts, txn_extra_op)
                         .unwrap();
@@ -166,7 +166,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             }
             entries.push(ScanEntry::None);
-            RTS_SCAN_DURATION_HISTOGRAM.observe(start.elapsed().as_secs_f64());
+            RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
             (task.send_entries)(entries, apply_index);
         };
         self.workers.spawn(fut);
@@ -180,7 +180,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         for retry_times in 0..=GET_SNAPSHOT_RETRY_TIME {
             if retry_times != 0 {
                 if let Err(e) = GLOBAL_TIMER_HANDLE
-                    .delay(Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP)
+                    .delay(
+                        std::time::Instant::now() + retry_times * GET_SNAPSHOT_RETRY_BACKOFF_STEP,
+                    )
                     .compat()
                     .await
                 {

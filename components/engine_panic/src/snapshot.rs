@@ -46,10 +46,10 @@ impl Iterable for PanicSnapshot {
 pub struct PanicSnapshotIterator;
 
 impl Iterator for PanicSnapshotIterator {
-    fn seek(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
         panic!()
     }
 

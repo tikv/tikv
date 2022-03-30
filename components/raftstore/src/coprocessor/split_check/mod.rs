@@ -85,8 +85,37 @@ impl<'a, E> Host<'a, E> {
         Ok(vec![])
     }
 
+    pub fn approximate_bucket_keys<Kv: engine_traits::KvEngine>(
+        &mut self,
+        region: &Region,
+        engine: &Kv,
+    ) -> Result<Vec<Vec<u8>>> {
+        let region_size = get_region_approximate_size(engine, region, 0)?;
+        const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
+        if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
+            let mut bucket_checker = size::Checker::new(
+                self.cfg.region_bucket_size.0, /* not used */
+                self.cfg.region_bucket_size.0, /* not used */
+                region_size / self.cfg.region_bucket_size.0,
+                CheckPolicy::Approximate,
+            );
+            return bucket_checker.approximate_split_keys(region, engine);
+        }
+        Ok(vec![])
+    }
+
     #[inline]
     pub fn add_checker(&mut self, checker: Box<dyn SplitChecker<E>>) {
         self.checkers.push(checker);
+    }
+
+    #[inline]
+    pub fn enable_region_bucket(&self) -> bool {
+        self.cfg.enable_region_bucket
+    }
+
+    #[inline]
+    pub fn region_bucket_size(&self) -> u64 {
+        self.cfg.region_bucket_size.0
     }
 }

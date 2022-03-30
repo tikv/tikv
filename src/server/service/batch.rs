@@ -1,8 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::metrics::GRPC_MSG_HISTOGRAM_STATIC;
-use crate::server::metrics::REQUEST_BATCH_SIZE_HISTOGRAM_VEC;
-use crate::server::service::kv::batch_commands_response;
+// #[PerformanceCriticalPath]
+use crate::server::metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC};
+use crate::server::service::kv::{
+    batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse,
+};
 use crate::storage::kv::{PerfStatisticsDelta, Statistics};
 use crate::storage::{
     errors::{extract_key_error, extract_region_error},
@@ -63,7 +65,7 @@ impl ReqBatcher {
     pub fn maybe_commit<E: Engine, L: LockManager>(
         &mut self,
         storage: &Storage<E, L>,
-        tx: &Sender<(u64, batch_commands_response::Response)>,
+        tx: &Sender<MeasuredSingleResponse>,
     ) {
         if self.gets.len() >= self.batch_size {
             let gets = std::mem::take(&mut self.gets);
@@ -81,7 +83,7 @@ impl ReqBatcher {
     pub fn commit<E: Engine, L: LockManager>(
         self,
         storage: &Storage<E, L>,
-        tx: &Sender<(u64, batch_commands_response::Response)>,
+        tx: &Sender<MeasuredSingleResponse>,
     ) {
         if !self.gets.is_empty() {
             future_batch_get_command(
@@ -135,13 +137,18 @@ impl BatcherBuilder {
 }
 
 pub struct GetCommandResponseConsumer {
-    tx: Sender<(u64, batch_commands_response::Response)>,
+    tx: Sender<MeasuredSingleResponse>,
 }
 
 impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
     for GetCommandResponseConsumer
 {
-    fn consume(&self, id: u64, res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>) {
+    fn consume(
+        &self,
+        id: u64,
+        res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        begin: Instant,
+    ) {
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
@@ -164,14 +171,16 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>
             cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
             ..Default::default()
         };
-        if self.tx.send_and_notify((id, res)).is_err() {
+        let mesure = GrpcRequestDuration::new(begin, GrpcTypeKind::kv_batch_get_command);
+        let task = MeasuredSingleResponse::new(id, res, mesure);
+        if self.tx.send_and_notify(task).is_err() {
             error!("KvService response batch commands fail");
         }
     }
 }
 
 impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
-    fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>) {
+    fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, begin: Instant) {
         let mut resp = RawGetResponse::default();
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
@@ -186,7 +195,9 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
             cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
             ..Default::default()
         };
-        if self.tx.send_and_notify((id, res)).is_err() {
+        let mesure = GrpcRequestDuration::new(begin, GrpcTypeKind::raw_batch_get_command);
+        let task = MeasuredSingleResponse::new(id, res, mesure);
+        if self.tx.send_and_notify(task).is_err() {
             error!("KvService response batch commands fail");
         }
     }
@@ -196,7 +207,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
+    tx: Sender<MeasuredSingleResponse>,
     begin_instant: tikv_util::time::Instant,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
@@ -207,6 +218,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
         gets,
         requests,
         GetCommandResponseConsumer { tx: tx.clone() },
+        begin_instant,
     );
     let f = async move {
         // This error can only cause by readpool busy.
@@ -219,14 +231,14 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                     cmd: Some(batch_commands_response::response::Cmd::Get(resp.clone())),
                     ..Default::default()
                 };
-                if tx.send_and_notify((id, res)).is_err() {
+                let measure =
+                    GrpcRequestDuration::new(begin_instant, GrpcTypeKind::kv_batch_get_command);
+                let task = MeasuredSingleResponse::new(id, res, measure);
+                if tx.send_and_notify(task).is_err() {
                     error!("KvService response batch commands fail");
                 }
             }
         }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .kv_batch_get_command
-            .observe(begin_instant.elapsed_secs());
     };
     poll_future_notify(f);
 }
@@ -235,7 +247,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
+    tx: Sender<MeasuredSingleResponse>,
     begin_instant: tikv_util::time::Instant,
 ) {
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
@@ -258,14 +270,14 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                     cmd: Some(batch_commands_response::response::Cmd::RawGet(resp.clone())),
                     ..Default::default()
                 };
-                if tx.send_and_notify((id, res)).is_err() {
+                let measure =
+                    GrpcRequestDuration::new(begin_instant, GrpcTypeKind::raw_batch_get_command);
+                let task = MeasuredSingleResponse::new(id, res, measure);
+                if tx.send_and_notify(task).is_err() {
                     error!("KvService response batch commands fail");
                 }
             }
         }
-        GRPC_MSG_HISTOGRAM_STATIC
-            .raw_batch_get_command
-            .observe(begin_instant.elapsed_secs());
     };
     poll_future_notify(f);
 }

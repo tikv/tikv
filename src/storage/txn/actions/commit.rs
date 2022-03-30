@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
@@ -276,6 +277,9 @@ pub mod tests {
             1,
             ts(60, 1),
             TimeStamp::zero(),
+            false,
+            kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);

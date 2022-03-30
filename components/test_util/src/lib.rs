@@ -14,8 +14,8 @@ mod runner;
 mod security;
 
 use rand::Rng;
-use std::env;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::{env, thread};
 
 pub use crate::encryption::*;
 pub use crate::kv_generator::*;
@@ -27,6 +27,14 @@ pub use crate::runner::{
 pub use crate::security::*;
 
 pub fn setup_for_ci() {
+    // We use backtrace in tests to record suspicious problems. And loading backtrace
+    // the first time can take several seconds. Spawning a thread and load it ahead
+    // of time to avoid causing timeout.
+    thread::Builder::new()
+        .name(tikv_util::thd_name!("backtrace-loader"))
+        .spawn(::backtrace::Backtrace::new)
+        .unwrap();
+
     if env::var("CI").is_ok() {
         // HACK! Use `epollex` as the polling engine for gRPC when running CI tests on
         // Linux and it hasn't been set before.
@@ -85,5 +93,25 @@ pub fn alloc_port() -> u16 {
             Ok(_) => return next,
             Err(e) => p = e,
         }
+    }
+}
+
+static MEM_DISK: &str = "TIKV_TEST_MEMORY_DISK_MOUNT_POINT";
+
+/// Gets a temporary path. The directory will be removed when dropped.
+///
+/// The returned path will point to memory only when memory disk is available
+/// and specified.
+pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    if let Some(prefix) = prefix.into() {
+        builder.prefix(prefix);
+    }
+    match env::var(MEM_DISK) {
+        Ok(dir) if prefer_mem => {
+            debug!("using memory disk"; "path" => %dir);
+            builder.tempdir_in(dir).unwrap()
+        }
+        _ => builder.tempdir().unwrap(),
     }
 }

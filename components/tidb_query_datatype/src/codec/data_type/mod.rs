@@ -76,7 +76,7 @@ impl AsMySQLBool for Real {
 impl<'a, T: AsMySQLBool> AsMySQLBool for &'a T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        (&**self).as_mysql_bool(context)
+        (**self).as_mysql_bool(context)
     }
 }
 
@@ -300,7 +300,7 @@ impl Evaluable for Int {
     }
 
     #[inline]
-    fn borrow_scalar_value_ref(v: ScalarValueRef) -> Option<&Self> {
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'_>) -> Option<&Self> {
         match v {
             ScalarValueRef::Int(x) => x,
             ScalarValueRef::Enum(x) => {
@@ -407,7 +407,7 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
 
     #[inline]
     fn from_owned_value(value: &'a T) -> Self {
-        &value
+        value
     }
 }
 

@@ -5,28 +5,6 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "encryption/protobuf-codec",
-  "engine_traits/protobuf-codec",
-  "keys/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "raft/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-  "file_system/protobuf-codec",
-]
-prost-codec = [
-  "encryption/prost-codec",
-  "engine_traits/prost-codec",
-  "keys/prost-codec",
-  "kvproto/prost-codec",
-  "raft/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-  "file_system/prost-codec",
-]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
@@ -45,12 +23,13 @@ failpoints = ["fail/failpoints"]
 nortcheck = []
 
 [dependencies]
+api_version = { path = "../api_version", default-features = false }
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 keys = { path = "../keys", default-features = false }
 num_cpus = "1"
-prometheus = { version = "0.12", features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
@@ -65,15 +44,16 @@ online_config = { path = "../online_config" }
 tempfile = "3.0"
 serde = "1.0"
 serde_derive = "1.0"
-kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
-raft = { version = "0.6.0-alpha", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 protobuf = "2"
-fail = "0.4"
+fail = "0.5"
+case_macros = { path = "../case_macros" }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-features = ["encryption", "static_libcpp"]
+features = ["encryption"]
 
 [dev-dependencies]
 rand = "0.8"

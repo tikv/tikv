@@ -1,9 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::option::Option;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fmt, u64};
 
@@ -429,6 +430,7 @@ pub struct Lease {
     max_lease: Duration,
 
     max_drift: Duration,
+    advance_renew_lease: Duration,
     last_update: Timespec,
     remote: Option<RemoteLease>,
 }
@@ -444,12 +446,13 @@ pub enum LeaseState {
 }
 
 impl Lease {
-    pub fn new(max_lease: Duration) -> Lease {
+    pub fn new(max_lease: Duration, advance_renew_lease: Duration) -> Lease {
         Lease {
             bound: None,
             max_lease,
 
             max_drift: max_lease / 3,
+            advance_renew_lease,
             last_update: Timespec::new(0, 0),
             remote: None,
         }
@@ -493,6 +496,10 @@ impl Lease {
         self.expire_remote_lease();
         let bound = self.next_expired_time(send_ts);
         self.bound = Some(Either::Left(bound));
+    }
+
+    pub fn is_suspect(&self) -> bool {
+        matches!(self.bound, Some(Either::Left(_)))
     }
 
     /// Inspect the lease state for the ts or now.
@@ -540,12 +547,31 @@ impl Lease {
         };
         let remote = RemoteLease {
             expired_time: Arc::new(AtomicU64::new(expired_time)),
+            renewing: Arc::new(AtomicBool::new(false)),
             term,
+            advance_renew_lease: self.advance_renew_lease,
         };
         // Clone the remote.
         let remote_clone = remote.clone();
         self.remote = Some(remote);
         Some(remote_clone)
+    }
+
+    /// Check if the lease will be expired in near future, if so return a
+    /// future timestamp in which the lease will be expired, if not `None`
+    /// will return
+    pub fn need_renew(&self, ts: Timespec) -> Option<Timespec> {
+        let future_ts = ts + self.advance_renew_lease;
+        match self.bound {
+            Some(Either::Right(bound)) => {
+                if future_ts < bound {
+                    None
+                } else {
+                    Some(future_ts)
+                }
+            }
+            None | Some(Either::Left(_)) => Some(future_ts),
+        }
     }
 }
 
@@ -566,6 +592,8 @@ impl fmt::Debug for Lease {
 #[derive(Clone)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
+    renewing: Arc<AtomicBool>,
+    advance_renew_lease: Duration,
     term: u64,
 }
 
@@ -582,6 +610,12 @@ impl RemoteLease {
     fn renew(&self, bound: Timespec) {
         self.expired_time
             .store(timespec_to_u64(bound), AtomicOrdering::Release);
+        self.renewing.store(false, AtomicOrdering::Release);
+    }
+
+    pub fn need_renew(&self, ts: Timespec) -> bool {
+        self.inspect(Some(ts + self.advance_renew_lease)) == LeaseState::Expired
+            && !self.renewing.swap(true, AtomicOrdering::Relaxed)
     }
 
     fn expire(&self) {
@@ -835,7 +869,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
 pub struct MsgType<'a>(pub &'a RaftMessage);
 
 impl Display for MsgType<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.0.has_extra_msg() {
             write!(f, "{:?}", self.0.get_message().get_msg_type())
         } else {
@@ -923,12 +957,18 @@ impl RegionReadProgressRegistry {
     }
 }
 
+impl Default for RegionReadProgressRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// `RegionReadProgress` is used to keep track of the replica's `safe_ts`, the replica can handle a read
 /// request directly without requiring leader lease or read index iff `safe_ts` >= `read_ts` (the `read_ts`
 /// is usually stale i.e seconds ago).
 ///
 /// `safe_ts` is updated by the `(apply index, safe ts)` item:
-/// ```
+/// ```ignore
 /// if self.applied_index >= item.apply_index {
 ///     self.safe_ts = max(self.safe_ts, item.safe_ts)
 /// }
@@ -1016,7 +1056,7 @@ impl RegionReadProgress {
     }
 
     // Dump the `LeaderInfo` and the peer list
-    fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
+    pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
         let mut leader_info = LeaderInfo::default();
         let core = self.core.lock().unwrap();
         let read_state = {
@@ -1235,6 +1275,68 @@ impl RegionReadProgressCore {
     }
 }
 
+/// Represent the duration of all stages of raftstore recorded by one inspecting.
+#[derive(Default, Debug)]
+pub struct RaftstoreDuration {
+    pub store_wait_duration: Option<std::time::Duration>,
+    pub store_process_duration: Option<std::time::Duration>,
+    pub store_write_duration: Option<std::time::Duration>,
+    pub apply_wait_duration: Option<std::time::Duration>,
+    pub apply_process_duration: Option<std::time::Duration>,
+}
+
+impl RaftstoreDuration {
+    pub fn sum(&self) -> std::time::Duration {
+        self.store_wait_duration.unwrap_or_default()
+            + self.store_process_duration.unwrap_or_default()
+            + self.store_write_duration.unwrap_or_default()
+            + self.apply_wait_duration.unwrap_or_default()
+            + self.apply_process_duration.unwrap_or_default()
+    }
+}
+
+/// Used to inspect the latency of all stages of raftstore.
+pub struct LatencyInspector {
+    id: u64,
+    duration: RaftstoreDuration,
+    cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
+}
+
+impl LatencyInspector {
+    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>) -> Self {
+        Self {
+            id,
+            cb,
+            duration: RaftstoreDuration::default(),
+        }
+    }
+
+    pub fn record_store_wait(&mut self, duration: std::time::Duration) {
+        self.duration.store_wait_duration = Some(duration);
+    }
+
+    pub fn record_store_process(&mut self, duration: std::time::Duration) {
+        self.duration.store_process_duration = Some(duration);
+    }
+
+    pub fn record_store_write(&mut self, duration: std::time::Duration) {
+        self.duration.store_write_duration = Some(duration);
+    }
+
+    pub fn record_apply_wait(&mut self, duration: std::time::Duration) {
+        self.duration.apply_wait_duration = Some(duration);
+    }
+
+    pub fn record_apply_process(&mut self, duration: std::time::Duration) {
+        self.duration.apply_process_duration = Some(duration);
+    }
+
+    /// Call the callback.
+    pub fn finish(self) {
+        (self.cb)(self.id, self.duration);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -1269,7 +1371,7 @@ mod tests {
         let duration = TimeDuration::milliseconds(1500);
 
         // Empty lease.
-        let mut lease = Lease::new(duration);
+        let mut lease = Lease::new(duration, duration / 4);
         let remote = lease.maybe_new_remote_lease(1).unwrap();
         let inspect_test = |lease: &Lease, ts: Option<Timespec>, state: LeaseState| {
             assert_eq!(lease.inspect(ts), state);

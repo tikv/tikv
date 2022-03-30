@@ -5,6 +5,7 @@ extern crate tikv_alloc;
 mod client;
 mod feature_gate;
 pub mod metrics;
+mod tso;
 mod util;
 
 mod config;
@@ -15,15 +16,22 @@ pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
 pub use self::util::PdConnector;
 pub use self::util::REQUEST_RECONNECT_INTERVAL;
+pub use self::util::{merge_bucket_stats, new_bucket_stats};
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use grpcio::ClientSStreamReceiver;
 use kvproto::metapb;
 use kvproto::pdpb;
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
-use pdpb::QueryStats;
-use tikv_util::time::UnixSecs;
+use kvproto::replication_modepb::{
+    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+};
+use pdpb::{QueryStats, WatchGlobalConfigResponse};
+use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub type Key = Vec<u8>;
@@ -41,6 +49,9 @@ pub struct RegionStat {
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: UnixSecs,
+    // cpu_usage is the CPU time usage of the leader region since the last heartbeat,
+    // which is calculated by cpu_time_delta/heartbeat_reported_interval.
+    pub cpu_usage: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +74,83 @@ impl Deref for RegionInfo {
     }
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct BucketMeta {
+    pub region_id: u64,
+    pub version: u64,
+    pub region_epoch: metapb::RegionEpoch,
+    pub keys: Vec<Vec<u8>>,
+}
+
+impl Eq for BucketMeta {}
+
+impl PartialEq for BucketMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.region_id == other.region_id
+            && self.region_epoch.get_version() == other.region_epoch.get_version()
+            && self.version == other.version
+    }
+}
+
+impl PartialOrd for BucketMeta {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BucketMeta {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self
+            .region_epoch
+            .get_version()
+            .cmp(&other.region_epoch.get_version())
+        {
+            Ordering::Equal => self.version.cmp(&other.version),
+            ord => ord,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BucketStat {
+    pub meta: Arc<BucketMeta>,
+    pub stats: metapb::BucketStats,
+    pub last_report_time: Instant,
+}
+
+impl Default for BucketStat {
+    fn default() -> Self {
+        Self {
+            last_report_time: Instant::now(),
+            meta: Arc::default(),
+            stats: metapb::BucketStats::default(),
+        }
+    }
+}
+
+impl BucketStat {
+    pub fn new(meta: Arc<BucketMeta>, stats: metapb::BucketStats) -> Self {
+        Self {
+            meta,
+            stats,
+            last_report_time: Instant::now(),
+        }
+    }
+
+    pub fn write_key(&mut self, key: &[u8], value_size: u64) {
+        let idx = match util::find_bucket_index(key, &self.meta.keys) {
+            Some(idx) => idx,
+            None => return,
+        };
+        if let Some(keys) = self.stats.mut_write_keys().get_mut(idx) {
+            *keys += 1;
+        }
+        if let Some(bytes) = self.stats.mut_write_bytes().get_mut(idx) {
+            *bytes += key.len() as u64 + value_size;
+        }
+    }
+}
+
 pub const INVALID_ID: u64 = 0;
 
 /// PdClient communicates with Placement Driver (PD).
@@ -71,6 +159,21 @@ pub const INVALID_ID: u64 = 0;
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
 pub trait PdClient: Send + Sync {
+    /// Load a list of GlobalConfig
+    fn load_global_config(&self, _list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+        unimplemented!();
+    }
+
+    /// Store a list of GlobalConfig
+    fn store_global_config(&self, _list: HashMap<String, String>) -> PdFuture<()> {
+        unimplemented!();
+    }
+
+    /// Watching change of GlobalConfig
+    fn watch_global_config(&self) -> Result<ClientSStreamReceiver<WatchGlobalConfigResponse>> {
+        unimplemented!();
+    }
+
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
@@ -214,7 +317,12 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+    fn store_heartbeat(
+        &self,
+        _stats: pdpb::StoreStats,
+        _report: Option<pdpb::StoreReport>,
+        _status: Option<StoreDrAutoSyncStatus>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
 
@@ -258,6 +366,11 @@ pub trait PdClient: Send + Sync {
 
     /// Gets the internal `FeatureGate`.
     fn feature_gate(&self) -> &FeatureGate {
+        unimplemented!()
+    }
+
+    // Report min resolved_ts to PD.
+    fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
         unimplemented!()
     }
 }

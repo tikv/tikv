@@ -2,7 +2,7 @@
 
 use crate::request::{restore_receiver, write_receiver};
 use anyhow::Context;
-use kvproto::backup as proto;
+use kvproto::brpb as proto;
 use lazy_static::lazy_static;
 use once_cell::sync::OnceCell;
 use protobuf::{self};
@@ -10,10 +10,7 @@ use slog_global::{error, info};
 use std::sync::Mutex;
 use tokio::runtime::{Builder, Runtime};
 
-#[cfg(feature = "prost-codec")]
-pub use kvproto::backup::storage_backend::Backend;
-#[cfg(feature = "protobuf-codec")]
-pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
+pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 lazy_static! {

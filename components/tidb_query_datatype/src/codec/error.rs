@@ -26,6 +26,7 @@ pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
 pub const ERR_INCORRECT_PARAMETERS: i32 = 1583;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
+pub const ERR_CANNOT_CONVERT_STRING: i32 = 3854;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -95,6 +96,11 @@ impl Error {
         } else {
             Error::Eval(msg, ERR_DATA_TOO_LONG)
         }
+    }
+
+    pub fn cannot_convert_string(charset: &str) -> Error {
+        let msg = format!("cannot convert string from binary to {}", charset);
+        Error::Eval(msg, ERR_CANNOT_CONVERT_STRING)
     }
 
     pub fn code(&self) -> i32 {

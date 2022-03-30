@@ -24,11 +24,24 @@ lazy_static! {
         exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref IMPORT_WRITE_CHUNK_DURATION: Histogram = register_histogram!(
-        "tikv_import_write_chunk_duration",
-        "Bucketed histogram of import write chunk duration",
+    pub static ref IMPORT_LOCAL_WRITE_CHUNK_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_import_local_write_chunk_duration",
+        "Bucketed histogram of local backend write chunk duration",
+        &["type"],
         // Start from 10ms.
         exponential_buckets(0.01, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_LOCAL_WRITE_BYTES_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_local_write_bytes",
+        "Number of bytes written from local backend",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref IMPORT_LOCAL_WRITE_KEYS_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_local_write_keys",
+        "Number of keys written from local backend",
+        &["type"]
     )
     .unwrap();
     pub static ref IMPORTER_DOWNLOAD_DURATION: HistogramVec = register_histogram_vec!(

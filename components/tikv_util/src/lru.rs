@@ -69,7 +69,7 @@ impl<K> Trace<K> {
     fn promote(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
             cut_out(record.as_mut());
-            suture(record.as_mut(), &mut self.head.next.as_mut());
+            suture(record.as_mut(), self.head.next.as_mut());
             suture(&mut self.head, record.as_mut());
         }
     }
@@ -139,6 +139,7 @@ pub trait SizePolicy<K, V> {
     fn on_reset(&mut self, val: usize);
 }
 
+#[derive(Default)]
 pub struct CountTracker(usize);
 
 impl<K, V> SizePolicy<K, V> for CountTracker {
@@ -156,12 +157,6 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
 
     fn on_reset(&mut self, val: usize) {
         self.0 = val;
-    }
-}
-
-impl Default for CountTracker {
-    fn default() -> Self {
-        Self(0)
     }
 }
 
@@ -222,22 +217,6 @@ where
 
     pub fn with_capacity_and_sample(capacity: usize, sample_mask: usize) -> LruCache<K, V> {
         Self::with_capacity_sample_and_trace(capacity, sample_mask, CountTracker::default())
-    }
-
-    #[inline]
-    pub fn resize(&mut self, mut new_cap: usize) {
-        if new_cap == 0 {
-            new_cap = 1;
-        }
-        if new_cap < self.capacity && self.map.len() > new_cap {
-            for _ in new_cap..self.map.len() {
-                let key = self.trace.remove_tail();
-                let entry = self.map.remove(&key).unwrap();
-                self.size_policy.on_remove(&key, &entry.value);
-            }
-            self.map.shrink_to_fit();
-        }
-        self.capacity = new_cap;
     }
 }
 
@@ -311,7 +290,7 @@ where
         }
     }
 
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             base: self.map.iter(),
         }
@@ -323,6 +302,22 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    #[inline]
+    pub fn resize(&mut self, mut new_cap: usize) {
+        if new_cap == 0 {
+            new_cap = 1;
+        }
+        if new_cap < self.capacity && self.size() > new_cap {
+            while self.size() > new_cap {
+                let key = self.trace.remove_tail();
+                let entry = self.map.remove(&key).unwrap();
+                self.size_policy.on_remove(&key, &entry.value);
+            }
+            self.map.shrink_to_fit();
+        }
+        self.capacity = new_cap;
     }
 }
 
@@ -343,7 +338,7 @@ where
     }
 }
 
-pub struct Iter<'a, K: 'a, V: 'a> {
+pub struct Iter<'a, K, V> {
     base: std::collections::hash_map::Iter<'a, K, ValueEntry<K, V>>,
 }
 

@@ -4,16 +4,18 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 
 use collections::HashMap;
-use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
+use test_storage::SyncTestStorage;
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::EvalContext;
+use tikv::server::gc_worker::GcConfig;
+use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    kv::{Engine, RocksEngine, TestEngineBuilder},
+    kv::{Engine, RocksEngine},
     txn::FixtureStore,
-    SnapshotStore,
+    SnapshotStore, Storage, TestStorageBuilder,
 };
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -32,6 +34,7 @@ impl<'a, E: Engine> Insert<'a, E> {
         }
     }
 
+    #[must_use]
     pub fn set(mut self, col: &Column, value: Datum) -> Self {
         assert!(self.table.column_by_id(col.id).is_some());
         self.values.insert(col.id, value);
@@ -110,18 +113,31 @@ pub struct Store<E: Engine> {
 
 impl Store<RocksEngine> {
     pub fn new() -> Self {
-        Self::from_engine(TestEngineBuilder::new().build().unwrap())
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+            .build()
+            .unwrap();
+        Self::from_storage(storage)
+    }
+}
+
+impl Default for Store<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl<E: Engine> Store<E> {
-    pub fn from_engine(engine: E) -> Self {
+    pub fn from_storage(storage: Storage<E, DummyLockManager>) -> Self {
         Self {
-            store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
+            store: SyncTestStorage::from_storage(storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
+    }
+
+    pub fn current_ts(&self) -> TimeStamp {
+        self.current_ts
     }
 
     pub fn begin(&mut self) {
@@ -134,7 +150,7 @@ impl<E: Engine> Store<E> {
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
-            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
+            .map(|(k, v)| Mutation::make_put(Key::from_raw(&k), v))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
@@ -148,7 +164,7 @@ impl<E: Engine> Store<E> {
         let pk = keys[0].clone();
         let mutations = keys
             .drain(..)
-            .map(|k| Mutation::Delete(Key::from_raw(&k)))
+            .map(|k| Mutation::make_delete(Key::from_raw(&k)))
             .collect();
         self.store
             .prewrite(ctx, mutations, pk, self.current_ts)
@@ -176,6 +192,10 @@ impl<E: Engine> Store<E> {
 
     pub fn get_engine(&self) -> E {
         self.store.get_engine()
+    }
+
+    pub fn get_storage(&self) -> SyncTestStorage<E> {
+        self.store.clone()
     }
 
     /// Strip off committed MVCC information to get a final data view.
@@ -207,6 +227,7 @@ impl<E: Engine> Store<E> {
             self.last_committed_ts,
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         )

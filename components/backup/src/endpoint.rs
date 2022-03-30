@@ -1,23 +1,25 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
-use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
-use std::sync::*;
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{borrow::Cow, time::*};
 
+use async_channel::SendError;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, SstCompressionType};
+use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
-use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
-use kvproto::backup::*;
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::brpb::*;
+use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
+
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
@@ -28,17 +30,16 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
-use tikv_util::time::Limiter;
+use tikv_util::time::{Instant, Limiter};
 use tikv_util::worker::Runnable;
-use tikv_util::{
-    box_err, debug, defer, error, error_unknown, impl_display_as_debug, info, thd_name, warn,
-};
+use tikv_util::{box_err, debug, error, error_unknown, impl_display_as_debug, info, warn};
+use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
-use yatp::task::callback::{Handle, TaskCell};
-use yatp::ThreadPool;
 
 use crate::metrics::*;
-use crate::writer::BackupWriterBuilder;
+use crate::softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu};
+use crate::utils::ControlThreadPool;
+use crate::writer::{BackupWriterBuilder, CfNameWrap};
 use crate::Error;
 use crate::*;
 
@@ -57,6 +58,7 @@ struct Request {
     cf: CfName,
     compression_type: CompressionType,
     compression_level: i32,
+    cipher: CipherInfo,
 }
 
 /// Backup Task.
@@ -83,12 +85,6 @@ impl fmt::Debug for Task {
     }
 }
 
-#[derive(Clone)]
-struct LimitedStorage {
-    limiter: Limiter,
-    storage: Arc<dyn ExternalStorage>,
-}
-
 impl Task {
     /// Create a backup task based on the given backup request.
     pub fn new(
@@ -101,7 +97,7 @@ impl Task {
         let limiter = Limiter::new(if speed_limit > 0 {
             speed_limit as f64
         } else {
-            INFINITY
+            f64::INFINITY
         });
         let cf = name_to_cf(req.get_cf()).ok_or_else(|| crate::Error::InvalidCf {
             cf: req.get_cf().to_owned(),
@@ -120,6 +116,11 @@ impl Task {
                 cf,
                 compression_type: req.get_compression_type(),
                 compression_level: req.get_compression_level(),
+                cipher: req.cipher_info.unwrap_or_else(|| {
+                    let mut cipher = CipherInfo::default();
+                    cipher.set_cipher_type(EncryptionMethod::Plaintext);
+                    cipher
+                }),
             },
             resp,
         };
@@ -142,17 +143,129 @@ pub struct BackupRange {
     cf: CfName,
 }
 
+/// The generic saveable writer. for generic `InMemBackupFiles`.
+/// Maybe what we really need is make Writer a trait...
+enum KvWriter {
+    Txn(BackupWriter),
+    Raw(BackupRawKVWriter),
+}
+
+impl std::fmt::Debug for KvWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Txn(_) => f.debug_tuple("Txn").finish(),
+            Self::Raw(_) => f.debug_tuple("Raw").finish(),
+        }
+    }
+}
+
+impl KvWriter {
+    async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+        match self {
+            Self::Txn(writer) => writer.save(storage).await,
+            Self::Raw(writer) => writer.save(storage).await,
+        }
+    }
+
+    fn need_flush_keys(&self) -> bool {
+        match self {
+            Self::Txn(writer) => writer.need_flush_keys(),
+            Self::Raw(_) => true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct InMemBackupFiles {
+    files: KvWriter,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    start_version: TimeStamp,
+    end_version: TimeStamp,
+    region: Region,
+}
+
+async fn save_backup_file_worker(
+    rx: async_channel::Receiver<InMemBackupFiles>,
+    tx: UnboundedSender<BackupResponse>,
+    storage: Arc<dyn ExternalStorage>,
+    api_version: ApiVersion,
+) {
+    while let Ok(msg) = rx.recv().await {
+        let files = if msg.files.need_flush_keys() {
+            match msg.files.save(&storage).await {
+                Ok(mut split_files) => {
+                    for file in split_files.iter_mut() {
+                        file.set_start_key(msg.start_key.clone());
+                        file.set_end_key(msg.end_key.clone());
+                        file.set_start_version(msg.start_version.into_inner());
+                        file.set_end_version(msg.end_version.into_inner());
+                    }
+                    Ok(split_files)
+                }
+                Err(e) => {
+                    error_unknown!(?e; "backup save file failed");
+                    Err(e)
+                }
+            }
+        } else {
+            Ok(vec![])
+        };
+        let mut response = BackupResponse::default();
+        match files {
+            Err(e) => {
+                error_unknown!(?e; "backup region failed";
+                    "region" => ?msg.region,
+                    "start_key" => &log_wrappers::Value::key(&msg.start_key),
+                    "end_key" => &log_wrappers::Value::key(&msg.end_key),
+                );
+                response.set_error(e.into());
+            }
+            Ok(files) => {
+                response.set_files(files.into());
+            }
+        }
+        response.set_start_key(msg.start_key.clone());
+        response.set_end_key(msg.end_key.clone());
+        response.set_api_version(api_version);
+        if let Err(e) = tx.unbounded_send(response) {
+            error_unknown!(?e; "backup failed to send response"; "region" => ?msg.region,
+            "start_key" => &log_wrappers::Value::key(&msg.start_key),
+            "end_key" => &log_wrappers::Value::key(&msg.end_key),);
+            if e.is_disconnected() {
+                return;
+            }
+        }
+    }
+}
+
+/// Send the save task to the save worker.
+/// Record the wait time at the same time.
+async fn send_to_worker_with_metrics(
+    tx: &async_channel::Sender<InMemBackupFiles>,
+    files: InMemBackupFiles,
+) -> std::result::Result<(), SendError<InMemBackupFiles>> {
+    let files = match tx.try_send(files) {
+        Ok(_) => return Ok(()),
+        Err(e) => e.into_inner(),
+    };
+    let begin = Instant::now();
+    tx.send(files).await?;
+    BACKUP_SCAN_WAIT_FOR_WRITER_HISTOGRAM.observe(begin.saturating_elapsed_secs());
+    Ok(())
+}
+
 impl BackupRange {
     /// Get entries from the scanner and save them to storage
-    fn backup<E: Engine>(
+    async fn backup<E: Engine>(
         &self,
         writer_builder: BackupWriterBuilder,
-        engine: &E,
+        engine: E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-        storage: &LimitedStorage,
-    ) -> Result<(Vec<File>, Statistics)> {
+        saver: async_channel::Sender<InMemBackupFiles>,
+    ) -> Result<Statistics> {
         assert!(!self.is_raw_kv);
 
         let mut ctx = Context::default();
@@ -169,9 +282,10 @@ impl BackupRange {
                 |key, lock| {
                     Lock::check_ts_conflict(
                         Cow::Borrowed(lock),
-                        &key,
+                        key,
                         backup_ts,
                         &Default::default(),
+                        IsolationLevel::Si,
                     )
                 },
             )
@@ -196,12 +310,13 @@ impl BackupRange {
         };
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
-            .observe(start_snapshot.elapsed().as_secs_f64());
+            .observe(start_snapshot.saturating_elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
             IsolationLevel::Si,
             false, /* fill_cache */
+            Default::default(),
             Default::default(),
             false,
         );
@@ -214,17 +329,12 @@ impl BackupRange {
             .unwrap();
 
         let start_scan = Instant::now();
-        let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
-        let mut last_key = self
+        let mut next_file_start_key = self
             .start_key
             .clone()
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut cur_key = self
-            .end_key
-            .clone()
-            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut writer = writer_builder.build(last_key.clone())?;
+        let mut writer = writer_builder.build(next_file_start_key.clone())?;
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -237,44 +347,32 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                let res = {
-                    entries.as_slice().get(0).map_or_else(
-                        || Err(Error::Other(box_err!("get entry error"))),
-                        |x| match x.to_key() {
-                            Ok(k) => {
-                                cur_key = k.into_raw().unwrap();
-                                writer_builder.build(cur_key.clone())
-                            }
-                            Err(e) => {
-                                error!(?e; "backup save file failed");
-                                Err(Error::Other(box_err!("Decode error: {:?}", e)))
-                            }
-                        },
-                    )
+                let this_end_key = entries.as_slice().get(0).map_or_else(
+                    || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
+                    |x| {
+                        x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
+                            error!(?e; "backup save file failed");
+                            Error::Other(box_err!("Decode error: {:?}", e))
+                        })
+                    },
+                )?;
+                let this_start_key = next_file_start_key.clone();
+                let msg = InMemBackupFiles {
+                    files: KvWriter::Txn(writer),
+                    start_key: this_start_key,
+                    end_key: this_end_key.clone(),
+                    start_version: begin_ts,
+                    end_version: backup_ts,
+                    region: self.region.clone(),
                 };
-                match writer.save(&storage.storage) {
-                    Ok(mut split_files) => {
-                        for file in split_files.iter_mut() {
-                            file.set_start_key(last_key.clone());
-                            file.set_end_key(cur_key.clone());
-                        }
-                        last_key = cur_key.clone();
-                        files.append(&mut split_files);
-                    }
-                    Err(e) => {
-                        error_unknown!(?e; "backup save file failed");
-                        return Err(e);
-                    }
-                }
-                match res {
-                    Ok(w) => {
-                        writer = w;
-                    }
-                    Err(e) => {
+                send_to_worker_with_metrics(&saver, msg).await?;
+                next_file_start_key = this_end_key;
+                writer = writer_builder
+                    .build(next_file_start_key.clone())
+                    .map_err(|e| {
                         error_unknown!(?e; "backup writer failed");
-                        return Err(e);
-                    }
-                }
+                        e
+                    })?;
             }
 
             // Build sst files.
@@ -283,32 +381,36 @@ impl BackupRange {
                 return Err(e);
             }
         }
+        drop(snap_store);
+        let stat = scanner.take_statistics();
+        let take = start_scan.saturating_elapsed_secs();
+        if take > 30.0 {
+            warn!("backup scan takes long time.";
+                "take(s)" => %take,
+                "region" => ?self.region,
+                "start_key" => %redact_option_key(&self.start_key),
+                "end_key" => %redact_option_key(&self.end_key),
+                "stat" => ?stat,
+            );
+        }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start_scan.elapsed().as_secs_f64());
+            .observe(take);
 
-        if writer.need_flush_keys() {
-            match writer.save(&storage.storage) {
-                Ok(mut split_files) => {
-                    cur_key = self
-                        .end_key
-                        .clone()
-                        .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-                    for file in split_files.iter_mut() {
-                        file.set_start_key(last_key.clone());
-                        file.set_end_key(cur_key.clone());
-                    }
-                    files.append(&mut split_files);
-                }
-                Err(e) => {
-                    error_unknown!(?e; "backup save file failed");
-                    return Err(e);
-                }
-            }
-        }
+        let msg = InMemBackupFiles {
+            files: KvWriter::Txn(writer),
+            start_key: next_file_start_key,
+            end_key: self
+                .end_key
+                .clone()
+                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+            start_version: begin_ts,
+            end_version: backup_ts,
+            region: self.region.clone(),
+        };
+        send_to_worker_with_metrics(&saver, msg).await?;
 
-        let stat = scanner.take_statistics();
-        Ok((files, stat))
+        Ok(stat)
     }
 
     fn backup_raw<E: Engine>(
@@ -368,27 +470,30 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start.saturating_elapsed().as_secs_f64());
         Ok(statistics)
     }
 
-    fn backup_raw_kv_to_file<E: Engine>(
+    async fn backup_raw_kv_to_file<E: Engine>(
         &self,
-        engine: &E,
+        engine: E,
         db: Arc<DB>,
-        storage: &LimitedStorage,
+        limiter: &Limiter,
         file_name: String,
-        cf: CfName,
+        cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
-    ) -> Result<(Vec<File>, Statistics)> {
+        cipher: CipherInfo,
+        saver_tx: async_channel::Sender<InMemBackupFiles>,
+    ) -> Result<Statistics> {
         let mut writer = match BackupRawKVWriter::new(
             db,
             &file_name,
             cf,
-            storage.limiter.clone(),
+            limiter.clone(),
             compression_type,
             compression_level,
+            cipher,
         ) {
             Ok(w) => w,
             Err(e) => {
@@ -396,18 +501,30 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup_raw(&mut writer, engine) {
+        let stat = match self.backup_raw(&mut writer, &engine) {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
-        // Save sst files to storage.
-        match writer.save(&storage.storage) {
-            Ok(files) => Ok((files, stat)),
-            Err(e) => {
-                error_unknown!(?e; "backup save file failed");
-                Err(e)
-            }
-        }
+        let start_key = self
+            .start_key
+            .clone()
+            .map(Key::into_encoded)
+            .unwrap_or_default();
+        let end_key = self
+            .end_key
+            .clone()
+            .map(Key::into_encoded)
+            .unwrap_or_default();
+        let msg = InMemBackupFiles {
+            files: KvWriter::Raw(writer),
+            start_key,
+            end_key,
+            start_version: TimeStamp::zero(),
+            end_version: TimeStamp::zero(),
+            region: self.region.clone(),
+        };
+        send_to_worker_with_metrics(&saver_tx, msg).await?;
+        Ok(stat)
     }
 }
 
@@ -428,15 +545,81 @@ impl ConfigManager {
     }
 }
 
+#[derive(Clone)]
+struct SoftLimitKeeper {
+    limit: SoftLimit,
+    config: ConfigManager,
+}
+
+impl SoftLimitKeeper {
+    fn new(config: ConfigManager) -> Self {
+        let BackupConfig { num_threads, .. } = *config.0.read().unwrap();
+        let limit = SoftLimit::new(num_threads);
+        BACKUP_SOFTLIMIT_GAUGE.set(limit.current_cap() as _);
+        Self { limit, config }
+    }
+
+    /// run the soft limit keeper at background.
+    async fn run(self) {
+        let mut cpu_quota =
+            SoftLimitByCpu::with_remain(self.config.0.read().unwrap().auto_tune_remain_threads);
+        loop {
+            if let Err(err) = self.on_tick(&mut cpu_quota).await {
+                warn!("soft limit on_tick failed."; "err" => %err);
+            }
+            let auto_tune_refresh_interval =
+                self.config.0.read().unwrap().auto_tune_refresh_interval;
+            tokio::time::sleep(auto_tune_refresh_interval.0).await;
+        }
+    }
+
+    async fn on_tick<S: CpuStatistics>(&self, cpu_quota: &mut SoftLimitByCpu<S>) -> Result<()> {
+        let BackupConfig {
+            enable_auto_tune,
+            num_threads,
+            auto_tune_remain_threads,
+            ..
+        } = *self.config.0.read().unwrap();
+        cpu_quota.set_remain(auto_tune_remain_threads);
+
+        let mut quota_val = num_threads;
+        if enable_auto_tune {
+            quota_val = cpu_quota
+                .get_quota(|s| s.contains("bkwkr"))
+                .clamp(1, num_threads);
+        }
+
+        self.limit.resize(quota_val).await.map_err(|err| {
+            warn!(
+                "error during appling the soft limit for backup.";
+                "current_limit" => %self.limit.current_cap(),
+                "to_set_value" => %quota_val,
+                "err" => %err,
+            );
+            Error::Other(box_err!("failed to resize softlimit: {}", err))
+        })?;
+
+        BACKUP_SOFTLIMIT_GAUGE.set(self.limit.current_cap() as _);
+        Ok(())
+    }
+
+    fn limit(&self) -> SoftLimit {
+        self.limit.clone()
+    }
+}
+
 /// The endpoint of backup.
 ///
 /// It coordinates backup tasks and dispatches them to different workers.
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
+    io_pool: Runtime,
     db: Arc<DB>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
+    softlimit: SoftLimitKeeper,
+    api_version: ApiVersion,
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -507,8 +690,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                         }
                     }
                     if info.role == StateRole::Leader {
-                        let ekey = get_min_end_key(end_key.as_ref(), &region);
-                        let skey = get_max_start_key(start_key.as_ref(), &region);
+                        let ekey = get_min_end_key(end_key.as_ref(), region);
+                        let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let leader = find_peer(region, store_id).unwrap().to_owned();
                         let backup_range = BackupRange {
@@ -549,53 +732,6 @@ impl<R: RegionInfoProvider> Progress<R> {
     }
 }
 
-struct ControlThreadPool {
-    size: usize,
-    workers: Option<Arc<ThreadPool<TaskCell>>>,
-}
-
-impl ControlThreadPool {
-    fn new() -> Self {
-        ControlThreadPool {
-            size: 0,
-            workers: None,
-        }
-    }
-
-    fn spawn<F>(&mut self, func: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let workers = self.workers.as_ref().unwrap();
-        let w = workers.clone();
-        workers.spawn(move |_: &mut Handle<'_>| {
-            func();
-            // Debug service requires jobs in the old thread pool continue to run even after
-            // the pool is recreated. So the pool needs to be ref counted and dropped after
-            // task has finished.
-            drop(w);
-        });
-    }
-
-    /// Lazily adjust the thread pool's size
-    ///
-    /// Resizing if the thread pool need to expend or there
-    /// are too many idle threads. Otherwise do nothing.
-    fn adjust_with(&mut self, new_size: usize) {
-        if self.size >= new_size && self.size - new_size <= 10 {
-            return;
-        }
-        let workers = Arc::new(
-            yatp::Builder::new(thd_name!("bkwkr"))
-                .max_thread_count(new_size)
-                .build_callback_pool(),
-        );
-        let _ = self.workers.replace(workers);
-        self.size = new_size;
-        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
-    }
-}
-
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
     pub fn new(
         store_id: u64,
@@ -604,15 +740,24 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         db: Arc<DB>,
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
+        api_version: ApiVersion,
     ) -> Endpoint<E, R> {
+        let pool = ControlThreadPool::new();
+        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
+        let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
+        let softlimit = SoftLimitKeeper::new(config_manager.clone());
+        rt.spawn(softlimit.clone().run());
         Endpoint {
             store_id,
             engine,
             region_info,
-            pool: RefCell::new(ControlThreadPool::new()),
+            pool: RefCell::new(pool),
             db,
-            config_manager: ConfigManager(Arc::new(RwLock::new(config))),
+            io_pool: rt,
+            softlimit,
+            config_manager,
             concurrency_manager,
+            api_version,
         }
     }
 
@@ -620,14 +765,32 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         self.config_manager.clone()
     }
 
+    fn get_config(&self) -> BackendConfig {
+        BackendConfig {
+            s3_multi_part_size: self.config_manager.0.read().unwrap().s3_multi_part_size.0 as usize,
+            hdfs_config: HdfsConfig {
+                hadoop_home: self.config_manager.0.read().unwrap().hadoop.home.clone(),
+                linux_user: self
+                    .config_manager
+                    .0
+                    .read()
+                    .unwrap()
+                    .hadoop
+                    .linux_user
+                    .clone(),
+            },
+        }
+    }
+
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
         request: Request,
-        tx: UnboundedSender<BackupResponse>,
+        saver_tx: async_channel::Sender<InMemBackupFiles>,
+        resp_tx: UnboundedSender<BackupResponse>,
+        _backend: Arc<dyn ExternalStorage>,
     ) {
         let start_ts = request.start_ts;
-        let end_ts = request.end_ts;
         let backup_ts = request.end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -635,40 +798,32 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+        let limit = self.softlimit.limit();
 
-        // TODO: make it async.
-        self.pool.borrow_mut().spawn(move || {
-            tikv_alloc::add_thread_memory_accessor();
-            let _with_io_type = WithIOType::new(IOType::Export);
-            defer!({
-                tikv_alloc::remove_thread_memory_accessor();
-            });
-
-            // Check if we can open external storage.
-            let backend = match create_storage(&request.backend) {
-                Ok(backend) => backend,
-                Err(err) => {
-                    error_unknown!(?err; "backup create storage failed");
-                    let mut response = BackupResponse::default();
-                    response.set_error(crate::Error::Io(err).into());
-                    if let Err(err) = tx.unbounded_send(response) {
-                        error_unknown!(?err; "backup failed to send response");
-                    }
-                    return;
-                }
-            };
-
-            let storage = LimitedStorage {
-                limiter: request.limiter,
-                storage: Arc::new(backend),
-            };
-
+        self.pool.borrow_mut().spawn(async move {
             loop {
+                // when get the guard, release it until we finish scanning a batch, 
+                // because if we were suspended during scanning, 
+                // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
+                let guard = limit.guard().await;
+                if let Err(e) = guard {
+                    warn!("failed to retrieve limit guard, omitting."; "err" => %e);
+                };
                 let (batch, is_raw_kv, cf) = {
                     // Release lock as soon as possible.
                     // It is critical to speed up backup, otherwise workers are
                     // blocked by each other.
-                    let mut progress = prs.lock().unwrap();
+                    //
+                    // If we use [tokio::sync::Mutex] here, until we give back the control flow to the scheduler
+                    // or tasks waiting for the lock won't be waked up due to the characteristic of the runtime...
+                    //
+                    // The worst case is when using `noop` backend:
+                    // the task seems never yielding and in fact the backup would executing sequentially.
+                    //
+                    // Anyway, even tokio itself doesn't recommend to use it unless the lock guard needs to be `Send`.
+                    // (See https://tokio.rs/tokio/tutorial/shared-state)
+                    // Use &mut and mark the type for making rust-analyzer happy.
+                    let progress: &mut Progress<_> = &mut prs.lock().unwrap();
                     let batch = progress.forward(batch_size);
                     if batch.is_empty() {
                         return;
@@ -677,6 +832,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 };
 
                 for brange in batch {
+                    // wake up the scheduler for each loop for awaking tasks waiting for some lock or channels.
+                    // because the softlimit permit is held by current task, there isn't risk of being suspended for long time.
+                    tokio::task::yield_now().await;
+                    let engine = engine.clone();
                     if request.cancel.load(Ordering::SeqCst) {
                         warn!("backup task has canceled"; "range" => ?brange);
                         return;
@@ -694,82 +853,57 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     let name = backup_file_name(store_id, &brange.region, key);
                     let ct = to_sst_compression_type(request.compression_type);
 
-                    let (res, start_key, end_key) = if is_raw_kv {
-                        (
-                            brange.backup_raw_kv_to_file(
-                                &engine,
+                    let stat = if is_raw_kv {
+                        brange
+                            .backup_raw_kv_to_file(
+                                engine,
                                 db.clone(),
-                                &storage,
+                                &request.limiter,
                                 name,
-                                cf,
+                                cf.into(),
                                 ct,
                                 request.compression_level,
-                            ),
-                            brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
-                            brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
-                        )
+                                request.cipher.clone(),
+                                saver_tx.clone(),
+                            )
+                            .await
                     } else {
                         let writer_builder = BackupWriterBuilder::new(
                             store_id,
-                            storage.limiter.clone(),
+                            request.limiter.clone(),
                             brange.region.clone(),
                             db.clone(),
                             ct,
                             request.compression_level,
                             sst_max_size,
+                            request.cipher.clone(),
                         );
-                        (
-                            brange.backup(
+                        brange
+                            .backup(
                                 writer_builder,
-                                &engine,
+                                engine,
                                 concurrency_manager.clone(),
                                 backup_ts,
                                 start_ts,
-                                &storage,
-                            ),
-                            brange
-                                .start_key
-                                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-                            brange
-                                .end_key
-                                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-                        )
+                                saver_tx.clone(),
+                            )
+                            .await
                     };
-
-                    let mut response = BackupResponse::default();
-                    match res {
-                        Err(e) => {
-                            error_unknown!(?e; "backup region failed";
-                                "region" => ?brange.region,
-                                "start_key" => &log_wrappers::Value::key(&start_key),
-                                "end_key" => &log_wrappers::Value::key(&end_key),
-                            );
-                            response.set_error(e.into());
+                    match stat {
+                        Err(err) => {
+                            error_unknown!(%err; "error during backup"; "region" => ?brange.region,);
+                            let mut resp = BackupResponse::new();
+                            resp.set_error(err.into());
+                            if let Err(err) =  resp_tx.unbounded_send(resp) {
+                                warn!("failed to send response"; "err" => ?err)
+                            }
                         }
-                        Ok((mut files, stat)) => {
+                        Ok(stat) => {
+                            // TODO: maybe add the stat to metrics?
                             debug!("backup region finish";
                             "region" => ?brange.region,
-                            "start_key" => &log_wrappers::Value::key(&start_key),
-                            "end_key" => &log_wrappers::Value::key(&end_key),
                             "details" => ?stat);
-
-                            for file in files.iter_mut() {
-                                if is_raw_kv {
-                                    file.set_start_key(start_key.clone());
-                                    file.set_end_key(end_key.clone());
-                                }
-                                file.set_start_version(start_ts.into_inner());
-                                file.set_end_version(end_ts.into_inner());
-                            }
-                            response.set_files(files.into());
                         }
-                    }
-                    response.set_start_key(start_key);
-                    response.set_end_key(end_key);
-
-                    if let Err(e) = tx.unbounded_send(response) {
-                        error_unknown!(?e; "backup failed to send response");
-                        return;
                     }
                 }
             }
@@ -805,10 +939,37 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             is_raw_kv,
             request.cf,
         )));
+        let backend = match create_storage(&request.backend, self.get_config()) {
+            Ok(backend) => backend,
+            Err(err) => {
+                error_unknown!(?err; "backup create storage failed");
+                let mut response = BackupResponse::default();
+                response.set_error(crate::Error::Io(err).into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
+        };
+        let backend = Arc::<dyn ExternalStorage>::from(backend);
         let concurrency = self.config_manager.0.read().unwrap().num_threads;
         self.pool.borrow_mut().adjust_with(concurrency);
+        // make the buffer small enough to implement back pressure.
+        let (tx, rx) = async_channel::bounded(1);
         for _ in 0..concurrency {
-            self.spawn_backup_worker(prs.clone(), request.clone(), resp.clone());
+            self.spawn_backup_worker(
+                prs.clone(),
+                request.clone(),
+                tx.clone(),
+                resp.clone(),
+                backend.clone(),
+            );
+            self.io_pool.spawn(save_backup_file_worker(
+                rx.clone(),
+                resp.clone(),
+                backend.clone(),
+                self.api_version,
+            ));
         }
     }
 }
@@ -903,14 +1064,23 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
     }
 }
 
+/// warp a Option<Key> to the redact wrapper.
+fn redact_option_key(key: &Option<Key>) -> log_wrappers::Value<'_> {
+    match key {
+        None => log_wrappers::Value::key(b""),
+        Some(key) => log_wrappers::Value::key(key.as_encoded().as_slice()),
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
-    use file_system::{IOOp, IORateLimiter};
+    use file_system::{IOOp, IORateLimiter, IOType};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -919,10 +1089,12 @@ pub mod tests {
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
     use rand::Rng;
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
+    use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -1005,8 +1177,10 @@ pub mod tests {
                     num_threads: 4,
                     batch_size: 8,
                     sst_max_size: ReadableSize::mb(144),
+                    ..Default::default()
                 },
                 concurrency_manager,
+                ApiVersion::V1,
             ),
         )
     }
@@ -1040,8 +1214,8 @@ pub mod tests {
 
         for i in 0..8 {
             let ctr = counter.clone();
-            pool.spawn(move || {
-                sleep(Duration::from_millis(100));
+            pool.spawn(async move {
+                time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }
@@ -1051,14 +1225,23 @@ pub mod tests {
 
         for i in 8..16 {
             let ctr = counter.clone();
-            pool.spawn(move || {
-                sleep(Duration::from_millis(100));
+            pool.spawn(async move {
+                time::sleep(Duration::from_millis(100)).await;
                 ctr.fetch_or(1 << i, Ordering::SeqCst);
             });
         }
 
         sleep(Duration::from_millis(250));
         assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
+    }
+
+    #[test]
+    fn test_s3_config() {
+        let (_tmp, endpoint) = new_endpoint();
+        assert_eq!(
+            endpoint.config_manager.0.read().unwrap().s3_multi_part_size,
+            ReadableSize::mb(5)
+        );
     }
 
     #[test]
@@ -1140,12 +1323,13 @@ pub mod tests {
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
-                        limiter: Limiter::new(INFINITY),
+                        limiter: Limiter::new(f64::INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         cf: engine_traits::CF_DEFAULT,
                         compression_type: CompressionType::Unknown,
                         compression_level: 0,
+                        cipher: CipherInfo::default(),
                     },
                     resp: tx,
                 };
@@ -1161,14 +1345,14 @@ pub mod tests {
                         expect
                     );
                 }
-                assert_eq!(resps.len(), expect.len());
+                assert_eq!(resps.len(), expect.len(), "{:?} {:?}", start_key, end_key);
             };
 
         // Backup range from case.0 to case.1,
         // the case.2 is the expected results.
         type Case<'a> = (&'a [u8], &'a [u8], Vec<(&'a [u8], &'a [u8])>);
 
-        let case: Vec<Case> = vec![
+        let case: Vec<Case<'_>> = vec![
             (b"", b"1", vec![(b"", b"1")]),
             (b"", b"2", vec![(b"", b"1"), (b"1", b"2")]),
             (b"1", b"2", vec![(b"1", b"2")]),
@@ -1445,13 +1629,13 @@ pub mod tests {
             .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
 
         let mut req = BackupRequest::default();
-        req.set_start_key(vec![]);
+        req.set_start_key(vec![b'1']);
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_storage_backend(make_noop_backend());
 
-        let (tx, _) = unbounded();
+        let (tx, rx) = unbounded();
 
         // expand thread pool is needed
         endpoint.get_config_manager().set_num_threads(15);
@@ -1461,13 +1645,28 @@ pub mod tests {
 
         // shrink thread pool only if there are too many idle threads
         endpoint.get_config_manager().set_num_threads(10);
+        req.set_start_key(vec![b'2']);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 15);
 
         endpoint.get_config_manager().set_num_threads(3);
+        req.set_start_key(vec![b'3']);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);
+
+        // make sure all tasks can finish properly.
+        let responses = block_on(rx.collect::<Vec<_>>());
+        assert_eq!(responses.len(), 3, "{:?}", responses);
+
+        // for testing whether dropping the pool before all tasks finished causes panic.
+        // but the panic must be checked manually... (It may panic at tokio runtime threads...)
+        let mut pool = ControlThreadPool::new();
+        pool.adjust_with(1);
+        pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
+        pool.adjust_with(2);
+        drop(pool);
+        std::thread::sleep(Duration::from_millis(150));
     }
 }

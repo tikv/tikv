@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use crate::fsm::{Fsm, FsmScheduler, FsmState};
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;

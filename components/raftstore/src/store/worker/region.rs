@@ -14,6 +14,7 @@ use engine_traits::{KvEngine, Mutable, WriteBatch};
 use fail::fail_point;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
+use tikv_util::time::Instant;
 use tikv_util::{box_err, box_try, defer, error, info, thd_name, warn};
 
 use crate::coprocessor::CoprocessorHost;
@@ -32,11 +33,22 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
-const GENERATE_POOL_SIZE: usize = 2;
-
 // used to periodically check whether we should delete a stale peer's range in region runner
 
 const CLEANUP_MAX_REGION_COUNT: usize = 128;
+#[cfg(test)]
+pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
+
+#[cfg(not(test))]
+pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
+
+// used to periodically check whether schedule pending applies in region runner
+#[cfg(not(test))]
+pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
+#[cfg(test)]
+pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
+
+const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
 /// Region related task
 #[derive(Debug)]
@@ -88,8 +100,8 @@ impl<S> Display for Task<S> {
                 f,
                 "Destroy {} [{}, {})",
                 region_id,
-                log_wrappers::Value::key(&start_key),
-                log_wrappers::Value::key(&end_key)
+                log_wrappers::Value::key(start_key),
+                log_wrappers::Value::key(end_key)
             ),
         }
     }
@@ -183,12 +195,12 @@ impl PendingDeleteRanges {
     ///
     /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
-        if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
+        if !self.find_overlap_ranges(start_key, end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                log_wrappers::Value::key(&start_key),
-                log_wrappers::Value::key(&end_key),
+                log_wrappers::Value::key(start_key),
+                log_wrappers::Value::key(end_key),
             );
         }
         let info = StalePeerInfo {
@@ -293,7 +305,7 @@ where
             return;
         }
 
-        let start = tikv_util::time::Instant::now();
+        let start = Instant::now();
         let _io_type_guard = WithIOType::new(if for_balance {
             IOType::LoadBalance
         } else {
@@ -313,7 +325,9 @@ where
         }
 
         SNAP_COUNTER.generate.success.inc();
-        SNAP_HISTOGRAM.generate.observe(start.elapsed_secs());
+        SNAP_HISTOGRAM
+            .generate
+            .observe(start.saturating_elapsed_secs());
     }
 
     fn pre_handle_snapshot(
@@ -393,7 +407,15 @@ where
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.cleanup_overlap_ranges(&start_key, &end_key)?;
+        let overlap_ranges = self
+            .pending_delete_ranges
+            .drain_overlap_ranges(&start_key, &end_key);
+        if !overlap_ranges.is_empty() {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["overlap-with-apply"])
+                .inc();
+            self.cleanup_overlap_regions(overlap_ranges)?;
+        }
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])?;
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
@@ -443,7 +465,7 @@ where
         info!(
             "apply new data";
             "region_id" => region_id,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }
@@ -461,7 +483,7 @@ where
         SNAP_COUNTER.apply.all.inc();
         // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         // let timer = apply_histogram.start_coarse_timer();
-        let start = tikv_util::time::Instant::now();
+        let start = Instant::now();
 
         match self.apply_snap(task) {
             Ok(()) => {
@@ -483,19 +505,22 @@ where
             }
         }
 
-        SNAP_HISTOGRAM.apply.observe(start.elapsed_secs());
+        SNAP_HISTOGRAM
+            .apply
+            .observe(start.saturating_elapsed_secs());
+        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
+    fn cleanup_range(&self, ranges: &[Range<'_>]) -> Result<()> {
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
+            .delete_all_in_range(DeleteStrategy::DeleteFiles, ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
         self.delete_all_in_range(ranges)?;
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
+            .delete_all_in_range(DeleteStrategy::DeleteBlobs, ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
@@ -503,13 +528,10 @@ where
     }
 
     /// Gets the overlapping ranges and cleans them up.
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let overlap_ranges = self
-            .pending_delete_ranges
-            .drain_overlap_ranges(start_key, end_key);
-        if overlap_ranges.is_empty() {
-            return Ok(());
-        }
+    fn cleanup_overlap_regions(
+        &mut self,
+        overlap_ranges: Vec<(u64, Vec<u8>, Vec<u8>, u64)>,
+    ) -> Result<()> {
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -542,21 +564,27 @@ where
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
-            warn!("cleanup_overlap_ranges failed";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-                "err" => %e,
-            );
-        } else {
-            info!("register deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-            );
+        let overlap_ranges = self
+            .pending_delete_ranges
+            .drain_overlap_ranges(start_key, end_key);
+        if !overlap_ranges.is_empty() {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["overlap-with-destroy"])
+                .inc();
+            if let Err(e) = self.cleanup_overlap_regions(overlap_ranges) {
+                warn!("cleanup_overlap_ranges failed";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(start_key),
+                    "end_key" => log_wrappers::Value::key(end_key),
+                    "err" => %e,
+                );
+            }
         }
-
+        info!("register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
+        );
         let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
@@ -565,7 +593,9 @@ where
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
-
+        if self.ingest_maybe_stall() {
+            return;
+        }
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
@@ -575,11 +605,15 @@ where
             .stale_ranges(oldest_sequence)
             .map(|(region_id, s, e)| (region_id, s.to_vec(), e.to_vec()))
             .collect();
+        if cleanup_ranges.is_empty() {
+            return;
+        }
+        CLEAN_COUNTER_VEC.with_label_values(&["destroy"]).inc_by(1);
         cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
         while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
             cleanup_ranges.pop();
         }
-        let ranges: Vec<Range> = cleanup_ranges
+        let ranges: Vec<Range<'_>> = cleanup_ranges
             .iter()
             .map(|(region_id, start, end)| {
                 info!("delete data in range because of stale"; "region_id" => region_id,
@@ -616,8 +650,9 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.engine.cf_names() {
+            // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
@@ -665,6 +700,7 @@ where
         mgr: SnapManager,
         region_worker_tick_interval: tikv_util::config::ReadableDuration,
         use_delete_range: bool,
+        snap_generator_pool_size: usize,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
     ) -> Runner<EK, R> {
@@ -805,11 +841,7 @@ where
                 // there might be a coprocessor request related to this range
                 self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key);
-
-                // try to delete stale ranges if there are any
-                if !self.ctx.ingest_maybe_stall() {
-                    self.ctx.clean_stale_ranges();
-                }
+                self.ctx.clean_stale_ranges();
             }
         }
     }
@@ -854,9 +886,9 @@ mod tests {
     use engine_test::ctor::CFOptions;
     use engine_test::ctor::ColumnFamilyOptions;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::KvEngine;
     use engine_traits::{
-        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable, SyncMutable,
+        WriteBatch, WriteBatchExt,
     };
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -865,6 +897,7 @@ mod tests {
     use tikv_util::worker::{LazyWorker, Worker};
 
     use super::*;
+    use keys::data_key;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -895,8 +928,7 @@ mod tests {
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
         let timeout2 = 12;
-        let overlap_ranges =
-            pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+        let overlap_ranges = pending_delete_ranges.drain_overlap_ranges(b"g", b"q");
         assert_eq!(
             overlap_ranges,
             [
@@ -962,6 +994,7 @@ mod tests {
             mgr,
             0,
             false,
+            2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
@@ -1028,14 +1061,20 @@ mod tests {
             Some(raft_cfs_opt),
             None,
             Some(kv_cfs_opts),
-            &[1, 2, 3, 4, 5, 6],
+            &[1, 2, 3, 4, 5, 6, 7],
         )
         .unwrap();
 
-        for cf_name in engine.kv.cf_names() {
-            for i in 0..6 {
-                engine.kv.put_cf(cf_name, &[i], &[i]).unwrap();
-                engine.kv.put_cf(cf_name, &[i + 1], &[i + 1]).unwrap();
+        for cf_name in &["default", "write", "lock"] {
+            for i in 0..7 {
+                engine
+                    .kv
+                    .put_cf(cf_name, &data_key(i.to_string().as_bytes()), &[i])
+                    .unwrap();
+                engine
+                    .kv
+                    .put_cf(cf_name, &data_key((i + 1).to_string().as_bytes()), &[i + 1])
+                    .unwrap();
                 engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
@@ -1052,7 +1091,7 @@ mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("snap-manager");
-        let mut worker = bg_worker.lazy_build("snapshot-worker");
+        let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
@@ -1060,6 +1099,7 @@ mod tests {
             mgr,
             0,
             true,
+            2,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
@@ -1127,20 +1167,43 @@ mod tests {
                 })
                 .unwrap();
         };
-        let wait_apply_finish = |id: u64| {
-            let region_key = keys::region_state_key(id);
-            loop {
-                thread::sleep(Duration::from_millis(100));
-                if engine
-                    .kv
-                    .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
-                    .unwrap()
-                    .unwrap()
-                    .get_state()
-                    == PeerState::Normal
-                {
-                    break;
+        let destroy_region = |id: u64| {
+            let start_key = data_key(id.to_string().as_bytes());
+            let end_key = data_key((id + 1).to_string().as_bytes());
+            // destroy region
+            sched
+                .schedule(Task::Destroy {
+                    region_id: id,
+                    start_key,
+                    end_key,
+                })
+                .unwrap();
+        };
+
+        let check_region_exist = |id: u64| -> bool {
+            let key = data_key(id.to_string().as_bytes());
+            let v = engine.kv.get_value(&key).unwrap();
+            v.is_some()
+        };
+
+        let wait_apply_finish = |ids: &[u64]| {
+            for id in ids {
+                match receiver.recv_timeout(Duration::from_secs(5)) {
+                    Ok((region_id, CasualMessage::SnapshotApplied)) => {
+                        assert_eq!(region_id, *id);
+                    }
+                    msg => panic!("expected {} SnapshotApplied, but got {:?}", id, msg),
                 }
+                let region_key = keys::region_state_key(*id);
+                assert_eq!(
+                    engine
+                        .kv
+                        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                        .unwrap()
+                        .unwrap()
+                        .get_state(),
+                    PeerState::Normal
+                )
             }
         };
 
@@ -1152,7 +1215,7 @@ mod tests {
                 .get_cf_num_files_at_level(CF_DEFAULT, 0)
                 .unwrap()
                 .unwrap(),
-            6
+            7
         );
 
         // compact all files to the bottomest level
@@ -1166,7 +1229,7 @@ mod tests {
             0
         );
 
-        wait_apply_finish(1);
+        wait_apply_finish(&[1]);
 
         // the pending apply task should be finished and snapshots are ingested.
         // note that when ingest sst, it may flush memtable if overlap,
@@ -1182,7 +1245,7 @@ mod tests {
 
         // no write stall, ingest without delay
         gen_and_apply_snap(2);
-        wait_apply_finish(2);
+        wait_apply_finish(&[2]);
         assert_eq!(
             engine
                 .kv
@@ -1212,6 +1275,9 @@ mod tests {
             4
         );
         gen_and_apply_snap(5);
+        destroy_region(6);
+        thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+        assert!(check_region_exist(6));
         assert_eq!(
             engine
                 .kv
@@ -1233,7 +1299,7 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        wait_apply_finish(4);
+        wait_apply_finish(&[3, 4]);
 
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
@@ -1256,7 +1322,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        wait_apply_finish(5);
+        wait_apply_finish(&[5]);
 
         // the last one pending task finished
         assert_eq!(
@@ -1267,5 +1333,7 @@ mod tests {
                 .unwrap(),
             2
         );
+        thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+        assert!(!check_region_exist(6));
     }
 }

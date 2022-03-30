@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{ExtraOp, LockInfo};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
@@ -9,8 +10,8 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
-    WriteResultLockInfo,
+    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::{
@@ -43,6 +44,7 @@ command! {
             return_values: bool,
             min_commit_ts: TimeStamp,
             old_values: OldValues,
+            check_existence: bool,
         }
 }
 
@@ -50,7 +52,7 @@ impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
     ts!(start_ts);
-    command_method!(can_be_pipelined, bool, true);
+    property!(can_be_pipelined);
 
     fn write_bytes(&self) -> usize {
         self.keys
@@ -75,11 +77,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
-        let mut reader = SnapshotReader::new(start_ts, snapshot, !ctx.get_not_fill_cache());
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
+            context.statistics,
+        );
 
         let rows = keys.len();
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
+        } else if self.check_existence {
+            // If return_value is set, the existence status is implicitly included in the result.
+            // So check_existence only need to be explicitly handled if `return_values` is not set.
+            Ok(PessimisticLockRes::Existence(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)
         };
@@ -94,14 +103,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.lock_ttl,
                 self.for_update_ts,
                 self.return_values,
+                self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
             ) {
                 Ok((val, old_value)) => {
-                    if self.return_values {
+                    if self.return_values || self.check_existence {
                         res.as_mut().unwrap().push(val);
                     }
-                    if old_value.valid() {
+                    if old_value.resolved() {
                         let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;
@@ -117,13 +127,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         }
 
         // Some values are read, update max_ts
-        if let Ok(PessimisticLockRes::Values(values)) = &res {
-            if !values.is_empty() {
+        match &res {
+            Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
                 txn.concurrency_manager.update_max_ts(self.for_update_ts);
             }
+            Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
+                txn.concurrency_manager.update_max_ts(self.for_update_ts);
+            }
+            _ => (),
         }
 
-        context.statistics.add(&reader.take_statistics());
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };

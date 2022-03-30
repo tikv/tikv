@@ -1,19 +1,23 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{atomic::AtomicU64, Arc};
+
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
+use kvproto::kvrpcpb::{
+    ApiVersion, ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest,
+};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
-use std::sync::{atomic::AtomicU64, Arc};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    test_util::GetConsumer, txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result,
-    Statistics, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
+    test_util::GetConsumer, txn::commands, Engine, KvGetStatistics, PrewriteResult, Result,
+    Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
+use tikv_util::time::Instant;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -23,15 +27,26 @@ pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
+    api_version: ApiVersion,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
-    pub fn new() -> Self {
+    pub fn new(api_version: ApiVersion) -> Self {
         Self {
-            engine: TestEngineBuilder::new().build().unwrap(),
+            engine: TestEngineBuilder::new()
+                .api_version(api_version)
+                .build()
+                .unwrap(),
             config: None,
             gc_config: None,
+            api_version,
         }
+    }
+}
+
+impl Default for SyncTestStorageBuilder<RocksEngine> {
+    fn default() -> Self {
+        Self::new(ApiVersion::V1)
     }
 }
 
@@ -41,37 +56,36 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             engine,
             config: None,
             gc_config: None,
+            api_version: ApiVersion::V1,
         }
     }
 
+    #[must_use]
     pub fn config(mut self, config: Config) -> Self {
         self.config = Some(config);
         self
     }
 
+    #[must_use]
     pub fn gc_config(mut self, gc_config: GcConfig) -> Self {
         self.gc_config = Some(gc_config);
         self
     }
 
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder =
-            TestStorageBuilder::from_engine_and_lock_mgr(self.engine.clone(), DummyLockManager {});
+        let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(
+            self.engine.clone(),
+            DummyLockManager {},
+            self.config
+                .as_ref()
+                .map(|cfg| cfg.api_version())
+                .unwrap_or_default(),
+        );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        let mut gc_worker = GcWorker::new(
-            self.engine,
-            RaftStoreBlackHole,
-            self.gc_config.unwrap_or_default(),
-            Default::default(),
-        );
-        gc_worker.start()?;
-
-        Ok(SyncTestStorage {
-            store: builder.build()?,
-            gc_worker,
-        })
+        builder = builder.set_api_version(self.api_version);
+        SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
     }
 }
 
@@ -85,6 +99,22 @@ pub struct SyncTestStorage<E: Engine> {
 }
 
 impl<E: Engine> SyncTestStorage<E> {
+    pub fn from_storage(storage: Storage<E, DummyLockManager>, config: GcConfig) -> Result<Self> {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut gc_worker = GcWorker::new(
+            storage.get_engine(),
+            RaftStoreBlackHole,
+            tx,
+            config,
+            Default::default(),
+        );
+        gc_worker.start()?;
+        Ok(Self {
+            gc_worker,
+            store: storage,
+        })
+    }
+
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
@@ -107,7 +137,7 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         key: &Key,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<(Option<Value>, Statistics, PerfStatisticsDelta)> {
+    ) -> Result<(Option<Value>, KvGetStatistics)> {
         block_on(self.store.get(ctx, key.to_owned(), start_ts.into()))
     }
 
@@ -117,7 +147,7 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         keys: &[Key],
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)> {
+    ) -> Result<(Vec<Result<KvPair>>, KvGetStatistics)> {
         block_on(self.store.batch_get(ctx, keys.to_owned(), start_ts.into()))
     }
 
@@ -130,8 +160,8 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<Vec<Option<Vec<u8>>>> {
         let mut ids = vec![];
         let requests: Vec<GetRequest> = keys
-            .to_owned()
-            .into_iter()
+            .iter()
+            .copied()
             .map(|key| {
                 let mut req = GetRequest::default();
                 req.set_context(ctx.clone());
@@ -142,7 +172,10 @@ impl<E: Engine> SyncTestStorage<E> {
             })
             .collect();
         let p = GetConsumer::new();
-        block_on(self.store.batch_get_command(requests, ids, p.clone()))?;
+        block_on(
+            self.store
+                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+        )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
             values.push(value?);
@@ -295,16 +328,88 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
     }
 
+    pub fn delete_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        notify_only: bool,
+    ) -> Result<()> {
+        wait_op!(|cb| self
+            .store
+            .delete_range(ctx, start_key, end_key, notify_only, cb))
+        .unwrap()
+    }
+
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         block_on(self.store.raw_get(ctx, cf, key))
+    }
+
+    pub fn raw_get_key_ttl(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<u64>> {
+        block_on(self.store.raw_get_key_ttl(ctx, cf, key))
+    }
+
+    pub fn raw_batch_get(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<Vec<Result<KvPair>>> {
+        block_on(self.store.raw_batch_get(ctx, cf, keys))
+    }
+
+    pub fn raw_batch_get_command(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let mut ids = vec![];
+        let requests: Vec<RawGetRequest> = keys
+            .into_iter()
+            .map(|key| {
+                let mut req = RawGetRequest::default();
+                req.set_context(ctx.clone());
+                req.set_key(key);
+                req.set_cf(cf.to_owned());
+                ids.push(ids.len() as u64);
+                req
+            })
+            .collect();
+        let p = GetConsumer::new();
+        block_on(self.store.raw_batch_get_command(requests, ids, p.clone()))?;
+        let mut values = vec![];
+        for value in p.take_data().into_iter() {
+            values.push(value?);
+        }
+        Ok(values)
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, 0, cb)).unwrap()
     }
 
+    pub fn raw_batch_put(&self, ctx: Context, cf: String, pairs: Vec<KvPair>) -> Result<()> {
+        let ttls = vec![0; pairs.len()];
+        wait_op!(|cb| self.store.raw_batch_put(ctx, cf, pairs, ttls, cb)).unwrap()
+    }
+
     pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
         wait_op!(|cb| self.store.raw_delete(ctx, cf, key, cb)).unwrap()
+    }
+
+    pub fn raw_delete_range(
+        &self,
+        ctx: Context,
+        cf: String,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.store.raw_delete_range(ctx, cf, start_key, end_key, cb)).unwrap()
+    }
+
+    pub fn raw_batch_delete(&self, ctx: Context, cf: String, keys: Vec<Vec<u8>>) -> Result<()> {
+        wait_op!(|cb| self.store.raw_batch_delete(ctx, cf, keys, cb)).unwrap()
     }
 
     pub fn raw_scan(
@@ -335,6 +440,19 @@ impl<E: Engine> SyncTestStorage<E> {
         )
     }
 
+    pub fn raw_batch_scan(
+        &self,
+        ctx: Context,
+        cf: String,
+        ranges: Vec<KeyRange>,
+        limit: usize,
+    ) -> Result<Vec<Result<KvPair>>> {
+        block_on(
+            self.store
+                .raw_batch_scan(ctx, cf, ranges, limit, false, false),
+        )
+    }
+
     pub fn raw_compare_and_swap_atomic(
         &self,
         ctx: Context,
@@ -361,9 +479,9 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
-        ttl: u64,
+        ttls: Vec<u64>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttl, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttls, cb)).unwrap()
     }
 
     pub fn raw_batch_delete_atomic(
@@ -373,5 +491,12 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Vec<u8>>,
     ) -> Result<()> {
         wait_op!(|cb| self.store.raw_batch_delete_atomic(ctx, cf, keys, cb)).unwrap()
+    }
+
+    pub fn raw_checksum(&self, ctx: Context, ranges: Vec<KeyRange>) -> Result<(u64, u64, u64)> {
+        block_on(
+            self.store
+                .raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, ranges),
+        )
     }
 }

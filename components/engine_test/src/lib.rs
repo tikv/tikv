@@ -60,21 +60,21 @@ pub mod raft {
 
     #[cfg(feature = "test-engine-raft-panic")]
     pub use engine_panic::{
-        PanicEngine as RaftTestEngine, PanicSnapshot as RaftTestSnapshot,
-        PanicWriteBatch as RaftTestWriteBatch,
+        PanicEngine as RaftTestEngine, PanicEngineIterator as RaftTestEngineIterator,
+        PanicSnapshot as RaftTestSnapshot, PanicWriteBatch as RaftTestWriteBatch,
     };
 
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::{
-        RocksEngine as RaftTestEngine, RocksSnapshot as RaftTestSnapshot,
-        RocksWriteBatch as RaftTestWriteBatch,
+        RocksEngine as RaftTestEngine, RocksEngineIterator as RaftTestEngineIterator,
+        RocksSnapshot as RaftTestSnapshot, RocksWriteBatch as RaftTestWriteBatch,
     };
 
     pub fn new_engine(
         path: &str,
         db_opt: Option<DBOptions>,
         cf: &str,
-        opt: Option<CFOptions>,
+        opt: Option<CFOptions<'_>>,
     ) -> Result<RaftTestEngine> {
         let cfs = &[cf];
         let opts = opt.map(|o| vec![o]);
@@ -84,7 +84,7 @@ pub mod raft {
     pub fn new_engine_opt(
         path: &str,
         db_opt: DBOptions,
-        cf_opt: CFOptions,
+        cf_opt: CFOptions<'_>,
     ) -> Result<RaftTestEngine> {
         let cfs_opts = vec![cf_opt];
         RaftTestEngine::new_engine_opt(path, db_opt, cfs_opts)
@@ -98,21 +98,21 @@ pub mod kv {
 
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
-        PanicEngine as KvTestEngine, PanicSnapshot as KvTestSnapshot,
-        PanicWriteBatch as KvTestWriteBatch,
+        PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
+        PanicSnapshot as KvTestSnapshot, PanicWriteBatch as KvTestWriteBatch,
     };
 
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
-        RocksEngine as KvTestEngine, RocksSnapshot as KvTestSnapshot,
-        RocksWriteBatch as KvTestWriteBatch,
+        RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
     };
 
     pub fn new_engine(
         path: &str,
         db_opt: Option<DBOptions>,
         cfs: &[&str],
-        opts: Option<Vec<CFOptions>>,
+        opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_engine(path, db_opt, cfs, opts)
     }
@@ -120,7 +120,7 @@ pub mod kv {
     pub fn new_engine_opt(
         path: &str,
         db_opt: DBOptions,
-        cfs_opts: Vec<CFOptions>,
+        cfs_opts: Vec<CFOptions<'_>>,
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_engine_opt(path, db_opt, cfs_opts)
     }
@@ -154,15 +154,25 @@ pub mod ctor {
         /// - The column families specified as `opts`, with options.
         ///
         /// Note that if `opts` is not `None` then the `cfs` argument is completely ignored.
+        ///
+        /// The engine stores its data in the `path` directory.
+        /// If that directory does not exist, then it is created.
         fn new_engine(
             path: &str,
             db_opt: Option<DBOptions>,
             cfs: &[&str],
-            opts: Option<Vec<CFOptions>>,
+            opts: Option<Vec<CFOptions<'_>>>,
         ) -> Result<Self>;
 
         /// Create a new engine with specified column families and options
-        fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<Self>;
+        ///
+        /// The engine stores its data in the `path` directory.
+        /// If that directory does not exist, then it is created.
+        fn new_engine_opt(
+            path: &str,
+            db_opt: DBOptions,
+            cfs_opts: Vec<CFOptions<'_>>,
+        ) -> Result<Self>;
     }
 
     #[derive(Clone)]
@@ -185,6 +195,12 @@ pub mod ctor {
 
         pub fn with_default_ctr_encrypted_env(&mut self, ciphertext: Vec<u8>) {
             self.encryption = CryptoOptions::DefaultCtrEncryptedEnv(ciphertext);
+        }
+    }
+
+    impl Default for DBOptions {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
@@ -285,6 +301,12 @@ pub mod ctor {
         }
     }
 
+    impl Default for ColumnFamilyOptions {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     mod panic {
         use super::{CFOptions, DBOptions, EngineConstructorExt};
         use engine_panic::PanicEngine;
@@ -295,7 +317,7 @@ pub mod ctor {
                 _path: &str,
                 _db_opt: Option<DBOptions>,
                 _cfs: &[&str],
-                _opts: Option<Vec<CFOptions>>,
+                _opts: Option<Vec<CFOptions<'_>>>,
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
@@ -303,7 +325,7 @@ pub mod ctor {
             fn new_engine_opt(
                 _path: &str,
                 _db_opt: DBOptions,
-                _cfs_opts: Vec<CFOptions>,
+                _cfs_opts: Vec<CFOptions<'_>>,
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
@@ -335,7 +357,7 @@ pub mod ctor {
                 path: &str,
                 db_opt: Option<DBOptions>,
                 cfs: &[&str],
-                opts: Option<Vec<CFOptions>>,
+                opts: Option<Vec<CFOptions<'_>>>,
             ) -> Result<Self> {
                 let rocks_db_opts = match db_opt {
                     Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
@@ -366,7 +388,7 @@ pub mod ctor {
             fn new_engine_opt(
                 path: &str,
                 db_opt: DBOptions,
-                cfs_opts: Vec<CFOptions>,
+                cfs_opts: Vec<CFOptions<'_>>,
             ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
@@ -387,14 +409,16 @@ pub mod ctor {
             cf_opts: &ColumnFamilyOptions,
         ) {
             if !cf_opts.get_no_range_properties() {
-                let f = Box::new(RangePropertiesCollectorFactory::default());
-                rocks_cf_opts
-                    .add_table_properties_collector_factory("tikv.range-properties-collector", f);
+                rocks_cf_opts.add_table_properties_collector_factory(
+                    "tikv.range-properties-collector",
+                    RangePropertiesCollectorFactory::default(),
+                );
             }
             if !cf_opts.get_no_table_properties() {
-                let f = Box::new(MvccPropertiesCollectorFactory::default());
-                rocks_cf_opts
-                    .add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+                rocks_cf_opts.add_table_properties_collector_factory(
+                    "tikv.mvcc-properties-collector",
+                    MvccPropertiesCollectorFactory::default(),
+                );
             }
         }
 

@@ -51,9 +51,15 @@ impl Service {
     }
 }
 
+impl Default for Service {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
     let mut members = Vec::with_capacity(eps.len());
-    for (i, ep) in (&eps).iter().enumerate() {
+    for (i, ep) in eps.iter().enumerate() {
         let mut m = Member::default();
         m.set_name(format!("pd{}", i));
         m.set_member_id(100 + i as u64);

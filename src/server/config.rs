@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, i32, isize};
 
 use super::Result;
@@ -98,11 +99,13 @@ pub struct Config {
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
+    #[online_config(skip)]
     pub raft_client_grpc_send_msg_buffer: usize,
 
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
+    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
@@ -147,7 +150,7 @@ pub struct Config {
     #[online_config(skip)]
     pub heavy_load_threshold: usize,
     #[online_config(skip)]
-    pub heavy_load_wait_duration: ReadableDuration,
+    pub heavy_load_wait_duration: Option<ReadableDuration>,
     #[online_config(skip)]
     pub enable_request_batch: bool,
     #[online_config(skip)]
@@ -164,6 +167,19 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub raft_client_backoff_step: ReadableDuration,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
+    /// increasing. For server layer some messages will be rejected or droped, if they utilize
+    /// memory more than `reject_messages_on_memory_ratio` * total.
+    ///
+    /// Set it to 0 can disable message rejecting.
+    // By default it's 0.2. So for different memory capacity, messages are rejected when:
+    // * system=8G,  memory_usage_limit=6G,  reject_at=1.2G
+    // * system=16G, memory_usage_limit=12G, reject_at=2.4G
+    // * system=32G, memory_usage_limit=24G, reject_at=4.8G
+    pub reject_messages_on_memory_ratio: f64,
 
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
@@ -234,13 +250,13 @@ impl Default for Config {
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
-            // 300 means gRPC threads are under heavy load if their total CPU usage
-            // is greater than 300%.
-            heavy_load_threshold: 300,
-            // The resolution of timer in tokio is 1ms.
-            heavy_load_wait_duration: ReadableDuration::millis(1),
+            // 75 means a gRPC thread is under heavy load if its total CPU usage
+            // is greater than 75%.
+            heavy_load_threshold: 75,
+            heavy_load_wait_duration: None,
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
+            reject_messages_on_memory_ratio: 0.2,
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
             // Go tikv client uses 4 as well.
@@ -250,6 +266,13 @@ impl Default for Config {
 }
 
 impl Config {
+    #[inline]
+    pub fn heavy_load_wait_duration(&self) -> Duration {
+        self.heavy_load_wait_duration
+            .unwrap_or_else(|| ReadableDuration::micros(50))
+            .0
+    }
+
     /// Validates the configuration and returns an error if it is misconfigured.
     pub fn validate(&mut self) -> Result<()> {
         box_try!(config::check_addr(&self.addr));
@@ -359,6 +382,18 @@ impl Config {
             ));
         }
 
+        if self.reject_messages_on_memory_ratio < 0.0 {
+            return Err(box_err!(
+                "server.reject_messages_on_memory_ratio must be greater than 0"
+            ));
+        }
+
+        if self.heavy_load_threshold > 100 {
+            // The configuration has been changed to describe CPU usage of a single thread instead
+            // of all threads. So migrate from the old style.
+            self.heavy_load_threshold = 75;
+        }
+
         Ok(())
     }
 
@@ -387,8 +422,7 @@ impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = c.clone();
-            self.config
-                .update(move |cfg: &mut Config| cfg.update(change));
+            self.config.update(move |cfg| cfg.update(change));
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
             }

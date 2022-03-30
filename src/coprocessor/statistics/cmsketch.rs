@@ -6,6 +6,7 @@ use murmur3::murmur3_x64_128;
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
 #[derive(Clone)]
 pub struct CmSketch {
+    #[allow(dead_code)]
     depth: usize,
     width: usize,
     count: u32,
