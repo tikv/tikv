@@ -1034,7 +1034,6 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            println!("{:?}", DOWNSTREAM_ID_ALLOC);
             Downstream::new(peer, epoch, id, ConnID::new())
         };
 
