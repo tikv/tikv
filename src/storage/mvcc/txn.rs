@@ -146,7 +146,6 @@ impl MvccTxn {
         self.modifies.push(write);
     }
 
-
     /// Add the timestamp of the current rollback operation to another transaction's lock if
     /// necessary.
     ///

@@ -79,7 +79,7 @@ impl Modify {
     pub fn size(&self) -> usize {
         let cf = match self {
             Modify::Delete(cf, _) => cf,
-            Modify::SingleDelete(cf, _) => cf,  // todo: verify
+            Modify::SingleDelete(cf, _) => cf, // todo: verify
             Modify::Put(cf, ..) => cf,
             Modify::PessimisticLock(..) => &CF_LOCK,
             Modify::DeleteRange(..) => unreachable!(),

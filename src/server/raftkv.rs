@@ -358,7 +358,7 @@ where
                     let bytes = keys::data_end_key(key2.as_encoded());
                     *key2 = Key::from_encoded(bytes);
                 }
-                Modify::SingleDelete(..) => unimplemented!()
+                Modify::SingleDelete(..) => unimplemented!(),
             }
         }
         write_modifies(&self.engine, modifies)
