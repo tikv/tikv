@@ -21,7 +21,7 @@ use getset::Getters;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb::PeerStats;
+use kvproto::pdpb::{PeerStats, StoreStats};
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
     RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
@@ -51,7 +51,7 @@ use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal, StoreInfo};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
@@ -461,6 +461,14 @@ pub enum ForceLeaderState {
     ForceLeader { failed_stores: HashSet<u64> },
 }
 
+pub struct UnsafeRecoveryState {
+    // During unsafe recovery, in order to make sure the report send to PD contains the up-to-date
+    // information, each peer has to make sure that certain entries are not only commited but also
+    // applied, and who ever is the last one needs to schedule the reporting.
+    pub wait_apply_target_index: Option<u64>,
+    pub wait_apply_task_counter: Option<Arc<AtomicUsize>>,
+}
+
 #[derive(Getters)]
 pub struct Peer<EK, ER>
 where
@@ -634,6 +642,7 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
+    pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -762,6 +771,7 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
+            unsafe_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2341,6 +2351,14 @@ where
             }
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
+
+            if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
+                if self.raft_group.store().applied_index()
+                    == unsafe_recovery_state.wait_apply_target_index.unwrap()
+                {
+                    self.unsafe_recovery_finish_wait_apply(ctx);
+                }
+            }
         }
 
         Some(ReadyResult {
@@ -4473,6 +4491,57 @@ where
                     "peer_id" => self.peer_id(),
                     "err" => %e,
                 );
+            }
+        }
+    }
+
+    pub fn unsafe_recovery_wait_apply<T>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T>,
+        counter: Arc<AtomicUsize>,
+    ) {
+        self.unsafe_recovery_state = Some(UnsafeRecoveryState {
+            wait_apply_target_index: Some(self.raft_group.store().commit_index()),
+            wait_apply_task_counter: Some(counter),
+        });
+        if self.raft_group.store().applied_index()
+            == *self
+                .unsafe_recovery_state
+                .as_ref()
+                .unwrap()
+                .wait_apply_target_index
+                .as_ref()
+                .unwrap()
+        {
+            self.unsafe_recovery_finish_wait_apply(ctx);
+        }
+    }
+
+    pub fn unsafe_recovery_finish_wait_apply<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.take() {
+            if let Some(counter) = unsafe_recovery_state.wait_apply_task_counter {
+                if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    let mut stats = StoreStats::default();
+                    stats.set_store_id(self.peer.get_store_id());
+                    let store_info = StoreInfo {
+                        kv_engine: ctx.engines.kv.clone(),
+                        raft_engine: ctx.engines.raft.clone(),
+                        capacity: ctx.cfg.capacity.0,
+                    };
+                    let task = PdTask::StoreHeartbeat {
+                        stats,
+                        store_info,
+                        send_detailed_report: true,
+                        dr_autosync_status: ctx
+                            .global_replication_state
+                            .lock()
+                            .unwrap()
+                            .store_dr_autosync_status(),
+                    };
+                    if let Err(e) = ctx.pd_scheduler.schedule(task) {
+                        panic!("fail to send detailed report to pd {:?}", e);
+                    }
+                }
             }
         }
     }
