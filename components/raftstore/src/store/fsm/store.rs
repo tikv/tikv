@@ -854,17 +854,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 inspector.record_store_process(dur);
             }
         }
+        let write_begin = TiInstant::now();
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.has_ready {
-                let write_begin = TiInstant::now();
                 write_worker.write_to_db(false);
-                let write_finish = TiInstant::now();
 
                 if !latency_inspect.is_empty() {
                     for mut inspector in latency_inspect {
-                        inspector.record_store_write(
-                            write_finish.saturating_duration_since(write_begin),
-                        );
+                        inspector.record_store_write(write_begin.saturating_elapsed());
                         inspector.finish();
                     }
                 }
@@ -878,11 +875,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         } else {
-            let now = TiInstant::now();
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
             if let Err(err) =
                 self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                    send_time: now,
+                    send_time: write_begin,
                     inspector: latency_inspect,
                 })
             {
