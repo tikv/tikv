@@ -141,7 +141,7 @@ impl CfStatistics {
                 GcKeysDetail::seek_for_prev_tombstone,
                 self.seek_for_prev_tombstone,
             ),
-            (GcKeysDetail::ttl_tombstone, self.raw_value_tombstone),
+            (GcKeysDetail::raw_value_tombstone, self.raw_value_tombstone),
         ]
     }
 
