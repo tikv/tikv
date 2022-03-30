@@ -13,11 +13,11 @@ name = "gen_proxy_ffi"
 path = "bin.rs"
 
 [dependencies.bindgen]
-version = ""
+version = "0.57.0"
 default-features = false
 # features = ["which-rustfmt"]
 
 [dependencies]
 walkdir = "2"
 # md5 = ""
-clap = ""
+clap = "2.33.0"

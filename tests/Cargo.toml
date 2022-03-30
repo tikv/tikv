@@ -15,7 +15,6 @@ path = "integrations/mod.rs"
 required-features = ["testexport"]
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "test-raftstore-proxy"]
 default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure", "test-raftstore-proxy"]
 test-raftstore-proxy = ["raftstore/test-raftstore-proxy"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
@@ -120,6 +119,7 @@ engine_traits = { path = "../components/engine_traits", default-features = false
 external_storage_export = { path = "../components/external_storage/export", default-features = false }
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys", default-features = false }
+profiler = { path = "../components/profiler" }
 security = { path = "../components/security", default-features = false }
 sst_importer = {path = "../components/sst_importer", default-features = false }
 test_util = { path = "../components/test_util", default-features = false }

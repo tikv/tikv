@@ -19,7 +19,7 @@ protobuf-codec = [
 [dependencies]
 server = { path = "../components/server" }
 raftstore = { path = "../components/raftstore", default-features = false }
-protobuf=""
+protobuf = "2.8.0"
 kvproto = { rev = "706fcaf286c8dd07ef59349c089f53289a32ce4c", git = "https://github.com/pingcap/kvproto.git", default-features = false }
 tikv_util = { path = "../components/tikv_util", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
