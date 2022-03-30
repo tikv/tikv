@@ -875,7 +875,9 @@ where
     fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
         self.fsm.peer.unsafe_recovery_wait_apply(self.ctx, counter);
         if self.fsm.stopped {
-            self.fsm.peer.unsafe_recovery_finish_wait_apply(self.ctx);
+            self.fsm
+                .peer
+                .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ true);
         }
     }
 
@@ -1899,14 +1901,10 @@ where
             }
         }
         // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
-        if let Some(unsafe_recovery_state) = self.fsm.peer.unsafe_recovery_state.as_ref() {
-            if let Some(wait_apply_target_index) =
-                unsafe_recovery_state.wait_apply_target_index.as_ref()
-            {
-                if self.fsm.peer.raft_group.store().applied_index() >= *wait_apply_target_index {
-                    self.fsm.peer.unsafe_recovery_finish_wait_apply(self.ctx);
-                }
-            }
+        if self.fsm.peer.unsafe_recovery_state.is_some() {
+            self.fsm
+                .peer
+                .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false);
         }
     }
 
@@ -3006,10 +3004,10 @@ where
         assert!(!self.fsm.peer.is_handling_snapshot());
 
         // No need to wait for the apply anymore.
-        if let Some(unsafe_recovery_state) = self.fsm.peer.unsafe_recovery_state.as_ref() {
-            if unsafe_recovery_state.wait_apply_target_index.is_some() {
-                self.fsm.peer.unsafe_recovery_finish_wait_apply(self.ctx);
-            }
+        if self.fsm.peer.unsafe_recovery_state.is_some() {
+            self.fsm
+                .peer
+                .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ true);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();

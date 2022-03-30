@@ -21,7 +21,7 @@ use getset::Getters;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb::{PeerStats, StoreStats};
+use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
     RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
@@ -51,7 +51,7 @@ use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal, StoreInfo};
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
@@ -62,8 +62,8 @@ use crate::store::worker::{
     RegionTask, SplitCheckTask,
 };
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
-    RAFT_INIT_LOG_INDEX,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, StoreMsg,
+    TxnExt, RAFT_INIT_LOG_INDEX,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -2352,12 +2352,8 @@ where
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
 
-            if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
-                if self.raft_group.store().applied_index()
-                    == unsafe_recovery_state.wait_apply_target_index.unwrap()
-                {
-                    self.unsafe_recovery_finish_wait_apply(ctx);
-                }
+            if self.unsafe_recovery_state.is_some() {
+                self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
             }
         }
 
@@ -4504,43 +4500,29 @@ where
             wait_apply_target_index: Some(self.raft_group.store().commit_index()),
             wait_apply_task_counter: Some(counter),
         });
-        if self.raft_group.store().applied_index()
-            == *self
-                .unsafe_recovery_state
-                .as_ref()
-                .unwrap()
-                .wait_apply_target_index
-                .as_ref()
-                .unwrap()
-        {
-            self.unsafe_recovery_finish_wait_apply(ctx);
-        }
+        self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
     }
 
-    pub fn unsafe_recovery_finish_wait_apply<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.take() {
-            if let Some(counter) = unsafe_recovery_state.wait_apply_task_counter {
-                if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                    let mut stats = StoreStats::default();
-                    stats.set_store_id(self.peer.get_store_id());
-                    let store_info = StoreInfo {
-                        kv_engine: ctx.engines.kv.clone(),
-                        raft_engine: ctx.engines.raft.clone(),
-                        capacity: ctx.cfg.capacity.0,
-                    };
-                    let task = PdTask::StoreHeartbeat {
-                        stats,
-                        store_info,
-                        send_detailed_report: true,
-                        dr_autosync_status: ctx
-                            .global_replication_state
-                            .lock()
-                            .unwrap()
-                            .store_dr_autosync_status(),
-                    };
-                    if let Err(e) = ctx.pd_scheduler.schedule(task) {
-                        panic!("fail to send detailed report to pd {:?}", e);
+    pub fn unsafe_recovery_maybe_finish_wait_apply<T>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T>,
+        force: bool,
+    ) {
+        if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
+            if let Some(target_index) = unsafe_recovery_state.wait_apply_target_index {
+                if self.raft_group.store().applied_index() >= target_index || force {
+                    if let Some(counter) = unsafe_recovery_state.wait_apply_task_counter.as_ref() {
+                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                            if let Err(e) = ctx
+                                .router
+                                .send_control(StoreMsg::SendDetailedReportForUnsafeRecovery)
+                            {
+                                error!("fail to schedule store reporting for unsafe recovery "; "err" => ?e);
+                            }
+                        }
                     }
+                    // Reset the state if the wait is finished.
+                    self.unsafe_recovery_state = None;
                 }
             }
         }
