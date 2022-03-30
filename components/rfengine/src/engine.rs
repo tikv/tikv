@@ -9,7 +9,6 @@ use raft_proto::eraftpb;
 use slog_global::info;
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use std::{
@@ -31,7 +30,7 @@ pub struct RFEngine {
     pub dir: PathBuf,
     pub(crate) writer: Arc<Mutex<WALWriter>>,
 
-    pub(crate) regions: Arc<dashmap::DashMap<u64, RegionData>>,
+    pub(crate) regions: Arc<dashmap::DashMap<u64, RwLock<RegionData>>>,
 
     pub(crate) task_sender: SyncSender<Task>,
     pub(crate) worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -284,9 +283,8 @@ impl RFEngine {
             offset = en.load_epoch(ep)?;
             if ep.has_state_file {
                 for e in en.regions.iter() {
-                    let region = e.value();
-                    let states = region.states.read().unwrap();
-                    worker_states.insert(region.region_id, states.clone());
+                    let region = e.read().unwrap();
+                    worker_states.insert(region.region_id, region.states.clone());
                 }
             }
         }
@@ -295,13 +293,7 @@ impl RFEngine {
             epoches.pop();
         }
         {
-            let mut worker = Worker::new(
-                dir.to_owned(),
-                epoches,
-                rx,
-                en.regions.clone(),
-                worker_states,
-            );
+            let mut worker = Worker::new(dir.to_owned(), epoches, rx, worker_states);
             let join_handle = thread::spawn(move || worker.run());
             let mut handle_ref = en.worker_handle.lock().unwrap();
             *handle_ref = Some(join_handle);
@@ -338,10 +330,18 @@ impl RFEngine {
         let timer = Instant::now();
         for (region_id, batch_data) in &wb.regions {
             let region_id = *region_id;
-            let region_data = self.get_or_init_region_data(region_id);
-            region_data.apply(batch_data);
-            if region_data.need_truncate() {
-                self.task_sender.send(Task::Truncate { region_id }).unwrap();
+            let region_ref = self.get_or_init_region_data(region_id);
+            let mut region_data = region_ref.write().unwrap();
+            let truncated = region_data.apply(batch_data);
+            let truncated_index = region_data.truncated_idx;
+            if truncated.len() > 0 {
+                self.task_sender
+                    .send(Task::Truncate {
+                        region_id,
+                        truncated_index,
+                        truncated,
+                    })
+                    .unwrap();
             }
         }
         ENGINE_APPLY_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
@@ -356,22 +356,23 @@ impl RFEngine {
         if map_ref.is_none() {
             return None;
         }
-        let region_data = map_ref.unwrap();
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
         region_data.term(index)
     }
 
-    pub fn get_range(&self, region_id: u64) -> Option<(u64, u64)> {
+    pub fn get_last_index(&self, region_id: u64) -> Option<u64> {
         let map_ref = self.regions.get(&region_id);
         if map_ref.is_none() {
             return None;
         }
-        let region_data = map_ref.unwrap();
-        let first = region_data.raft_logs.load_first();
-        let end = region_data.raft_logs.load_end();
-        if first == 0 {
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
+        let last = region_data.raft_logs.last_index();
+        if last == 0 {
             return None;
         }
-        Some((first, end))
+        Some(last)
     }
 
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
@@ -379,7 +380,8 @@ impl RFEngine {
         if map_ref.is_none() {
             return None;
         }
-        let region_data = map_ref.unwrap();
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
         match region_data.get_state(key) {
             Some(val) => {
                 if val.len() > 0 {
@@ -397,11 +399,12 @@ impl RFEngine {
         if map_ref.is_none() {
             return None;
         }
-        let region_data = map_ref.unwrap();
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
         let mut end_prefix = Vec::from(prefix);
         end_prefix[prefix.len() - 1] += 1;
         let r = Bytes::copy_from_slice(prefix)..Bytes::copy_from_slice(&end_prefix);
-        let states = region_data.states.read().unwrap();
+        let states = &region_data.states;
         let range = states.range(r);
         for (k, v) in range.rev() {
             if k.chunk() == end_prefix.as_slice() {
@@ -412,14 +415,14 @@ impl RFEngine {
         None
     }
 
-    pub(crate) fn get_or_init_region_data(&self, region_id: u64) -> Ref<u64, RegionData> {
+    pub(crate) fn get_or_init_region_data(&self, region_id: u64) -> Ref<u64, RwLock<RegionData>> {
         match self.regions.get(&region_id) {
             Some(region_data) => {
                 return region_data;
             }
             None => {}
         }
-        let region_data = RegionData::new(region_id);
+        let region_data = RwLock::new(RegionData::new(region_id));
         self.regions.insert(region_id, region_data);
         self.regions.get(&region_id).unwrap()
     }
@@ -432,8 +435,9 @@ impl RFEngine {
         if map_ref.is_none() {
             return Ok(());
         }
-        let region_data = map_ref.unwrap();
-        let states = region_data.states.read().unwrap();
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
+        let states = &region_data.states;
         if desc {
             for (k, v) in states.iter().rev() {
                 f(k.chunk(), v.chunk())?;
@@ -451,8 +455,9 @@ impl RFEngine {
     where
         F: FnMut(u64, &[u8], &[u8]) -> bool,
     {
-        for region_data in self.regions.iter() {
-            let states = region_data.states.read().unwrap();
+        for region_ref in self.regions.iter() {
+            let region_data = region_ref.read().unwrap();
+            let states = &region_data.states;
             let iter = states.iter();
             if desc {
                 for (k, v) in iter.rev() {
@@ -488,11 +493,11 @@ impl RFEngine {
         if map_ref.is_none() {
             return;
         }
-        let region_data = map_ref.unwrap();
-        let mut deps = region_data.dependents.write().unwrap();
-        deps.insert(dependent_id);
-        let dependents_len = deps.len();
-        drop(deps);
+        let map_ref = map_ref.unwrap();
+        let mut region_data = map_ref.write().unwrap();
+        region_data.dependents.insert(dependent_id);
+        let dependents_len = region_data.dependents.len();
+        drop(region_data);
         info!(
             "region {} add dependent {}, dependents_len {}",
             region_id, dependent_id, dependents_len
@@ -504,10 +509,10 @@ impl RFEngine {
         if map_ref.is_none() {
             return;
         }
-        let region_data = map_ref.unwrap();
-        let mut deps = region_data.dependents.write().unwrap();
-        deps.remove(&dependent_id);
-        let dependents_len = deps.len();
+        let map_ref = map_ref.unwrap();
+        let mut region_data = map_ref.write().unwrap();
+        region_data.dependents.remove(&dependent_id);
+        let dependents_len = region_data.dependents.len();
         info!(
             "region {} remove dependent {}, dependents_len {}",
             region_id, dependent_id, dependents_len
@@ -525,54 +530,30 @@ pub(crate) fn maybe_create_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
 pub(crate) struct RegionData {
     pub(crate) region_id: u64,
-    pub(crate) truncated_idx: AtomicU64,
+    // truncated_idx is the max index that doesn't exists.
+    // After truncate, the first index would be truncated_idx + 1.
+    pub(crate) truncated_idx: u64,
     pub(crate) raft_logs: RaftLogs,
-    pub(crate) states: RwLock<BTreeMap<Bytes, Bytes>>,
-    pub(crate) dependents: RwLock<HashSet<u64>>,
-}
-
-impl Clone for RegionData {
-    fn clone(&self) -> Self {
-        let raft_logs = self.raft_logs.clone();
-        let states = self.states.read().unwrap().clone();
-        let dependents = self.dependents.read().unwrap().clone();
-        Self {
-            region_id: self.region_id,
-            truncated_idx: AtomicU64::new(self.load_truncate_idx()),
-            raft_logs,
-            states: RwLock::new(states),
-            dependents: RwLock::new(dependents),
-        }
-    }
+    pub(crate) states: BTreeMap<Bytes, Bytes>,
+    pub(crate) dependents: HashSet<u64>,
 }
 
 impl RegionData {
     pub(crate) fn new(region_id: u64) -> Self {
         Self {
             region_id,
-            truncated_idx: AtomicU64::new(0),
-            raft_logs: RaftLogs::new(0, 0),
-            states: RwLock::new(BTreeMap::new()),
-            dependents: RwLock::new(HashSet::new()),
+            truncated_idx: 0,
+            raft_logs: RaftLogs::new(),
+            states: BTreeMap::new(),
+            dependents: HashSet::new(),
         }
     }
 
-    pub(crate) fn append(&self, op: RaftLogOp) {
-        self.raft_logs.append(op);
-    }
-
-    pub(crate) fn load_truncate_idx(&self) -> u64 {
-        self.truncated_idx.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn store_truncate_idx(&self, idx: u64) {
-        self.truncated_idx.store(idx, Ordering::Release)
-    }
-
-    pub(crate) fn truncate_self(&self) {
-        self.raft_logs.truncate(self.load_truncate_idx());
+    pub(crate) fn append(&mut self, op: RaftLogOp) -> Vec<RaftLogBlock> {
+        self.raft_logs.append(op)
     }
 
     pub(crate) fn get(&self, index: u64) -> Option<eraftpb::Entry> {
@@ -586,120 +567,170 @@ impl RegionData {
         None
     }
 
-    pub(crate) fn get_state(&self, key: &[u8]) -> Option<Bytes> {
-        let states = self.states.read().unwrap();
-        states.get(key).cloned()
+    pub(crate) fn get_state(&self, key: &[u8]) -> Option<&Bytes> {
+        self.states.get(key)
     }
 
-    pub(crate) fn apply(&self, batch: &RegionBatch) {
-        let self_truncated_idx = self.load_truncate_idx();
-        if self_truncated_idx < batch.truncated_idx {
-            self.store_truncate_idx(batch.truncated_idx);
+    pub(crate) fn apply(&mut self, batch: &RegionBatch) -> Vec<RaftLogBlock> {
+        let mut truncated_blocks = vec![];
+        if self.truncated_idx < batch.truncated_idx {
+            self.truncated_idx = batch.truncated_idx;
         }
-        let mut states = self.states.write().unwrap();
+        if self.need_truncate() {
+            truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
+        }
         for (key, val) in &batch.states {
             if val.len() == 0 {
-                states.remove(key.chunk());
+                self.states.remove(key.chunk());
             } else {
-                states.insert(key.clone(), val.clone());
+                self.states.insert(key.clone(), val.clone());
             }
         }
-        drop(states);
         for op in &batch.raft_logs {
-            self.append(op.clone())
+            let blocks = self.append(op.clone());
+            if blocks.len() > 0 {
+                truncated_blocks.extend_from_slice(&blocks);
+            }
         }
+        truncated_blocks
     }
 
     pub(crate) fn need_truncate(&self) -> bool {
-        let dependent_empty = self.dependents.read().unwrap().is_empty();
-        let first = self.raft_logs.load_first();
-        dependent_empty && first > 0 && self.load_truncate_idx() > first
+        let dependent_empty = self.dependents.is_empty();
+        let first = self.raft_logs.first_index();
+        dependent_empty && first > 0 && self.truncated_idx > first
     }
 }
 
-pub(crate) struct RaftLogs {
-    first: AtomicU64,
-    end: AtomicU64,
-    m: dashmap::DashMap<u64, RaftLogOp>,
+#[derive(Clone)]
+pub(crate) struct RaftLogBlock {
+    logs: VecDeque<RaftLogOp>,
 }
 
-impl Clone for RaftLogs {
-    fn clone(&self) -> Self {
+impl RaftLogBlock {
+    fn new() -> Self {
         Self {
-            first: AtomicU64::new(self.load_first()),
-            end: AtomicU64::new(self.load_end()),
-            m: self.m.clone(),
+            logs: VecDeque::with_capacity(256),
         }
     }
+
+    fn first_index(&self) -> u64 {
+        self.logs.front().map_or(0, |front| front.index)
+    }
+
+    fn last_index(&self) -> u64 {
+        self.logs.back().map_or(0, |back| back.index)
+    }
+
+    fn truncate_left(&mut self, truncated_idx: u64) -> RaftLogBlock {
+        let mut truncated_block = RaftLogBlock::new();
+        loop {
+            if let Some(first) = self.logs.front() {
+                if first.index <= truncated_idx {
+                    let first = self.logs.pop_front().unwrap();
+                    truncated_block.logs.push_back(first);
+                    continue;
+                }
+            }
+            break;
+        }
+        truncated_block
+    }
+
+    fn truncate_right(&mut self, truncated_idx: u64) {
+        if truncated_idx > self.last_index() {
+            return;
+        }
+        while let Some(back) = self.logs.pop_back() {
+            if back.index < truncated_idx {
+                self.logs.push_back(back);
+                break;
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RaftLogs {
+    blocks: VecDeque<RaftLogBlock>,
 }
 
 impl RaftLogs {
-    pub(crate) fn new(first: u64, end: u64) -> RaftLogs {
+    pub(crate) fn new() -> RaftLogs {
         Self {
-            first: AtomicU64::new(first),
-            end: AtomicU64::new(end),
-            m: dashmap::DashMap::new(),
+            blocks: VecDeque::new(),
         }
     }
 
-    pub(crate) fn append(&self, op: RaftLogOp) {
+    pub(crate) fn first_index(&self) -> u64 {
+        self.blocks.front().map_or(0, |front| front.first_index())
+    }
+
+    pub(crate) fn last_index(&self) -> u64 {
+        self.blocks.back().map_or(0, |back| back.last_index())
+    }
+
+    pub(crate) fn append(&mut self, op: RaftLogOp) -> Vec<RaftLogBlock> {
+        let mut truncated_blocks = vec![];
+        let next_idx = self.last_index() + 1;
         let op_idx = op.index;
-        self.prepare_append(op_idx);
-        self.m.insert(op_idx, op);
-        self.store_end(op_idx + 1);
-    }
-
-    pub(crate) fn load_first(&self) -> u64 {
-        self.first.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn store_first(&self, idx: u64) {
-        self.first.store(idx, Ordering::Release);
-    }
-
-    pub(crate) fn load_end(&self) -> u64 {
-        self.end.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn store_end(&self, idx: u64) {
-        self.end.store(idx, Ordering::Release);
-    }
-
-    pub(crate) fn prepare_append(&self, index: u64) {
-        let first = self.load_first();
-        let end = self.load_end();
-        if first == 0 || index < first || end < index {
-            self.store_first(index);
-        }
-    }
-
-    pub(crate) fn truncate(&self, index: u64) {
-        let first = self.load_first();
-        let end = self.load_end();
-        if first == end || index <= first {
-            return;
-        }
-        let truncate_end = std::cmp::min(end, index);
-        self.store_first(truncate_end);
-        let mut to_be_removed = Vec::with_capacity(self.m.len());
-        for x in &self.m {
-            let idx = x.index;
-            if idx < truncate_end {
-                to_be_removed.push(idx);
+        if next_idx < op_idx {
+            // There is gap between existing logs and next log, clear all.
+            while let Some(block) = self.blocks.pop_front() {
+                truncated_blocks.push(block);
+            }
+        } else if op_idx < next_idx {
+            while let Some(mut block) = self.blocks.pop_back() {
+                if op_idx <= block.first_index() {
+                    truncated_blocks.push(block);
+                } else {
+                    block.truncate_right(op_idx);
+                    self.blocks.push_back(block);
+                    break;
+                }
             }
         }
-        for id in &to_be_removed {
-            self.m.remove(id);
+        match self.blocks.back() {
+            None => {
+                self.blocks.push_back(RaftLogBlock::new());
+            }
+            Some(back) => {
+                if back.logs.len() == back.logs.capacity() {
+                    self.blocks.push_back(RaftLogBlock::new());
+                }
+            }
         }
+        let back_block = self.blocks.back_mut().unwrap();
+        back_block.logs.push_back(op);
+        truncated_blocks
+    }
+
+    pub(crate) fn truncate(&mut self, index: u64) -> Vec<RaftLogBlock> {
+        let mut truncated = Vec::with_capacity(self.blocks.len());
+        while let Some(mut front) = self.blocks.pop_front() {
+            if front.last_index() <= index {
+                truncated.push(front);
+            } else {
+                let truncated_block = front.truncate_left(index);
+                truncated.push(truncated_block);
+                self.blocks.push_front(front);
+                break;
+            }
+        }
+        truncated
     }
 
     pub(crate) fn get(&self, index: u64) -> Option<eraftpb::Entry> {
-        let first = self.load_first();
-        let end = self.load_end();
-        if index < first || index >= end {
+        if self.blocks.len() == 0 {
             return None;
         }
-        let op = self.m.get(&index).unwrap();
+        let block_idx = search(self.blocks.len(), |i| self.blocks[i].last_index() >= index);
+        if block_idx >= self.blocks.len() {
+            return None;
+        }
+        let block = &self.blocks[block_idx];
+        let local_idx = (index - block.first_index()) as usize;
+        let op = &block.logs[local_idx];
         let mut entry = eraftpb::Entry::new();
         entry.set_entry_type(eraftpb::EntryType::from_i32(op.e_type as i32).unwrap());
         entry.set_term(op.term as u64);
@@ -710,6 +741,24 @@ impl RaftLogs {
         entry.set_data(op.data.clone());
         Some(entry)
     }
+}
+
+/// simple rewrite of golang sort.Search
+pub fn search<F>(n: usize, mut f: F) -> usize
+where
+    F: FnMut(usize) -> bool,
+{
+    let mut i = 0;
+    let mut j = n;
+    while i < j {
+        let h = (i + j) / 2;
+        if !f(h) {
+            i = h + 1;
+        } else {
+            j = h;
+        }
+    }
+    i
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -780,8 +829,9 @@ mod tests {
         }
         assert_eq!(engine.regions.len(), 10);
         let mut old_entries_map = HashMap::new();
-        for region_data in engine.regions.iter() {
-            assert_eq!(*region_data.key(), region_data.region_id);
+        for region_ref in engine.regions.iter() {
+            let region_data = region_ref.read().unwrap();
+            assert_eq!(*region_ref.key(), region_data.region_id);
             old_entries_map.insert(region_data.region_id, region_data.clone());
         }
         assert_eq!(old_entries_map.len(), 10);
@@ -794,16 +844,19 @@ mod tests {
                 true
             });
             assert_eq!(engine.regions.len(), 10);
-            for new_data in engine.regions.iter() {
-                let old_data = old_entries_map.get(new_data.key()).unwrap();
-                assert_eq!(old_data.load_truncate_idx(), new_data.load_truncate_idx());
+            for new_data_ref in engine.regions.iter() {
+                let new_data = new_data_ref.read().unwrap();
+                let old_data = old_entries_map.get(new_data_ref.key()).unwrap();
+                assert_eq!(old_data.truncated_idx, new_data.truncated_idx);
                 assert_eq!(
-                    old_data.raft_logs.load_first(),
-                    new_data.raft_logs.load_first()
+                    old_data.raft_logs.first_index(),
+                    new_data.raft_logs.first_index()
                 );
-                assert_eq!(old_data.raft_logs.load_end(), new_data.raft_logs.load_end());
-                assert_eq!(old_data.raft_logs.len(), new_data.raft_logs.len());
-                for i in new_data.raft_logs.load_first()..new_data.raft_logs.load_end() {
+                assert_eq!(
+                    old_data.raft_logs.last_index(),
+                    new_data.raft_logs.last_index()
+                );
+                for i in new_data.raft_logs.first_index()..=new_data.raft_logs.last_index() {
                     let entry = new_data.raft_logs.get(i).unwrap();
                     assert_eq!(
                         old_data.get(entry.index).unwrap().data.chunk(),

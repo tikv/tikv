@@ -20,7 +20,8 @@ impl RaftEngineReadOnly for RFEngine {
         if map_ref.is_none() {
             return Ok(None);
         }
-        let region_data = map_ref.unwrap();
+        let map_ref = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
         Ok(region_data.get(index))
     }
 
@@ -37,8 +38,9 @@ impl RaftEngineReadOnly for RFEngine {
         if map_ref.is_none() {
             return Ok(0);
         }
+        let map_ref = map_ref.unwrap();
         let timer = Instant::now();
-        let region_data = map_ref.unwrap();
+        let region_data = map_ref.read().unwrap();
         for i in low..high {
             let res = region_data.get(i);
             if res.is_none() {

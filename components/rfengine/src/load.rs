@@ -121,9 +121,9 @@ impl RFEngine {
     pub(crate) fn load_wal_file(&mut self, epoch_id: u32) -> Result<u64> {
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
         it.iterate(|new_data| {
-            let region_data = self.get_or_init_region_data(new_data.region_id);
-            region_data.apply(&new_data);
-            region_data.truncate_self()
+            let region_ref = self.get_or_init_region_data(new_data.region_id);
+            let mut region_data = region_ref.write().unwrap();
+            let _ = region_data.apply(&new_data);
         })?;
         Ok(it.offset)
     }
@@ -149,9 +149,11 @@ impl RFEngine {
             data = &data[4..];
             let val = &data[..val_len];
             data = &data[val_len..];
-            let region_data = self.get_or_init_region_data(region_id);
-            let mut states = region_data.states.write().unwrap();
-            states.insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(val));
+            let region_ref = self.get_or_init_region_data(region_id);
+            let mut region_data = region_ref.write().unwrap();
+            region_data
+                .states
+                .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(val));
         }
         Ok(())
     }
@@ -166,9 +168,9 @@ impl RFEngine {
         let rlog_filename = raft_log_file_name(&self.dir, epoch_id, region_id, first, end);
         let bin = read_checksum_file(&rlog_filename)?;
         let new_data = RegionBatch::decode(&bin);
-        let old_data = self.get_or_init_region_data(new_data.region_id);
-        old_data.apply(&new_data);
-        old_data.truncate_self();
+        let old_data_ref = self.get_or_init_region_data(new_data.region_id);
+        let mut old_data = old_data_ref.write().unwrap();
+        let _ = old_data.apply(&new_data);
         Ok(())
     }
 }

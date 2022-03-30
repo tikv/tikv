@@ -20,7 +20,6 @@ use crate::*;
 pub(crate) struct Worker {
     dir: PathBuf,
     epoches: Vec<Epoch>,
-    region_data: Arc<dashmap::DashMap<u64, RegionData>>,
     truncated_idx: HashMap<u64, u64>,
     writer: DirectWriter,
     task_rx: Receiver<Task>,
@@ -33,7 +32,6 @@ impl Worker {
         dir: PathBuf,
         epoches: Vec<Epoch>,
         task_rx: Receiver<Task>,
-        region_data: Arc<dashmap::DashMap<u64, RegionData>>,
         all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
     ) -> Self {
         let rate_limiter = Arc::new(file_system::IORateLimiter::new(
@@ -46,7 +44,6 @@ impl Worker {
         Self {
             dir,
             epoches,
-            region_data,
             truncated_idx: HashMap::new(),
             writer,
             task_rx,
@@ -66,8 +63,12 @@ impl Worker {
                 Task::Rotate { epoch_id } => {
                     self.handle_rotate_task(epoch_id);
                 }
-                Task::Truncate { region_id } => {
-                    self.handle_truncate_task(region_id);
+                Task::Truncate {
+                    region_id,
+                    truncated_index,
+                    truncated,
+                } => {
+                    self.handle_truncate_task(region_id, truncated_index, truncated);
                 }
                 Task::Close => return,
             }
@@ -173,27 +174,18 @@ impl Worker {
         Ok(())
     }
 
-    fn handle_truncate_task(&mut self, region_id: u64) {
-        let map_ref = self.region_data.get(&region_id);
-        if map_ref.is_none() {
-            return;
-        }
-        let region_data = map_ref.unwrap();
-        if !region_data.need_truncate() {
-            return;
-        }
+    fn handle_truncate_task(&mut self, region_id: u64, truncated_index: u64, truncated: Vec<RaftLogBlock>) {
         let timer = Instant::now();
-        let index = region_data.load_truncate_idx();
-        region_data.truncate_self();
+        drop(truncated);
         ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
-        self.truncated_idx.insert(region_id, index);
+        self.truncated_idx.insert(region_id, truncated_index);
         let mut removed_epoch_ids = HashSet::new();
         let mut remove_cnt = 0;
         let mut retain_cnt = 0;
         for ep in &mut self.epoches {
             let mut raft_log_files = ep.raft_log_files.lock().unwrap();
             if let Some((first, end)) = raft_log_files.get(&region_id) {
-                if *end <= index {
+                if *end <= truncated_index {
                     let filename = raft_log_file_name(&self.dir, ep.id, region_id, *first, *end);
                     if let Err(err) = fs::remove_file(filename.clone()) {
                         error!("failed to remove rlog file {:?}, {:?}", filename, err);
@@ -210,7 +202,7 @@ impl Worker {
         }
         info!(
             "region {} truncate raft log to {}, remove {} files, retain {} files",
-            region_id, index, remove_cnt, retain_cnt
+            region_id, truncated_index, remove_cnt, retain_cnt
         );
         if removed_epoch_ids.len() == 0 {
             return;
@@ -246,7 +238,13 @@ pub(crate) fn recycle_file_name(dir: &PathBuf, epoch_id: u32) -> PathBuf {
 }
 
 pub(crate) enum Task {
-    Rotate { epoch_id: u32 },
-    Truncate { region_id: u64 },
+    Rotate {
+        epoch_id: u32,
+    },
+    Truncate {
+        region_id: u64,
+        truncated_index: u64,
+        truncated: Vec<RaftLogBlock>,
+    },
     Close,
 }

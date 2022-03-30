@@ -580,8 +580,8 @@ pub fn clear_meta(
         Ok(())
     })
     .unwrap();
-    if let Some((_, end_idx)) = raft.get_range(region_id) {
-        raft_wb.truncate_raft_log(region_id, end_idx);
+    if let Some(last_idx) = raft.get_last_index(region_id) {
+        raft_wb.truncate_raft_log(region_id, last_idx);
     }
 }
 
