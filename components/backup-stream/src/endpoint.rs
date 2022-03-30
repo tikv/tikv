@@ -19,7 +19,6 @@ use resolved_ts::Resolver;
 
 use tikv_util::time::Instant;
 
-use crossbeam_channel::tick;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
@@ -143,10 +142,9 @@ where
     PDC: PdClient + 'static,
 {
     async fn starts_flush_ticks(router: Router) {
-        let ticker = tick(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 5));
         loop {
             // wait 1min to trigger tick
-            let _ = ticker.recv().unwrap();
+            tokio::time::sleep(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 5)).await;
             debug!("backup stream trigger flush tick");
             router.tick().await;
         }
