@@ -900,6 +900,13 @@ where
                     self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
                 }
             }
+<<<<<<< HEAD
+=======
+            CasualMessage::RenewLease => {
+                self.try_renew_leader_lease("casual message");
+                self.reset_raft_tick(GroupState::Ordered);
+            }
+>>>>>>> c7cbaf4d3... raftstore: ignore stale read states (#12300)
             CasualMessage::RejectRaftAppend { peer_id } => {
                 let mut msg = raft::eraftpb::Message::new();
                 msg.msg_type = MessageType::MsgUnreachable;
@@ -1465,6 +1472,72 @@ where
                 }
             }
         }
+<<<<<<< HEAD
+=======
+        // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
+        if let Some(target_commit_index) = self.fsm.unsafe_recovery_target_commit_index {
+            if self.fsm.peer.raft_group.store().applied_index() >= target_commit_index {
+                self.finish_unsafe_recovery_wait_apply();
+            }
+        }
+    }
+
+    fn retry_pending_prepare_merge(&mut self, applied_index: u64) {
+        if self.fsm.peer.prepare_merge_fence > 0
+            && applied_index >= self.fsm.peer.prepare_merge_fence
+        {
+            if let Some(pending_prepare_merge) = self.fsm.peer.pending_prepare_merge.take() {
+                self.propose_raft_command_internal(
+                    pending_prepare_merge,
+                    Callback::None,
+                    DiskFullOpt::AllowedOnAlmostFull,
+                );
+            }
+            // When applied index reaches prepare_merge_fence, always clear the fence.
+            // So, even if the PrepareMerge fails to propose, we can ensure the region
+            // will be able to serve again.
+            self.fsm.peer.prepare_merge_fence = 0;
+            assert!(self.fsm.peer.pending_prepare_merge.is_none());
+        }
+    }
+
+    // If lease expired, we will send a noop read index to renew lease.
+    fn try_renew_leader_lease(&mut self, reason: &str) {
+        debug!(
+            "renew lease";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "reason" => reason,
+        );
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        if let Err(e) = self.fsm.peer.pre_read_index() {
+            debug!(
+                "prevent unsafe read index to renew leader lease";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => ?e,
+            );
+            self.ctx.raft_metrics.propose.unsafe_read_index += 1;
+            return;
+        }
+
+        let current_time = *self.ctx.current_time.get_or_insert_with(monotonic_raw_now);
+        if self.fsm.peer.need_renew_lease_at(self.ctx, current_time) {
+            let mut cmd = new_read_index_request(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                self.fsm.peer.peer.clone(),
+            );
+            cmd.mut_header().set_read_quorum(true);
+            self.propose_raft_command_internal(
+                cmd,
+                Callback::Read(Box::new(|_| ())),
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
+        }
+>>>>>>> c7cbaf4d3... raftstore: ignore stale read states (#12300)
     }
 
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
@@ -1610,6 +1683,16 @@ where
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
+            // This can be a message that sent when it's still a follower. Nevertheleast,
+            // it's meaningless to continue to handle the request as callbacks are cleared.
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+                && self.fsm.peer.is_leader()
+                && (msg.get_message().get_from() == raft::INVALID_ID
+                    || msg.get_message().get_from() == self.fsm.peer_id())
+            {
+                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                return Ok(());
+            }
             self.fsm.peer.step(self.ctx, msg.take_message())
         };
 
@@ -4039,6 +4122,22 @@ where
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn register_check_leader_lease_tick(&mut self) {
+        self.schedule_tick(PeerTick::CheckLeaderLease)
+    }
+
+    fn on_check_leader_lease_tick(&mut self) {
+        if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+        self.try_renew_leader_lease("tick");
+        self.register_check_leader_lease_tick();
+    }
+
+>>>>>>> c7cbaf4d3... raftstore: ignore stale read states (#12300)
     fn register_split_region_check_tick(&mut self) {
         self.schedule_tick(PeerTicks::SPLIT_REGION_CHECK)
     }
