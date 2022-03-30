@@ -1034,6 +1034,7 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
+            println!("{:?}", DOWNSTREAM_ID_ALLOC);
             Downstream::new(peer, epoch, id, ConnID::new())
         };
 
@@ -1043,14 +1044,18 @@ mod tests {
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
-        // Subscribe once, downstream id will be 0.
-        delegate.subscribe(new_downstream(1, 1)).unwrap();
+        // Subscribe once.
+        let downstream1 = new_downstream(1, 1);
+        let downstream1_id = downstream1.id;
+        delegate.subscribe(downstream1).unwrap();
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
-        delegate.subscribe(new_downstream(2, 1)).unwrap();
-        assert!(!delegate.unsubscribe(DownstreamID(1), None));
+        let downstream2 = new_downstream(2, 1);
+        let downstream2_id = downstream2.id;
+        delegate.subscribe(downstream2).unwrap();
+        assert!(!delegate.unsubscribe(downstream2_id, None));
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
@@ -1074,7 +1079,7 @@ mod tests {
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
-        assert!(delegate.unsubscribe(DownstreamID(0), None));
+        assert!(delegate.unsubscribe(downstream1_id, None));
         assert!(delegate.downstreams().is_empty());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(!delegate.handle.is_observing());
