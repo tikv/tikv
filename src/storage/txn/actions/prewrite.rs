@@ -218,6 +218,7 @@ impl LockStatus {
 }
 
 /// A single mutation to be prewritten.
+#[derive(Debug)]
 struct PrewriteMutation<'a> {
     key: Key,
     value: Option<Value>,
@@ -499,20 +500,26 @@ impl<'a> PrewriteMutation<'a> {
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.write_loaded.inc();
         }
 
-        match (self.assertion, write) {
+        let res = match (self.assertion, write) {
             (Assertion::Exist, None) => {
-                info!("assertion failed: exist, previous write record not found";);
-                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())?
+                self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())
             }
             (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
-                info!("assertion failed: exist"; "write" => ?w, "commit_ts" => commit_ts);
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
             (Assertion::NotExist, Some((w, commit_ts))) if w.write_type == WriteType::Put => {
-                info!("assertion failed: not exist"; "write" => ?w, "commit_ts" => commit_ts);
-                self.assertion_failed_error(w.start_ts, *commit_ts)?;
+                self.assertion_failed_error(w.start_ts, *commit_ts)
             }
-            _ => (),
+            _ => Ok(()),
+        };
+        if res.is_err() {
+            let (write, commit_ts) = write
+                .clone()
+                .map(|(w, ts)| (Some(w), Some(ts)))
+                .unwrap_or((None, None));
+            error!("assertion failure"; "assertion" => ?self.assertion, "write" => ?write, 
+            "commit_ts" => commit_ts, "mutation" => ?self);
+            res?
         }
 
         Ok((reloaded_write, reloaded))
