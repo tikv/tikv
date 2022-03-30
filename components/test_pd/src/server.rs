@@ -1,13 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::{future, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{future, SinkExt, TryFutureExt, TryStreamExt};
 use grpcio::{
-    DuplexSink, EnvBuilder, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
-    RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
+    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+    Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
 };
 
 use pd_client::Error as PdError;
@@ -53,6 +54,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let mocker = PdMock {
             default_handler,
             case,
+            tso_logical: Arc::new(AtomicI64::default()),
         };
         let mut server = Server {
             server: None,
@@ -165,6 +167,7 @@ fn hijack_unary<F, R, C: PdMocker>(
 struct PdMock<C: PdMocker> {
     default_handler: Arc<Service>,
     case: Option<Arc<C>>,
+    tso_logical: Arc<AtomicI64>,
 }
 
 impl<C: PdMocker> Clone for PdMock<C> {
@@ -172,6 +175,7 @@ impl<C: PdMocker> Clone for PdMock<C> {
         PdMock {
             default_handler: Arc::clone(&self.default_handler),
             case: self.case.clone(),
+            tso_logical: self.tso_logical.clone(),
         }
     }
 }
@@ -234,13 +238,17 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         mut resp: DuplexSink<TsoResponse>,
     ) {
         let header = Service::header();
+        let tso_logical = self.tso_logical.clone();
         let fut = async move {
-            resp.send_all(&mut req.map(move |_| {
-                let mut r = TsoResponse::default();
-                r.set_header(header.clone());
-                r.mut_timestamp().physical = 42;
-                r.count = 1;
-                GrpcResult::Ok((r, WriteFlags::default()))
+            resp.send_all(&mut req.map_ok(move |r| {
+                let logical =
+                    tso_logical.fetch_add(r.count as i64, Ordering::SeqCst) + r.count as i64;
+                let mut res = TsoResponse::default();
+                res.set_header(header.clone());
+                res.mut_timestamp().physical = 42;
+                res.mut_timestamp().logical = logical;
+                res.count = r.count;
+                (res, WriteFlags::default())
             }))
             .await
             .unwrap();
