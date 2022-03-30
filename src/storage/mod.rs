@@ -84,6 +84,7 @@ use crate::storage::{
 use api_version::{
     match_template_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL, APIV2,
 };
+use causal_ts;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -110,10 +111,6 @@ use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
-
-use causal_ts;
-
-use causal_ts;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;

@@ -92,6 +92,15 @@ impl Modify {
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
+
+    pub fn key(&self) -> &Key {
+        match self {
+            Modify::Delete(_, ref k) => k,
+            Modify::Put(_, ref k, _) => k,
+            Modify::PessimisticLock(ref k, _) => k,
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
 }
 
 impl From<Modify> for raft_cmdpb::Request {
