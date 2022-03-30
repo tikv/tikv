@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::sync::{Arc, RwLock};
 
-use crate::errors::Error;
 use crate::try_send;
 use crate::utils::SegmentSet;
 use dashmap::DashMap;
@@ -52,6 +51,7 @@ impl BackupStreamObserver {
 
     /// The internal way to register a region.
     /// It delegate the initial scanning and modify of the subs to the endpoint.
+    #[cfg(test)]
     fn register_region(&self, region: &Region) {
         if let Err(err) = self
             .scheduler
@@ -60,6 +60,7 @@ impl BackupStreamObserver {
                 needs_initial_scanning: true,
             }))
         {
+            use crate::errors::Error;
             Error::from(err).report(format_args!(
                 "failed to schedule role change for region {}",
                 region.get_id()
@@ -171,7 +172,12 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
 
     fn on_applied_current_term(&self, role: StateRole, region: &Region) {
         if role == StateRole::Leader && self.should_register_region(region) {
-            self.register_region(region);
+            try_send!(
+                self.scheduler,
+                Task::ModifyObserve(ObserveOp::Start {
+                    region: region.clone(),
+                })
+            );
         }
     }
 }

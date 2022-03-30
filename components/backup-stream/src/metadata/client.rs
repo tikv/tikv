@@ -307,8 +307,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     /// insert a task with ranges into the metadata store.
     /// the current abstraction of metadata store doesn't support transaction API.
     /// Hence this function is non-transactional and only for testing.
-    #[cfg(test)]
-    pub(crate) async fn insert_task_with_range(
+    pub async fn insert_task_with_range(
         &self,
         task: &StreamTask,
         ranges: &[(&[u8], &[u8])],
@@ -330,8 +329,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
     /// remove some task, without the ranges.
     /// only for testing.
-    #[cfg(test)]
-    pub(crate) async fn remove_task(&self, name: &str) -> Result<()> {
+    pub async fn remove_task(&self, name: &str) -> Result<()> {
         self.meta_store
             .delete(Keys::Key(MetaKey::task_of(name)))
             .await

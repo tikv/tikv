@@ -142,6 +142,17 @@ impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
     }
 }
 
+struct RangeToExclusiveRef<'a, T: ?Sized>(&'a T);
+
+impl<'a, T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'a, T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Excluded(self.0)
+    }
+}
 #[derive(Default, Debug, Clone)]
 pub struct SegmentMap<K: Ord, V>(BTreeMap<K, SegmentValue<K, V>>);
 
@@ -166,18 +177,6 @@ impl<K: Ord, V: Default> SegmentMap<K, V> {
     /// - If overlapping detected, do nothing and return `false`.
     pub fn add(&mut self, (start, end): (K, K)) -> bool {
         self.insert((start, end), V::default())
-    }
-}
-
-struct RangeToExclusiveRef<'a, T: ?Sized>(&'a T);
-
-impl<'a, T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'a, T> {
-    fn start_bound(&self) -> Bound<&T> {
-        Bound::Unbounded
-    }
-
-    fn end_bound(&self) -> Bound<&T> {
-        Bound::Excluded(self.0)
     }
 }
 

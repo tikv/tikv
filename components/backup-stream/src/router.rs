@@ -446,6 +446,7 @@ impl RouterInner {
             Some(task_info) => {
                 let result = task_info.do_flush(store_id, resolve_to).await;
                 if let Err(ref e) = result {
+                    e.report("failed to flush task.");
                     warn!("backup steam do flush fail"; "err" => ?e);
                 }
 

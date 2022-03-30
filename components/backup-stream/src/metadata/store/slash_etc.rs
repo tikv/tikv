@@ -16,6 +16,7 @@ use std::{
     ops::Bound,
     sync::Arc,
 };
+use tikv_util::warn;
 use tokio::sync::{
     mpsc::{self, Sender},
     Mutex,
@@ -50,7 +51,10 @@ impl Snapshot for WithRevision<SlashEtcStore> {
     ) -> Result<crate::metadata::store::GetResponse> {
         let data = self.inner.lock().await;
         if data.revision != self.revision {
-            panic!("snapshot expired (multi version isn't supported yet.)");
+            warn!(
+                "snapshot expired (multi version isn't supported yet, you may read steal data): {} vs {}",
+                data.revision, self.revision
+            );
         }
         let (start_key, end_key) = keys.into_bound();
         let mut kvs = data

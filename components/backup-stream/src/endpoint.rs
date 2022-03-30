@@ -63,6 +63,67 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
     resolvers: Arc<DashMap<u64, Resolver>>,
 }
 
+impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
+where
+    R: RegionInfoProvider + 'static + Clone,
+    E: KvEngine,
+    RT: RaftStoreRouter<E> + 'static,
+    PDC: PdClient + 'static,
+    S: MetaStore + 'static,
+{
+    pub fn with_client(
+        store_id: u64,
+        cli: MetadataClient<S>,
+        config: BackupStreamConfig,
+        scheduler: Scheduler<Task>,
+        observer: BackupStreamObserver,
+        accessor: R,
+        router: RT,
+        pd_client: Arc<PDC>,
+    ) -> Self {
+        let pool = create_tokio_runtime(config.num_threads, "br-stream")
+            .expect("failed to create tokio runtime for backup stream worker.");
+
+        // TODO consider TLS?
+        let meta_client = Some(cli);
+        let range_router = Router::new(
+            PathBuf::from(config.streaming_path.clone()),
+            scheduler.clone(),
+            config.temp_file_size_limit_per_task.0,
+        );
+
+        if let Some(meta_client) = meta_client.as_ref() {
+            // spawn a worker to watch task changes from etcd periodically.
+            let meta_client_clone = meta_client.clone();
+            let scheduler_clone = scheduler.clone();
+            // TODO build a error handle mechanism #error 2
+            pool.spawn(async {
+                if let Err(err) = Self::starts_watch_tasks(meta_client_clone, scheduler_clone).await
+                {
+                    err.report("failed to start watch tasks");
+                }
+            });
+            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
+        }
+
+        info!("the endpoint of stream backup started"; "path" => %config.streaming_path);
+        Endpoint {
+            config,
+            meta_client,
+            range_router,
+            scheduler,
+            observer,
+            pool,
+            store_id,
+            regions: accessor,
+            engine: PhantomData,
+            router,
+            pd_client,
+            resolvers: Default::default(),
+        }
+    }
+}
+
 impl<R, E, RT, PDC> Endpoint<EtcdStore, R, E, RT, PDC>
 where
     R: RegionInfoProvider + 'static + Clone,
@@ -316,7 +377,7 @@ where
                                 );
                                 match range_init_result {
                                     Ok(stat) => {
-                                        info!("success to do initial scanning"; "stat" => ?stat, 
+                                        info!("success to do initial scanning"; "stat" => ?stat,
                                             "start_key" => utils::redact(&start_key),
                                             "end_key" => utils::redact(&end_key),
                                             "take" => ?start.saturating_elapsed(),)
@@ -368,7 +429,53 @@ where
         new_tso.unwrap_or_default()
     }
 
-    pub fn on_flush(&self, task: String, store_id: u64) {
+    async fn flush_for_task(
+        task: String,
+        store_id: u64,
+        router: Router,
+        pd_cli: Arc<PDC>,
+        resolvers: Arc<DashMap<u64, Resolver>>,
+        meta_cli: MetadataClient<S>,
+    ) {
+        let start = Instant::now_coarse();
+        // NOTE: Maybe push down the resolve step to the router?
+        //       Or if there are too many duplicated `Flush` command, we may do some useless works.
+        let new_rts = Self::try_resolve(pd_cli.clone(), resolvers).await;
+        metrics::FLUSH_DURATION
+            .with_label_values(&["resolve_by_now"])
+            .observe(start.saturating_elapsed_secs());
+        if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
+            info!("flushing and refreshing checkpoint ts."; "checkpoint_ts" => %rts, "task" => %task);
+            if rts == 0 {
+                // We cannot advance the resolved ts for now.
+                return;
+            }
+            if let Err(err) = pd_cli
+                .update_service_safe_point(
+                    format!("backup-stream-{}-{}", task, store_id),
+                    TimeStamp::new(rts),
+                    Duration::from_secs(600),
+                )
+                .await
+            {
+                Error::from(err).report("failed to update service safe point!");
+                // don't give up?
+            }
+            if let Err(err) = cli.step_task(&task, rts).await {
+                err.report(format!("on flushing task {}", task));
+                // we can advance the progress at next time.
+                // return early so we won't be mislead by the metrics.
+                return;
+            }
+            metrics::STORE_CHECKPOINT_TS
+                // Currently, we only support one task at the same time,
+                // so use the task as label would be ok.
+                .with_label_values(&[task.as_str()])
+                .set(rts as _)
+        }
+    }
+
+    pub fn on_force_flush(&self, task: String, store_id: u64) {
         let router = self.range_router.clone();
         let cli = self
             .meta_client
@@ -378,43 +485,25 @@ where
         let pd_cli = self.pd_client.clone();
         let resolvers = self.resolvers.clone();
         self.pool.spawn(async move {
-            let start = Instant::now_coarse();
-            // NOTE: Maybe push down the resolve step to the router?
-            //       Or if there are too many duplicated `Flush` command, we may do some useless works.
-            let new_rts = Self::try_resolve(pd_cli.clone(), resolvers).await;
-            metrics::FLUSH_DURATION
-                .with_label_values(&["resolve_by_now"])
-                .observe(start.saturating_elapsed_secs());
-            if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
-                info!("flushing and refreshing checkpoint ts."; "checkpoint_ts" => %rts, "task" => %task);
-                if rts == 0 {
-                    // We cannot advance the resolved ts for now.
-                    return;
-                }
-                if let Err(err) = pd_cli
-                    .update_service_safe_point(
-                        format!("backup-stream-{}-{}", task, store_id),
-                        TimeStamp::new(rts),
-                        Duration::from_secs(600),
-                    )
-                    .await
-                {
-                    Error::from(err).report("failed to update service safe point!");
-                    // don't give up?
-                }
-                if let Err(err) = cli.step_task(&task, rts).await {
-                    err.report(format!("on flushing task {}", task));
-                    // we can advance the progress at next time.
-                    // return early so we won't be mislead by the metrics.
-                    return;
-                }
-                metrics::STORE_CHECKPOINT_TS
-                    // Currently, we only support one task at the same time,
-                    // so use the task as label would be ok.
-                    .with_label_values(&[task.as_str()])
-                    .set(rts as _)
-            }
+            let info = router.get_task_info(&task).await;
+            // This should only happen in testing, it would be to unwrap...
+            let _ = info.unwrap().set_flushing_status_cas(false, true);
+            Self::flush_for_task(task, store_id, router, pd_cli, resolvers, cli).await;
         });
+    }
+
+    pub fn on_flush(&self, task: String, store_id: u64) {
+        let router = self.range_router.clone();
+        let cli = self
+            .meta_client
+            .as_ref()
+            .expect("on_flush: executed from an endpoint without cli")
+            .clone();
+        let pd_cli = self.pd_client.clone();
+        let resolvers = self.resolvers.clone();
+        self.pool.spawn(Self::flush_for_task(
+            task, store_id, router, pd_cli, resolvers, cli,
+        ));
     }
 
     /// Start observe over some region.
@@ -556,6 +645,8 @@ pub enum Task {
     Flush(String),
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
+    /// Convert status of some task into `flushing` and do flush then.
+    ForceFlush(String),
 }
 
 #[derive(Debug)]
@@ -592,6 +683,7 @@ impl fmt::Debug for Task {
             Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
             Self::ModifyObserve(op) => f.debug_tuple("ModifyObserve").field(op).finish(),
+            Self::ForceFlush(arg0) => f.debug_tuple("ForceFlush").field(arg0).finish(),
         }
     }
 }
@@ -619,6 +711,7 @@ where
             Task::BatchEvent(events) => self.do_backup(events),
             Task::Flush(task) => self.on_flush(task, self.store_id),
             Task::ModifyObserve(op) => self.on_modify_observe(op),
+            Task::ForceFlush(task) => self.on_force_flush(task, self.store_id),
             _ => (),
         }
     }

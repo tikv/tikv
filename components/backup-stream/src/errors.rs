@@ -12,6 +12,7 @@ use tikv::storage::txn::Error as TxnError;
 use tikv_util::worker::ScheduleError;
 
 use crate::endpoint::Task;
+#[cfg(not(test))]
 use crate::metrics;
 
 #[derive(ThisError, Debug)]
@@ -52,13 +53,22 @@ macro_rules! annotate {
 
 impl Error {
     pub fn report(&self, context: impl Display) {
-        // TODO: adapt the error_code module, use `tikv_util::error!` to replace this.
-        error!("backup stream meet error"; "context" => %context, "err" => %self);
-        metrics::STREAM_ERROR
-            .with_label_values(&[self.kind()])
-            .inc()
+        #[cfg(test)]
+        println!(
+            "backup stream meet error (context = {}, err = {})",
+            context, self
+        );
+        #[cfg(not(test))]
+        {
+            // TODO: adapt the error_code module, use `tikv_util::error!` to replace this.
+            error!("backup stream meet error"; "context" => %context, "err" => %self);
+            metrics::STREAM_ERROR
+                .with_label_values(&[self.kind()])
+                .inc()
+        }
     }
 
+    #[cfg(not(test))]
     fn kind(&self) -> &'static str {
         match self {
             Error::Etcd(_) => "etcd",
