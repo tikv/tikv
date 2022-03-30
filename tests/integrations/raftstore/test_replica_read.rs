@@ -554,7 +554,6 @@ fn test_malformed_read_index() {
     raft_msg.mut_entries().push(e);
     raft_msg.from = 1;
     raft_msg.to = 1;
-    raft_msg.term = 6;
     let mut message = RaftMessage::default();
     message.set_region_id(region_id);
     message.set_from_peer(new_peer(1, 1));
