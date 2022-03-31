@@ -514,7 +514,7 @@ impl<'a> PrewriteMutation<'a> {
         };
         if res.is_err() {
             let (write, commit_ts) = write
-                .clone()
+                .as_ref()
                 .map(|(w, ts)| (Some(w), Some(ts)))
                 .unwrap_or((None, None));
             error!("assertion failure"; "assertion" => ?self.assertion, "write" => ?write, 
