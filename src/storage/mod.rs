@@ -260,6 +260,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         })
     }
 
+    #[inline]
+    pub fn get_api_version(&self) -> ApiVersion {
+        self.api_version
+    }
+
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()

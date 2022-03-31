@@ -601,12 +601,26 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    test_split_region_impl(false, ApiVersion::V1);
+    test_split_region_impl(false, ApiVersion::V2);
+    test_split_region_impl(true, ApiVersion::V2);
+}
+
+fn test_split_region_impl(is_raw_kv: bool, api_version: ApiVersion) {
+    // let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (mut cluster, leader, mut ctx) =
+        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(api_version));
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+    ctx.set_api_version(api_version);
 
     // Split region commands
-    let key = b"b";
+    let key = b"r\0b";
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     req.set_split_key(key.to_vec());
     let resp = client.split_region(&req).unwrap();
     assert_eq!(
@@ -630,7 +644,8 @@ fn test_split_region() {
     ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
-    let split_keys = vec![b"e".to_vec(), b"c".to_vec(), b"d".to_vec()];
+    req.set_is_raw_kv(is_raw_kv);
+    let split_keys = vec![b"r\0e".to_vec(), b"r\0c".to_vec(), b"r\0d".to_vec()];
     req.set_split_keys(split_keys.into());
     let resp = client.split_region(&req).unwrap();
     let result_split_keys: Vec<_> = resp
@@ -644,7 +659,12 @@ fn test_split_region() {
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]
+        vec![
+            b"r\0b".to_vec(),
+            b"r\0c".to_vec(),
+            b"r\0d".to_vec(),
+            b"r\0e".to_vec()
+        ]
     );
 }
 
