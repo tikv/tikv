@@ -88,6 +88,18 @@ macro_rules! match_template_api_version {
      }}
 }
 
+#[macro_export]
+macro_rules! with_api_version {
+    ($api_version:expr, $block:block) => {{
+        match_template_api_version!(
+            API,
+            match $api_version {
+                ApiVersion::API => $block,
+            }
+        )
+    }}
+}
+
 /// The key mode inferred from the key prefix.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum KeyMode {

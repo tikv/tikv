@@ -82,7 +82,8 @@ use crate::storage::{
 };
 
 use api_version::{
-    match_template_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL, APIV2,
+    match_template_api_version, with_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL,
+    APIV2,
 };
 use causal_ts;
 use concurrency_manager::ConcurrencyManager;
@@ -1464,82 +1465,79 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
-        const CMD: CommandKind = CommandKind::raw_get;
-        let priority = ctx.get_priority();
-        let priority_tag = get_priority_tag(priority);
-        let resource_tag = self
-            .resource_tag_factory
-            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
-        let api_version = self.api_version;
+    ) -> futures::future::BoxFuture<'static, Result<Option<Vec<u8>>>> {
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_get;
+            let priority = ctx.get_priority();
+            let priority_tag = get_priority_tag(priority);
+            let resource_tag = self
+                .resource_tag_factory
+                .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
+            let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle(
-            async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
+            let res = self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                        .get(priority_tag)
+                        .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+                    Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let key: Key = match_template_api_version!(
-                    API,
-                    match api_version {
-                        ApiVersion::API => API::encode_raw_key_owned(key, None),
-                    }
-                );
+                    let key = API::encode_raw_key_owned(key, None);
 
-                tls_collect_query(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    key.as_encoded(),
-                    key.as_encoded(),
-                    false,
-                    QueryKind::Get,
-                );
-
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let snap_ctx = SnapContext {
-                    pb_ctx: &ctx,
-                    ..Default::default()
-                };
-                let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let buckets = snapshot.ext().get_buckets();
-                let store = RawStore::new(snapshot, api_version);
-                let cf = Self::rawkv_cf(&cf, api_version)?;
-                {
-                    let begin_instant = Instant::now_coarse();
-                    let mut stats = Statistics::default();
-                    let r = store
-                        .raw_get_key_value(cf, &key, &mut stats)
-                        .map_err(Error::from);
-                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    tls_collect_read_flow(
+                    tls_collect_query(
                         ctx.get_region_id(),
-                        Some(key.as_encoded()),
-                        Some(key.as_encoded()),
-                        &stats,
-                        buckets.as_ref(),
+                        ctx.get_peer(),
+                        key.as_encoded(),
+                        key.as_encoded(),
+                        false,
+                        QueryKind::Get,
                     );
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
-                    r
-                }
-            }
-            .in_resource_metering_tag(resource_tag),
-            priority,
-            thread_rng().next_u64(),
-        );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let snap_ctx = SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    };
+                    let snapshot =
+                        Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                    let buckets = snapshot.ext().get_buckets();
+                    let store = RawStore::new(snapshot, api_version);
+                    let cf = Self::rawkv_cf(&cf, api_version)?;
+                    {
+                        let begin_instant = Instant::now_coarse();
+                        let mut stats = Statistics::default();
+                        let r = store
+                            .raw_get_key_value(cf, &key, &mut stats)
+                            .map_err(Error::from);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                        tls_collect_read_flow(
+                            ctx.get_region_id(),
+                            Some(key.as_encoded()),
+                            Some(key.as_encoded()),
+                            &stats,
+                            buckets.as_ref(),
+                        );
+                        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(begin_instant.saturating_elapsed_secs());
+                        SCHED_HISTOGRAM_VEC_STATIC
+                            .get(CMD)
+                            .observe(command_duration.saturating_elapsed_secs());
+                        r
+                    }
+                }
+                .in_resource_metering_tag(resource_tag),
+                priority,
+                thread_rng().next_u64(),
+            );
+
+            Box::pin(async move {
+                res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                    .await?
+            })
+        })
     }
 
     /// Get the values of a set of raw keys, return a list of `Result`s.
@@ -1789,45 +1787,40 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        const CMD: CommandKind = CommandKind::raw_put;
-        let api_version = self.api_version;
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_put;
+            let api_version = self.api_version;
 
-        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+            Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-        check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
+            check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
-        let m = match_template_api_version!(
-            API,
-            match self.api_version {
-                ApiVersion::API => {
-                    if !API::IS_TTL_ENABLED && ttl != 0 {
-                        return Err(Error::from(ErrorInner::TTLNotEnabled));
-                    }
-
-                    let raw_value = RawValue {
-                        user_value: value,
-                        expire_ts: ttl_to_expire_ts(ttl),
-                        is_delete: false,
-                    };
-                    Modify::Put(
-                        Self::rawkv_cf(&cf, self.api_version)?,
-                        API::encode_raw_key_owned(key, None),
-                        API::encode_raw_value_owned(raw_value),
-                    )
-                }
+            if !API::IS_TTL_ENABLED && ttl != 0 {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
             }
-        );
 
-        let mut batch = WriteData::from_modifies(vec![m]);
-        batch.set_allowed_on_disk_almost_full();
+            let raw_value = RawValue {
+                user_value: value,
+                expire_ts: ttl_to_expire_ts(ttl),
+                is_delete: false,
+            };
+            let m = Modify::Put(
+                Self::rawkv_cf(&cf, self.api_version)?,
+                API::encode_raw_key_owned(key, None),
+                API::encode_raw_value_owned(raw_value),
+            );
 
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
-        Ok(())
+            let mut batch = WriteData::from_modifies(vec![m]);
+            batch.set_allowed_on_disk_almost_full();
+
+            self.engine.async_write(
+                &ctx,
+                batch,
+                Box::new(|res| callback(res.map_err(Error::from))),
+            )?;
+            KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
+            Ok(())
+        })
     }
 
     fn raw_batch_put_requests_to_modifies(
