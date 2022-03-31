@@ -1746,6 +1746,9 @@ where
         let mut res = HandleReadyResult::SendIOTask;
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
+            fail_point!("raft_before_apply_snap_callback", |_| {
+                Err(box_err!("failpoint early return"))
+            });
             let last_first_index = self.first_index();
             let snap_region =
                 self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
