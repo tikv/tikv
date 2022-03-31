@@ -414,6 +414,14 @@ impl Engine {
             let mut bottoms = vec![];
             for tbl in lh.tables.iter() {
                 if tbl.biggest() < smallest || tbl.smallest() > biggest {
+                    info!(
+                        "skip L1 table {} for L0 compaction, tbl smallest {:?}, tbl biggest {:?}, L0 smallest {:?}, L0 biggest {:?}",
+                        tbl.id(),
+                        tbl.smallest(),
+                        tbl.biggest(),
+                        smallest,
+                        biggest,
+                    );
                     continue;
                 }
                 bottoms.push(tbl.id());

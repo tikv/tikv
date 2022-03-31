@@ -180,7 +180,12 @@ impl EngineCore {
             let scf_builder = ShardCFBuilder::new(cf);
             scf_builders.push(scf_builder);
         }
-        self.pre_load_files_by_ids(meta.id, meta.ver, meta.all_files())?;
+        let mut ids = meta.all_files();
+        ids.retain(|id| {
+            let local_path = self.local_file_path(*id);
+            !local_path.exists()
+        });
+        self.pre_load_files_by_ids(meta.id, meta.ver, ids)?;
         for (fid, fm) in &meta.files {
             let file = self.fs.open(*fid, dfs_opts)?;
             if fm.cf == -1 {

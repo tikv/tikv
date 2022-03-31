@@ -111,7 +111,7 @@ impl S3FSCore {
             RusotoError::Credentials(_) => false,
             RusotoError::Validation(_) => false,
             RusotoError::ParseError(_) => false,
-            RusotoError::Unknown(_) => false,
+            RusotoError::Unknown(resp) => resp.status.is_server_error(),
             RusotoError::Blocking => false,
         }
     }
