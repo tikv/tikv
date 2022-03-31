@@ -19,7 +19,7 @@ use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use tikv::storage::kv::{PerfStatisticsInstant, Snapshot, Iterator};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
-use tikv::storage::raw::raw_mvcc::RawMvccSnapshot;
+use tikv::storage::raw::raw_mvcc::{RawMvccSnapshot, RawMvccIterator};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv::storage::Statistics;
 use tikv_kv::PerfStatisticsDelta;
@@ -31,6 +31,7 @@ use tikv_util::{box_err, debug, error, info, warn, Either};
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
+
 use crate::channel::CdcEvent;
 use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
 use crate::endpoint::Deregister;
@@ -40,7 +41,6 @@ use crate::service::ConnID;
 use crate::Task;
 use crate::{Error, Result};
 
-#[derive(Clone, Copy, Debug)]
 struct ScanStat {
     // Fetched bytes to the scanner.
     emit: usize,
@@ -53,6 +53,11 @@ struct ScanStat {
 pub(crate) enum KvEntry {
     TxnEntry(TxnEntry),
     RawKvEntry(KvPair),
+}
+
+pub(crate) enum ScannerIter<S: Snapshot> {
+    Scanner(DeltaScanner<S>),
+    Iter(RawMvccIterator<<S as Snapshot>::Iter>),
 }
 
 pub(crate) struct Initializer<E> {
@@ -226,51 +231,44 @@ impl<E: KvEngine> Initializer<E> {
             Err(box_err!("scan canceled"))
         };
 
-        if kv_api == 1 {
-            // Time range: (checkpoint_ts, max]
-            let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
+        let mut scanner_iter: Option<ScannerIter<S>> = None;
+        if kv_api == 0 {
+            let scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
                 .range(None, None)
                 .hint_min_ts(hint_min_ts)
                 .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
                 .unwrap();
 
-            let mut done = false;
-            while !done {
-                // When downstream_state is Stopped, it means the corresponding
-                // delegate is stopped. The initialization can be safely canceled.
-                if self.downstream_state.load() == DownstreamState::Stopped {
-                    return on_cancel();
-                }
-                let cursors = old_value_cursors.as_mut();
-                let resolver = resolver.as_mut();
-                let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
-                if let Some(None) = entries.last() {
-                    // If the last element is None, it means scanning is finished.
-                    done = true;
-                }
-                debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
-                fail_point!("before_schedule_incremental_scan");
-                self.sink_scan_events(entries, done).await?;
-            }
+            scanner_iter = Some(ScannerIter::Scanner(scanner));
         } else {
-            let mut entries = Vec::with_capacity(self.max_scan_batch_size);
             let iter_opt = IterOptions::default();
-            let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snap);
-            let mut iter = raw_mvcc_snapshot.iter(iter_opt).unwrap();
+            let mut iter = RawMvccSnapshot::from_snapshot(snap)
+                .iter(iter_opt)
+                .unwrap();
+
             iter.seek_to_first().unwrap();
-            while iter.valid().unwrap() {
-                let key = iter.key().to_owned();
-                let value = iter.value().to_owned();
-                iter.next().unwrap();
-                // TODO: filter deleted key
+            scanner_iter = Some(ScannerIter::Iter(iter));
+        }
 
-                entries.push(Some(KvEntry::RawKvEntry((key.to_vec(), value.to_vec()))))
+
+        let mut done = false;
+        while !done {
+            // When downstream_state is Stopped, it means the corresponding
+            // delegate is stopped. The initialization can be safely canceled.
+            if self.downstream_state.load() == DownstreamState::Stopped {
+                return on_cancel();
             }
-            entries.push(None);
-
+            let cursors = old_value_cursors.as_mut();
+            let resolver = resolver.as_mut();
+            let entries = self.scan_batch(&mut scanner_iter, cursors, resolver).await?;
+            if let Some(None) = entries.last() {
+                // If the last element is None, it means scanning is finished.
+                done = true;
+            }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
-            self.sink_scan_events(entries, true).await?;
+            fail_point!("before_schedule_incremental_scan");
+            self.sink_scan_events(entries, done).await?;
         }
 
         if !post_init_downstream(&self.downstream_state) {
@@ -296,7 +294,7 @@ impl<E: KvEngine> Initializer<E> {
     // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
-        scanner: &mut DeltaScanner<S>,
+        scanner_iter: &mut Option<ScannerIter<S>>,
         mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         entries: &mut Vec<Option<KvEntry>>,
     ) -> Result<ScanStat> {
@@ -323,15 +321,33 @@ impl<E: KvEngine> Initializer<E> {
         let mut stats = Statistics::default();
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
-            match scanner.next_entry()? {
-                Some(mut entry) => {
-                    read_old_value(entry.old_value(), &mut stats)?;
-                    total_bytes += entry.size();
-                    entries.push(Some(KvEntry::TxnEntry(entry)));
-                }
-                None => {
-                    entries.push(None);
-                    break;
+            if let Some(scanner_iter) = scanner_iter {
+                match scanner_iter {
+                    ScannerIter::Scanner(scanner) => {
+                        match scanner.next_entry()? {
+                            Some(mut entry) => {
+                                read_old_value(entry.old_value(), &mut stats)?;
+                                total_bytes += entry.size();
+                                entries.push(Some(KvEntry::TxnEntry(entry)));
+                            }
+                            None => {
+                                entries.push(None);
+                                break;
+                            }
+                        }
+                    }
+                    ScannerIter::Iter(iter) => {
+                        if iter.valid().unwrap() {
+                            let key = iter.key().to_vec();
+                            let value = iter.value().to_vec();
+                            total_bytes += key.len() + value.len();
+                            entries.push(Some(KvEntry::RawKvEntry((key, value))));
+                            iter.next().unwrap();
+                        } else {
+                            entries.push(None);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -352,7 +368,7 @@ impl<E: KvEngine> Initializer<E> {
 
     async fn scan_batch<S: Snapshot>(
         &self,
-        scanner: &mut DeltaScanner<S>,
+        scanner_iter: &mut Option<ScannerIter<S>>,
         old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<KvEntry>>> {
@@ -361,7 +377,7 @@ impl<E: KvEngine> Initializer<E> {
             emit,
             disk_read,
             perf_delta,
-        } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
+        } = self.do_scan(scanner_iter, old_value_cursors, &mut entries)?;
 
         CDC_SCAN_BYTES.inc_by(emit as _);
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);

@@ -55,6 +55,7 @@ prometheus = { version = "0.13", default-features = false, features = ["nightly"
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 futures-timer = "3.0"
+api_version = { path = "../api_version" }
 
 [dev-dependencies]
 engine_rocks = { path = "../engine_rocks", default-features = false }

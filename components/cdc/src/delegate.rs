@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::{APIVersion, APIV2};
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
 use tikv_util::{debug, info, warn};
-use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
+use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
 use crate::initializer::KvEntry;
@@ -459,10 +460,22 @@ impl Delegate {
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
-                Some(KvEntry::RawKvEntry(raw_entry)) => {
-                    // TODO: finish here
-                }
+                Some(KvEntry::RawKvEntry(kv_pair)) => {
+                    let mut row = EventRow::default();
 
+                    let skip = decode_rawkv(&kv_pair, &mut row);
+                    if skip {
+                        continue;
+                    }
+
+                    let row_size = row.key.len() + row.value.len();
+                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                        rows.push(Vec::with_capacity(entries_len));
+                        current_rows_size = 0;
+                    }
+                    current_rows_size += row_size;
+                    rows.last_mut().unwrap().push(row);
+                }
                 Some(KvEntry::TxnEntry(txn_entry)) => {
                     match txn_entry {
                         TxnEntry::Prewrite {
@@ -892,6 +905,22 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     if let Some(value) = lock.short_value {
         row.value = value;
     }
+
+    false
+}
+
+fn decode_rawkv(kv_pair: &KvPair, row: &mut EventRow) -> bool {
+    let raw_value = APIV2::decode_raw_value_owned(kv_pair.1.to_vec()).unwrap();
+    if raw_value.is_delete {
+        return true;
+    }
+    let (key, ts) =
+        APIV2::decode_raw_key_owned(Key::from_encoded(kv_pair.0.to_vec()), true).unwrap();
+
+    row.start_ts = ts.unwrap().into_inner();
+    row.commit_ts = row.start_ts;
+    row.key = key;
+    row.value = raw_value.user_value.to_vec();
 
     false
 }
