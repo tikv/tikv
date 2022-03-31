@@ -1436,8 +1436,8 @@ where
                 info!(
                     "useless admin command";
                     "region_id" => self.region_id(),
-                    "term" => ctx.exec_ctx.as_ref().unwrap().term,
-                    "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                    "term" => ctx.exec_log_term,
+                    "index" => ctx.exec_log_index,
                     "type" => ?cmd_type,
                 );
             }
@@ -1446,8 +1446,8 @@ where
                     "execute admin command";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
-                    "term" => ctx.exec_ctx.as_ref().unwrap().term,
-                    "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                    "term" => ctx.exec_log_term,
+                    "index" => ctx.exec_log_index,
                     "command" => ?request
                 );
             }
@@ -1490,8 +1490,8 @@ where
                 &response,
                 RaftCmdHeader::new(
                     self.region.get_id(),
-                    ctx.exec_ctx.as_ref().unwrap().index,
-                    ctx.exec_ctx.as_ref().unwrap().term,
+                    ctx.exec_log_index,
+                    ctx.exec_log_term,
                 ),
             )
         };
@@ -1585,8 +1585,8 @@ where
                         "skip persist for ingest sst";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "term" => ctx.exec_ctx.as_ref().unwrap().term,
-                        "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                        "term" => ctx.exec_log_term,
+                        "index" => ctx.exec_log_index,
                         "pending_ssts" => ?self.pending_clean_ssts
                     );
 
@@ -1602,8 +1602,8 @@ where
                         "ingest sst success";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "term" => ctx.exec_ctx.as_ref().unwrap().term,
-                        "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                        "term" => ctx.exec_log_term,
+                        "index" => ctx.exec_log_index,
                         "ssts_to_clean" => ?ssts
                     );
                     ctx.delete_ssts.append(&mut ssts.clone());
@@ -1620,8 +1620,8 @@ where
                     &cmds,
                     RaftCmdHeader::new(
                         self.region.get_id(),
-                        ctx.exec_ctx.as_ref().unwrap().index,
-                        ctx.exec_ctx.as_ref().unwrap().term,
+                        ctx.exec_log_index,
+                        ctx.exec_log_term,
                     ),
                 )
             };
@@ -1843,8 +1843,8 @@ where
             sst_views,
             RaftCmdHeader::new(
                 self.region.get_id(),
-                ctx.exec_ctx.as_ref().unwrap().index,
-                ctx.exec_ctx.as_ref().unwrap().term,
+                ctx.exec_log_index,
+                ctx.exec_log_term,
             ),
         )
     }
