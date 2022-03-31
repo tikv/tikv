@@ -255,56 +255,64 @@ mod tests {
 
         let thread_start_time = ThreadTime::now();
 
+        let check_duration = |actual: Duration, expected: Duration| {
+            // time delay may be less than expected because the cpu time is keep-going.
+            assert!(actual <= expected);
+            if expected > Duration::from_millis(5) {
+                assert!(actual >= expected - Duration::from_millis(5));
+            }
+        };
+
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(60));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::ZERO);
+        check_duration(should_delay, Duration::ZERO);
 
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(40));
+        sample.add_cpu_time(Duration::from_millis(50));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(100));
+        check_duration(should_delay, Duration::from_millis(110));
 
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(30));
+        sample.add_cpu_time(Duration::from_millis(20));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        // should less 60+40+30
+        // should less 60+50+20
         assert!(should_delay < Duration::from_millis(130));
 
         let mut sample = quota_limiter.new_sample();
         sample.add_cpu_time(Duration::from_millis(200));
         sample.add_write_bytes(256);
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(250));
+        check_duration(should_delay, Duration::from_millis(250));
 
         // ThreadTime elapsed time is not long.
         assert!(thread_start_time.elapsed() < Duration::from_millis(50));
 
         quota_limiter.set_cpu_time_limit(2000);
         let mut sample = quota_limiter.new_sample();
-        sample.add_cpu_time(Duration::from_millis(100));
+        sample.add_cpu_time(Duration::from_millis(200));
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(50));
+        check_duration(should_delay, Duration::from_millis(100));
 
         quota_limiter.set_read_bandwidth_limit(ReadableSize(512));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(128);
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(250));
+        check_duration(should_delay, Duration::from_millis(250));
 
         quota_limiter.set_write_bandwidth_limit(ReadableSize::kb(2));
         let mut sample = quota_limiter.new_sample();
         sample.add_write_bytes(256);
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(125));
+        check_duration(should_delay, Duration::from_millis(125));
 
         quota_limiter.set_max_delay_duration(ReadableDuration::millis(40));
         let mut sample = quota_limiter.new_sample();
         sample.add_read_bytes(256);
         sample.add_write_bytes(512);
         let should_delay = block_on(quota_limiter.async_consume(sample));
-        assert_eq!(should_delay, Duration::from_millis(40));
+        check_duration(should_delay, Duration::from_millis(40));
     }
 }
