@@ -520,7 +520,6 @@ impl<'a> PrewriteMutation<'a> {
                 .unwrap_or((None, None));
             error!("assertion failure"; "assertion" => ?self.assertion, "write" => ?write, 
             "commit_ts" => commit_ts, "mutation" => ?self);
-            res?
         }
 
         Ok((reloaded_write, reloaded))
