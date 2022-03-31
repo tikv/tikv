@@ -257,10 +257,9 @@ mod tests {
 
         let check_duration = |actual: Duration, expected: Duration| {
             // time delay may be less than expected because the cpu time is keep-going.
-            assert!(actual <= expected);
-            if expected > Duration::from_millis(5) {
-                assert!(actual >= expected - Duration::from_millis(5));
-            }
+            assert!(
+                actual >= expected.saturating_sub(Duration::from_millis(5)) && actual <= expected
+            );
         };
 
         let mut sample = quota_limiter.new_sample();
