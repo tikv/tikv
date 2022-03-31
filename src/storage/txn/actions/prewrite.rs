@@ -504,6 +504,7 @@ impl<'a> PrewriteMutation<'a> {
             (Assertion::Exist, None) => {
                 self.assertion_failed_error(TimeStamp::zero(), TimeStamp::zero())
             }
+            // A Delete record is returned as a None. So this branch is unreachable.
             (Assertion::Exist, Some((w, commit_ts))) if w.write_type == WriteType::Delete => {
                 self.assertion_failed_error(w.start_ts, *commit_ts)
             }
