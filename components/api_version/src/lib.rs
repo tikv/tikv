@@ -486,48 +486,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_v2_key_decode_err() {
-        let cases: Vec<(Vec<u8>, bool)> = vec![
-            // Invalid prefix
-            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], false),
-            // Memcomparable-encoded padding: n * 9 + Optional 8
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], false),
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], false),
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], true),
-            (
-                vec![
-                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
-                ],
-                true,
-            ),
-            (
-                vec![
-                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0,
-                    0, 0, 1, 0,
-                ],
-                true,
-            ),
-            // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
-            (vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb], false),
-            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6], false),
-        ];
-
-        for (idx, (bytes, with_ts)) in cases.into_iter().enumerate() {
-            let res = vec![
-                panic_hook::recover_safe(|| {
-                    let _ = APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
-                }),
-                panic_hook::recover_safe(|| {
-                    let _ = APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
-                }),
-            ];
-            for r in res {
-                assert!(r.is_err(), "case {}: {:?}", idx, r);
-            }
-        }
-    }
-
     fn assert_raw_key_encode_decode_identity(
         user_key: &[u8],
         ts: Option<TimeStamp>,

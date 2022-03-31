@@ -63,6 +63,7 @@ async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
+causal_ts = { path = "components/causal_ts" }
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
 concurrency_manager = { path = "components/concurrency_manager", default-features = false }
@@ -263,6 +264,7 @@ members = [
   "components/test_coprocessor_plugin/example_plugin",
   "components/resource_metering",
   "components/api_version",
+  "components/causal_ts",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 

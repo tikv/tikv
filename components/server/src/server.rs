@@ -732,6 +732,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             );
         }
 
+        // Register causal observer for RawKV API V2
+        // TODO: uncomment after finish modification of Storage.
+        // if let ApiVersion::V2 = self.config.storage.api_version() {
+        //     let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+        //         self.pd_client.clone(),
+        //         self.config.causal_ts.renew_interval.0,
+        //         self.config.causal_ts.renew_batch_min_size,
+        //     ));
+        //     if let Err(e) = tso {
+        //         panic!("Causal timestamp provider initialize failed: {:?}", e);
+        //     }
+        //     let causal_ts_provider = Arc::new(tso.unwrap());
+        //     info!("Causal timestamp provider startup.");
+        //
+        //     let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        //     causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // }
+
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());

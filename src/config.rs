@@ -18,6 +18,7 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -2606,6 +2607,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(skip)]
+    pub causal_ts: CausalTsConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2646,6 +2650,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            causal_ts: CausalTsConfig::default(),
         }
     }
 }
@@ -2774,6 +2779,7 @@ impl TiKvConfig {
         self.gc.validate()?;
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
+        self.causal_ts.validate()?;
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net
