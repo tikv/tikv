@@ -1454,7 +1454,7 @@ where
         }
 
         let ori_apply_state = if cmd_type == AdminCmdType::CompactLog {
-            Some(ctx.exec_ctx.as_ref().unwrap().apply_state.clone())
+            Some(self.apply_state.clone())
         } else {
             None
         };
@@ -1501,7 +1501,7 @@ where
                 if cmd_type == AdminCmdType::CompactLog {
                     response = AdminResponse::new();
                     exec_result = ApplyResult::None;
-                    ctx.exec_ctx.as_mut().unwrap().apply_state = ori_apply_state.unwrap();
+                    self.apply_state = ori_apply_state.unwrap();
                 }
             }
             _ => {}
