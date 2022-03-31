@@ -23,7 +23,7 @@ use resolved_ts::Resolver;
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
 use tikv_util::{debug, info, warn};
-use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES};
 use crate::initializer::KvEntry;
@@ -468,7 +468,7 @@ impl Delegate {
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    let skip = decode_rawkv(&kv_pair, &mut row);
+                    let skip = decode_rawkv(kv_pair.0, kv_pair.1, &mut row, true);
                     if skip {
                         continue;
                     }
@@ -678,22 +678,11 @@ impl Delegate {
         rows: &mut HashMap<Vec<u8>, EventRow>,
     ) -> Result<()> {
         let mut row = EventRow::default();
-        let (key, ts) =
-            APIV2::decode_raw_key_owned(Key::from_encoded(put.take_key()), true).unwrap();
-        let raw_value = APIV2::decode_raw_value_owned(put.get_value().to_vec()).unwrap();
-
-        row.commit_ts = ts.unwrap().into_inner();
-        row.start_ts = row.commit_ts;
-        row.key = key;
-        row.value = raw_value.user_value.to_vec();
-        if raw_value.is_delete {
-            row.op_type = EventRowOpType::Delete;
-        } else {
-            row.op_type = EventRowOpType::Put;
+        if decode_rawkv(put.take_key(), put.take_value(), &mut row, false) {
+            return Ok(());
         }
-        set_event_row_type(&mut row, EventLogType::Committed);
 
-        // TODO: add ttl
+        // TODO: validate commit_ts must be greater than the current resolved_ts ?
         match rows.get_mut(&row.key) {
             Some(row_with_value) => {
                 row.value = mem::take(&mut row_with_value.value);
@@ -987,18 +976,26 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_rawkv(kv_pair: &KvPair, row: &mut EventRow) -> bool {
-    let raw_value = APIV2::decode_raw_value_owned(kv_pair.1.to_vec()).unwrap();
-    if raw_value.is_delete {
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow, is_ignore_delete: bool) -> bool {
+    let decoded_value = APIV2::decode_raw_value(&value).unwrap();
+    if decoded_value.is_delete && is_ignore_delete {
         return true;
     }
-    let (key, ts) =
-        APIV2::decode_raw_key_owned(Key::from_encoded(kv_pair.0.to_vec()), true).unwrap();
+    let (decoded_key, ts) = APIV2::decode_raw_key(&Key::from_encoded(key), true).unwrap();
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
-    row.key = key;
-    row.value = raw_value.user_value.to_vec();
+    row.key = decoded_key;
+    row.value = decoded_value.user_value.to_vec();
+
+    // TODO: add ttl
+
+    if decoded_value.is_delete {
+        row.op_type = EventRowOpType::Delete;
+    } else {
+        row.op_type = EventRowOpType::Put;
+    }
+    set_event_row_type(row, EventLogType::Committed);
 
     false
 }
