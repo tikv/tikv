@@ -60,7 +60,8 @@ impl Engine {
             let file = self.fs.open(flush.get_l0_create().id, opts)?;
             let l0_tbl = sstable::L0Table::new(file, Some(self.cache.clone()))?;
             shard.atomic_add_l0_table(l0_tbl);
-            shard.atomic_remove_mem_table();
+            let old_tbls = shard.atomic_remove_mem_table();
+            self.free_tx.send(old_tbls).unwrap();
         }
         if flush.is_initial_flush {
             store_bool(&shard.initial_flushed, true);
@@ -82,7 +83,8 @@ impl Engine {
             if last_read_only.get_version()
                 <= initial_flush.base_version + initial_flush.data_sequence
             {
-                shard.atomic_remove_mem_table();
+                let old_tbls = shard.atomic_remove_mem_table();
+                self.free_tx.send(old_tbls).unwrap();
             } else {
                 break;
             }

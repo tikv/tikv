@@ -263,7 +263,11 @@ impl Drop for ArenaSegment {
 }
 
 fn block_cap(idx: usize) -> u32 {
-    (idx as u32 + 1) * 32 * 1024
+    let mut cap = (idx as u32 + 1) * 32 * 1024;
+    if cap > 640 * 1024 {
+        cap = 640 * 1024
+    }
+    cap
 }
 
 struct ArenaBlock {

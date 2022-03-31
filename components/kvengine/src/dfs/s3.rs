@@ -81,7 +81,7 @@ impl S3FSCore {
         };
         let s3c = rusoto_s3::S3Client::new_with(http_client, credential, region);
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
+            .worker_threads(2)
             .enable_all()
             .thread_name("s3")
             .build()
@@ -301,16 +301,17 @@ impl File for LocalFile {
 mod tests {
     use crate::dfs::s3::S3FS;
     use crate::dfs::{Options, DFS};
-    use file_system::{IORateLimitMode, IORateLimiter};
+    use bytes::Buf;
+    use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::str::FromStr;
-    use std::sync::Arc;
 
     #[test]
     fn test_s3() {
         crate::tests::init_logger();
 
-        let end_point = "http://127.0.0.1:9000";
+        let end_point = "http://localhost:9000";
         let local_dir = PathBuf::from_str("/tmp/s3test").unwrap();
         if !local_dir.exists() {
             std::fs::create_dir(&local_dir).unwrap();
@@ -346,16 +347,16 @@ mod tests {
         };
         s3fs.runtime.spawn(f);
         assert!(rx.recv().unwrap());
-        let local_file = s3fs.local_file_path(321);
-        let data = std::fs::read(&local_file).unwrap();
-        assert_eq!(&data, &file_data);
-        std::fs::remove_file(&local_file).unwrap();
         let fs = s3fs.clone();
         let (tx, rx) = tikv_util::mpsc::bounded(1);
+        let local_file = s3fs.local_file_path(321);
+        let move_local_file = local_file.clone();
         let f = async move {
             let opts = Options::new(1, 1);
-            match fs.prefetch(321, opts).await {
-                Ok(_) => {
+            match fs.read_file(321, opts).await {
+                Ok(data) => {
+                    let mut file = std::fs::File::create(&move_local_file).unwrap();
+                    file.write_all(data.chunk()).unwrap();
                     tx.send(true).unwrap();
                     println!("prefetch ok");
                 }
@@ -382,6 +383,6 @@ mod tests {
         };
         s3fs.runtime.spawn(f);
         assert!(rx.recv().unwrap());
-        assert!(!local_file.exists());
+        let _ = fs::remove_file(local_file);
     }
 }

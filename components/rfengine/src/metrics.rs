@@ -31,6 +31,18 @@ lazy_static! {
         exponential_buckets(0.00005, 1.8, 26).unwrap()
     )
     .unwrap();
+    pub static ref ENGINE_ROTATE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "raft_engine_rotate_duration_seconds",
+        "Bucketed histogram of Raft Engine rotate duration",
+        exponential_buckets(0.00005, 1.8, 26).unwrap()
+    )
+    .unwrap();
+    pub static ref ENGINE_WAL_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "raft_engine_wal_write_duration_seconds",
+        "Bucketed histogram of Raft Engine wal write duration",
+        exponential_buckets(0.00005, 1.8, 26).unwrap()
+    )
+    .unwrap();
     pub static ref ENGINE_APPLY_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "raft_engine_apply_duration_seconds",
         "Bucketed histogram of Raft Engine apply duration",

@@ -174,7 +174,12 @@ impl Worker {
         Ok(())
     }
 
-    fn handle_truncate_task(&mut self, region_id: u64, truncated_index: u64, truncated: Vec<RaftLogBlock>) {
+    fn handle_truncate_task(
+        &mut self,
+        region_id: u64,
+        truncated_index: u64,
+        truncated: Vec<RaftLogBlock>,
+    ) {
         let timer = Instant::now();
         drop(truncated);
         ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));

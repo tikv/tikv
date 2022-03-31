@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::*;
+use std::time::Instant;
 use std::{
     fs,
     fs::File,
@@ -95,7 +96,9 @@ impl WALWriter {
         batch_header.put_u32_le(checksum);
         batch_header.put_u32_le(batch_payload.len() as u32);
         self.buf.resize(aligned_len(self.buf.len()), 0);
+        let timer = Instant::now();
         self.fd.write_all_at(&self.buf[..], self.file_off)?;
+        ENGINE_WAL_WRITE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         self.file_off += self.buf.len() as u64;
         self.reset_batch();
         Ok(rotated)
@@ -106,8 +109,11 @@ impl WALWriter {
     }
 
     fn rotate(&mut self) -> Result<()> {
+        let timer = Instant::now();
         self.epoch_id += 1;
-        self.open_file()
+        let res = self.open_file();
+        ENGINE_ROTATE_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
+        res
     }
 
     pub(crate) fn open_file(&mut self) -> Result<()> {

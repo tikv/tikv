@@ -84,7 +84,7 @@ pub(crate) struct RaftWorker {
 }
 
 const MAX_BATCH_COUNT: usize = 1024;
-const MAX_BATCH_SIZE: usize = 4 * 1024 * 1024;
+const MAX_BATCH_SIZE: usize = 1 * 1024 * 1024;
 
 impl RaftWorker {
     pub(crate) fn new(

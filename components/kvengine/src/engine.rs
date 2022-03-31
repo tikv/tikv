@@ -17,9 +17,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use tikv_util::mpsc;
 
 use crate::meta::ShardMeta;
+use crate::table::memtable::CFTable;
 use crate::table::sstable::{BlockCacheKey, L0Table, SSTable};
 use crate::*;
 
@@ -73,6 +75,7 @@ impl Engine {
         }
         let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity, 64);
         let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
+        let (free_tx, free_rx) = mpsc::unbounded();
         let core = EngineCore {
             shards: DashMap::new(),
             opts: opts.clone(),
@@ -84,6 +87,7 @@ impl Engine {
             managed_safe_ts: AtomicU64::new(0),
             tmp_file_id: AtomicU64::new(0),
             rate_limiter,
+            free_tx,
         };
         let en = Engine {
             core: Arc::new(core),
@@ -104,6 +108,12 @@ impl Engine {
             .name("compaction".to_string())
             .spawn(move || {
                 compact_en.run_compaction();
+            })
+            .unwrap();
+        thread::Builder::new()
+            .name("free_mem".to_string())
+            .spawn(move || {
+                free_mem(free_rx);
             })
             .unwrap();
         Ok(en)
@@ -143,6 +153,7 @@ pub struct EngineCore {
     pub(crate) managed_safe_ts: AtomicU64,
     pub(crate) tmp_file_id: AtomicU64,
     pub(crate) rate_limiter: Arc<IORateLimiter>,
+    pub(crate) free_tx: mpsc::Sender<Arc<Vec<CFTable>>>,
 }
 
 impl EngineCore {
@@ -362,4 +373,18 @@ pub fn new_filename(file_id: u64) -> PathBuf {
 
 pub fn new_tmp_filename(file_id: u64, tmp_id: u64) -> PathBuf {
     PathBuf::from(format!("{:016x}.{}.tmp", file_id, tmp_id))
+}
+
+fn free_mem(free_rx: mpsc::Receiver<Arc<Vec<CFTable>>>) {
+    loop {
+        let mut tables = vec![];
+        let x = free_rx.recv().unwrap();
+        tables.push(x);
+        let cnt = free_rx.len();
+        for _ in 0..cnt {
+            tables.push(free_rx.recv().unwrap());
+        }
+        thread::sleep(Duration::from_secs(5));
+        drop(tables);
+    }
 }

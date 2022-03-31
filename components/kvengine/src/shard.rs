@@ -6,6 +6,7 @@ use dashmap::DashMap;
 use std::iter::Iterator;
 use std::sync::RwLock;
 use std::{
+    mem,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering::*, *},
         Arc,
@@ -358,24 +359,24 @@ impl Shard {
 
     pub fn atomic_add_mem_table(&self, mem_tbl: memtable::CFTable) {
         info!("shard {}:{} atomic add new mem table", self.id, self.ver);
-        let mut guard = self.mem_tbls.write().unwrap();
-        let mut tbl_vec = Vec::with_capacity(guard.tbls.len() + 1);
+        let mem_tbls = self.get_mem_tbls();
+        let mut tbl_vec = Vec::with_capacity(mem_tbls.tbls.len() + 1);
         tbl_vec.push(mem_tbl);
-        for tbl in guard.tbls.as_ref() {
+        for tbl in mem_tbls.tbls.as_ref() {
             tbl_vec.push(tbl.clone());
         }
-        *guard = MemTables {
-            tbls: Arc::new(tbl_vec),
-        };
+        let new_tables = Arc::new(tbl_vec);
+        let mut guard = self.mem_tbls.write().unwrap();
+        guard.tbls = new_tables;
     }
 
-    pub fn atomic_remove_mem_table(&self) {
-        let mut guard = self.mem_tbls.write().unwrap();
-        let old_tables = guard.tbls.as_ref();
+    pub fn atomic_remove_mem_table(&self) -> Arc<Vec<CFTable>> {
+        let mem_tbls = self.get_mem_tbls();
+        let old_tables = mem_tbls.tbls.as_ref();
         let old_len = old_tables.len();
         if old_len <= 1 {
             warn!("atomic remove mem table with old table len {}", old_len);
-            return;
+            return Arc::new(vec![]);
         }
         info!(
             "shard {}:{} atomic remove mem table version {}",
@@ -391,10 +392,9 @@ impl Shard {
                 break;
             }
         }
-        let new_mem_tbls = MemTables {
-            tbls: Arc::new(tbl_vec),
-        };
-        *guard = new_mem_tbls;
+        let new_tables = Arc::new(tbl_vec);
+        let mut guard = self.mem_tbls.write().unwrap();
+        mem::replace(&mut guard.tbls, new_tables)
     }
 
     pub fn set_split_mem_tables(&self, old_mem_tbls: &[CFTable]) {
@@ -465,11 +465,13 @@ impl Shard {
         let mut max_pri = CompactionPriority::default();
         max_pri.shard_id = self.id;
         max_pri.shard_ver = self.ver;
-        let l0s = self.get_l0_tbls();
-        let size_score = l0s.total_size() as f64 / self.opt.base_size as f64;
-        let num_tbl_score = l0s.tbls.len() as f64 / 4.0;
-        max_pri.score = size_score * 0.6 + num_tbl_score * 0.4;
         max_pri.cf = -1;
+        let l0s = self.get_l0_tbls();
+        if l0s.tbls.len() > 2 {
+            let size_score = l0s.total_size() as f64 / self.opt.base_size as f64;
+            let num_tbl_score = l0s.tbls.len() as f64 / 4.0;
+            max_pri.score = size_score * 0.6 + num_tbl_score * 0.4;
+        }
         for l0 in l0s.tbls.as_ref() {
             if !self.cover_full_table(l0.smallest(), l0.biggest()) {
                 // set highest priority for newly split L0.
