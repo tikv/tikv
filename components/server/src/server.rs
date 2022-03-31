@@ -739,6 +739,24 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             );
         }
 
+        // Register causal observer for RawKV API V2
+        // TODO: uncomment after finish modification of Storage.
+        // if let ApiVersion::V2 = self.config.storage.api_version() {
+        //     let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+        //         self.pd_client.clone(),
+        //         self.config.causal_ts.renew_interval.0,
+        //         self.config.causal_ts.renew_batch_min_size,
+        //     ));
+        //     if let Err(e) = tso {
+        //         panic!("Causal timestamp provider initialize failed: {:?}", e);
+        //     }
+        //     let causal_ts_provider = Arc::new(tso.unwrap());
+        //     info!("Causal timestamp provider startup.");
+        //
+        //     let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        //     causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // }
+
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
@@ -860,7 +878,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         let split_config_manager =
-            SplitConfigManager(Arc::new(VersionTrack::new(self.config.split.clone())));
+            SplitConfigManager::new(Arc::new(VersionTrack::new(self.config.split.clone())));
         cfg_controller.register(
             tikv::config::Module::Split,
             Box::new(split_config_manager.clone()),
@@ -1296,10 +1314,11 @@ impl TiKVServer<RocksEngine> {
             .unwrap();
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &self.config.storage.data_dir,
             &self.config.raft_engine.config().dir,
             &self.config.raft_store.raftdb_path,
         );
-        let dump_source = raft_data_state_machine.before_open_target();
+        let should_dump = raft_data_state_machine.before_open_target();
 
         let raft_db_path = &self.config.raft_store.raftdb_path;
         let config_raftdb = &self.config.raftdb;
@@ -1312,11 +1331,9 @@ impl TiKVServer<RocksEngine> {
         let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
         raftdb.set_shared_block_cache(shared_block_cache);
 
-        if let Some(source) = dump_source {
-            let mut raft_engine_config = self.config.raft_engine.config();
-            raft_engine_config.dir = source.to_str().unwrap().to_owned();
+        if should_dump {
             let raft_engine = RaftLogEngine::new(
-                raft_engine_config,
+                self.config.raft_engine.config(),
                 self.encryption_key_manager.clone(),
                 None,
             )
@@ -1387,10 +1404,11 @@ impl TiKVServer<RaftLogEngine> {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         let mut raft_data_state_machine = RaftDataStateMachine::new(
+            &self.config.storage.data_dir,
             &self.config.raft_store.raftdb_path,
             &self.config.raft_engine.config().dir,
         );
-        let dump_source = raft_data_state_machine.before_open_target();
+        let should_dump = raft_data_state_machine.before_open_target();
 
         let raft_config = self.config.raft_engine.config();
         let raft_engine = RaftLogEngine::new(
@@ -1400,13 +1418,13 @@ impl TiKVServer<RaftLogEngine> {
         )
         .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
 
-        if let Some(source) = dump_source {
+        if should_dump {
             let config_raftdb = &self.config.raftdb;
             let mut raft_db_opts = config_raftdb.build_opt();
             raft_db_opts.set_env(env.clone());
             let raft_cf_opts = config_raftdb.build_cf_opts(&block_cache);
             let raftdb = engine_rocks::raw_util::new_engine_opt(
-                source.to_str().unwrap(),
+                &self.config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
             )

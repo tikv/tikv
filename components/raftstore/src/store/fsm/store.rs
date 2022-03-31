@@ -443,6 +443,8 @@ where
             self.cfg.check_leader_lease_interval.0;
         self.tick_batch[PeerTick::ReactivateMemoryLock as usize].wait_duration =
             self.cfg.reactive_memory_lock_tick_interval.0;
+        self.tick_batch[PeerTick::ReportBuckets as usize].wait_duration =
+            self.cfg.check_leader_lease_interval.0;
     }
 }
 

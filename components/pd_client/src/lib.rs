@@ -22,6 +22,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
@@ -361,6 +362,13 @@ pub trait PdClient: Send + Sync {
 
     /// Gets a timestamp from PD.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
+        self.batch_get_tso(1)
+    }
+
+    /// Gets a batch of timestamps from PD.
+    /// Return a timestamp with (physical, logical), indicating that timestamps allocated are:
+    /// [Timestamp(physical, logical - count + 1), Timestamp(physical, logical)]
+    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
         unimplemented!()
     }
 
@@ -372,6 +380,11 @@ pub trait PdClient: Send + Sync {
     // Report min resolved_ts to PD.
     fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
         unimplemented!()
+    }
+
+    /// Region's Leader uses this to report buckets to PD.
+    fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+        unimplemented!();
     }
 }
 

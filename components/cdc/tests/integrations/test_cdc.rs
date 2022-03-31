@@ -1063,7 +1063,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     cm.update_max_ts(20.into());
 
     let guard = lock_key(b"a", 80);
-    suite.set_tso(100);
+    suite.set_tso(99);
 
     let mut req = suite.new_changedata_request(1);
     req.set_checkpoint_ts(100);
@@ -1430,11 +1430,7 @@ fn test_old_value_cache_hit() {
 
 #[test]
 fn test_old_value_cache_hit_pessimistic() {
-    let mut cluster = new_server_cluster(1, 1);
-    // Increase the Raft tick interval to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(100), None);
-    cluster.cfg.pessimistic_txn.in_memory = false;
-    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let mut suite = TestSuite::new(1);
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);

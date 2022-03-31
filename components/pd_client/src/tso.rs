@@ -32,7 +32,10 @@ const MAX_BATCH_SIZE: usize = 64;
 
 const MAX_PENDING_COUNT: usize = 1 << 16;
 
-type TimestampRequest = oneshot::Sender<TimeStamp>;
+struct TimestampRequest {
+    sender: oneshot::Sender<TimeStamp>,
+    count: u32,
+}
 
 /// The timestamp oracle (TSO) which provides monotonically increasing timestamps.
 pub struct TimestampOracle {
@@ -75,12 +78,18 @@ impl TimestampOracle {
         })
     }
 
-    pub(crate) fn get_timestamp(&self) -> impl Future<Output = Result<TimeStamp>> + 'static {
+    pub(crate) fn get_timestamp(
+        &self,
+        count: u32,
+    ) -> impl Future<Output = Result<TimeStamp>> + 'static {
         let (request, response) = oneshot::channel();
         let request_tx = self.request_tx.clone();
         async move {
             request_tx
-                .send(request)
+                .send(TimestampRequest {
+                    sender: request,
+                    count,
+                })
                 .await
                 .map_err(|_| -> Error { box_err!("TimestampRequest channel is closed") })?;
             response
@@ -155,7 +164,7 @@ struct RequestGroup {
 
 struct TsoRequestStream<'a> {
     cluster_id: u64,
-    request_rx: &'a mut mpsc::Receiver<oneshot::Sender<TimeStamp>>,
+    request_rx: &'a mut mpsc::Receiver<TimestampRequest>,
     pending_requests: Rc<RefCell<VecDeque<RequestGroup>>>,
     self_waker: Rc<AtomicWaker>,
 }
@@ -183,7 +192,7 @@ impl<'a> Stream for TsoRequestStream<'a> {
         if !requests.is_empty() {
             let mut req = TsoRequest::default();
             req.mut_header().cluster_id = self.cluster_id;
-            req.count = requests.len() as u32;
+            req.count = requests.iter().map(|r| r.count).sum();
 
             let request_group = RequestGroup {
                 tso_request: req.clone(),
@@ -226,11 +235,11 @@ fn allocate_timestamps(
         }
 
         for request in requests {
-            offset -= 1;
+            offset -= request.count;
             let physical = tail_ts.physical as u64;
             let logical = tail_ts.logical as u64 - offset as u64;
             let ts = TimeStamp::compose(physical, logical);
-            let _ = request.send(ts);
+            let _ = request.sender.send(ts);
         }
     } else {
         return Err(box_err!("PD gives more TsoResponse than expected"));
