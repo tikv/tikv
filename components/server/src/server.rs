@@ -103,7 +103,7 @@ use tokio::runtime::Builder;
 
 use crate::raft_engine_switch::*;
 use crate::util::ffi_server_info;
-use crate::{memory::*, setup::*, signal_handler};
+use crate::{memory::*, setup::*};
 use raftstore::engine_store_ffi::{
     EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
     RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient,
@@ -666,12 +666,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        cfg_controller.register(
-            tikv::config::Module::PessimisticTxn,
-            Box::new(lock_mgr.config_manager()),
-        );
-        lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
-
         let engines = self.engines.as_ref().unwrap();
 
         let pd_worker = LazyWorker::new("pd-worker");
@@ -748,7 +742,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
-            lock_mgr.get_storage_dynamic_configs(),
+            raftstore::store::StorageDynamicConfigs::default(), // we don't care since we don't start
             flow_controller.clone(),
             pd_sender.clone(),
             resource_tag_factory.clone(),
@@ -1077,72 +1071,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Lock manager.
-        if servers
-            .server
-            .register_service(create_deadlock(servers.lock_mgr.deadlock_service()))
-            .is_some()
-        {
-            fatal!("failed to register deadlock service");
-        }
-
-        servers
-            .lock_mgr
-            .start(
-                servers.node.id(),
-                self.pd_client.clone(),
-                self.resolver.clone(),
-                self.security_mgr.clone(),
-                &self.config.pessimistic_txn,
-            )
-            .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
-
         // Backup service.
-        let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
-        let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
-        if servers
-            .server
-            .register_service(create_backup(backup_service))
-            .is_some()
-        {
-            fatal!("failed to register backup service");
-        }
-
-        let backup_endpoint = backup::Endpoint::new(
-            servers.node.id(),
-            engines.engine.clone(),
-            self.region_info_accessor.clone(),
-            engines.engines.kv.as_inner().clone(),
-            self.config.backup.clone(),
-            self.concurrency_manager.clone(),
-            self.config.storage.api_version(),
-        );
-        self.cfg_controller.as_mut().unwrap().register(
-            tikv::config::Module::Backup,
-            Box::new(backup_endpoint.get_config_manager()),
-        );
-        backup_worker.start(backup_endpoint);
-
-        let cdc_service = cdc::Service::new(
-            servers.cdc_scheduler.clone(),
-            servers.cdc_memory_quota.clone(),
-        );
-        if servers
-            .server
-            .register_service(create_change_data(cdc_service))
-            .is_some()
-        {
-            fatal!("failed to register cdc service");
-        }
-        if servers
-            .server
-            .register_service(create_resource_metering_pub_sub(
-                servers.rsmeter_pubsub_service.clone(),
-            ))
-            .is_some()
-        {
-            warn!("failed to register resource metering pubsub service");
-        }
     }
 
     fn init_io_utility(&mut self) -> BytesFetcher {

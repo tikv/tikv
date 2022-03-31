@@ -247,7 +247,7 @@ pub unsafe fn run_proxy(
 fn check_engine_label(matches: &clap::ArgMatches<'_>) {
     let engine_label = matches.value_of("engine-label").unwrap();
     let expect_engine_label = option_env!("ENGINE_LABEL_VALUE").unwrap();
-    if (engine_label != expect_engine_label) {
+    if engine_label != expect_engine_label {
         panic!(
             "`engine-label` is `{}`, expect `{}`",
             engine_label, expect_engine_label
