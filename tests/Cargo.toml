@@ -15,48 +15,14 @@ path = "integrations/mod.rs"
 required-features = ["testexport"]
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure", "test-raftstore-proxy"]
+default = ["failpoints", "testexport", "test-engines-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure", "test-raftstore-proxy"]
 test-raftstore-proxy = ["raftstore/test-raftstore-proxy"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = [ "external_storage_export/cloud-aws" ]
 cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 cloud-azure = [ "external_storage_export/cloud-azure" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
-protobuf-codec = [
-  "protobuf/bytes",
-  "batch-system/protobuf-codec",
-  "encryption/protobuf-codec",
-  "error_code/protobuf-codec",
-  "grpcio/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "pd_client/protobuf-codec",
-  "raft/protobuf-codec",
-  "raftstore/protobuf-codec",
-  "sst_importer/protobuf-codec",
-  "test_raftstore/protobuf-codec",
-  "test_storage/protobuf-codec",
-  "tikv/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-  "grpcio-health/protobuf-codec",
-]
-prost-codec = [
-  "batch-system/prost-codec",
-  "encryption/prost-codec",
-  "error_code/prost-codec",
-  "grpcio/prost-codec",
-  "kvproto/prost-codec",
-  "pd_client/prost-codec",
-  "raft/prost-codec",
-  "raftstore/prost-codec",
-  "sst_importer/prost-codec",
-  "test_raftstore/prost-codec",
-  "test_storage/prost-codec",
-  "tikv/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-  "grpcio-health/prost-codec",
-]
+
 profiling = ["profiler/profiling"]
 test-engines-rocksdb = [
   "raftstore/test-engines-rocksdb",

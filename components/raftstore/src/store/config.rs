@@ -269,9 +269,6 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
-    #[serde(with = "engine_config::perf_level_serde")]
-    #[online_config(skip)]
-    pub perf_level: PerfLevel,
 
     #[online_config(skip)]
     pub store_batch_retry_recv_timeout: ReadableDuration,
@@ -287,7 +284,6 @@ pub struct Config {
     pub reactive_memory_lock_tick_interval: ReadableDuration,
     /// Max tick count before reactivating in-memory pessimistic lock.
     pub reactive_memory_lock_timeout_tick: usize,
->>>>>>> tikv/release-6.0
 }
 
 impl Default for Config {
@@ -360,7 +356,6 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
-            perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,

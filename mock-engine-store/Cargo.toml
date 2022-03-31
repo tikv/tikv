@@ -15,7 +15,6 @@ protobuf-codec = [
   "kvproto/protobuf-codec",
 ]
 
-
 [dependencies]
 server = { path = "../components/server" }
 raftstore = { path = "../components/raftstore", default-features = false }

@@ -623,7 +623,7 @@ pub struct SSTFileReader {
 
 impl SSTFileReader {
     fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
-        let env = get_env(key_manager, None).unwrap();
+        let env = get_env(None, key_manager).unwrap();
         let sst_reader = RocksSstReader::open_with_env(path, Some(env)).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();

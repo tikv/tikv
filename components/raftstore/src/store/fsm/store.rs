@@ -939,11 +939,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
     }
-
-    fn batch_retry_recv_timeout(&self) -> Option<Duration> {
-        self.batch_retry_recv_timeout
-            .checked_sub(self.last_sync_time.elapsed())
-    }
 }
 
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {

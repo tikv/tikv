@@ -1464,7 +1464,7 @@ where
             AdminCmdType::ChangePeerV2 => self.exec_change_peer_v2(ctx, request),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
-            AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
+            AdminCmdType::CompactLog => self.exec_compact_log(request),
             AdminCmdType::TransferLeader => Err(box_err!("transfer leader won't exec")),
             AdminCmdType::ComputeHash => Ok((AdminResponse::new(), ApplyResult::None)),
             AdminCmdType::VerifyHash => Ok((AdminResponse::new(), ApplyResult::None)),
@@ -1801,9 +1801,9 @@ where
         Ok(())
     }
 
-    fn handle_ingest_sst_for_engine_store<W: WriteBatch<EK>>(
+    fn handle_ingest_sst_for_engine_store(
         &mut self,
-        ctx: &ApplyContext<EK, W>,
+        ctx: &ApplyContext<EK>,
         ssts: &Vec<SSTMetaInfo>,
     ) -> EngineStoreApplyRes {
         let mut ssts_wrap = vec![];
@@ -3654,9 +3654,9 @@ where
     }
 
     #[allow(unused_mut, clippy::redundant_closure_call)]
-    fn handle_snapshot<W: WriteBatch<EK>>(
+    fn handle_snapshot(
         &mut self,
-        apply_ctx: &mut ApplyContext<EK, W>,
+        apply_ctx: &mut ApplyContext<EK>,
         snap_task: GenSnapTask,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {

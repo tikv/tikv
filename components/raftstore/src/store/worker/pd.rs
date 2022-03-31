@@ -786,7 +786,6 @@ where
     const INTERVAL_DIVISOR: u32 = 2;
 
     pub fn new(
-        config: &crate::store::Config,
         cfg: &Config,
         store_id: u64,
         pd_client: Arc<T>,
@@ -817,7 +816,7 @@ where
 
         Runner {
             engine_store_server_helper: crate::engine_store_ffi::gen_engine_store_server_helper(
-                config.engine_store_server_helper,
+                cfg.engine_store_server_helper,
             ),
             store_id,
             pd_client,
@@ -1028,6 +1027,7 @@ where
         send_detailed_report: bool,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
+        let store_stats = self.engine_store_server_helper.handle_compute_store_stats();
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
             Err(e) => {
                 error!(

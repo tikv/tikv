@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::u64;
 
 use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
@@ -33,9 +33,10 @@ use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
-// used to periodically check whether we should delete a stale peer's range in region runner
+const GENERATE_POOL_SIZE: usize = 2;
 
-const CLEANUP_MAX_REGION_COUNT: usize = 128;
+// used to periodically check whether we should delete a stale peer's range in region runner
+const CLEANUP_MAX_REGION_COUNT: usize = 64;
 #[cfg(test)]
 pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
 
@@ -48,7 +49,6 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 #[cfg(test)]
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
 
-const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
 /// Region related task
 #[derive(Debug)]
@@ -357,7 +357,7 @@ where
             "region_id" => region_id,
             "peer_id" => peer_id,
             "state" => ?apply_state,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
 
         Ok(res)
