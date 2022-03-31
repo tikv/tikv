@@ -2009,6 +2009,7 @@ fn test_cdc_write_rollback_when_no_lock() {
     loop {
         let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            println!("----Resolve ts----: {}", resolved_ts.ts);
             if resolved_ts.ts == 10 {
                 break;
             }
@@ -2022,6 +2023,7 @@ fn test_cdc_write_rollback_when_no_lock() {
     for _ in 0..10 {
         let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            println!("----Resolve ts----: {}", resolved_ts.ts);
             if resolved_ts.ts > 10 {
                 panic!("resolved_ts shouldn't be advanced beyond 10");
             }
@@ -2034,6 +2036,7 @@ fn test_cdc_write_rollback_when_no_lock() {
     loop {
         let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            println!("----Resolve ts----: {}", resolved_ts.ts);
             advance_cnt += 1;
             if resolved_ts.ts > 15 {
                 break;

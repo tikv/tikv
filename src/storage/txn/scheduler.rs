@@ -975,7 +975,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     .modifies
                     .iter()
                     .filter_map(|write| match write {
-                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
+                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key) | Modify::SingleDelete(cf, key) if *cf == CF_LOCK => {
                             locks.get_mut(key).map(|(_, deleted)| {
                                 *deleted = true;
                                 key.to_owned()
