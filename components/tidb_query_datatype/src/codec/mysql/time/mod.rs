@@ -1343,6 +1343,13 @@ impl Time {
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
     }
 
+    pub fn from_local_time(ctx: &mut EvalContext, time_type: TimeType, fsp: i8) -> Result<Time> {
+        let fsp = check_fsp(fsp)?;
+        let utc = Local::now();
+        let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
+        Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
+    }
+
     pub fn from_year(
         ctx: &mut EvalContext,
         year: u32,
@@ -1685,14 +1692,14 @@ impl Time {
     #[inline]
     pub fn to_numeric_string(self) -> String {
         let mut buffer = String::with_capacity(15);
-        write!(&mut buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
+        write!(buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
         if self.get_time_type() != TimeType::Date {
-            write!(&mut buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
+            write!(buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
         }
         let fsp = usize::from(self.fsp());
         if fsp > 0 {
             write!(
-                &mut buffer,
+                buffer,
                 ".{:0width$}",
                 self.micro() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
@@ -2710,6 +2717,23 @@ mod tests {
             assert_eq!(today.hour(), 0);
             assert_eq!(today.minute(), 0);
             assert_eq!(today.second(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_local_time() -> Result<()> {
+        let mut ctx = EvalContext::default();
+        for i in 2..10 {
+            let actual = Time::from_local_time(&mut ctx, TimeType::DateTime, i % MAX_FSP)?;
+            let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
+
+            //2022-02-15 07:45:48.581699 NonFixed(UTC)   c_datetime
+            //2022-02-15 07:45:48.581933075 UTC          Utc::now()
+            //We compare length 22 of then; Exceed it may be not equal ( in milli seconds ).
+            let now0 = &c_datetime.to_string()[0..22];
+            let now1 = &Utc::now().to_string()[0..22];
+            assert_eq!(now0, now1);
         }
         Ok(())
     }

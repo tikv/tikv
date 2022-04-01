@@ -203,10 +203,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
         for logical_row_index in 0..pinned_source_data.logical_rows.len() {
             let row = HeapItemUnsafe {
-                order_is_desc_ptr: (&*self.order_is_desc).into(),
-                order_exprs_field_type_ptr: (&*self.order_exprs_field_type).into(),
+                order_is_desc_ptr: (*self.order_is_desc).into(),
+                order_exprs_field_type_ptr: (*self.order_exprs_field_type).into(),
                 source_data: pinned_source_data.clone(),
-                eval_columns_buffer_ptr: (&*self.eval_columns_buffer_unsafe).into(),
+                eval_columns_buffer_ptr: self.eval_columns_buffer_unsafe.as_ref().into(),
                 eval_columns_offset: eval_offset,
                 logical_row_index,
             };

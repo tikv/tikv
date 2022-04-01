@@ -42,7 +42,8 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
+use raftstore::store::memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
+use raftstore::store::metrics::RAFT_ENTRIES_CACHES_GAUGE;
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
@@ -1073,6 +1074,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
     ) {
+        let addr = ctx.peer();
         let ts = request.get_ts();
         let leaders = request.take_regions().into();
         let (cb, resp) = paired_future_callback();
@@ -1088,8 +1090,10 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
             sink.success(resp).await?;
             ServerResult::Ok(())
         }
-        .map_err(|e| {
-            warn!("call CheckLeader failed"; "err" => ?e);
+        .map_err(move |e| {
+            // CheckLeader only needs quorum responses, remote may drops
+            // requests early.
+            info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
         })
         .map(|_| ());
 
@@ -2103,7 +2107,17 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
-        if raft_msg_usage as f64 > usage as f64 * reject_messages_on_memory_ratio {
+        let cached_entries = RAFT_ENTRIES_CACHES_GAUGE.get() as u64;
+        let applying_entries = MEMTRACE_APPLYS.sum() as u64;
+        if (raft_msg_usage + cached_entries + applying_entries) as f64
+            > usage as f64 * reject_messages_on_memory_ratio
+        {
+            debug!("need reject log append on memory limit";
+                "raft messages" => raft_msg_usage,
+                "cached entries" => cached_entries,
+                "applying entries" => applying_entries,
+                "current usage" => usage,
+                "reject ratio" => reject_messages_on_memory_ratio);
             return true;
         }
     }

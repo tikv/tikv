@@ -596,7 +596,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &ChunkedVecSized::from_slice(&[Some(21i64), None, Some(22i64)]),
+            ChunkedVecSized::from_slice(&[Some(21i64), None, Some(22i64)]),
             &[0, 1, 2]
         )
         .unwrap();
@@ -709,7 +709,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &ChunkedVecSized::from_slice(&[Some(69i64), None, Some(68i64)]),
+            ChunkedVecSized::from_slice(&[Some(69i64), None, Some(68i64)]),
             &[0, 1, 2]
         )
         .unwrap();
@@ -918,7 +918,7 @@ mod tests {
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
             let max_slice: ChunkedVecSized<Int> = max_result.as_ref().to_int_vec().into();
-            update_vector!(max_state, &mut ctx, &max_slice, max_result.logical_rows()).unwrap();
+            update_vector!(max_state, &mut ctx, max_slice, max_result.logical_rows()).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -935,7 +935,7 @@ mod tests {
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
             let min_slice: ChunkedVecSized<Int> = min_result.as_ref().to_int_vec().into();
-            update_vector!(min_state, &mut ctx, &min_slice, min_result.logical_rows()).unwrap();
+            update_vector!(min_state, &mut ctx, min_slice, min_result.logical_rows()).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 

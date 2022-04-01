@@ -9,7 +9,9 @@ use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
 use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::ErrorInner::WriteConflict;
 use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
+use crate::storage::need_check_locks;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -152,47 +154,45 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             let ts = self.cfg.ts;
 
             if has_lock {
-                match self.cfg.isolation_level {
-                    IsolationLevel::Si => {
-                        let lock = {
-                            let lock_value = self
-                                .lock_cursor
-                                .as_mut()
-                                .unwrap()
-                                .value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                            self.met_newer_ts_data = NewerTsCheckState::Met;
-                        }
-                        result = Lock::check_ts_conflict(
-                            Cow::Borrowed(&lock),
-                            &current_user_key,
-                            ts,
-                            &self.cfg.bypass_locks,
-                        )
-                        .map(|_| None)
-                        .map_err(Into::into);
-                        if result.is_err() {
-                            self.statistics.lock.processed_keys += 1;
-                            if self.cfg.access_locks.contains(lock.ts) {
-                                self.ensure_default_cursor()?;
-                                result = super::load_data_by_lock(
-                                    &current_user_key,
-                                    &self.cfg,
-                                    self.default_cursor.as_mut().unwrap(),
-                                    lock,
-                                    &mut self.statistics,
-                                );
-                                if has_write {
-                                    // Skip current_user_key because this key is either blocked or handled.
-                                    has_write = false;
-                                    self.move_write_cursor_to_prev_user_key(&current_user_key)?;
-                                }
+                if need_check_locks(self.cfg.isolation_level) {
+                    let lock = {
+                        let lock_value = self
+                            .lock_cursor
+                            .as_mut()
+                            .unwrap()
+                            .value(&mut self.statistics.lock);
+                        Lock::parse(lock_value)?
+                    };
+                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    result = Lock::check_ts_conflict(
+                        Cow::Borrowed(&lock),
+                        &current_user_key,
+                        ts,
+                        &self.cfg.bypass_locks,
+                        self.cfg.isolation_level,
+                    )
+                    .map(|_| None)
+                    .map_err(Into::into);
+                    if result.is_err() {
+                        self.statistics.lock.processed_keys += 1;
+                        if self.cfg.access_locks.contains(lock.ts) {
+                            self.ensure_default_cursor()?;
+                            result = super::load_data_by_lock(
+                                &current_user_key,
+                                &self.cfg,
+                                self.default_cursor.as_mut().unwrap(),
+                                lock,
+                                &mut self.statistics,
+                            );
+                            if has_write {
+                                // Skip current_user_key because this key is either blocked or handled.
+                                has_write = false;
+                                self.move_write_cursor_to_prev_user_key(&current_user_key)?;
                             }
                         }
                     }
-                    IsolationLevel::Rc => {}
                 }
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
                     lock_cursor.prev(&mut self.statistics.lock);
@@ -262,6 +262,18 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     is_done = true;
                     if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                         self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
+                        // TODO: the more write recent version with `LOCK` or `ROLLBACK` write type
+                        //       could be skipped.
+                        return Err(WriteConflict {
+                            start_ts: self.cfg.ts,
+                            conflict_start_ts: Default::default(),
+                            conflict_commit_ts: last_checked_commit_ts,
+                            key: current_key.into(),
+                            primary: vec![],
+                        }
+                        .into());
                     }
                 }
             }
@@ -477,7 +489,8 @@ mod tests {
     use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
     use crate::storage::mvcc::tests::write;
     use crate::storage::txn::tests::{
-        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+        must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
+        must_prewrite_lock, must_prewrite_put, must_rollback,
     };
     use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
@@ -1416,5 +1429,94 @@ mod tests {
             .map(|result| result.unwrap())
             .collect();
         assert_eq!(result, expected_result);
+    }
+
+    #[test]
+    fn test_rc_read_check_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key0, val0) = (b"k0", b"v0");
+        must_prewrite_put(&engine, key0, val0, key0, 60);
+
+        let (key1, val1) = (b"k1", b"v1");
+        must_prewrite_put(&engine, key1, val1, key1, 25);
+        must_commit(&engine, key1, 25, 30);
+
+        let (key2, val2, val22) = (b"k2", b"v2", b"v22");
+        must_prewrite_put(&engine, key2, val2, key2, 6);
+        must_commit(&engine, key2, 6, 9);
+        must_prewrite_put(&engine, key2, val22, key2, 10);
+        must_commit(&engine, key2, 10, 20);
+
+        let (key3, val3) = (b"k3", b"v3");
+        must_prewrite_put(&engine, key3, val3, key3, 5);
+        must_commit(&engine, key3, 5, 6);
+
+        let (key4, val4) = (b"k4", b"val4");
+        must_prewrite_put(&engine, key4, val4, key4, 3);
+        must_commit(&engine, key4, 3, 4);
+        must_prewrite_lock(&engine, key4, key4, 5);
+
+        let (key5, val5) = (b"k5", b"val5");
+        must_prewrite_put(&engine, key5, val5, key5, 1);
+        must_commit(&engine, key5, 1, 2);
+        must_acquire_pessimistic_lock(&engine, key5, key5, 3, 3);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 29.into())
+            .range(None, None)
+            .desc(true)
+            .isolation_level(IsolationLevel::RcCheckTs)
+            .build()
+            .unwrap();
+
+        // Scanner has met a more recent version.
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key5), val5.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key4), val4.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key3), val3.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key2), val22.to_vec()))
+        );
+        assert!(scanner.next().is_err());
+
+        // Scanner has met a lock though lock.ts > read_ts.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 55.into())
+            .range(None, None)
+            .desc(true)
+            .isolation_level(IsolationLevel::RcCheckTs)
+            .build()
+            .unwrap();
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key5), val5.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key4), val4.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key3), val3.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key2), val22.to_vec()))
+        );
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(key1), val1.to_vec()))
+        );
+        assert!(scanner.next().is_err());
     }
 }

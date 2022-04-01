@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use engine_traits::CF_WRITE;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{Context, Mutation, Op, PessimisticLockRequest, PrewriteRequest};
+use kvproto::kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::TikvClient;
@@ -692,7 +692,13 @@ fn test_report_approximate_size_after_split_check() {
         .pd_client
         .get_region_approximate_keys(region_id)
         .unwrap_or_default();
-    assert!(approximate_size == 0 && approximate_keys == 0);
+    // It's either 0 for uninialized or 1 for 0.
+    assert!(
+        approximate_size <= 1 && approximate_keys <= 1,
+        "{} {}",
+        approximate_size,
+        approximate_keys,
+    );
     let (tx, rx) = mpsc::channel();
     let tx = Arc::new(Mutex::new(tx));
 
@@ -755,22 +761,11 @@ fn test_split_with_concurrent_pessimistic_locking() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let get_ctx = |cluster: &mut Cluster<ServerCluster>, key: &[u8]| {
-        let region = cluster.get_region(key);
-        let leader = cluster.leader_of_region(region.id).unwrap();
-        let epoch = cluster.get_region_epoch(region.id);
-        let mut ctx = Context::default();
-        ctx.set_region_id(region.id);
-        ctx.set_peer(leader);
-        ctx.set_region_epoch(epoch);
-        ctx
-    };
-
     let mut mutation = Mutation::default();
     mutation.set_op(Op::PessimisticLock);
     mutation.key = b"key".to_vec();
     let mut req = PessimisticLockRequest::default();
-    req.set_context(get_ctx(&mut cluster, b"key"));
+    req.set_context(cluster.get_ctx(b"key"));
     req.set_mutations(vec![mutation].into());
     req.set_start_version(10);
     req.set_for_update_ts(10);
@@ -794,7 +789,7 @@ fn test_split_with_concurrent_pessimistic_locking() {
     // 2. Locking happens when split has finished
     // It needs to be rejected due to incorrect epoch, otherwise the lock may be written to the wrong region.
     fail::cfg("txn_before_process_write", "pause").unwrap();
-    req.set_context(get_ctx(&mut cluster, b"key"));
+    req.set_context(cluster.get_ctx(b"key"));
     let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
     thread::sleep(Duration::from_millis(200));
 
@@ -823,23 +818,12 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let get_ctx = |cluster: &mut Cluster<ServerCluster>, key: &[u8]| {
-        let region = cluster.get_region(key);
-        let leader = cluster.leader_of_region(region.id).unwrap();
-        let epoch = cluster.get_region_epoch(region.id);
-        let mut ctx = Context::default();
-        ctx.set_region_id(region.id);
-        ctx.set_peer(leader);
-        ctx.set_region_epoch(epoch);
-        ctx
-    };
-
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(b"a".to_vec());
     mutation.set_value(b"v".to_vec());
     let mut req = PrewriteRequest::default();
-    req.set_context(get_ctx(&mut cluster, b"a"));
+    req.set_context(cluster.get_ctx(b"a"));
     req.set_mutations(vec![mutation].into());
     req.set_try_one_pc(true);
     req.set_start_version(20);
@@ -869,8 +853,14 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        locks.insert(vec![(Key::from_raw(b"a"), lock_a)]);
-        locks.insert(vec![(Key::from_raw(b"c"), lock_c)]);
+        assert!(
+            locks
+                .insert(vec![
+                    (Key::from_raw(b"a"), lock_a),
+                    (Key::from_raw(b"c"), lock_c)
+                ])
+                .is_ok()
+        );
     }
 
     let mut mutation = Mutation::default();
@@ -878,7 +868,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     mutation.set_key(b"a".to_vec());
     mutation.set_value(b"v2".to_vec());
     let mut req = PrewriteRequest::default();
-    req.set_context(get_ctx(&mut cluster, b"a"));
+    req.set_context(cluster.get_ctx(b"a"));
     req.set_mutations(vec![mutation].into());
     req.set_is_pessimistic_lock(vec![true]);
     req.set_start_version(10);

@@ -843,7 +843,7 @@ pub fn put_cf_till_size<T: Simulator>(
         for _ in 0..batch_size / 74 + 1 {
             key.clear();
             let key_id = range.next().unwrap();
-            write!(&mut key, "{:09}", key_id).unwrap();
+            write!(key, "{:09}", key_id).unwrap();
             rng.fill_bytes(&mut value);
             // plus 1 for the extra encoding prefix
             len += key.len() as u64 + 1;
@@ -1345,4 +1345,13 @@ impl PeerClient {
     pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
         must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts)
     }
+}
+
+pub fn peer_on_store(region: &metapb::Region, store_id: u64) -> metapb::Peer {
+    region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_store_id() == store_id)
+        .unwrap()
+        .clone()
 }

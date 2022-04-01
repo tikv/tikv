@@ -132,6 +132,16 @@ impl<W> EncrypterWriter<W> {
     pub fn finalize(self) -> IoResult<W> {
         self.0.finalize()
     }
+
+    #[inline]
+    pub fn inner(&self) -> &W {
+        &self.0.writer
+    }
+
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.0.writer
+    }
 }
 
 impl<W: Write> Write for EncrypterWriter<W> {

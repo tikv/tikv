@@ -164,7 +164,7 @@ impl EventBatcher {
                 self.total_resolved_ts_bytes += size as usize;
             }
             CdcEvent::Barrier(_) => {
-                // Barrier requires events must be batched accross the barrier.
+                // Barrier requires events must be batched across the barrier.
                 self.last_size = CDC_RESP_MAX_BYTES;
             }
         }

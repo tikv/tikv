@@ -357,7 +357,7 @@ fn test_query_stats() {
         });
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
-    fail::cfg("mock_collect_interval", "return(0)").unwrap();
+    fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
     test_query_num(raw_get, true);
     test_query_num(raw_batch_get, true);
     test_query_num(raw_scan, true);
@@ -374,7 +374,7 @@ fn test_query_stats() {
     test_rollback();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
-    fail::remove("mock_collect_interval");
+    fail::remove("mock_collect_tick_interval");
 }
 
 fn raw_put(

@@ -133,14 +133,14 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::store::{SplitCheckRunner, SplitCheckTask};
+    use crate::store::{BucketRange, SplitCheckRunner, SplitCheckTask};
     use engine_traits::{MiscExt, SyncMutable};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;
     use txn_types::Key;
 
-    use super::super::size::tests::must_split_at;
+    use super::super::size::tests::{must_generate_buckets, must_split_at};
     use super::*;
     use crate::coprocessor::{Config, CoprocessorHost};
 
@@ -184,6 +184,7 @@ mod tests {
             region.clone(),
             false,
             CheckPolicy::Scan,
+            None,
         ));
         let split_key = Key::from_raw(b"0005");
         must_split_at(&rx, &region, vec![split_key.clone().into_encoded()]);
@@ -191,8 +192,121 @@ mod tests {
             region.clone(),
             false,
             CheckPolicy::Approximate,
+            None,
         ));
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+    }
+
+    #[test]
+    fn test_generate_region_bucket() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                let cf_opts = ColumnFamilyOptions::new();
+                CFOptions::new(cf, cf_opts)
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
+            ..Default::default()
+        };
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+
+        // so bucket key will be all these keys
+        let mut exp_bucket_keys = vec![];
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            None,
+        ));
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        exp_bucket_keys.clear();
+
+        // now insert a few keys to grow the bucket 0001
+        let start = format!("{:04}", 1).into_bytes();
+        let end = format!("{:04}", 2).into_bytes();
+        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
+        let bucket_range = BucketRange(
+            Key::from_raw(&start).as_encoded().clone(),
+            Key::from_raw(&end).as_encoded().clone(),
+        );
+        for i in 10..20 {
+            let k = format!("{:05}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![bucket_range]),
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        // testing split bucket with end key ""
+        exp_bucket_keys.clear();
+
+        // now insert a few keys to grow the bucket 0010
+        let start = format!("{:04}", 10).into_bytes();
+        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
+        let bucket_range = BucketRange(Key::from_raw(&start).as_encoded().clone(), vec![]);
+        for i in 11..20 {
+            let k = format!("{:04}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![bucket_range]),
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
+        exp_bucket_keys.clear();
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![]), // empty bucket, no buckets are expected
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
     }
 
     #[test]

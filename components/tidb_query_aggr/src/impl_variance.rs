@@ -608,7 +608,7 @@ mod tests {
             update_vector!(
                 pop_var_state,
                 &mut ctx,
-                &pop_var_slice,
+                pop_var_slice,
                 pop_var_result.logical_rows()
             )
             .unwrap();
@@ -628,7 +628,7 @@ mod tests {
             update_vector!(
                 samp_var_state,
                 &mut ctx,
-                &samp_var_slice,
+                samp_var_slice,
                 samp_var_result.logical_rows()
             )
             .unwrap();

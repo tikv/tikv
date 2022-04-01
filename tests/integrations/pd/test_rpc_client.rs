@@ -91,6 +91,9 @@ fn test_rpc_client() {
     let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
+    let ts100 = block_on(client.batch_get_tso(100)).unwrap();
+    assert_eq!(ts.logical() + 100, ts100.logical());
+
     let mut prev_id = 0;
     for _ in 0..100 {
         let client = new_client(eps.clone(), None);
@@ -122,7 +125,12 @@ fn test_rpc_client() {
     assert_eq!(region_info.region, region);
     assert_eq!(region_info.leader.unwrap(), peer);
 
-    block_on(client.store_heartbeat(pdpb::StoreStats::default(), /*store_report=*/ None)).unwrap();
+    block_on(client.store_heartbeat(
+        pdpb::StoreStats::default(),
+        /*store_report=*/ None,
+        None,
+    ))
+    .unwrap();
     block_on(client.ask_batch_split(metapb::Region::default(), 1)).unwrap();
     block_on(client.report_batch_split(vec![metapb::Region::default(), metapb::Region::default()]))
         .unwrap();
@@ -538,7 +546,7 @@ fn test_cluster_version() {
 
     let emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
-        block_on(client.store_heartbeat(req, /*store_report=*/ None)).unwrap();
+        block_on(client.store_heartbeat(req, /*store_report=*/ None, None)).unwrap();
     };
 
     let set_cluster_version = |version: &str| {

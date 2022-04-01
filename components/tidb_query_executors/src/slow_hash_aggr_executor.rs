@@ -360,7 +360,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 }
             }
 
-            let buffer_ptr = (&*self.group_key_buffer).into();
+            let buffer_ptr = self.group_key_buffer.as_ref().into();
             // Extra column is not included in `GroupKeyRefUnsafe` to avoid being aggr on.
             let group_key_ref_unsafe = GroupKeyRefUnsafe {
                 buffer_ptr,

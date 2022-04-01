@@ -291,7 +291,7 @@ mod tests {
         let example_ca = temp.path().join("ca");
         let example_cert = temp.path().join("cert");
         let example_key = temp.path().join("key");
-        for (id, f) in (&[&example_ca, &example_cert, &example_key])
+        for (id, f) in [&example_ca, &example_cert, &example_key]
             .iter()
             .enumerate()
         {

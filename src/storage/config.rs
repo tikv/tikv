@@ -3,21 +3,14 @@
 //! Storage configuration.
 
 use crate::config::BLOCK_CACHE_RATE;
-use crate::server::ttl::TTLCheckerTask;
-use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::txn::flow_controller::FlowController;
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use engine_traits::{ColumnFamilyOptions, KvEngine, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
-use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
+use online_config::OnlineConfig;
 use std::error::Error;
-use std::sync::Arc;
-use strum::IntoEnumIterator;
-use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
-use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -46,7 +39,6 @@ pub struct Config {
     pub max_key_size: usize,
     #[online_config(skip)]
     pub scheduler_concurrency: usize,
-    #[online_config(skip)]
     pub scheduler_worker_pool_size: usize,
     #[online_config(skip)]
     pub scheduler_pending_write_threshold: ReadableSize,
@@ -77,7 +69,11 @@ impl Default for Config {
             gc_ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             max_key_size: DEFAULT_MAX_KEY_SIZE,
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
-            scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
+            scheduler_worker_pool_size: if cpu_num >= 16.0 {
+                8
+            } else {
+                std::cmp::max(1, std::cmp::min(4, cpu_num as usize))
+            },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
@@ -113,6 +109,16 @@ impl Config {
                     .into(),
             );
         };
+        // max worker pool size should be at least 4.
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
+        if self.scheduler_worker_pool_size == 0 || self.scheduler_worker_pool_size > max_pool_size {
+            return Err(
+                format!(
+                    "storage.scheduler_worker_pool_size should be greater than 0 and less than or equal to {}",
+                    max_pool_size
+                ).into()
+            );
+        }
         self.io_rate_limit.validate()?;
 
         Ok(())
@@ -142,97 +148,6 @@ impl Config {
                 self.enable_ttl = true;
             }
         }
-    }
-}
-
-pub struct StorageConfigManger<EK: KvEngine> {
-    kvdb: EK,
-    shared_block_cache: bool,
-    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
-    flow_controller: Arc<FlowController>,
-}
-
-impl<EK: KvEngine> StorageConfigManger<EK> {
-    pub fn new(
-        kvdb: EK,
-        shared_block_cache: bool,
-        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
-        flow_controller: Arc<FlowController>,
-    ) -> Self {
-        StorageConfigManger {
-            kvdb,
-            shared_block_cache,
-            ttl_checker_scheduler,
-            flow_controller,
-        }
-    }
-}
-
-impl<EK: KvEngine> ConfigManager for StorageConfigManger<EK> {
-    fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
-        if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
-            if !self.shared_block_cache {
-                return Err("shared block cache is disabled".into());
-            }
-            if let Some(size) = block_cache.remove("capacity") {
-                let s: OptionReadableSize = size.into();
-                if let Some(size) = s.0 {
-                    // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
-                    // the size through any of them. Here we change it through default CF in kvdb.
-                    // A better way to do it is to hold the cache reference somewhere, and use it to
-                    // change cache size.
-                    let opt = self.kvdb.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                    opt.set_block_cache_capacity(size.0)?;
-                    // Write config to metric
-                    CONFIG_ROCKSDB_GAUGE
-                        .with_label_values(&[CF_DEFAULT, "block_cache_size"])
-                        .set(size.0 as f64);
-                }
-            }
-        } else if let Some(v) = change.remove("ttl_check_poll_interval") {
-            let interval: ReadableDuration = v.into();
-            self.ttl_checker_scheduler
-                .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
-                .unwrap();
-        } else if let Some(ConfigValue::Module(mut flow_control)) = change.remove("flow_control") {
-            if let Some(v) = flow_control.remove("enable") {
-                let enable: bool = v.into();
-                if enable {
-                    for cf in self.kvdb.cf_names() {
-                        self.kvdb
-                            .set_options_cf(cf, &[("disable_write_stall", "true")])
-                            .unwrap();
-                    }
-                    self.flow_controller.enable(true);
-                } else {
-                    for cf in self.kvdb.cf_names() {
-                        self.kvdb
-                            .set_options_cf(cf, &[("disable_write_stall", "false")])
-                            .unwrap();
-                    }
-                    self.flow_controller.enable(false);
-                }
-            }
-        }
-        if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
-            let limiter = match get_io_rate_limiter() {
-                None => return Err("IO rate limiter is not present".into()),
-                Some(limiter) => limiter,
-            };
-            if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
-                let limit: ReadableSize = limit.into();
-                limiter.set_io_rate_limit(limit.0 as usize);
-            }
-
-            for t in IOType::iter() {
-                if let Some(priority) = io_rate_limit.remove(&(t.as_str().to_owned() + "_priority"))
-                {
-                    let priority: IOPriority = priority.into();
-                    limiter.set_io_priority(t, priority);
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -269,7 +184,7 @@ impl Default for FlowControlConfig {
 pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub shared: bool,
-    pub capacity: OptionReadableSize,
+    pub capacity: Option<ReadableSize>,
     #[online_config(skip)]
     pub num_shard_bits: i32,
     #[online_config(skip)]
@@ -284,7 +199,7 @@ impl Default for BlockCacheConfig {
     fn default() -> BlockCacheConfig {
         BlockCacheConfig {
             shared: true,
-            capacity: OptionReadableSize(None),
+            capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.8,
@@ -298,7 +213,7 @@ impl BlockCacheConfig {
         if !self.shared {
             return None;
         }
-        let capacity = match self.capacity.0 {
+        let capacity = match self.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
@@ -438,5 +353,26 @@ impl IORateLimitConfig {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_storage_config() {
+        let mut cfg = Config::default();
+        assert!(cfg.validate().is_ok());
+
+        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        cfg.scheduler_worker_pool_size = max_pool_size;
+        assert!(cfg.validate().is_ok());
+
+        cfg.scheduler_worker_pool_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg.scheduler_worker_pool_size = max_pool_size + 1;
+        assert!(cfg.validate().is_err());
     }
 }

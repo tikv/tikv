@@ -3,6 +3,8 @@
 // #[PerformanceCriticalPath]
 use std::borrow::Cow;
 use std::fmt;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -20,7 +22,10 @@ use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
+use crate::store::worker::{Bucket, BucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
+#[cfg(any(test, feature = "testexport"))]
+use pd_client::BucketMeta;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -35,6 +40,14 @@ pub struct ReadResponse<S: Snapshot> {
 #[derive(Debug)]
 pub struct WriteResponse {
     pub response: RaftCmdResponse,
+}
+
+// Peer's internal stat, for test purpose only
+#[cfg(any(test, feature = "testexport"))]
+#[derive(Debug)]
+pub struct PeerInternalStat {
+    pub buckets: Arc<BucketMeta>,
+    pub bucket_ranges: Option<Vec<BucketRange>>,
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -56,6 +69,8 @@ where
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
+#[cfg(any(test, feature = "testexport"))]
+pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -79,6 +94,9 @@ pub enum Callback<S: Snapshot> {
         committed_cb: Option<ExtCallback>,
         request_times: SmallVec<[Instant; 4]>,
     },
+    #[cfg(any(test, feature = "testexport"))]
+    /// Test purpose callback
+    Test { cb: TestCallback },
 }
 
 impl<S: Snapshot> HeapSize for Callback<S> {}
@@ -126,6 +144,8 @@ where
                 let resp = WriteResponse { response: resp };
                 cb(resp);
             }
+            #[cfg(any(test, feature = "testexport"))]
+            Callback::Test { .. } => (),
         }
     }
 
@@ -174,6 +194,8 @@ where
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
+            #[cfg(any(test, feature = "testexport"))]
+            Callback::Test { .. } => write!(fmt, "Callback::Test(..)"),
         }
     }
 }
@@ -189,6 +211,8 @@ pub enum PeerTick {
     CheckPeerStaleState = 5,
     EntryCacheEvict = 6,
     CheckLeaderLease = 7,
+    ReactivateMemoryLock = 8,
+    ReportBuckets = 9,
 }
 
 impl PeerTick {
@@ -205,6 +229,8 @@ impl PeerTick {
             PeerTick::CheckPeerStaleState => "check_peer_stale_state",
             PeerTick::EntryCacheEvict => "entry_cache_evict",
             PeerTick::CheckLeaderLease => "check_leader_lease",
+            PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
+            PeerTick::ReportBuckets => "report_buckets",
         }
     }
 
@@ -218,6 +244,8 @@ impl PeerTick {
             PeerTick::CheckPeerStaleState,
             PeerTick::EntryCacheEvict,
             PeerTick::CheckLeaderLease,
+            PeerTick::ReactivateMemoryLock,
+            PeerTick::ReportBuckets,
         ];
         TICKS
     }
@@ -348,6 +376,7 @@ pub enum CasualMessage<EK: KvEngine> {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
         source: &'static str,
+        cb: Callback<EK::Snapshot>,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {
@@ -377,9 +406,18 @@ pub enum CasualMessage<EK: KvEngine> {
     RejectRaftAppend {
         peer_id: u64,
     },
+    RefreshRegionBuckets {
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+        cb: Callback<EK::Snapshot>,
+    },
 
     // Try renew leader lease
     RenewLease,
+
+    // Snapshot is applied
+    SnapshotApplied,
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -435,7 +473,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RejectRaftAppend { peer_id } => {
                 write!(fmt, "RejectRaftAppend(peer_id={})", peer_id)
             }
+            CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
+            CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
         }
     }
 }
@@ -526,6 +566,7 @@ pub enum PeerMsg<EK: KvEngine> {
     UpdateReplicationMode,
     Destroy(u64),
     UpdateRegionForUnsafeRecover(metapb::Region),
+    UnsafeRecoveryWaitApply(Arc<AtomicUsize>),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -557,6 +598,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::UpdateRegionForUnsafeRecover(region) => {
                 write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
             }
+            PeerMsg::UnsafeRecoveryWaitApply(counter) => write!(fmt, "WaitApply {:?}", *counter),
         }
     }
 }

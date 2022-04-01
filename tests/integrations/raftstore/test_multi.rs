@@ -839,16 +839,22 @@ fn test_leader_drop_with_pessimistic_lock() {
         .get_txn_ext()
         .unwrap()
         .clone();
-    txn_ext.pessimistic_locks.write().insert(vec![(
-        Key::from_raw(b"k1"),
-        PessimisticLock {
-            primary: b"k1".to_vec().into_boxed_slice(),
-            start_ts: 10.into(),
-            ttl: 1000,
-            for_update_ts: 10.into(),
-            min_commit_ts: 10.into(),
-        },
-    )]);
+    assert!(
+        txn_ext
+            .pessimistic_locks
+            .write()
+            .insert(vec![(
+                Key::from_raw(b"k1"),
+                PessimisticLock {
+                    primary: b"k1".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 10.into(),
+                },
+            )])
+            .is_ok()
+    );
 
     // Isolate node 1, leader should be transferred to another node.
     cluster.add_send_filter(IsolationFilterFactory::new(1));

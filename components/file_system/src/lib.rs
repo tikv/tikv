@@ -13,15 +13,13 @@ extern crate test;
 extern crate tikv_alloc;
 
 mod file;
-mod iosnoop;
+mod io_stats;
 mod metrics;
 mod metrics_manager;
 mod rate_limiter;
-#[allow(unused)]
-mod thread_io;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{get_io_type, set_io_type};
+pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,

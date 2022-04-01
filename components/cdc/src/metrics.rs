@@ -71,6 +71,10 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
+    pub static ref CDC_ENDPOINT_PENDING_TASKS: IntGauge = register_int_gauge!(
+        "tikv_cdc_endpoint_pending_tasks",
+        "CDC endpoint pending tasks"
+    ).unwrap();
     pub static ref CDC_RESOLVED_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
         "tikv_cdc_resolved_ts_gap_seconds",
         "Bucketed histogram of the gap between cdc resolved ts and current tso",

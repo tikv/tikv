@@ -89,7 +89,7 @@ impl TestEngineBuilder {
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
-            cache_opt.capacity.0 = Some(ReadableSize::kb(0));
+            cache_opt.capacity = Some(ReadableSize::kb(0));
         }
         let cache = cache_opt.build_shared_cache();
         let cfs_opts = cfs
@@ -111,6 +111,7 @@ impl TestEngineBuilder {
             Some(cfs_opts),
             cache.is_some(),
             self.io_rate_limiter,
+            None, /* CFOptions */
         )
     }
 }
@@ -123,8 +124,8 @@ impl Default for TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::CfStatistics;
     use super::super::PerfStatisticsInstant;
+    use super::super::{CfStatistics, TEST_ENGINE_CFS};
     use super::super::{Engine, Snapshot};
     use super::*;
     use crate::storage::{Cursor, CursorBuilder, ScanMode};

@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use std::{mem, u64};
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandleResult, HandlerBuilder, PollHandler,
-    Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
+    HandlerBuilder, PollHandler, Priority,
 };
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
-use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch, WriteBatchExt};
+use engine_traits::{Engines, KvEngine, Mutable, PerfContextKind, WriteBatch};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
@@ -242,10 +242,17 @@ where
         }
         let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
         let event = TraceEvent::Add(heap_size);
+        let send_failed = Cell::new(true);
+
+        MEMTRACE_RAFT_MESSAGES.trace(event);
+        defer!(if send_failed.get() {
+            MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
+        });
 
         let store_msg = match self.try_send(id, peer_msg) {
             Either::Left(Ok(())) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                fail_point!("memtrace_raft_messages_overflow_check_send");
+                send_failed.set(false);
                 return Ok(());
             }
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(im)))) => {
@@ -259,7 +266,7 @@ where
         };
         match self.send_control(store_msg) {
             Ok(()) => {
-                MEMTRACE_RAFT_MESSAGES.trace(event);
+                send_failed.set(false);
                 Ok(())
             }
             Err(TrySendError::Full(StoreMsg::RaftMessage(im))) => Err(TrySendError::Full(im.msg)),
@@ -433,6 +440,10 @@ where
         self.tick_batch[PeerTick::CheckMerge as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
         self.tick_batch[PeerTick::CheckLeaderLease as usize].wait_duration =
+            self.cfg.check_leader_lease_interval.0;
+        self.tick_batch[PeerTick::ReactivateMemoryLock as usize].wait_duration =
+            self.cfg.reactive_memory_lock_tick_interval.0;
+        self.tick_batch[PeerTick::ReportBuckets as usize].wait_duration =
             self.cfg.check_leader_lease_interval.0;
     }
 }
@@ -683,7 +694,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
     for RaftPoller<EK, ER, T>
 {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a BatchSystemConfig),
+    {
         self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
@@ -711,6 +725,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.raft_metrics.waterfall_metrics = self.poll_ctx.cfg.waterfall_metrics;
             self.poll_ctx.update_ticks_timeout();
+            update_cfg(&incoming.store_batch_system);
         }
     }
 
@@ -1393,6 +1408,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.store_writers
             .spawn(meta.get_id(), &engines, &self.router, &trans, &cfg)?;
 
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1419,34 +1435,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
         };
         let region_peers = builder.init()?;
-        let engine = builder.engines.kv.clone();
-        if engine.support_write_batch_vec() {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatchVec>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                mgr,
-                pd_client,
-                collector_reg_handle,
-            )?;
-        } else {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                mgr,
-                pd_client,
-                collector_reg_handle,
-            )?;
-        }
+        self.start_system::<T, C>(
+            workers,
+            region_peers,
+            builder,
+            auto_split_controller,
+            concurrency_manager,
+            mgr,
+            pd_client,
+            collector_reg_handle,
+            region_read_progress,
+        )?;
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers<EK, ER>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
@@ -1456,11 +1459,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
+        region_read_progress: RegionReadProgressRegistry,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<EK, W>::new(
+        let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
             Box::new(self.router.clone()),
             self.apply_router.clone(),
@@ -1533,6 +1537,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
+            region_read_progress,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1656,7 +1661,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
-                assert_eq!(peer.get_id(), msg.get_from_peer().get_id());
+                if peer.get_id() < msg.get_from_peer().get_id() {
+                    panic!(
+                        "peer id increased after region is merged, message peer id {}, local peer id {}, region {:?}",
+                        msg.get_from_peer().get_id(),
+                        peer.get_id(),
+                        region
+                    );
+                }
                 // Let stale peer decides whether it should wait for merging or just remove
                 // itself.
                 Some(local_state.get_merge_state().get_target().to_owned())
@@ -2221,6 +2233,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             stats,
             store_info,
             send_detailed_report: false,
+            dr_autosync_status: self
+                .ctx
+                .global_replication_state
+                .lock()
+                .unwrap()
+                .store_dr_autosync_status(),
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!("notify pd failed";
@@ -2604,9 +2622,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 return;
             }
         }
+        let store_allowlist = match status.get_mode() {
+            ReplicationMode::DrAutoSync => {
+                status.get_dr_auto_sync().get_available_stores().to_vec()
+            }
+            _ => vec![],
+        };
+
         info!("updating replication mode"; "status" => ?status);
         state.set_status(status);
         drop(state);
+        self.ctx.trans.set_store_allowlist(store_allowlist);
         self.ctx.router.report_status_update()
     }
 

@@ -18,6 +18,7 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -44,14 +45,13 @@ use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
-use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use tikv_util::config::{
-    self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
+    self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
 };
 use tikv_util::sys::SysQuota;
 use tikv_util::time::duration_to_sec;
@@ -963,6 +963,9 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
+    // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
+    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
+    // in RocksDB has been removed.
     #[online_config(skip)]
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
@@ -1015,8 +1018,8 @@ impl Default for DbConfig {
             max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
-            enable_pipelined_write: true,
-            enable_multi_batch_write: true,
+            enable_pipelined_write: false,
+            enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1075,11 +1078,9 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(
-            (self.enable_pipelined_write || self.enable_multi_batch_write)
-                && !self.enable_unordered_write,
-        );
-        opts.enable_multi_batch_write(self.enable_multi_batch_write);
+        opts.enable_pipelined_write(self.enable_pipelined_write);
+        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_pipelined_commit(enable_pipelined_commit);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
@@ -1122,9 +1123,7 @@ impl DbConfig {
             if self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
-            if self.enable_pipelined_write || self.enable_multi_batch_write {
-                return Err("pipelined_write is not compatible with unordered_write".into());
-            }
+            self.enable_pipelined_write = false;
         }
 
         // Since the following configuration supports online update, in order to
@@ -1628,10 +1627,6 @@ fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(Str
                     let s: ReadableSize = s.into();
                     Some(s.0.to_string())
                 }
-                s @ ConfigValue::OptionSize(_) => {
-                    let s: OptionReadableSize = s.into();
-                    s.0.map(|v| v.0.to_string())
-                }
                 ConfigValue::Module(_) => unreachable!(),
                 v => Some(format!("{}", v)),
             };
@@ -1692,13 +1687,16 @@ pub mod log_level_serde {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnifiedReadPoolConfig {
+    #[online_config(skip)]
     pub min_thread_count: usize,
     pub max_thread_count: usize,
+    #[online_config(skip)]
     pub stack_size: ReadableSize,
+    #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
@@ -1717,6 +1715,17 @@ impl UnifiedReadPoolConfig {
                     .into(),
             );
         }
+        let limit = cmp::max(
+            UNIFIED_READPOOL_MIN_CONCURRENCY,
+            SysQuota::cpu_cores_quota() as usize,
+        );
+        if self.max_thread_count > limit {
+            return Err(format!(
+                "readpool.unified.max-thread-count should be smaller than {}",
+                limit
+            )
+            .into());
+        }
         if self.stack_size.0 < ReadableSize::mb(2).0 {
             return Err("readpool.unified.stack-size should be >= 2mb"
                 .to_string()
@@ -1731,7 +1740,7 @@ impl UnifiedReadPoolConfig {
     }
 }
 
-const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+pub const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
@@ -1761,6 +1770,15 @@ mod unified_read_pool_tests {
             max_tasks_per_worker: 2000,
         };
         assert!(cfg.validate().is_ok());
+        let cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ),
+            ..cfg
+        };
+        assert!(cfg.validate().is_ok());
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -1783,6 +1801,15 @@ mod unified_read_pool_tests {
 
         let invalid_cfg = UnifiedReadPoolConfig {
             max_tasks_per_worker: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: cmp::max(
+                UNIFIED_READPOOL_MIN_CONCURRENCY,
+                SysQuota::cpu_cores_quota() as usize,
+            ) + 1,
             ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
@@ -2035,12 +2062,15 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    #[online_config(submodule)]
     pub unified: UnifiedReadPoolConfig,
+    #[online_config(skip)]
     pub storage: StorageReadPoolConfig,
+    #[online_config(skip)]
     pub coprocessor: CoprReadPoolConfig,
 }
 
@@ -2240,8 +2270,9 @@ pub struct BackupConfig {
 
 impl BackupConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.num_threads == 0 {
-            return Err("backup.num_threads cannot be 0".into());
+        let limit = SysQuota::cpu_cores_quota() as usize;
+        if self.num_threads == 0 || self.num_threads > limit {
+            return Err(format!("backup.num_threads cannot be 0 or larger than {}", limit).into());
         }
         if self.batch_size == 0 {
             return Err("backup.batch_size cannot be 0".into());
@@ -2440,6 +2471,39 @@ impl LogConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct QuotaConfig {
+    pub foreground_cpu_time: usize,
+    pub foreground_write_bandwidth: ReadableSize,
+    pub foreground_read_bandwidth: ReadableSize,
+    pub max_delay_duration: ReadableDuration,
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            foreground_cpu_time: 0,
+            foreground_write_bandwidth: ReadableSize(0),
+            foreground_read_bandwidth: ReadableSize(0),
+            max_delay_duration: ReadableDuration::millis(500),
+        }
+    }
+}
+
+impl QuotaConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        const MAX_DELAY_DURATION: ReadableDuration = ReadableDuration::micros(u64::MAX / 1000);
+
+        if self.max_delay_duration > MAX_DELAY_DURATION {
+            return Err(format!("quota.max-delay-duration must <= {}", MAX_DELAY_DURATION).into());
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -2483,7 +2547,7 @@ pub struct TiKvConfig {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    pub memory_usage_limit: OptionReadableSize,
+    pub memory_usage_limit: Option<ReadableSize>,
 
     #[doc(hidden)]
     #[online_config(skip)]
@@ -2492,7 +2556,10 @@ pub struct TiKvConfig {
     #[online_config(skip)]
     pub log: LogConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
+    pub quota: QuotaConfig,
+
+    #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
     #[online_config(submodule)]
@@ -2552,6 +2619,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(skip)]
+    pub causal_ts: CausalTsConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2568,9 +2638,10 @@ impl Default for TiKvConfig {
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
             abort_on_panic: false,
-            memory_usage_limit: OptionReadableSize(None),
+            memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2591,6 +2662,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            causal_ts: CausalTsConfig::default(),
         }
     }
 }
@@ -2659,18 +2731,12 @@ impl TiKvConfig {
             return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
         }
 
-        if RocksEngine::exists(&kv_db_path)
-            && !RocksEngine::exists(&self.raft_store.raftdb_path)
-            && !RaftLogEngine::exists(&self.raft_engine.config.dir)
-        {
-            return Err("default rocksdb exists, but raftdb and raft engine doesn't exist".into());
-        }
-        if !RocksEngine::exists(&kv_db_path)
-            && (RocksEngine::exists(&self.raft_store.raftdb_path)
-                || RaftLogEngine::exists(&self.raft_engine.config.dir))
-        {
-            return Err("default rocksdb doesn't exist, but raftdb or raft engine exists".into());
-        }
+        RaftDataStateMachine::new(
+            &self.storage.data_dir,
+            &self.raft_store.raftdb_path,
+            &self.raft_engine.config.dir,
+        )
+        .validate(RocksEngine::exists(&kv_db_path))?;
 
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
@@ -2725,6 +2791,8 @@ impl TiKvConfig {
         self.gc.validate()?;
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
+        self.quota.validate()?;
+        self.causal_ts.validate()?;
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net
@@ -2780,7 +2848,7 @@ impl TiKvConfig {
                 .hard_pending_compaction_bytes_limit;
         }
 
-        if let Some(memory_usage_limit) = self.memory_usage_limit.0 {
+        if let Some(memory_usage_limit) = self.memory_usage_limit {
             let total = SysQuota::memory_limit_in_bytes();
             if memory_usage_limit.0 > total {
                 // Explicitly exceeds system memory capacity is not allowed.
@@ -2793,12 +2861,11 @@ impl TiKvConfig {
         } else {
             // Adjust `memory_usage_limit` if necessary.
             if self.storage.block_cache.shared {
-                if let Some(cap) = self.storage.block_cache.capacity.0 {
+                if let Some(cap) = self.storage.block_cache.capacity {
                     let limit = (cap.0 as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                    self.memory_usage_limit.0 = Some(ReadableSize(limit));
+                    self.memory_usage_limit = Some(ReadableSize(limit));
                 } else {
-                    self.memory_usage_limit =
-                        OptionReadableSize(Some(Self::suggested_memory_usage_limit()));
+                    self.memory_usage_limit = Some(Self::suggested_memory_usage_limit());
                 }
             } else {
                 let cap = self.rocksdb.defaultcf.block_cache_size.0
@@ -2806,18 +2873,18 @@ impl TiKvConfig {
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0;
                 let limit = (cap as f64 / BLOCK_CACHE_RATE * MEMORY_USAGE_LIMIT_RATE) as u64;
-                self.memory_usage_limit.0 = Some(ReadableSize(limit));
+                self.memory_usage_limit = Some(ReadableSize(limit));
             }
         }
 
-        let mut limit = self.memory_usage_limit.0.unwrap();
+        let mut limit = self.memory_usage_limit.unwrap();
         let total = ReadableSize(SysQuota::memory_limit_in_bytes());
         if limit.0 > total.0 {
             warn!(
                 "memory_usage_limit:{:?} > total:{:?}, fallback to total",
                 limit, total,
             );
-            self.memory_usage_limit.0 = Some(total);
+            self.memory_usage_limit = Some(total);
             limit = total;
         }
 
@@ -2972,8 +3039,8 @@ impl TiKvConfig {
         // block cache sizes. Otherwise use the sum of block cache size of all column families
         // as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
-        if cache_cfg.shared && cache_cfg.capacity.0.is_none() {
-            cache_cfg.capacity.0 = Some(ReadableSize(
+        if cache_cfg.shared && cache_cfg.capacity.is_none() {
+            cache_cfg.capacity = Some(ReadableSize(
                 self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
@@ -2998,24 +3065,6 @@ impl TiKvConfig {
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
-        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
-            return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is '{}', \
-                 current db wal_dir is '{}', please guarantee all data wal logs \
-                 have been moved to destination directory.",
-                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            ));
-        }
-
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
-            return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
-                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
-                 have been moved to destination directory.",
-                last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            ));
-        }
-
         if last_cfg.storage.data_dir != self.storage.data_dir {
             // In tikv 3.0 the default value of storage.data-dir changed
             // from "" to "./"
@@ -3030,32 +3079,50 @@ impl TiKvConfig {
                 ));
             }
         }
-
-        if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path
-            && !last_cfg.raft_engine.enable
-        {
+        if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "raft db dir have been changed, former is '{}', \
-                 current is '{}', please check if it is expected.",
-                last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+                "db wal dir have been changed, former is '{}', \
+                 current db wal_dir is '{}', please guarantee all data wal logs \
+                 have been moved to destination directory.",
+                last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
             ));
         }
-        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir && !last_cfg.raft_engine.enable {
+
+        // It's possible that `last_cfg` is not fully validated.
+        let last_raftdb_dir = last_cfg
+            .infer_raft_db_path(None)
+            .map_err(|e| e.to_string())?;
+        let last_raft_engine_dir = last_cfg
+            .infer_raft_engine_path(None)
+            .map_err(|e| e.to_string())?;
+
+        // FIXME: We cannot reliably determine the actual value of
+        // `last_cfg.raft_engine.enable`, because some old versions don't have
+        // this field (so it is automatically interpreted as the current
+        // default value). To be safe, we will check both engines regardless
+        // of whether raft engine is enabled.
+        if last_raftdb_dir != self.raft_store.raftdb_path {
+            return Err(format!(
+                "raft db dir have been changed, former is '{}', \
+                current is '{}', please check if it is expected.",
+                last_raftdb_dir, self.raft_store.raftdb_path
+            ));
+        }
+        if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
                 "raft db wal dir have been changed, former is '{}', \
-                 current is '{}', please check if it is expected.",
+                current is '{}', please check if it is expected.",
                 last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
             ));
         }
-        if last_cfg.raft_engine.config.dir != self.raft_engine.config.dir
-            && last_cfg.raft_engine.enable
-        {
+        if last_raft_engine_dir != self.raft_engine.config.dir {
             return Err(format!(
                 "raft engine dir have been changed, former is '{}', \
                  current is '{}', please check if it is expected.",
-                last_cfg.raft_engine.config.dir, self.raft_engine.config.dir
+                last_raft_engine_dir, self.raft_engine.config.dir
             ));
         }
+
         if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
             return Err("can't disable ttl on a ttl instance".to_owned());
         } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
@@ -3138,7 +3205,9 @@ pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // changes, user must guarantee relevant works have been done.
     if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
         cfg.compatible_adjust();
-        let _ = cfg.validate();
+        if let Err(e) = cfg.validate() {
+            warn!("last_tikv.toml is invalid but ignored: {:?}", e);
+        }
         config.check_critical_cfg_with(&cfg)?;
     }
     Ok(())
@@ -3232,24 +3301,15 @@ lazy_static! {
 }
 
 fn serde_to_online_config(name: String) -> String {
-    match name.as_ref() {
-        "raftstore.store-pool-size" => name.replace(
-            "raftstore.store-pool-size",
-            "raft_store.store_batch_system.pool_size",
-        ),
-        "raftstore.apply-pool-size" => name.replace(
-            "raftstore.apply-pool-size",
-            "raft_store.apply_batch_system.pool_size",
-        ),
-        "raftstore.store_pool_size" => name.replace(
-            "raftstore.store_pool_size",
-            "raft_store.store_batch_system.pool_size",
-        ),
-        "raftstore.apply_pool_size" => name.replace(
-            "raftstore.apply_pool_size",
-            "raft_store.apply_batch_system.pool_size",
-        ),
-        _ => name.replace("raftstore", "raft_store").replace('-', "_"),
+    let res = name.replace("raftstore", "raft_store").replace('-', "_");
+    match res.as_ref() {
+        "raft_store.store_pool_size" | "raft_store.store_max_batch_size" => {
+            res.replace("store_", "store_batch_system.")
+        }
+        "raft_store.apply_pool_size" | "raft_store.apply_max_batch_size" => {
+            res.replace("apply_", "apply_batch_system.")
+        }
+        _ => res,
     }
 }
 
@@ -3311,9 +3371,6 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
     let res = match typed {
         ConfigValue::Duration(_) => ConfigValue::from(v.parse::<ReadableDuration>()?),
         ConfigValue::Size(_) => ConfigValue::from(v.parse::<ReadableSize>()?),
-        ConfigValue::OptionSize(_) => {
-            ConfigValue::from(OptionReadableSize(Some(v.parse::<ReadableSize>()?)))
-        }
         ConfigValue::U64(_) => ConfigValue::from(v.parse::<u64>()?),
         ConfigValue::F64(_) => ConfigValue::from(v.parse::<f64>()?),
         ConfigValue::U32(_) => ConfigValue::from(v.parse::<u32>()?),
@@ -3347,10 +3404,13 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
                     match c {
                         ConfigValue::Duration(_)
                         | ConfigValue::Size(_)
-                        | ConfigValue::OptionSize(_)
                         | ConfigValue::String(_)
                         | ConfigValue::BlobRunMode(_)
                         | ConfigValue::IOPriority(_) => Ok(true),
+                        ConfigValue::None => Err(Box::new(IoError::new(
+                            ErrorKind::Other,
+                            format!("unexpect none field: {:?}", c),
+                        ))),
                         _ => Ok(false),
                     }
                 }
@@ -3402,6 +3462,7 @@ pub enum Module {
     CDC,
     ResolvedTs,
     ResourceMetering,
+    Quota,
     Unknown(String),
 }
 
@@ -3427,6 +3488,7 @@ impl From<&str> for Module {
             "cdc" => Module::CDC,
             "resolved_ts" => Module::ResolvedTs,
             "resource_metering" => Module::ResourceMetering,
+            "quota" => Module::Quota,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -3474,14 +3536,17 @@ impl ConfigController {
 
     fn update_impl(
         &self,
-        diff: HashMap<String, ConfigValue>,
+        mut diff: HashMap<String, ConfigValue>,
         change: Option<HashMap<String, String>>,
     ) -> CfgResult<()> {
-        {
-            let mut incoming = self.get_current();
-            incoming.update(diff.clone());
-            incoming.validate()?;
-        }
+        diff = {
+            let incoming = self.get_current();
+            let mut updated = incoming.clone();
+            updated.update(diff);
+            // Config might be adjusted in `validate`.
+            updated.validate()?;
+            incoming.diff(&updated)
+        };
         let mut inner = self.inner.write().unwrap();
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -3542,20 +3607,26 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use itertools::Itertools;
     use tempfile::Builder;
 
     use super::*;
     use crate::server::ttl::TTLCheckerTask;
-    use crate::storage::config::StorageConfigManger;
+    use crate::storage::config_manager::StorageConfigManger;
+    use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
+    use crate::storage::{Storage, TestStorageBuilder};
     use case_macros::*;
-    use engine_rocks::raw_util::new_engine_opt;
-    use engine_traits::DBOptions as DBOptionsTrait;
+    use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
+    use kvproto::kvrpcpb::CommandPri;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
+    use tikv_kv::RocksEngine as RocksDBEngine;
+    use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
+    use tikv_util::sys::SysQuota;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
@@ -3576,46 +3647,65 @@ mod tests {
     #[test]
     fn test_check_critical_cfg_with() {
         let mut tikv_cfg = TiKvConfig::default();
-        let mut last_cfg = TiKvConfig::default();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        let last_cfg = TiKvConfig::default();
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = "/data1".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.storage.data_dir = "/data1".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Enable Raft Engine.
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.raft_engine.enable = true;
         last_cfg.raft_engine.enable = true;
 
         tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Disable Raft Engine and uses RocksDB.
+        let mut tikv_cfg = TiKvConfig::default();
+        let mut last_cfg = TiKvConfig::default();
         tikv_cfg.raft_engine.enable = false;
         last_cfg.raft_engine.enable = false;
 
         tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
+        tikv_cfg.validate().unwrap();
         assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
 
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok());
+        tikv_cfg.validate().unwrap();
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
     }
 
     #[test]
@@ -3870,23 +3960,33 @@ mod tests {
     fn new_engines(
         cfg: TiKvConfig,
     ) -> (
-        RocksEngine,
+        Storage<RocksDBEngine, DummyLockManager>,
         ConfigController,
         ReceiverWrapper<TTLCheckerTask>,
         Arc<FlowController>,
     ) {
-        let engine = RocksEngine::from_db(Arc::new(
-            new_engine_opt(
-                &cfg.storage.data_dir,
-                cfg.rocksdb.build_opt(),
-                cfg.rocksdb.build_cf_opts(
-                    &cfg.storage.block_cache.build_shared_cache(),
-                    None,
-                    cfg.storage.api_version(),
-                ),
-            )
-            .unwrap(),
-        ));
+        let engine = RocksDBEngine::new(
+            &cfg.storage.data_dir,
+            ALL_CFS,
+            Some(cfg.rocksdb.build_cf_opts(
+                &cfg.storage.block_cache.build_shared_cache(),
+                None,
+                cfg.storage.api_version(),
+            )),
+            true,
+            None,
+            Some(cfg.rocksdb.build_opt()),
+        )
+        .unwrap();
+        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager {},
+            ApiVersion::V1,
+        )
+        .config(cfg.storage.clone())
+        .build()
+        .unwrap();
+        let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::new(
             &cfg.storage.flow_control,
@@ -3903,13 +4003,14 @@ mod tests {
         cfg_controller.register(
             Module::Storage,
             Box::new(StorageConfigManger::new(
-                engine.clone(),
+                engine,
                 shared,
                 scheduler,
                 flow_controller.clone(),
+                storage.get_scheduler(),
             )),
         );
-        (engine, cfg_controller, receiver, flow_controller)
+        (storage, cfg_controller, receiver, flow_controller)
     }
 
     #[test]
@@ -3917,8 +4018,8 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (db, cfg_controller, _, flow_controller) = new_engines(cfg);
-
+        let (storage, cfg_controller, _, flow_controller) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
                 .unwrap()
@@ -4046,7 +4147,8 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
         assert_eq!(db.get_db_options().get_max_background_jobs(), 4);
@@ -4119,7 +4221,8 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
         assert_eq!(
@@ -4141,7 +4244,8 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (db, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
         assert!(
@@ -4196,6 +4300,125 @@ mod tests {
             None => unreachable!(),
             Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
+    }
+
+    #[test]
+    fn test_change_store_scheduler_worker_pool_size() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.storage.scheduler_worker_pool_size = 4;
+        cfg.validate().unwrap();
+        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let scheduler = storage.get_scheduler();
+
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
+
+        let check_scale_pool_size = |size: usize, ok: bool| {
+            let origin_pool_size = scheduler
+                .get_sched_pool(CommandPri::Normal)
+                .pool
+                .get_pool_size();
+            let origin_pool_size_high = scheduler
+                .get_sched_pool(CommandPri::High)
+                .pool
+                .get_pool_size();
+            let res = cfg_controller
+                .update_config("storage.scheduler-worker-pool-size", &format!("{}", size));
+            let (expected_size, expected_size_high) = if ok {
+                res.unwrap();
+                (size, std::cmp::max(size / 2, 1))
+            } else {
+                assert!(res.is_err());
+                (origin_pool_size, origin_pool_size_high)
+            };
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::Normal)
+                    .pool
+                    .get_pool_size(),
+                expected_size
+            );
+            assert_eq!(
+                scheduler
+                    .get_sched_pool(CommandPri::High)
+                    .pool
+                    .get_pool_size(),
+                expected_size_high
+            );
+        };
+
+        check_scale_pool_size(0, false);
+        check_scale_pool_size(max_pool_size + 1, false);
+        check_scale_pool_size(1, true);
+        check_scale_pool_size(max_pool_size, true);
+    }
+
+    #[test]
+    fn test_change_quota_config() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.quota.foreground_cpu_time = 1000;
+        cfg.quota.foreground_write_bandwidth = ReadableSize::mb(128);
+        cfg.quota.foreground_read_bandwidth = ReadableSize::mb(256);
+        cfg.quota.max_delay_duration = ReadableDuration::secs(1);
+        cfg.validate().unwrap();
+
+        let quota_limiter = Arc::new(QuotaLimiter::new(
+            cfg.quota.foreground_cpu_time,
+            cfg.quota.foreground_write_bandwidth,
+            cfg.quota.foreground_read_bandwidth,
+            cfg.quota.max_delay_duration,
+        ));
+
+        let cfg_controller = ConfigController::new(cfg.clone());
+        cfg_controller.register(
+            Module::Quota,
+            Box::new(QuotaLimitConfigManager::new(Arc::clone(&quota_limiter))),
+        );
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        // u64::MAX ns casts to 213503d.
+        assert!(
+            cfg_controller
+                .update_config("quota.max-delay-duration", "213504d")
+                .is_err()
+        );
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        cfg_controller
+            .update_config("quota.foreground-cpu-time", "2000")
+            .unwrap();
+        cfg.quota.foreground_cpu_time = 2000;
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        cfg_controller
+            .update_config("quota.foreground-write-bandwidth", "256MB")
+            .unwrap();
+        cfg.quota.foreground_write_bandwidth = ReadableSize::mb(256);
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(125));
+
+        cfg_controller
+            .update_config("quota.foreground-read-bandwidth", "512MB")
+            .unwrap();
+        cfg.quota.foreground_read_bandwidth = ReadableSize::mb(512);
+        assert_eq!(cfg_controller.get_current(), cfg);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(250));
+
+        cfg_controller
+            .update_config("quota.max-delay-duration", "50ms")
+            .unwrap();
+        cfg.quota.max_delay_duration = ReadableDuration::millis(50);
+        assert_eq!(cfg_controller.get_current(), cfg);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(50));
     }
 
     #[test]
@@ -4349,21 +4572,21 @@ mod tests {
         );
 
         // Test validating memory_usage_limit when it's greater than max.
-        cfg.memory_usage_limit.0 = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
+        cfg.memory_usage_limit = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
         assert!(cfg.validate().is_err());
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
-        cfg.memory_usage_limit = OptionReadableSize(None);
-        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(3 * GIB));
+        cfg.memory_usage_limit = None;
+        cfg.storage.block_cache.capacity = Some(ReadableSize(3 * GIB));
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(5 * GIB));
+        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
 
         // Test memory_usage_limit will fallback to system memory capacity with huge block cache.
-        cfg.memory_usage_limit = OptionReadableSize(None);
+        cfg.memory_usage_limit = None;
         let system = SysQuota::memory_limit_in_bytes();
-        cfg.storage.block_cache.capacity.0 = Some(ReadableSize(system * 3 / 4));
+        cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.memory_usage_limit.0.unwrap(), ReadableSize(system));
+        assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
     }
 
     #[test]
@@ -4602,8 +4825,8 @@ mod tests {
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
-        cfg.storage.block_cache.capacity = OptionReadableSize(None); // Either `None` and a value is computed or `Some(_)` fixed value.
-        cfg.memory_usage_limit = OptionReadableSize(None);
+        cfg.storage.block_cache.capacity = None; // Either `None` and a value is computed or `Some(_)` fixed value.
+        cfg.memory_usage_limit = None;
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
 
         assert_eq!(cfg, default_cfg);
@@ -4758,5 +4981,67 @@ mod tests {
                 .unwrap()
                 .contains("rate-limiter-mode = 1")
         );
+    }
+
+    #[test]
+    fn test_serde_to_online_config() {
+        let cases = vec![
+            (
+                "raftstore.store_pool_size",
+                "raft_store.store_batch_system.pool_size",
+            ),
+            (
+                "raftstore.store-pool-size",
+                "raft_store.store_batch_system.pool_size",
+            ),
+            (
+                "raftstore.store_max_batch_size",
+                "raft_store.store_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.store-max-batch-size",
+                "raft_store.store_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.apply_pool_size",
+                "raft_store.apply_batch_system.pool_size",
+            ),
+            (
+                "raftstore.apply-pool-size",
+                "raft_store.apply_batch_system.pool_size",
+            ),
+            (
+                "raftstore.apply_max_batch_size",
+                "raft_store.apply_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.apply-max-batch-size",
+                "raft_store.apply_batch_system.max_batch_size",
+            ),
+            (
+                "raftstore.store_io_pool_size",
+                "raft_store.store_io_pool_size",
+            ),
+            (
+                "raftstore.store-io-pool-size",
+                "raft_store.store_io_pool_size",
+            ),
+            (
+                "raftstore.apply_yield_duration",
+                "raft_store.apply_yield_duration",
+            ),
+            (
+                "raftstore.apply-yield-duration",
+                "raft_store.apply_yield_duration",
+            ),
+            (
+                "raftstore.raft_store_max_leader_lease",
+                "raft_store.raft_store_max_leader_lease",
+            ),
+        ];
+
+        for (name, res) in cases {
+            assert_eq!(serde_to_online_config(name.into()).as_str(), res);
+        }
     }
 }

@@ -16,6 +16,7 @@ use kvproto::metapb;
 use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
+use pd_client::BucketMeta;
 use time::Timespec;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
@@ -149,6 +150,7 @@ pub struct ReadDelegate {
     pub last_valid_ts: Timespec,
 
     pub tag: String,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
@@ -232,6 +234,7 @@ impl ReadDelegate {
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
+            bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
     }
@@ -260,6 +263,9 @@ impl ReadDelegate {
             }
             Progress::LeaderLease(leader_lease) => {
                 self.leader_lease = Some(leader_lease);
+            }
+            Progress::RegionBuckets(bucket_meta) => {
+                self.bucket_meta = Some(bucket_meta);
             }
         }
     }
@@ -338,6 +344,28 @@ impl ReadDelegate {
             txn_extra_op: TxnExtraOp::Noop,
         })
     }
+
+    /// Used in some external tests.
+    pub fn mock(region_id: u64) -> Self {
+        let mut region: metapb::Region = Default::default();
+        region.set_id(region_id);
+        let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, "mock".to_owned()));
+        ReadDelegate {
+            region: Arc::new(region),
+            peer_id: 1,
+            term: 1,
+            applied_index_term: 1,
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            tag: format!("[region {}] {}", region_id, 1),
+            txn_extra_op: Default::default(),
+            txn_ext: Default::default(),
+            read_progress,
+            pending_remove: false,
+            track_ver: TrackVer::new(),
+            bucket_meta: None,
+        }
+    }
 }
 
 impl Display for ReadDelegate {
@@ -361,6 +389,7 @@ pub enum Progress {
     Term(u64),
     AppliedIndexTerm(u64),
     LeaderLease(RemoteLease),
+    RegionBuckets(Arc<BucketMeta>),
 }
 
 impl Progress {
@@ -378,6 +407,10 @@ impl Progress {
 
     pub fn leader_lease(lease: RemoteLease) -> Progress {
         Progress::LeaderLease(lease)
+    }
+
+    pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
+        Progress::RegionBuckets(bucket_meta)
     }
 }
 
@@ -647,6 +680,7 @@ where
                 cmd_resp::bind_term(&mut response.response, delegate.term);
                 if let Some(snap) = response.snapshot.as_mut() {
                     snap.txn_ext = Some(delegate.txn_ext.clone());
+                    snap.bucket_meta = delegate.bucket_meta.clone();
                 }
                 response.txn_extra_op = delegate.txn_extra_op.load();
                 cb.invoke_read(response);
@@ -1060,6 +1094,7 @@ mod tests {
                 read_progress: read_progress.clone(),
                 pending_remove: false,
                 track_ver: TrackVer::new(),
+                bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
         }
@@ -1302,6 +1337,7 @@ mod tests {
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
                 pending_remove: false,
+                bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
         }
