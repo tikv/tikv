@@ -232,7 +232,7 @@ impl<E: KvEngine> Initializer<E> {
             Err(box_err!("scan canceled"))
         };
 
-        let mut scanner_iter: Option<ScannerIter<S>> = None;
+        let mut scanner_iter: Option<ScannerIter<S>>;
         if !(kv_api == ChangeDataRequestKvApi::RawKv) {
             let scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
@@ -622,7 +622,7 @@ mod tests {
             max_scan_batch_size: 1024,
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
-            kv_api: 1,
+            kv_api: ChangeDataRequestKvApi::TiBd,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
