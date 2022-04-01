@@ -87,7 +87,7 @@ where
         // TODO consider TLS?
         let meta_client = Some(cli);
         let range_router = Router::new(
-            PathBuf::from(config.streaming_path.clone()),
+            PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
             config.temp_file_size_limit_per_task.0,
         );
@@ -106,7 +106,7 @@ where
             pool.spawn(Self::starts_flush_ticks(range_router.clone()));
         }
 
-        info!("the endpoint of stream backup started"; "path" => %config.streaming_path);
+        info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         Endpoint {
             config,
             meta_client,
@@ -461,7 +461,7 @@ where
                 Error::from(err).report("failed to update service safe point!");
                 // don't give up?
             }
-            if let Err(err) = cli.step_task(&task, rts).await {
+            if let Err(err) = meta_cli.step_task(&task, rts).await {
                 err.report(format!("on flushing task {}", task));
                 // we can advance the progress at next time.
                 // return early so we won't be mislead by the metrics.

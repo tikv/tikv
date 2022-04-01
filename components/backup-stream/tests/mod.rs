@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use br_stream::{
+use backup_stream::{
     metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
     observer::BackupStreamObserver,
     Endpoint, Task,
@@ -123,8 +123,8 @@ impl Suite {
         let raft_router = sim.get_server_router(id);
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let mut cfg = BackupStreamConfig::default();
-        cfg.enable_streaming = true;
-        cfg.streaming_path = format!("/{}/{}", self.temp_files.path().display(), id);
+        cfg.enable = true;
+        cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
         let endpoint = Endpoint::with_client(
             id,
@@ -207,7 +207,7 @@ impl Suite {
         let muts = vec![mutation(key.clone(), b"hello, world".to_vec())];
         let enc_key = Key::from_raw(&key).into_encoded();
         let region = self.cluster.get_region_id(&enc_key);
-        self.must_kv_async_commit_prewrite(region, muts, key.clone(), ts)
+        self.must_kv_async_commit_prewrite(region, muts, key, TimeStamp::new(ts));
     }
 
     fn force_flush_files(&self, task: &str) {
@@ -325,7 +325,7 @@ impl Suite {
                 if m.op != Op::Put && m.op != Op::Del && m.op != Op::Insert {
                     None
                 } else {
-                    Some(m.key)
+                    Some(m.key.clone())
                 }
             })
             .collect();
@@ -348,7 +348,7 @@ impl Suite {
             prewrite_resp.get_errors()
         );
         assert_ne!(prewrite_resp.min_commit_ts, 0);
-        prewrite_resp.min_commit_ts
+        TimeStamp::new(prewrite_resp.min_commit_ts)
     }
 
     pub fn must_kv_commit(
@@ -408,6 +408,7 @@ mod test {
 
     #[test]
     fn basic() {
+        test_util::init_log_for_test();
         let mut suite = super::Suite::new("basic", 4);
 
         // write data before the task starting, for testing incremental scanning.
@@ -422,6 +423,7 @@ mod test {
 
     #[test]
     fn with_split() {
+        test_util::init_log_for_test();
         let mut suite = super::Suite::new("with_split", 4);
         suite.write_records(0, 128, 1);
         suite.must_split(&make_split_key_at_record(1, 42));
@@ -435,6 +437,7 @@ mod test {
 
     #[test]
     fn leader_down() {
+        test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
 
@@ -448,8 +451,10 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    #[test]
-    fn async_commit() {
+    #[tokio::test]
+    // FIXME: This test case cannot pass for now.
+    async fn async_commit() {
+        test_util::init_log_for_test();
         let mut suite = super::Suite::new("async_commit", 3);
         suite.must_register_task(1, "test_async_commit");
 
@@ -460,7 +465,9 @@ mod test {
         std::thread::sleep(Duration::from_secs(4));
         let cli = MetadataClient::new(suite.meta_store, 1);
         assert_eq!(
-            li.global_progress_of_task("test_async_commit").unwrap(),
+            cli.global_progress_of_task("test_async_commit")
+                .await
+                .unwrap(),
             128
         );
     }

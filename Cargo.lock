@@ -258,7 +258,7 @@ dependencies = [
  "fail 0.5.0",
  "futures 0.3.15",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "http",
  "hyper",
  "hyper-tls",
@@ -404,7 +404,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -452,7 +452,7 @@ dependencies = [
  "fail 0.4.0",
  "file_system",
  "futures 0.3.15",
- "grpcio 0.9.1",
+ "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -481,6 +481,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util 0.7.0",
  "txn_types",
+ "url",
  "uuid",
  "walkdir",
 ]
@@ -609,9 +610,9 @@ checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 
 [[package]]
 name = "boringssl-src"
-version = "0.3.0+688fc5c"
+version = "0.5.1+b9232f9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f901accdf830d2ea2f4e27f923a5e1125cd8b1a39ab578b9db1a42d578a6922b"
+checksum = "13550d246f6517024ac7f53ae2f1016bb3ed3b238f1489f8564380b635071664"
 dependencies = [
  "cmake",
 ]
@@ -742,7 +743,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-timer",
  "getset",
- "grpcio 0.10.0",
+ "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -809,7 +810,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "serde",
- "time",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -1200,7 +1201,7 @@ checksum = "22813a6dc45b335f9bade10bf7271dc477e81113e89eb251a0bc2a8a81c536e1"
 dependencies = [
  "bstr",
  "csv-core",
- "itoa",
+ "itoa 0.4.4",
  "ryu",
  "serde",
 ]
@@ -1457,7 +1458,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "time",
+ "time 0.1.42",
  "toml",
  "txn_types",
 ]
@@ -1547,7 +1548,7 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "raft",
@@ -1599,7 +1600,7 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "libloading",
@@ -1639,7 +1640,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "gcp",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.119",
@@ -2133,27 +2134,13 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d99e00eed7e0a04ee2705112e7cfdbe1a3cc771147f22f016a8cd2d002187b"
-dependencies = [
- "futures 0.3.15",
- "grpcio-sys 0.9.1+1.38.0",
- "libc 0.2.119",
- "log",
- "parking_lot 0.11.1",
- "protobuf",
-]
-
-[[package]]
-name = "grpcio"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6b007f9db2cf73dae2664bc723b4dd21c67d7a97024e07cca7b9d4171c395c0"
 dependencies = [
  "futures-executor",
  "futures-util",
- "grpcio-sys 0.10.0+1.44.0",
+ "grpcio-sys",
  "libc 0.2.119",
  "log",
  "parking_lot 0.11.1",
@@ -2177,25 +2164,9 @@ checksum = "641a95bace445aed36b31ae8731513c4c4d1d3dcdbc05aaeeefefe4fd673ada1"
 dependencies = [
  "futures-executor",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "log",
  "protobuf",
-]
-
-[[package]]
-name = "grpcio-sys"
-version = "0.9.1+1.38.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9447d1a926beeef466606cc45717f80897998b548e7dc622873d453e1ecb4be4"
-dependencies = [
- "bindgen 0.57.0",
- "boringssl-src",
- "cc",
- "cmake",
- "libc 0.2.119",
- "libz-sys",
- "pkg-config",
- "walkdir",
 ]
 
 [[package]]
@@ -2205,6 +2176,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "842c75c8037bee3058ce0998b4e3d7c8d2554f2c26135aa9297fe64fab3079d3"
 dependencies = [
  "bindgen 0.59.2",
+ "boringssl-src",
  "cc",
  "cmake",
  "libc 0.2.119",
@@ -2319,7 +2291,7 @@ checksum = "527e8c9ac747e28542699a951517aa9a6945af506cd1f2e1b53a576c17b6cc11"
 dependencies = [
  "bytes 1.0.1",
  "fnv",
- "itoa",
+ "itoa 0.4.4",
 ]
 
 [[package]]
@@ -2366,7 +2338,7 @@ dependencies = [
  "http-body",
  "httparse",
  "httpdate",
- "itoa",
+ "itoa 0.4.4",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -2454,7 +2426,7 @@ dependencies = [
  "ahash 0.6.3",
  "atty",
  "indexmap",
- "itoa",
+ "itoa 0.4.4",
  "lazy_static",
  "log",
  "num-format",
@@ -2550,6 +2522,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
 
 [[package]]
+name = "itoa"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
+
+[[package]]
 name = "jobserver"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2598,7 +2576,7 @@ version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git?branch=br-stream#b87187a88066427469e0e5bb82994d5b74c39ed2"
 dependencies = [
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "protobuf",
  "protobuf-build",
  "raft-proto",
@@ -3132,7 +3110,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bafe4179722c2894288ee77a9f044f02811c86af699344c498b0840c698a2465"
 dependencies = [
  "arrayvec",
- "itoa",
+ "itoa 0.4.4",
 ]
 
 [[package]]
@@ -3183,6 +3161,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
 dependencies = [
  "hermit-abi",
+ "libc 0.2.119",
+]
+
+[[package]]
+name = "num_threads"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aba1801fb138d8e85e11d0fc70baf4fe1cdfffda7c6cd34a854905df588e5ed0"
+dependencies = [
  "libc 0.2.119",
 ]
 
@@ -3407,7 +3394,7 @@ dependencies = [
  "error_code",
  "fail 0.5.0",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "log",
@@ -3945,7 +3932,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
- "time",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -4007,7 +3994,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
- "time",
+ "time 0.1.42",
  "tokio",
  "txn_types",
  "uuid",
@@ -4290,7 +4277,7 @@ dependencies = [
  "engine_traits",
  "fail 0.5.0",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -4323,7 +4310,7 @@ dependencies = [
  "collections",
  "crossbeam",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.119",
@@ -4630,7 +4617,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "encryption",
- "grpcio 0.10.0",
+ "grpcio",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4767,7 +4754,7 @@ version = "1.0.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799e97dc9fdae36a5c8b8f2cae9ce2ee9fdce2058c57a93e6099d919fd982f79"
 dependencies = [
- "itoa",
+ "itoa 0.4.4",
  "ryu",
  "serde",
 ]
@@ -4788,7 +4775,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edfa57a7f8d9c1d260a549e7224100f6c43d43f9103e06dd8b4095a9b2b43ce9"
 dependencies = [
  "form_urlencoded",
- "itoa",
+ "itoa 0.4.4",
  "ryu",
  "serde",
 ]
@@ -4834,7 +4821,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -4965,15 +4952,15 @@ dependencies = [
 
 [[package]]
 name = "slog-term"
-version = "2.8.0"
+version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95c1e7e5aab61ced6006149ea772770b84a0d16ce0f7885def313e4829946d76"
+checksum = "87d29185c55b7b258b4f120eab00f48557d4d9bc814f41713f449d35b0f8977c"
 dependencies = [
  "atty",
- "chrono",
  "slog",
  "term",
  "thread_local",
+ "time 0.3.9",
 ]
 
 [[package]]
@@ -5060,7 +5047,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5341,7 +5328,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "rand 0.8.3",
  "tempfile",
@@ -5379,7 +5366,7 @@ dependencies = [
  "collections",
  "fail 0.5.0",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "pd_client",
  "security",
@@ -5402,7 +5389,7 @@ dependencies = [
  "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5461,7 +5448,7 @@ dependencies = [
  "collections",
  "encryption_export",
  "fail 0.5.0",
- "grpcio 0.10.0",
+ "grpcio",
  "kvproto",
  "rand 0.8.3",
  "rand_isaac",
@@ -5470,7 +5457,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_util",
- "time",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -5497,7 +5484,7 @@ dependencies = [
  "fail 0.5.0",
  "file_system",
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "grpcio-health",
  "hyper",
  "keys",
@@ -5539,7 +5526,7 @@ dependencies = [
  "tidb_query_expr",
  "tikv",
  "tikv_util",
- "time",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "tokio",
@@ -5645,7 +5632,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tikv_util",
- "time",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -5744,7 +5731,7 @@ dependencies = [
  "tidb_query_common",
  "tidb_query_datatype",
  "tikv_util",
- "time",
+ "time 0.1.42",
  "tipb",
  "tipb_helper",
  "twoway",
@@ -5785,7 +5772,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
- "grpcio 0.10.0",
+ "grpcio",
  "grpcio-health",
  "hex 0.4.2",
  "http",
@@ -5855,7 +5842,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_kv",
  "tikv_util",
- "time",
+ "time 0.1.42",
  "tipb",
  "tokio",
  "tokio-openssl",
@@ -5888,7 +5875,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "gag",
- "grpcio 0.10.0",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -5916,7 +5903,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "time",
+ "time 0.1.42",
  "tokio",
  "toml",
  "txn_types",
@@ -5962,7 +5949,7 @@ dependencies = [
  "clap 2.33.0",
  "server",
  "tikv",
- "time",
+ "time 0.1.42",
  "toml",
 ]
 
@@ -6033,7 +6020,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "gag",
- "grpcio 0.10.0",
+ "grpcio",
  "http",
  "kvproto",
  "lazy_static",
@@ -6066,7 +6053,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tikv_alloc",
- "time",
+ "time 0.1.42",
  "tokio",
  "tokio-executor",
  "tokio-timer",
@@ -6088,6 +6075,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "time"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2702e08a7a860f005826c6815dcac101b19b5eb330c27fe4a5928fec1d20ddd"
+dependencies = [
+ "itoa 1.0.1",
+ "libc 0.2.119",
+ "num_threads",
+ "time-macros",
+]
+
+[[package]]
+name = "time-macros"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
+
+[[package]]
 name = "tinytemplate"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6103,7 +6108,7 @@ version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#f3286471a05a4454a1071dd5f66ac7dbf6c79ba3"
 dependencies = [
  "futures 0.3.15",
- "grpcio 0.10.0",
+ "grpcio",
  "protobuf",
  "protobuf-build",
 ]

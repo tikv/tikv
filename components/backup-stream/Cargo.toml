@@ -59,9 +59,11 @@ pd_client = {path = "../pd_client"}
 [dev-dependencies]
 rand = "0.8.0"
 tempdir = "0.3"
-grpcio = "0.9"
+grpcio = "0.10"
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 engine_panic = {path = "../engine_panic"}
 walkdir = "2"
 hex = "0.4"
+url = "2"
+async-trait = "0.1"

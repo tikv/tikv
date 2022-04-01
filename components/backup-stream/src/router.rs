@@ -19,7 +19,7 @@ use crate::{
     errors::Error,
     metadata::StreamTask,
     metrics::SKIP_KV_COUNTER,
-    utils::{self, SegmentMap, SlotMap, StopWatch},
+    utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
 use super::errors::Result;
@@ -50,9 +50,12 @@ use tikv_util::{
     worker::Scheduler,
     Either, HandyRwLock,
 };
-use tokio::fs::{remove_file, File};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
+use tokio::{
+    fs::{remove_file, File},
+    sync::RwLock,
+};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -384,6 +387,18 @@ impl RouterInner {
         r.get_value_by_point(key).cloned()
     }
 
+    #[cfg(test)]
+    pub(crate) async fn must_mut_task_info<F>(&self, task_name: &str, mutator: F)
+    where
+        F: FnOnce(&mut StreamTaskInfo),
+    {
+        let mut tasks = self.tasks.lock().await;
+        let t = tasks.remove(task_name);
+        let mut raw = Arc::try_unwrap(t.unwrap()).unwrap();
+        mutator(&mut raw);
+        tasks.insert(task_name.to_owned(), Arc::new(raw));
+    }
+
     pub async fn get_task_info(&self, task_name: &str) -> Result<Arc<StreamTaskInfo>> {
         let task_info = match self.tasks.lock().await.get(task_name) {
             Some(t) => t.clone(),
@@ -440,7 +455,6 @@ impl RouterInner {
         store_id: u64,
         resolve_to: TimeStamp,
     ) -> Option<u64> {
-        debug!("backup stream do flush"; "task" => task_name);
         let task = self.tasks.lock().await.get(task_name).cloned();
         match task {
             Some(task_info) => {
@@ -591,13 +605,13 @@ impl TempFileKey {
 pub struct StreamTaskInfo {
     task: StreamTask,
     /// support external storage. eg local/s3.
-    storage: Arc<dyn ExternalStorage>,
+    pub(crate) storage: Arc<dyn ExternalStorage>,
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
     /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
     files: SlotMap<TempFileKey, DataFile>,
     /// flushing_files contains files pending flush.
-    flushing_files: SlotMap<TempFileKey, DataFile>,
+    flushing_files: RwLock<Vec<(TempFileKey, Slot<DataFile>)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
     /// flush_interval represents the tick interval of flush, setting by users.
@@ -640,7 +654,7 @@ impl StreamTaskInfo {
             temp_dir,
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
-            flushing_files: SlotMap::default(),
+            flushing_files: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
             // TODO make this config set by config or task?
             flush_interval: Duration::from_secs(FLUSH_STORAGE_INTERVAL),
@@ -748,14 +762,15 @@ impl StreamTaskInfo {
     pub async fn move_to_flushing_files(&self) -> &Self {
         let mut w = self.files.write().await;
         for (k, v) in w.drain() {
-            self.flushing_files.write().await.insert(k, v);
+            self.flushing_files.write().await.push((k, v));
         }
         self
     }
 
     pub async fn clear_flushing_files(&self) {
-        for (_, v) in self.flushing_files.write().await.drain() {
+        for (_, v) in self.flushing_files.write().await.drain(..) {
             let data_file = v.lock().await;
+            debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.local_path.display());
             self.total_size
                 .fetch_sub(data_file.file_size, Ordering::SeqCst);
             if let Err(e) = data_file.remove_temp_file().await {
@@ -776,8 +791,10 @@ impl StreamTaskInfo {
         let stat = reader.metadata().await?;
         let reader = UnpinReader(Box::new(limiter.limit(reader.compat())));
         let filepath = &data_file.storage_path;
+        // Once we cannot get the stat of the file, use 4K I/O.
+        let est_len = stat.len().max(4096);
 
-        let ret = storage.write(filepath, reader, stat.len().max(4096)).await;
+        let ret = storage.write(filepath, reader, est_len).await;
         match ret {
             Ok(_) => {
                 debug!(
@@ -789,6 +806,7 @@ impl StreamTaskInfo {
             Err(e) => {
                 warn!("backup stream flush failed";
                     "file" => ?data_file.local_path,
+                    "est_len" => ?est_len,
                     "err" => ?e,
                 );
                 return Err(Error::Io(e));
@@ -802,8 +820,8 @@ impl StreamTaskInfo {
         let storage = self.storage.clone();
         let files = self.flushing_files.write().await;
         let futs = files
-            .values()
-            .map(|v| Self::flush_log_file_to(storage.clone(), v));
+            .iter()
+            .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
         futures::future::try_join_all(futs).await?;
         Ok(())
     }
@@ -836,6 +854,7 @@ impl StreamTaskInfo {
         if !self.is_flushing() {
             return Ok(None);
         }
+        let begin = Instant::now_coarse();
         let mut sw = StopWatch::new();
 
         // generate meta data and prepare to flush to storage
@@ -860,6 +879,8 @@ impl StreamTaskInfo {
         // flush log file to storage.
         self.flush_log().await?;
 
+        let file_len = metadata_info.files.len();
+        let file_size = metadata_info.files.iter().fold(0, |a, d| a + d.length);
         // flush meta file to storage.
         self.flush_meta(metadata_info).await?;
         crate::metrics::FLUSH_DURATION
@@ -871,6 +892,12 @@ impl StreamTaskInfo {
         crate::metrics::FLUSH_DURATION
             .with_label_values(&["clear_temp_files"])
             .observe(sw.lap().as_secs_f64());
+
+        info!("log backup flush done";
+            "files" => %file_len,
+            "total_size" => %file_size,
+            "take" => ?begin.saturating_elapsed(),
+        );
         Ok(rts)
     }
 }
@@ -1033,6 +1060,7 @@ impl DataFile {
         meta.set_resolved_ts(self.resolved_ts.into_inner() as _);
         meta.set_start_key(std::mem::take(&mut self.start_key));
         meta.set_end_key(std::mem::take(&mut self.end_key));
+        meta.set_length(self.file_size as _);
 
         meta.set_is_meta(file_key.is_meta);
         meta.set_table_id(file_key.table_id);
@@ -1071,7 +1099,7 @@ mod tests {
 
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
 
-    use std::time::Duration;
+    use std::{ffi::OsStr, time::Duration};
     use tikv_util::{
         codec::number::NumberEncoder,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -1200,31 +1228,45 @@ mod tests {
         backend
     }
 
-    #[tokio::test]
-    async fn test_basic_file() -> Result<()> {
-        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
-        println!("tmp_path={:?}", tmp);
-        tokio::fs::create_dir_all(&tmp).await?;
-        let (tx, rx) = dummy_scheduler();
-        let router = RouterInner::new(tmp.clone(), tx, 32);
+    async fn task(name: String) -> Result<(StreamBackupTaskInfo, PathBuf)> {
         let mut stream_task = StreamBackupTaskInfo::default();
-        stream_task.set_name("dummy".to_string());
+        stream_task.set_name(name);
         let storage_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&storage_path).await?;
         println!("storage={:?}", storage_path);
         stream_task.set_storage(create_local_storage_backend(
             storage_path.to_str().unwrap().to_string(),
         ));
+        Ok((stream_task, storage_path))
+    }
 
+    async fn must_register_table(
+        router: &RouterInner,
+        stream_task: StreamBackupTaskInfo,
+        table_id: i64,
+    ) {
         router
             .register_task(
                 StreamTask { info: stream_task },
                 vec![(
-                    utils::wrap_key(make_table_key(1, b"")),
-                    utils::wrap_key(make_table_key(2, b"")),
+                    utils::wrap_key(make_table_key(table_id, b"")),
+                    utils::wrap_key(make_table_key(table_id + 1, b"")),
                 )],
             )
-            .await?;
+            .await
+            .expect("failed to register task")
+    }
+
+    #[tokio::test]
+    async fn test_basic_file() -> Result<()> {
+        test_util::init_log_for_test();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&tmp).await?;
+        let (tx, rx) = dummy_scheduler();
+        let router = RouterInner::new(tmp.clone(), tx, 32);
+        let (stream_task, storage_path) = task("dummy".to_owned()).await?;
+        must_register_table(&router, stream_task, 1).await;
+
         let now = TimeStamp::physical_now();
         let mut region1 = KvEventsBuilder::new(1, now);
         let start_ts = TimeStamp::physical_now();
@@ -1235,14 +1277,12 @@ mod tests {
         region1.put_table(CF_WRITE, 2, b"hello", b"this isn't a write record :3");
         region1.put_table(CF_WRITE, 1, b"hello", b"still isn't a write record :3");
         region1.delete_table(CF_DEFAULT, 1, b"hello");
-        println!("{:?}", region1);
         let events = region1.flush_events();
         router.on_events(events).await?;
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let end_ts = TimeStamp::physical_now();
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
-        println!("{:?}", files);
         let meta = files
             .move_to_flushing_files()
             .await
@@ -1260,7 +1300,6 @@ mod tests {
             start_ts,
             end_ts
         );
-        println!("{:#?}", meta);
         files.flush_log().await?;
         files.flush_meta(meta).await?;
         files.clear_flushing_files().await;
@@ -1275,19 +1314,15 @@ mod tests {
 
         let mut meta_count = 0;
         let mut log_count = 0;
-        let mut a = tokio::fs::read_dir(storage_path).await?;
-        while let Some(entry) = a.next_entry().await? {
-            assert!(
-                entry.path().is_file(),
-                "log file {:?} is not a file",
-                entry.path()
-            );
+        for entry in walkdir::WalkDir::new(storage_path) {
+            let entry = entry.unwrap();
             let filename = entry.file_name();
+            println!("walking {}", entry.path().display());
             if filename.to_str().unwrap().contains("v1_backupmeta") {
                 meta_count += 1;
-            } else {
+            } else if entry.path().extension() == Some(OsStr::new("log")) {
                 log_count += 1;
-                let f = entry.metadata().await?;
+                let f = entry.metadata().unwrap();
                 assert!(
                     f.len() > 10,
                     "the log file {:?} is too small (size = {}B)",
@@ -1296,13 +1331,107 @@ mod tests {
                 );
             }
         }
+
         assert_eq!(meta_count, 1);
         assert_eq!(log_count, 3);
         Ok(())
     }
 
+    struct ErrorStorage<Inner> {
+        inner: Inner,
+        error_on_write: Box<dyn Fn() -> io::Result<()> + Send + Sync>,
+    }
+
+    impl<Inner> ErrorStorage<Inner> {
+        fn with_first_time_error(inner: Inner) -> Self {
+            let first_time = std::sync::Mutex::new(true);
+            Self {
+                inner,
+                error_on_write: Box::new(move || {
+                    let mut fst = first_time.lock().unwrap();
+                    if *fst {
+                        *fst = false;
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "the absence of the result, is also a kind of result",
+                        ));
+                    }
+                    Ok(())
+                }),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<Inner: ExternalStorage> ExternalStorage for ErrorStorage<Inner> {
+        fn name(&self) -> &'static str {
+            self.inner.name()
+        }
+
+        fn url(&self) -> io::Result<url::Url> {
+            self.inner.url()
+        }
+
+        async fn write(
+            &self,
+            name: &str,
+            reader: UnpinReader,
+            content_length: u64,
+        ) -> io::Result<()> {
+            if let Err(e) = (self.error_on_write)() {
+                return Err(e);
+            }
+            self.inner.write(name, reader, content_length).await
+        }
+
+        fn read(&self, name: &str) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+            self.inner.read(name)
+        }
+    }
+
+    fn build_kv_event(base: i32, count: i32) -> ApplyEvents {
+        let mut b = KvEventsBuilder::new(42, 0);
+        for i in 0..count {
+            let cf = if i % 2 == 0 { CF_WRITE } else { CF_DEFAULT };
+            let rnd_key = format!("{:05}", i + base);
+            let rnd_value = std::iter::from_fn(|| Some(rand::random::<u8>()))
+                .take(rand::random::<usize>() % 32)
+                .collect::<Vec<_>>();
+            b.put_table(cf, 1, rnd_key.as_bytes(), &rnd_value);
+        }
+        b.events
+    }
+
+    #[tokio::test]
+    async fn test_flush_with_error() -> Result<()> {
+        test_util::init_log_for_test();
+        let (tx, _rx) = dummy_scheduler();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let router = Arc::new(RouterInner::new(tmp.clone(), tx, 1));
+        let (task, _path) = task("error_prone".to_owned()).await?;
+        must_register_table(router.as_ref(), task, 1).await;
+        router
+            .must_mut_task_info("error_prone", |i| {
+                i.storage = Arc::new(ErrorStorage::with_first_time_error(i.storage.clone()))
+            })
+            .await;
+        router.on_events(build_kv_event(0, 10)).await.unwrap();
+        assert!(
+            router
+                .do_flush("error_prone", 42, TimeStamp::max())
+                .await
+                .is_none()
+        );
+        router.on_events(build_kv_event(10, 10)).await.unwrap();
+        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
+        let t = router.get_task_info("error_prone").await.unwrap();
+        assert_eq!(t.total_size(), 0);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_empty_resolved_ts() {
+        test_util::init_log_for_test();
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = RouterInner::new(tmp.clone(), tx, 32);
@@ -1323,6 +1452,7 @@ mod tests {
 
     #[test]
     fn test_format_datetime() {
+        test_util::init_log_for_test();
         let s = TempFileKey::format_date_time(431656320867237891);
         let s = s.to_string();
         assert_eq!(s, "20220307");

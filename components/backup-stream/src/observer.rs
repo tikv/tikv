@@ -176,6 +176,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
+                    needs_initial_scanning: true,
                 })
             );
         }
