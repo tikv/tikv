@@ -648,7 +648,6 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    SendDetailedReportForUnsafeRecovery,
     CreatePeer(metapb::Region),
 }
 
@@ -678,9 +677,6 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
-            StoreMsg::SendDetailedReportForUnsafeRecovery => {
-                write!(fmt, "Send detailed report for unsafe recovery")
-            }
             StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
         }
     }

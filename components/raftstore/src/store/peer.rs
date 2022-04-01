@@ -50,7 +50,7 @@ use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
-use crate::store::fsm::store::PollContext;
+use crate::store::fsm::store::{store_heartbeat_pd, PollContext};
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
@@ -62,8 +62,8 @@ use crate::store::worker::{
     RegionTask, SplitCheckTask,
 };
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, StoreMsg,
-    TxnExt, RAFT_INIT_LOG_INDEX,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
+    RAFT_INIT_LOG_INDEX,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -4491,7 +4491,7 @@ where
         }
     }
 
-    pub fn unsafe_recovery_wait_apply<T>(
+    pub fn unsafe_recovery_wait_apply<T: Transport>(
         &mut self,
         ctx: &PollContext<EK, ER, T>,
         counter: Arc<AtomicUsize>,
@@ -4503,7 +4503,7 @@ where
         self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
     }
 
-    pub fn unsafe_recovery_maybe_finish_wait_apply<T>(
+    pub fn unsafe_recovery_maybe_finish_wait_apply<T: Transport>(
         &mut self,
         ctx: &PollContext<EK, ER, T>,
         force: bool,
@@ -4513,12 +4513,7 @@ where
                 if self.raft_group.raft.raft_log.applied >= target_index || force {
                     if let Some(counter) = unsafe_recovery_state.wait_apply_task_counter.as_ref() {
                         if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                            if let Err(e) = ctx
-                                .router
-                                .send_control(StoreMsg::SendDetailedReportForUnsafeRecovery)
-                            {
-                                error!("fail to schedule store reporting for unsafe recovery "; "err" => ?e);
-                            }
+                            store_heartbeat_pd(ctx, /*send_detailed_report=*/ true);
                         }
                     }
                     // Reset the state if the wait is finished.

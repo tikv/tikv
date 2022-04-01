@@ -622,9 +622,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::SendDetailedReportForUnsafeRecovery => {
-                    store_heartbeat_pd(self.ctx, /*send_detailed_report=*/ true);
-                }
                 StoreMsg::CreatePeer(region) => self.on_create_peer(region),
             }
         }
@@ -1609,8 +1606,8 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-fn store_heartbeat_pd<EK: KvEngine, ER: RaftEngine, T: Transport>(
-    ctx: &mut PollContext<EK, ER, T>,
+pub fn store_heartbeat_pd<EK: KvEngine, ER: RaftEngine, T: Transport>(
+    ctx: &PollContext<EK, ER, T>,
     send_detailed_report: bool,
 ) {
     let mut stats = StoreStats::default();
