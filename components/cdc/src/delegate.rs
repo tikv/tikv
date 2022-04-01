@@ -13,7 +13,7 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request, SingleDeleteRequest
 };
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
 use raftstore::store::util::compare_region_epoch;
@@ -561,6 +561,7 @@ impl Delegate {
                     self.sink_put(req.take_put(), is_one_pc, &mut rows, &mut read_old_value)?;
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
+                CmdType::SingleDelete => self.sink_single_delete(req.take_single_delete()),
                 _ => {
                     debug!(
                         "skip other command";
@@ -723,6 +724,28 @@ impl Delegate {
             "" | "default" | "write" => {}
             other => {
                 panic!("invalid cf {}", other);
+            }
+        }
+    }
+
+    fn sink_single_delete(&mut self, mut single_delete: SingleDeleteRequest) {
+        match single_delete.cf.as_str() {
+            "lock" => {
+                let raw_key = Key::from_encoded(single_delete.take_key()).into_raw().unwrap();
+                match self.resolver {
+                    Some(ref mut resolver) => resolver.untrack_lock(&raw_key, None),
+                    None => {
+                        assert!(self.pending.is_some(), "region resolver not ready");
+                        let key_len = raw_key.len();
+                        let pending = self.pending.as_mut().unwrap();
+                        pending.locks.push(PendingLock::Untrack { key: raw_key });
+                        pending.pending_bytes += key_len;
+                        CDC_PENDING_BYTES_GAUGE.add(key_len as i64);
+                    }
+                }
+            }
+            _ => {
+                unimplemented!()
             }
         }
     }
