@@ -34,6 +34,8 @@ pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::hibernate_state::{GroupState, HibernateState};
 pub use self::memory::*;
 pub use self::metrics::RAFT_ENTRY_FETCHES_VEC;
+#[cfg(any(test, feature = "testexport"))]
+pub use self::msg::PeerInternalStat;
 pub use self::msg::{
     Callback, CasualMessage, ExtCallback, InspectedRaftMessage, MergeResultKind, PeerMsg, PeerTick,
     RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg, StoreMsg, StoreTick,
@@ -66,6 +68,6 @@ pub use self::worker::{
     AutoSplitController, FlowStatistics, FlowStatsReporter, PdTask, QueryStats, ReadDelegate,
     ReadStats, SplitConfig, SplitConfigManager, TrackVer, WriteStats,
 };
+pub use self::worker::{Bucket, BucketRange, KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{CheckLeaderRunner, CheckLeaderTask};
-pub use self::worker::{KeyEntry, LocalReader, RegionTask};
 pub use self::worker::{SplitCheckRunner, SplitCheckTask};

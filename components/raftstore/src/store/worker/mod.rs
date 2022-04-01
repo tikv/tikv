@@ -34,6 +34,8 @@ pub use self::refresh_config::{
     Task as RefreshConfigTask,
 };
 pub use self::region::{Runner as RegionRunner, Task as RegionTask};
-pub use self::split_check::{KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask};
+pub use self::split_check::{
+    Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
+};
 pub use self::split_config::{SplitConfig, SplitConfigManager};
 pub use self::split_controller::{AutoSplitController, ReadStats, WriteStats};
