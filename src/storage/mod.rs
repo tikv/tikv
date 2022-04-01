@@ -87,7 +87,7 @@ use api_version::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use futures::prelude::*;
+use futures::{future::BoxFuture, prelude::*};
 use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::{
     ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo,
@@ -1464,7 +1464,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> futures::future::BoxFuture<'static, Result<Option<Vec<u8>>>> {
+    ) -> BoxFuture<'static, Result<Option<Vec<u8>>>> {
         with_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_get;
             let priority = ctx.get_priority();
@@ -1483,17 +1483,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                    let key = API::encode_raw_key_owned(key, None);
-
-                    tls_collect_query(
-                        ctx.get_region_id(),
-                        ctx.get_peer(),
-                        key.as_encoded(),
-                        key.as_encoded(),
-                        false,
-                        QueryKind::Get,
-                    );
-
                     let command_duration = tikv_util::time::Instant::now_coarse();
                     let snap_ctx = SnapContext {
                         pb_ctx: &ctx,
@@ -1507,6 +1496,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     {
                         let begin_instant = Instant::now_coarse();
                         let mut stats = Statistics::default();
+                        let key = API::encode_raw_key_owned(key, None);
+                        // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                        tls_collect_query(
+                            ctx.get_region_id(),
+                            ctx.get_peer(),
+                            key.as_encoded(),
+                            key.as_encoded(),
+                            false,
+                            QueryKind::Get,
+                        );
                         let r = store
                             .raw_get_key_value(cf, &key, &mut stats)
                             .map_err(Error::from);
@@ -1545,123 +1544,121 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         gets: Vec<RawGetRequest>,
         ids: Vec<u64>,
         consumer: P,
-    ) -> impl Future<Output = Result<()>> {
-        const CMD: CommandKind = CommandKind::raw_batch_get_command;
-        // all requests in a batch have the same region, epoch, term, replica_read
-        let priority = gets[0].get_context().get_priority();
-        let priority_tag = get_priority_tag(priority);
-        let api_version = self.api_version;
+    ) -> BoxFuture<'static, Result<()>> {
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_batch_get_command;
+            // all requests in a batch have the same region, epoch, term, replica_read
+            let priority = gets[0].get_context().get_priority();
+            let priority_tag = get_priority_tag(priority);
+            let api_version = self.api_version;
 
-        // The resource tags of these batched requests are not the same, and it is quite expensive
-        // to distinguish them, so we can find random one of them as a representative.
-        let rand_index = rand::thread_rng().gen_range(0, gets.len());
-        let rand_ctx = gets[rand_index].get_context();
-        let rand_key = gets[rand_index].get_key().to_vec();
-        let resource_tag = self
-            .resource_tag_factory
-            .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
+            // The resource tags of these batched requests are not the same, and it is quite expensive
+            // to distinguish them, so we can find random one of them as a representative.
+            let rand_index = rand::thread_rng().gen_range(0, gets.len());
+            let rand_ctx = gets[rand_index].get_context();
+            let rand_key = gets[rand_index].get_key().to_vec();
+            let resource_tag = self
+                .resource_tag_factory
+                .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
 
-        let res = self.read_pool.spawn_handle(
-            async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
-                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe(gets.len() as f64);
+            let res = self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                        .get(priority_tag)
+                        .inc();
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(gets.len() as f64);
 
-                for get in &gets {
-                    Self::check_api_version(
-                        api_version,
-                        get.get_context().api_version,
-                        CMD,
-                        [get.get_key()],
-                    )
-                    .map_err(Error::from)?;
-                }
+                    for get in &gets {
+                        Self::check_api_version(
+                            api_version,
+                            get.get_context().api_version,
+                            CMD,
+                            [get.get_key()],
+                        )
+                        .map_err(Error::from)?;
+                    }
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let read_id = Some(ThreadReadId::new());
-                let mut snaps = vec![];
-                for (req, id) in gets.into_iter().zip(ids) {
-                    let snap_ctx = SnapContext {
-                        pb_ctx: req.get_context(),
-                        read_id: read_id.clone(),
-                        ..Default::default()
-                    };
-                    let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
-                    snaps.push((id, req, snap));
-                }
-                Self::with_tls_engine(|engine| engine.release_snapshot());
-                let begin_instant = Instant::now_coarse();
-                for (id, mut req, snap) in snaps {
-                    let ctx = req.take_context();
-                    let cf = req.take_cf();
-                    let key: Key = match_template_api_version!(
-                        API,
-                        match api_version {
-                            ApiVersion::API => API::encode_raw_key_owned(req.take_key(), None),
-                        }
-                    );
-                    tls_collect_query(
-                        ctx.get_region_id(),
-                        ctx.get_peer(),
-                        key.as_encoded(),
-                        key.as_encoded(),
-                        false,
-                        QueryKind::Get,
-                    );
-
-                    match snap.await {
-                        Ok(snapshot) => {
-                            let mut stats = Statistics::default();
-                            let buckets = snapshot.ext().get_buckets();
-                            let store = RawStore::new(snapshot, api_version);
-                            match Self::rawkv_cf(&cf, api_version) {
-                                Ok(cf) => {
-                                    consumer.consume(
-                                        id,
-                                        store
-                                            .raw_get_key_value(cf, &key, &mut stats)
-                                            .map_err(Error::from),
-                                        begin_instant,
-                                    );
-                                    tls_collect_read_flow(
-                                        ctx.get_region_id(),
-                                        Some(key.as_encoded()),
-                                        Some(key.as_encoded()),
-                                        &stats,
-                                        buckets.as_ref(),
-                                    );
-                                }
-                                Err(e) => {
-                                    consumer.consume(id, Err(e), begin_instant);
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let read_id = Some(ThreadReadId::new());
+                    let mut snaps = vec![];
+                    for (req, id) in gets.into_iter().zip(ids) {
+                        let snap_ctx = SnapContext {
+                            pb_ctx: req.get_context(),
+                            read_id: read_id.clone(),
+                            ..Default::default()
+                        };
+                        let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
+                        snaps.push((id, req, snap));
+                    }
+                    Self::with_tls_engine(|engine| engine.release_snapshot());
+                    let begin_instant = Instant::now_coarse();
+                    for (id, mut req, snap) in snaps {
+                        let ctx = req.take_context();
+                        let cf = req.take_cf();
+                        let key = req.take_key();
+                        match snap.await {
+                            Ok(snapshot) => {
+                                let mut stats = Statistics::default();
+                                let buckets = snapshot.ext().get_buckets();
+                                let store = RawStore::new(snapshot, api_version);
+                                let key = API::encode_raw_key_owned(key, None);
+                                // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                                tls_collect_query(
+                                    ctx.get_region_id(),
+                                    ctx.get_peer(),
+                                    key.as_encoded(),
+                                    key.as_encoded(),
+                                    false,
+                                    QueryKind::Get,
+                                );
+                                match Self::rawkv_cf(&cf, api_version) {
+                                    Ok(cf) => {
+                                        consumer.consume(
+                                            id,
+                                            store
+                                                .raw_get_key_value(cf, &key, &mut stats)
+                                                .map_err(Error::from),
+                                            begin_instant,
+                                        );
+                                        tls_collect_read_flow(
+                                            ctx.get_region_id(),
+                                            Some(key.as_encoded()),
+                                            Some(key.as_encoded()),
+                                            &stats,
+                                            buckets.as_ref(),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        consumer.consume(id, Err(e), begin_instant);
+                                    }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            Err(e) => {
+                                consumer.consume(id, Err(e), begin_instant);
+                            }
                         }
                     }
-                }
 
-                SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                    .get(CMD)
-                    .observe(begin_instant.saturating_elapsed_secs());
-                SCHED_HISTOGRAM_VEC_STATIC
-                    .get(CMD)
-                    .observe(command_duration.saturating_elapsed_secs());
-                Ok(())
-            }
-            .in_resource_metering_tag(resource_tag),
-            priority,
-            thread_rng().next_u64(),
-        );
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.saturating_elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.saturating_elapsed_secs());
+                    Ok(())
+                }
+                .in_resource_metering_tag(resource_tag),
+                priority,
+                thread_rng().next_u64(),
+            );
+            Box::pin(async move {
+                res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                    .await?
+            })
+        })
     }
 
     /// Get the values of some raw keys in a batch.
@@ -1670,110 +1667,103 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
-        const CMD: CommandKind = CommandKind::raw_batch_get;
-        let priority = ctx.get_priority();
-        let priority_tag = get_priority_tag(priority);
-        let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
-        let resource_tag = self
-            .resource_tag_factory
-            .new_tag_with_key_ranges(&ctx, key_ranges);
-        let api_version = self.api_version;
+    ) -> BoxFuture<'static, Result<Vec<Result<KvPair>>>> {
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_batch_get;
+            let priority = ctx.get_priority();
+            let priority_tag = get_priority_tag(priority);
+            let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
+            let resource_tag = self
+                .resource_tag_factory
+                .new_tag_with_key_ranges(&ctx, key_ranges);
+            let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle(
-            async move {
-                let mut key_ranges = vec![];
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
+            let res = self.read_pool.spawn_handle(
+                async move {
+                    let mut key_ranges = vec![];
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                        .get(priority_tag)
+                        .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
+                    Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let snap_ctx = SnapContext {
-                    pb_ctx: &ctx,
-                    ..Default::default()
-                };
-                let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let buckets = snapshot.ext().get_buckets();
-                let store = RawStore::new(snapshot, api_version);
-                {
-                    let begin_instant = Instant::now_coarse();
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let snap_ctx = SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    };
+                    let snapshot =
+                        Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                    let buckets = snapshot.ext().get_buckets();
+                    let store = RawStore::new(snapshot, api_version);
+                    {
+                        let begin_instant = Instant::now_coarse();
 
-                    let cf = Self::rawkv_cf(&cf, api_version)?;
-                    // no scan_count for this kind of op.
-                    let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> = match_template_api_version!(
-                        API,
-                        match api_version {
-                            ApiVersion::API => {
-                                keys.into_iter()
-                                    .map(|k| API::encode_raw_key_owned(k, None))
-                                    .map(|k| {
-                                        let mut s = Statistics::default();
-                                        let v = store
-                                            .raw_get_key_value(cf, &k, &mut s)
-                                            .map_err(Error::from);
-                                        tls_collect_read_flow(
-                                            ctx.get_region_id(),
-                                            Some(k.as_encoded()),
-                                            Some(k.as_encoded()),
-                                            &s,
-                                            buckets.as_ref(),
-                                        );
-                                        stats.add(&s);
-                                        key_ranges.push(build_key_range(
-                                            k.as_encoded(),
-                                            k.as_encoded(),
-                                            false,
-                                        ));
-                                        (k, v)
-                                    })
-                                    .filter(|&(_, ref v)| {
-                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                    })
-                                    .map(|(k, v)| match v {
-                                        Ok(v) => {
-                                            let (user_key, _) =
-                                                API::decode_raw_key_owned(k, false).unwrap();
-                                            Ok((user_key, v.unwrap()))
-                                        }
-                                        Err(v) => Err(v),
-                                    })
-                                    .collect()
-                            }
-                        }
-                    );
+                        let cf = Self::rawkv_cf(&cf, api_version)?;
+                        // no scan_count for this kind of op.
+                        let mut stats = Statistics::default();
+                        let result: Vec<Result<KvPair>> = keys
+                            .into_iter()
+                            .map(|k| API::encode_raw_key_owned(k, None))
+                            .map(|k| {
+                                let mut s = Statistics::default();
+                                let v =
+                                    store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
+                                tls_collect_read_flow(
+                                    ctx.get_region_id(),
+                                    Some(k.as_encoded()),
+                                    Some(k.as_encoded()),
+                                    &s,
+                                    buckets.as_ref(),
+                                );
+                                stats.add(&s);
+                                key_ranges.push(build_key_range(
+                                    k.as_encoded(),
+                                    k.as_encoded(),
+                                    false,
+                                ));
+                                (k, v)
+                            })
+                            .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                            .map(|(k, v)| match v {
+                                Ok(v) => {
+                                    let (user_key, _) =
+                                        API::decode_raw_key_owned(k, false).unwrap();
+                                    Ok((user_key, v.unwrap()))
+                                }
+                                Err(v) => Err(v),
+                            })
+                            .collect();
 
-                    tls_collect_query_batch(
-                        ctx.get_region_id(),
-                        ctx.get_peer(),
-                        key_ranges,
-                        QueryKind::Get,
-                    );
-                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(stats.data.flow_stats.read_keys as f64);
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
-                    Ok(result)
+                        tls_collect_query_batch(
+                            ctx.get_region_id(),
+                            ctx.get_peer(),
+                            key_ranges,
+                            QueryKind::Get,
+                        );
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(stats.data.flow_stats.read_keys as f64);
+                        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(begin_instant.saturating_elapsed_secs());
+                        SCHED_HISTOGRAM_VEC_STATIC
+                            .get(CMD)
+                            .observe(command_duration.saturating_elapsed_secs());
+                        Ok(result)
+                    }
                 }
-            }
-            .in_resource_metering_tag(resource_tag),
-            priority,
-            thread_rng().next_u64(),
-        );
+                .in_resource_metering_tag(resource_tag),
+                priority,
+                thread_rng().next_u64(),
+            );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+            Box::pin(async move {
+                res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                    .await?
+            })
+        })
     }
 
     /// Write a raw key to the storage.
@@ -1822,43 +1812,35 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         })
     }
 
-    fn raw_batch_put_requests_to_modifies(
-        api_version: ApiVersion,
+    fn raw_batch_put_requests_to_modifies<Api: APIVersion>(
         cf: CfName,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
     ) -> Result<Vec<Modify>> {
-        let modifies = match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    if !API::IS_TTL_ENABLED {
-                        if ttls.iter().any(|&x| x != 0) {
-                            return Err(Error::from(ErrorInner::TTLNotEnabled));
-                        }
-                    } else if ttls.len() != pairs.len() {
-                        return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
-                    }
-
-                    pairs
-                        .into_iter()
-                        .zip(ttls)
-                        .map(|((k, v), ttl)| {
-                            let raw_value = RawValue {
-                                user_value: v,
-                                expire_ts: ttl_to_expire_ts(ttl),
-                                is_delete: false,
-                            };
-                            Modify::Put(
-                                cf,
-                                API::encode_raw_key_owned(k, None),
-                                API::encode_raw_value_owned(raw_value),
-                            )
-                        })
-                        .collect()
-                }
+        if !Api::IS_TTL_ENABLED {
+            if ttls.iter().any(|&x| x != 0) {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
             }
-        );
+        } else if ttls.len() != pairs.len() {
+            return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
+        }
+
+        let modifies = pairs
+            .into_iter()
+            .zip(ttls)
+            .map(|((k, v), ttl)| {
+                let raw_value = RawValue {
+                    user_value: v,
+                    expire_ts: ttl_to_expire_ts(ttl),
+                    is_delete: false,
+                };
+                Modify::Put(
+                    cf,
+                    Api::encode_raw_key_owned(k, None),
+                    Api::encode_raw_value_owned(raw_value),
+                )
+            })
+            .collect();
         Ok(modifies)
     }
 
@@ -1871,32 +1853,34 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_batch_put,
-            pairs.iter().map(|(ref k, _)| k),
-        )?;
+        with_api_version!(self.api_version, {
+            Self::check_api_version(
+                self.api_version,
+                ctx.api_version,
+                CommandKind::raw_batch_put,
+                pairs.iter().map(|(ref k, _)| k),
+            )?;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+            let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
-        check_key_size!(
-            pairs.iter().map(|(ref k, _)| k),
-            self.max_key_size,
-            callback
-        );
+            check_key_size!(
+                pairs.iter().map(|(ref k, _)| k),
+                self.max_key_size,
+                callback
+            );
 
-        let modifies = Self::raw_batch_put_requests_to_modifies(self.api_version, cf, pairs, ttls)?;
-        let mut batch = WriteData::from_modifies(modifies);
-        batch.set_allowed_on_disk_almost_full();
+            let modifies = Self::raw_batch_put_requests_to_modifies::<API>(cf, pairs, ttls)?;
+            let mut batch = WriteData::from_modifies(modifies);
+            batch.set_allowed_on_disk_almost_full();
 
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
-        Ok(())
+            self.engine.async_write(
+                &ctx,
+                batch,
+                Box::new(|res| callback(res.map_err(Error::from))),
+            )?;
+            KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
+            Ok(())
+        })
     }
 
     /// Delete a raw key from the storage.
@@ -1958,40 +1942,33 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        check_key_size!([&start_key, &end_key], self.max_key_size, callback);
-        Self::check_api_version_ranges(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_delete_range,
-            [(Some(&start_key), Some(&end_key))],
-        )?;
+        with_api_version!(self.api_version, {
+            check_key_size!([&start_key, &end_key], self.max_key_size, callback);
+            Self::check_api_version_ranges(
+                self.api_version,
+                ctx.api_version,
+                CommandKind::raw_delete_range,
+                [(Some(&start_key), Some(&end_key))],
+            )?;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let (start_key, end_key) = match_template_api_version!(
-            API,
-            match self.api_version {
-                ApiVersion::API => {
-                    (
-                        API::encode_raw_key_owned(start_key, None),
-                        API::encode_raw_key_owned(end_key, None),
-                    )
-                }
-            }
-        );
+            let cf = Self::rawkv_cf(&cf, self.api_version)?;
+            let start_key = API::encode_raw_key_owned(start_key, None);
+            let end_key = API::encode_raw_key_owned(end_key, None);
 
-        let mut batch =
-            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
-        batch.set_allowed_on_disk_almost_full();
+            let mut batch =
+                WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
+            batch.set_allowed_on_disk_almost_full();
 
-        // TODO: special notification channel for API V2.
+            // TODO: special notification channel for API V2.
 
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
-        Ok(())
+            self.engine.async_write(
+                &ctx,
+                batch,
+                Box::new(|res| callback(res.map_err(Error::from))),
+            )?;
+            KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
+            Ok(())
+        })
     }
 
     fn raw_batch_delete_requests_to_modifies(
@@ -2070,132 +2047,124 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
-        const CMD: CommandKind = CommandKind::raw_scan;
-        let priority = ctx.get_priority();
-        let priority_tag = get_priority_tag(priority);
-        let resource_tag = self.resource_tag_factory.new_tag(&ctx);
-        let api_version = self.api_version;
+    ) -> BoxFuture<'static, Result<Vec<Result<KvPair>>>> {
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_scan;
+            let priority = ctx.get_priority();
+            let priority_tag = get_priority_tag(priority);
+            let resource_tag = self.resource_tag_factory.new_tag(&ctx);
+            let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle(
-            async move {
-                match_template_api_version!(
-                    API,
-                    match api_version {
-                        ApiVersion::API => {
-                            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                            SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                                .get(priority_tag)
-                                .inc();
+            let res = self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                        .get(priority_tag)
+                        .inc();
 
-                            Self::check_api_version_ranges(
-                                api_version,
-                                ctx.api_version,
-                                CMD,
-                                [(Some(&start_key), end_key.as_ref())],
-                            )?;
+                    Self::check_api_version_ranges(
+                        api_version,
+                        ctx.api_version,
+                        CMD,
+                        [(Some(&start_key), end_key.as_ref())],
+                    )?;
 
-                            let start_key = API::encode_raw_key_owned(start_key, None);
-                            let end_key = end_key.map(|k| API::encode_raw_key_owned(k, None));
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let snap_ctx = SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    };
+                    let snapshot =
+                        Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                    let buckets = snapshot.ext().get_buckets();
+                    let cf = Self::rawkv_cf(&cf, api_version)?;
+                    {
+                        let store = RawStore::new(snapshot, api_version);
+                        let begin_instant = Instant::now_coarse();
 
-                            tls_collect_query(
-                                ctx.get_region_id(),
-                                ctx.get_peer(),
-                                start_key.as_encoded(),
-                                end_key.as_ref().map(|k| k.as_encoded()).unwrap_or(&vec![]),
-                                reverse_scan,
-                                QueryKind::Scan,
-                            );
+                        let start_key = API::encode_raw_key_owned(start_key, None);
+                        let end_key = end_key.map(|k| API::encode_raw_key_owned(k, None));
+                        // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                        tls_collect_query(
+                            ctx.get_region_id(),
+                            ctx.get_peer(),
+                            start_key.as_encoded(),
+                            end_key.as_ref().map(|k| k.as_encoded()).unwrap_or(&vec![]),
+                            reverse_scan,
+                            QueryKind::Scan,
+                        );
 
-                            let command_duration = tikv_util::time::Instant::now_coarse();
-                            let snap_ctx = SnapContext {
-                                pb_ctx: &ctx,
-                                ..Default::default()
-                            };
-                            let snapshot =
-                                Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx))
-                                    .await?;
-                            let buckets = snapshot.ext().get_buckets();
-                            let cf = Self::rawkv_cf(&cf, api_version)?;
-                            {
-                                let store = RawStore::new(snapshot, api_version);
-                                let begin_instant = Instant::now_coarse();
-                                let mut statistics = Statistics::default();
-
-                                let result = if reverse_scan {
-                                    store
-                                        .reverse_raw_scan(
-                                            cf,
-                                            &start_key,
-                                            end_key.as_ref(),
-                                            limit,
-                                            &mut statistics,
-                                            key_only,
-                                        )
-                                        .await
-                                } else {
-                                    store
-                                        .forward_raw_scan(
-                                            cf,
-                                            &start_key,
-                                            end_key.as_ref(),
-                                            limit,
-                                            &mut statistics,
-                                            key_only,
-                                        )
-                                        .await
-                                }
-                                .map(|pairs| {
-                                    pairs
-                                        .into_iter()
-                                        .map(|pair| {
-                                            pair.map(|(k, v)| {
-                                                let (user_key, _) = API::decode_raw_key_owned(
-                                                    Key::from_encoded(k),
-                                                    true,
-                                                )
-                                                .unwrap();
-                                                (user_key, v)
-                                            })
-                                            .map_err(Error::from)
-                                        })
-                                        .collect()
-                                })
-                                .map_err(Error::from);
-
-                                metrics::tls_collect_read_flow(
-                                    ctx.get_region_id(),
-                                    Some(start_key.as_encoded()),
-                                    end_key.as_ref().map(|k| k.as_encoded().as_slice()),
-                                    &statistics,
-                                    buckets.as_ref(),
-                                );
-                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                                    .get(CMD)
-                                    .observe(statistics.data.flow_stats.read_keys as f64);
-                                metrics::tls_collect_scan_details(CMD, &statistics);
-                                SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                                    .get(CMD)
-                                    .observe(begin_instant.saturating_elapsed_secs());
-                                SCHED_HISTOGRAM_VEC_STATIC
-                                    .get(CMD)
-                                    .observe(command_duration.saturating_elapsed_secs());
-
-                                result
-                            }
+                        let mut statistics = Statistics::default();
+                        let result = if reverse_scan {
+                            store
+                                .reverse_raw_scan(
+                                    cf,
+                                    &start_key,
+                                    end_key.as_ref(),
+                                    limit,
+                                    &mut statistics,
+                                    key_only,
+                                )
+                                .await
+                        } else {
+                            store
+                                .forward_raw_scan(
+                                    cf,
+                                    &start_key,
+                                    end_key.as_ref(),
+                                    limit,
+                                    &mut statistics,
+                                    key_only,
+                                )
+                                .await
                         }
-                    }
-                )
-            }
-            .in_resource_metering_tag(resource_tag),
-            priority,
-            thread_rng().next_u64(),
-        );
+                        .map(|pairs| {
+                            pairs
+                                .into_iter()
+                                .map(|pair| {
+                                    pair.map(|(k, v)| {
+                                        let (user_key, _) =
+                                            API::decode_raw_key_owned(Key::from_encoded(k), true)
+                                                .unwrap();
+                                        (user_key, v)
+                                    })
+                                    .map_err(Error::from)
+                                })
+                                .collect()
+                        })
+                        .map_err(Error::from);
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+                        metrics::tls_collect_read_flow(
+                            ctx.get_region_id(),
+                            Some(start_key.as_encoded()),
+                            end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                            &statistics,
+                            buckets.as_ref(),
+                        );
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(statistics.data.flow_stats.read_keys as f64);
+                        metrics::tls_collect_scan_details(CMD, &statistics);
+                        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(begin_instant.saturating_elapsed_secs());
+                        SCHED_HISTOGRAM_VEC_STATIC
+                            .get(CMD)
+                            .observe(command_duration.saturating_elapsed_secs());
+
+                        result
+                    }
+                }
+                .in_resource_metering_tag(resource_tag),
+                priority,
+                thread_rng().next_u64(),
+            );
+
+            Box::pin(async move {
+                res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                    .await?
+            })
+        })
     }
 
     /// Scan raw keys in multiple ranges in a batch.
@@ -2207,166 +2176,156 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         each_limit: usize,
         key_only: bool,
         reverse_scan: bool,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
-        const CMD: CommandKind = CommandKind::raw_batch_scan;
-        let priority = ctx.get_priority();
-        let priority_tag = get_priority_tag(priority);
-        let key_ranges = ranges
-            .iter()
-            .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
-            .collect();
-        let resource_tag = self
-            .resource_tag_factory
-            .new_tag_with_key_ranges(&ctx, key_ranges);
-        let api_version = self.api_version;
+    ) -> BoxFuture<'static, Result<Vec<Result<KvPair>>>> {
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_batch_scan;
+            let priority = ctx.get_priority();
+            let priority_tag = get_priority_tag(priority);
+            let key_ranges = ranges
+                .iter()
+                .map(|key_range| (key_range.start_key.clone(), key_range.end_key.clone()))
+                .collect();
+            let resource_tag = self
+                .resource_tag_factory
+                .new_tag_with_key_ranges(&ctx, key_ranges);
+            let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle(
-            async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
+            let res = self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                        .get(priority_tag)
+                        .inc();
 
-                Self::check_api_version_ranges(
-                    api_version,
-                    ctx.api_version,
-                    CMD,
-                    ranges
-                        .iter()
-                        .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
-                )?;
+                    Self::check_api_version_ranges(
+                        api_version,
+                        ctx.api_version,
+                        CMD,
+                        ranges
+                            .iter()
+                            .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
+                    )?;
 
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let snap_ctx = SnapContext {
-                    pb_ctx: &ctx,
-                    ..Default::default()
-                };
-                let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let buckets = snapshot.ext().get_buckets();
-                let cf = Self::rawkv_cf(&cf, api_version)?;
-                {
-                    let store = RawStore::new(snapshot, api_version);
-                    let begin_instant = Instant::now();
-                    let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges, reverse_scan) {
-                        return Err(box_err!("Invalid KeyRanges"));
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let snap_ctx = SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
                     };
-                    let mut result: Vec<Result<KvPair>> = Vec::new();
-                    let mut key_ranges = vec![];
-                    let ranges_len = ranges.len();
+                    let snapshot =
+                        Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                    let buckets = snapshot.ext().get_buckets();
+                    let cf = Self::rawkv_cf(&cf, api_version)?;
+                    {
+                        let store = RawStore::new(snapshot, api_version);
+                        let begin_instant = Instant::now();
+                        let mut statistics = Statistics::default();
+                        if !Self::check_key_ranges(&ranges, reverse_scan) {
+                            return Err(box_err!("Invalid KeyRanges"));
+                        };
+                        let mut result = Vec::new();
+                        let mut key_ranges = vec![];
+                        let ranges_len = ranges.len();
 
-                    match_template_api_version!(
-                        API,
-                        match api_version {
-                            ApiVersion::API => {
-                                for i in 0..ranges_len {
-                                    let start_key =
-                                        API::encode_raw_key_owned(ranges[i].take_start_key(), None);
-                                    let end_key = ranges[i].take_end_key();
-                                    let end_key = if end_key.is_empty() {
-                                        if i + 1 == ranges_len {
-                                            None
-                                        } else {
-                                            Some(API::encode_raw_key(
-                                                ranges[i + 1].get_start_key(),
-                                                None,
-                                            ))
-                                        }
-                                    } else {
-                                        Some(API::encode_raw_key_owned(end_key, None))
-                                    };
-                                    let mut stats = Statistics::default();
-                                    let pairs: Vec<Result<KvPair>> = if reverse_scan {
-                                        store
-                                            .reverse_raw_scan(
-                                                cf,
-                                                &start_key,
-                                                end_key.as_ref(),
-                                                each_limit,
-                                                &mut stats,
-                                                key_only,
-                                            )
-                                            .await
-                                    } else {
-                                        store
-                                            .forward_raw_scan(
-                                                cf,
-                                                &start_key,
-                                                end_key.as_ref(),
-                                                each_limit,
-                                                &mut stats,
-                                                key_only,
-                                            )
-                                            .await
-                                    }
-                                    .map(|pairs| {
-                                        pairs
-                                            .into_iter()
-                                            .map(|pair| {
-                                                pair.map(|(k, v)| {
-                                                    let (user_key, _) = API::decode_raw_key_owned(
-                                                        Key::from_encoded(k),
-                                                        true,
-                                                    )
-                                                    .unwrap();
-                                                    (user_key, v)
-                                                })
-                                                .map_err(Error::from)
-                                            })
-                                            .collect()
-                                    })
-                                    .map_err(Error::from)?;
-
-                                    key_ranges.push(build_key_range(
-                                        start_key.as_encoded(),
-                                        end_key.as_ref().map(|k| k.as_encoded()).unwrap_or(&vec![]),
-                                        reverse_scan,
-                                    ));
-                                    metrics::tls_collect_read_flow(
-                                        ctx.get_region_id(),
-                                        Some(start_key.as_encoded()),
-                                        end_key.as_ref().map(|k| k.as_encoded().as_slice()),
-                                        &stats,
-                                        buckets.as_ref(),
-                                    );
-                                    statistics.add(&stats);
-                                    result.extend(
-                                        pairs.into_iter().map(|res| res.map_err(Error::from)),
-                                    );
+                        for i in 0..ranges_len {
+                            let start_key =
+                                API::encode_raw_key_owned(ranges[i].take_start_key(), None);
+                            let end_key = ranges[i].take_end_key();
+                            let end_key = if end_key.is_empty() {
+                                if i + 1 == ranges_len {
+                                    None
+                                } else {
+                                    Some(API::encode_raw_key(ranges[i + 1].get_start_key(), None))
                                 }
+                            } else {
+                                Some(API::encode_raw_key_owned(end_key, None))
+                            };
+                            let mut stats = Statistics::default();
+                            let pairs: Vec<Result<KvPair>> = if reverse_scan {
+                                store
+                                    .reverse_raw_scan(
+                                        cf,
+                                        &start_key,
+                                        end_key.as_ref(),
+                                        each_limit,
+                                        &mut stats,
+                                        key_only,
+                                    )
+                                    .await
+                            } else {
+                                store
+                                    .forward_raw_scan(
+                                        cf,
+                                        &start_key,
+                                        end_key.as_ref(),
+                                        each_limit,
+                                        &mut stats,
+                                        key_only,
+                                    )
+                                    .await
                             }
+                            .map(|pairs| {
+                                pairs
+                                    .into_iter()
+                                    .map(|pair| {
+                                        pair.map(|(k, v)| {
+                                            let (user_key, _) = API::decode_raw_key_owned(
+                                                Key::from_encoded(k),
+                                                true,
+                                            )
+                                            .unwrap();
+                                            (user_key, v)
+                                        })
+                                        .map_err(Error::from)
+                                    })
+                                    .collect()
+                            })
+                            .map_err(Error::from)?;
+
+                            key_ranges.push(build_key_range(
+                                start_key.as_encoded(),
+                                end_key.as_ref().map(|k| k.as_encoded()).unwrap_or(&vec![]),
+                                reverse_scan,
+                            ));
+                            metrics::tls_collect_read_flow(
+                                ctx.get_region_id(),
+                                Some(start_key.as_encoded()),
+                                end_key.as_ref().map(|k| k.as_encoded().as_slice()),
+                                &stats,
+                                buckets.as_ref(),
+                            );
+                            statistics.add(&stats);
+                            result.extend(pairs.into_iter().map(|res| res.map_err(Error::from)));
                         }
-                    );
 
-                    tls_collect_query_batch(
-                        ctx.get_region_id(),
-                        ctx.get_peer(),
-                        key_ranges,
-                        QueryKind::Scan,
-                    );
-                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(statistics.data.flow_stats.read_keys as f64);
-                    metrics::tls_collect_scan_details(CMD, &statistics);
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
-                    Ok(result)
+                        tls_collect_query_batch(
+                            ctx.get_region_id(),
+                            ctx.get_peer(),
+                            key_ranges,
+                            QueryKind::Scan,
+                        );
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(statistics.data.flow_stats.read_keys as f64);
+                        metrics::tls_collect_scan_details(CMD, &statistics);
+                        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(begin_instant.saturating_elapsed_secs());
+                        SCHED_HISTOGRAM_VEC_STATIC
+                            .get(CMD)
+                            .observe(command_duration.saturating_elapsed_secs());
+                        Ok(result)
+                    }
                 }
-            }
-            .in_resource_metering_tag(resource_tag),
-            priority,
-            thread_rng().next_u64(),
-        );
+                .in_resource_metering_tag(resource_tag),
+                priority,
+                thread_rng().next_u64(),
+            );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+            Box::pin(async move {
+                res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                    .await?
+            })
+        })
     }
 
     /// Get the value of a raw key.
@@ -2375,82 +2334,78 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         key: Vec<u8>,
-    ) -> impl Future<Output = Result<Option<u64>>> {
-        const CMD: CommandKind = CommandKind::raw_get_key_ttl;
-        let priority = ctx.get_priority();
-        let priority_tag = get_priority_tag(priority);
-        let resource_tag = self
-            .resource_tag_factory
-            .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
-        let api_version = self.api_version;
+    ) -> BoxFuture<'static, Result<Option<u64>>> {
+        with_api_version!(self.api_version, {
+            const CMD: CommandKind = CommandKind::raw_get_key_ttl;
+            let priority = ctx.get_priority();
+            let priority_tag = get_priority_tag(priority);
+            let resource_tag = self
+                .resource_tag_factory
+                .new_tag_with_key_ranges(&ctx, vec![(key.clone(), key.clone())]);
+            let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle(
-            async move {
-                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
-                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-                    .get(priority_tag)
-                    .inc();
+            let res = self.read_pool.spawn_handle(
+                async move {
+                    KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                        .get(priority_tag)
+                        .inc();
 
-                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+                    Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
-                let key: Key = match_template_api_version!(
-                    API,
-                    match api_version {
-                        ApiVersion::API => API::encode_raw_key_owned(key, None),
+                    let command_duration = tikv_util::time::Instant::now_coarse();
+                    let snap_ctx = SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    };
+                    let snapshot =
+                        Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                    let buckets = snapshot.ext().get_buckets();
+                    let store = RawStore::new(snapshot, api_version);
+                    let cf = Self::rawkv_cf(&cf, api_version)?;
+                    {
+                        let begin_instant = Instant::now_coarse();
+                        let mut stats = Statistics::default();
+                        let key = API::encode_raw_key_owned(key, None);
+                        // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                        tls_collect_query(
+                            ctx.get_region_id(),
+                            ctx.get_peer(),
+                            key.as_encoded(),
+                            key.as_encoded(),
+                            false,
+                            QueryKind::Get,
+                        );
+                        let r = store
+                            .raw_get_key_ttl(cf, &key, &mut stats)
+                            .map_err(Error::from);
+                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                        tls_collect_read_flow(
+                            ctx.get_region_id(),
+                            Some(key.as_encoded()),
+                            Some(key.as_encoded()),
+                            &stats,
+                            buckets.as_ref(),
+                        );
+                        SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                            .get(CMD)
+                            .observe(begin_instant.saturating_elapsed_secs());
+                        SCHED_HISTOGRAM_VEC_STATIC
+                            .get(CMD)
+                            .observe(command_duration.saturating_elapsed_secs());
+                        r
                     }
-                );
-
-                tls_collect_query(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    key.as_encoded(),
-                    key.as_encoded(),
-                    false,
-                    QueryKind::Get,
-                );
-
-                let command_duration = tikv_util::time::Instant::now_coarse();
-                let snap_ctx = SnapContext {
-                    pb_ctx: &ctx,
-                    ..Default::default()
-                };
-                let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let buckets = snapshot.ext().get_buckets();
-                let store = RawStore::new(snapshot, api_version);
-                let cf = Self::rawkv_cf(&cf, api_version)?;
-                {
-                    let begin_instant = Instant::now_coarse();
-                    let mut stats = Statistics::default();
-                    let r = store
-                        .raw_get_key_ttl(cf, &key, &mut stats)
-                        .map_err(Error::from);
-                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                    tls_collect_read_flow(
-                        ctx.get_region_id(),
-                        Some(key.as_encoded()),
-                        Some(key.as_encoded()),
-                        &stats,
-                        buckets.as_ref(),
-                    );
-                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
-                        .get(CMD)
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    SCHED_HISTOGRAM_VEC_STATIC
-                        .get(CMD)
-                        .observe(command_duration.saturating_elapsed_secs());
-                    r
                 }
-            }
-            .in_resource_metering_tag(resource_tag),
-            priority,
-            thread_rng().next_u64(),
-        );
+                .in_resource_metering_tag(resource_tag),
+                priority,
+                thread_rng().next_u64(),
+            );
 
-        async move {
-            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-                .await?
-        }
+            Box::pin(async move {
+                res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                    .await?
+            })
+        })
     }
 
     pub fn raw_compare_and_swap_atomic(
@@ -2463,27 +2418,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_compare_and_swap,
-            [&key],
-        )?;
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        with_api_version!(self.api_version, {
+            Self::check_api_version(
+                self.api_version,
+                ctx.api_version,
+                CommandKind::raw_compare_and_swap,
+                [&key],
+            )?;
+            let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
-        if self.api_version == ApiVersion::V1 && ttl != 0 {
-            return Err(Error::from(ErrorInner::TTLNotEnabled));
-        }
-        let key: Key = match_template_api_version!(
-            API,
-            match self.api_version {
-                ApiVersion::API => API::encode_raw_key_owned(key, None),
+            if !API::IS_TTL_ENABLED && ttl != 0 {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
             }
-        );
 
-        let cmd =
-            RawCompareAndSwap::new(cf, key, previous_value, value, ttl, self.api_version, ctx);
-        self.sched_txn_command(cmd, cb)
+            let key = API::encode_raw_key_owned(key, None);
+
+            let cmd =
+                RawCompareAndSwap::new(cf, key, previous_value, value, ttl, self.api_version, ctx);
+            self.sched_txn_command(cmd, cb)
+        })
     }
 
     pub fn raw_batch_put_atomic(
@@ -2494,17 +2447,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_atomic_store,
-            pairs.iter().map(|(ref k, _)| k),
-        )?;
+        with_api_version!(self.api_version, {
+            Self::check_api_version(
+                self.api_version,
+                ctx.api_version,
+                CommandKind::raw_atomic_store,
+                pairs.iter().map(|(ref k, _)| k),
+            )?;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let modifies = Self::raw_batch_put_requests_to_modifies(self.api_version, cf, pairs, ttls)?;
-        let cmd = RawAtomicStore::new(cf, modifies, self.api_version, ctx);
-        self.sched_txn_command(cmd, callback)
+            let cf = Self::rawkv_cf(&cf, self.api_version)?;
+            let modifies = Self::raw_batch_put_requests_to_modifies::<API>(cf, pairs, ttls)?;
+            let cmd = RawAtomicStore::new(cf, modifies, self.api_version, ctx);
+            self.sched_txn_command(cmd, callback)
+        })
     }
 
     pub fn raw_batch_delete_atomic(
@@ -2533,6 +2488,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         algorithm: ChecksumAlgorithm,
         ranges: Vec<KeyRange>,
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
+        // TODO: change for API V2 in backup & restore feature.
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);

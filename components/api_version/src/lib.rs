@@ -88,13 +88,14 @@ macro_rules! match_template_api_version {
      }}
 }
 
+// TODO: Not good enough. Consider `proc_macro_attribute` ?
 #[macro_export]
 macro_rules! with_api_version {
-    ($api_version:expr, $block:block) => {{
+    ($api_version:expr, $e:expr) => {{
         match_template_api_version!(
             API,
             match $api_version {
-                ApiVersion::API => $block,
+                ApiVersion::API => $e,
             }
         )
     }};

@@ -24,7 +24,7 @@ use crate::storage::{
 };
 use crate::{coprocessor_v2, log_net_error};
 use crate::{forward_duplex, forward_unary};
-use api_version::APIVersion;
+use api_version::{match_template_api_version, with_api_version, APIVersion};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
@@ -41,6 +41,7 @@ use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
@@ -769,24 +770,16 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
-            match_template_api_version!(
-                API,
-                match self.storage.get_api_version() {
-                    ApiVersion::API => {
-                        if !req.get_split_key().is_empty() {
-                            vec![
-                                API::encode_raw_key_owned(req.take_split_key(), None)
-                                    .into_encoded(),
-                            ]
-                        } else {
-                            req.take_split_keys()
-                                .into_iter()
-                                .map(|x| API::encode_raw_key_owned(x, None).into_encoded())
-                                .collect()
-                        }
-                    }
+            with_api_version!(self.storage.get_api_version(), {
+                if !req.get_split_key().is_empty() {
+                    vec![API::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
+                } else {
+                    req.take_split_keys()
+                        .into_iter()
+                        .map(|x| API::encode_raw_key_owned(x, None).into_encoded())
+                        .collect()
                 }
-            )
+            })
         } else {
             if !req.get_split_key().is_empty() {
                 vec![Key::from_raw(req.get_split_key()).into_encoded()]
@@ -2038,9 +2031,6 @@ pub mod batch_commands_request {
         pub type Cmd = kvproto::tikvpb::BatchCommandsRequest_Request_oneof_cmd;
     }
 }
-
-use api_version::match_template_api_version;
-use protobuf::RepeatedField;
 
 /// To measure execute time for a given request.
 #[derive(Debug)]
