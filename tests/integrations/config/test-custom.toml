@@ -565,7 +565,7 @@ max-sorted-runs = 100
 gc-merge-rewrite = true
 
 [raft-engine]
-enable = false
+enable = true
 dir = "test-dir"
 batch-compression-threshold = "1KB"
 bytes-per-sync = "64KB"
