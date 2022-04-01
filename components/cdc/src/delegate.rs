@@ -13,7 +13,8 @@ use kvproto::cdcpb::{
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request, SingleDeleteRequest
+    AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
+    SingleDeleteRequest,
 };
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveHandle};
 use raftstore::store::util::compare_region_epoch;
@@ -731,7 +732,9 @@ impl Delegate {
     fn sink_single_delete(&mut self, mut single_delete: SingleDeleteRequest) {
         match single_delete.cf.as_str() {
             "lock" => {
-                let raw_key = Key::from_encoded(single_delete.take_key()).into_raw().unwrap();
+                let raw_key = Key::from_encoded(single_delete.take_key())
+                    .into_raw()
+                    .unwrap();
                 match self.resolver {
                     Some(ref mut resolver) => resolver.untrack_lock(&raw_key, None),
                     None => {

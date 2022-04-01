@@ -94,19 +94,31 @@ impl MvccTxn {
     }
 
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
-        println!("txn.rs: put_lock: key {:?}, lock {:?}", &key.clone().into_encoded(), lock);
+        println!(
+            "txn.rs: put_lock: key {:?}, lock {:?}",
+            &key.clone().into_encoded(),
+            lock
+        );
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.modifies.push(write);
     }
 
     pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
-        println!("txn.rs: put_locks_for_1pc: key {:?}, lock {:?}", &key.clone().into_encoded(), lock);
+        println!(
+            "txn.rs: put_locks_for_1pc: key {:?}, lock {:?}",
+            &key.clone().into_encoded(),
+            lock
+        );
         self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
     }
 
     pub(crate) fn put_pessimistic_lock(&mut self, key: Key, lock: PessimisticLock) {
-        println!("txn.rs: put_pessimistic_lock: key {:?}, lock {:?}", &key.clone().into_encoded(), lock);
+        println!(
+            "txn.rs: put_pessimistic_lock: key {:?}, lock {:?}",
+            &key.clone().into_encoded(),
+            lock
+        );
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
