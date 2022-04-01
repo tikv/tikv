@@ -85,7 +85,6 @@ use api_version::{
     match_template_api_version, with_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL,
     APIV2,
 };
-use causal_ts;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -2718,17 +2717,10 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager, api_version: ApiVersion) -> Self {
-        let mut engine = TestEngineBuilder::new()
+        let engine = TestEngineBuilder::new()
             .api_version(api_version)
             .build()
             .unwrap();
-
-        // register causal observer for RawKV API V2
-        if let ApiVersion::V2 = api_version {
-            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(engine.mut_coprocessor());
-        }
 
         Self::from_engine_and_lock_mgr(engine, lock_mgr, api_version)
     }

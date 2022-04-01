@@ -97,7 +97,7 @@ macro_rules! with_api_version {
                 ApiVersion::API => $block,
             }
         )
-    }}
+    }};
 }
 
 /// The key mode inferred from the key prefix.
