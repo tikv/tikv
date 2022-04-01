@@ -97,9 +97,21 @@ fn test_node_cache_compact_with_one_node_down() {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i > 100 && is_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100
+            && is_compacted(
+                &cluster.engines,
+                &before_states,
+                1,
+                false, /*must_compacted*/
+            )
+        {
             return;
         }
     }
-    panic!("cluster is not compacted after inserting 200 entries.");
+    is_compacted(
+        &cluster.engines,
+        &before_states,
+        1,
+        true, /*must_compacted*/
+    );
 }

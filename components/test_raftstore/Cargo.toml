@@ -39,7 +39,6 @@ pd_client = { path = "../pd_client", default-features = false }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }
-raft_log_engine = { path = "../raft_log_engine", default-features = false }
 rand = "0.8"
 resolved_ts = { path = "../resolved_ts" }
 security = { path = "../security", default-features = false }

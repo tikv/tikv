@@ -22,12 +22,24 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         let value = v.as_bytes();
         cluster.must_put(key, value);
 
-        if i > 100 && is_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100
+            && is_compacted(
+                &cluster.engines,
+                &before_states,
+                1,
+                false, /*must_compacted*/
+            )
+        {
             return;
         }
     }
 
-    panic!("after inserting 1000 entries, compaction is still not finished.");
+    is_compacted(
+        &cluster.engines,
+        &before_states,
+        1,
+        true, /*must_compacted*/
+    );
 }
 
 fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -76,11 +88,23 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i > 100 && is_compacted(&cluster.engines, &before_states, 1) {
+        if i > 100
+            && is_compacted(
+                &cluster.engines,
+                &before_states,
+                1,
+                true, /*must_compacted*/
+            )
+        {
             return;
         }
     }
-    panic!("cluster is not compacted after inserting 200 entries.");
+    is_compacted(
+        &cluster.engines,
+        &before_states,
+        1,
+        true, /*must_compacted*/
+    );
 }
 
 fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -111,12 +135,24 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         let v2 = cluster.get(&k);
         assert_eq!(v2, Some(v));
 
-        if i >= 200 && is_compacted(&cluster.engines, &before_states, gc_limit * 2) {
+        if i >= 200
+            && is_compacted(
+                &cluster.engines,
+                &before_states,
+                gc_limit * 2,
+                true, /*must_compacted*/
+            )
+        {
             return;
         }
     }
 
-    panic!("compact is expected to be executed multiple times");
+    is_compacted(
+        &cluster.engines,
+        &before_states,
+        gc_limit * 2,
+        true, /*must_compacted*/
+    );
 }
 
 #[test]

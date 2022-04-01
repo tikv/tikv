@@ -17,7 +17,8 @@ use engine_rocks::{
 };
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, Peekable, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
+    ALL_CFS, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -38,7 +39,7 @@ use kvproto::raft_serverpb::{
 };
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
-use raft::eraftpb::{ConfChangeType, Entry};
+use raft::eraftpb::ConfChangeType;
 use raftstore::store::fsm::RaftRouter;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::store::*;
@@ -129,7 +130,11 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     );
 }
 
-pub fn dump_raft_entries(engine: &RaftTestEngine, region_id: u64) -> Vec<Entry> {
+pub fn dump_raft_entries(
+    engine: &RaftTestEngine,
+    region_id: u64,
+) -> <RaftTestEngine as RaftEngine>::LogBatch {
+    let mut batch = engine.log_batch(0);
     let mut entries = Vec::new();
     engine
         .scan_entries(region_id, |e| {
@@ -137,7 +142,14 @@ pub fn dump_raft_entries(engine: &RaftTestEngine, region_id: u64) -> Vec<Entry> 
             Ok(true)
         })
         .unwrap();
-    entries
+    batch.append(region_id, entries).unwrap();
+    batch
+        .put_raft_state(
+            region_id,
+            &engine.get_raft_state(region_id).unwrap().unwrap(),
+        )
+        .unwrap();
+    batch
 }
 
 lazy_static! {
@@ -1198,6 +1210,7 @@ pub fn is_compacted(
     all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
+    must_compacted: bool,
 ) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
     let mut compacted_idx = HashMap::default();
@@ -1210,9 +1223,23 @@ pub fn is_compacted(
         let idx = after_state.get_index();
         let term = after_state.get_term();
         if idx == before_state.get_index() || term == before_state.get_term() {
+            if must_compacted {
+                panic!(
+                    "Should be compacted, but Raft truncated state is not updated: {} state={:?}",
+                    id, before_state
+                );
+            }
             return false;
         }
         if idx - before_state.get_index() < compact_count {
+            if must_compacted {
+                panic!(
+                    "Should be compacted, but compact count is too small: {} {}<{}",
+                    id,
+                    idx - before_state.get_index(),
+                    compact_count
+                );
+            }
             return false;
         }
         assert!(term > before_state.get_term());
@@ -1225,6 +1252,9 @@ pub fn is_compacted(
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
             if engines.raft.get_entry(1, i).unwrap().is_some() {
+                if must_compacted {
+                    panic!("Should be compacted, but found entry: {} {}", id, i);
+                }
                 return false;
             }
         }

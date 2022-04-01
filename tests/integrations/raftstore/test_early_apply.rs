@@ -64,8 +64,11 @@ where
         cluster.stop_node(*id);
     }
     // Simulate data lost in raft cf.
-    for (id, entries) in ids.iter().zip(snaps) {
-        cluster.get_raft_engine(*id).append(*id, entries).unwrap();
+    for (id, mut batch) in ids.iter().zip(snaps) {
+        cluster
+            .get_raft_engine(*id)
+            .consume(&mut batch, true /*sync*/)
+            .unwrap();
     }
     for id in &ids {
         cluster.run_node(*id).unwrap();
@@ -172,9 +175,12 @@ fn test_update_internal_apply_index() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
     // Simulate data lost in raft cf.
-    for (id, entries) in snaps.into_iter() {
+    for (id, mut batch) in snaps.into_iter() {
         cluster.stop_node(id);
-        cluster.get_raft_engine(id).append(id, entries).unwrap();
+        cluster
+            .get_raft_engine(id)
+            .consume(&mut batch, true /*sync*/)
+            .unwrap();
         cluster.run_node(id).unwrap();
     }
 
