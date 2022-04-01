@@ -91,7 +91,4 @@ pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
         })
         .collect()
 }
-#[cfg(not(target_os = "linux"))]
-pub use self::threads_dummy::dump_thread_stats;
-#[cfg(target_os = "linux")]
-pub use self::threads_linux::dump_thread_stats;
+

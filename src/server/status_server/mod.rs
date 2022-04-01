@@ -566,12 +566,6 @@ where
         }
     }
 
-    pub async fn thread_stats(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        Ok(Response::new(
-            tikv_util::metrics::dump_thread_stats().into(),
-        ))
-    }
-
     pub async fn handle_http_request(
         req: Request<Body>,
         engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
@@ -706,7 +700,6 @@ where
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
                             }
-                            (Method::GET, "/thread_stats") => Self::thread_stats(req).await,
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }

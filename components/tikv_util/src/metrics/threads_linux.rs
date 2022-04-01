@@ -297,9 +297,9 @@ fn update_metric(
 
 #[derive(Default)]
 struct ThreadMetrics {
-    cpu_times: HashMap<String, f64>,
-    read_ios: HashMap<String, f64>,
-    write_ios: HashMap<String, f64>,
+    cpu_times: HashMap<i32, f64>,
+    read_ios: HashMap<i32, f64>,
+    write_ios: HashMap<i32, f64>,
 }
 
 impl ThreadMetrics {
@@ -314,6 +314,7 @@ impl ThreadMetrics {
 pub struct ThreadInfoStatistics {
     pid: Pid,
     last_instant: Instant,
+    tid_names: HashMap<i32, String>,
     tid_retriever: TidRetriever,
     metrics_rate: ThreadMetrics,
     metrics_total: ThreadMetrics,

@@ -1188,7 +1188,7 @@ where
             return exec_result;
         }
 
-        debug!(
+        info!(
             "applied command";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
