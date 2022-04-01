@@ -91,7 +91,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
-    quota_limiter::QuotaLimiter,
+    quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
@@ -577,6 +577,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
+
+        cfg_controller.register(
+            tikv::config::Module::Quota,
+            Box::new(QuotaLimitConfigManager::new(Arc::clone(
+                &self.quota_limiter,
+            ))),
+        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
