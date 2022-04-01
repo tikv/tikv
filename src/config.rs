@@ -1401,7 +1401,7 @@ pub struct RaftEngineConfig {
 impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
-            enable: true,
+            enable: false,
             config: RawRaftEngineConfig::default(),
         }
     }
