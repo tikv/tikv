@@ -723,7 +723,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
 
         // we don't care since we don't start this service
-        let dummy_dynamic_configs = crate::server::storage::DynamicConfigs{
+        let dummy_dynamic_configs = crate::server::storage::DynamicConfigs {
             pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(true)),
         };
@@ -734,7 +734,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
-            dummy_dynamic_configs ,
+            dummy_dynamic_configs,
             flow_controller.clone(),
             pd_sender.clone(),
             resource_tag_factory.clone(),

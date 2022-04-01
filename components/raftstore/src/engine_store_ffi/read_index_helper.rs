@@ -1,5 +1,5 @@
 use crate::router::RaftStoreRouter;
-use crate::store::{Callback, RaftRouter, ReadResponse, RaftCmdExtraOpts};
+use crate::store::{Callback, RaftCmdExtraOpts, RaftRouter, ReadResponse};
 use engine_rocks::RocksEngine;
 use engine_traits::RaftEngine;
 use futures::executor::block_on;

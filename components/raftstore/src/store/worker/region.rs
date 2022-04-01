@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{mpsc, Arc};
-use std::time::{Duration};
+use std::time::Duration;
 use std::u64;
 
 use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
@@ -48,7 +48,6 @@ pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 #[cfg(test)]
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
-
 
 /// Region related task
 #[derive(Debug)]

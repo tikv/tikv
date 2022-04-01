@@ -1488,11 +1488,7 @@ where
             ctx.engine_store_server_helper.handle_admin_raft_cmd(
                 &request,
                 &response,
-                RaftCmdHeader::new(
-                    self.region.get_id(),
-                    ctx.exec_log_index,
-                    ctx.exec_log_term,
-                ),
+                RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
             )
         };
 
@@ -1618,11 +1614,7 @@ where
             let flash_res = {
                 ctx.engine_store_server_helper.handle_write_raft_cmd(
                     &cmds,
-                    RaftCmdHeader::new(
-                        self.region.get_id(),
-                        ctx.exec_log_index,
-                        ctx.exec_log_term,
-                    ),
+                    RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
                 )
             };
             Ok((RaftCmdResponse::new(), ApplyResult::None, flash_res))
@@ -1841,11 +1833,7 @@ where
 
         ctx.engine_store_server_helper.handle_ingest_sst(
             sst_views,
-            RaftCmdHeader::new(
-                self.region.get_id(),
-                ctx.exec_log_index,
-                ctx.exec_log_term,
-            ),
+            RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
         )
     }
 
@@ -3654,11 +3642,7 @@ where
     }
 
     #[allow(unused_mut, clippy::redundant_closure_call)]
-    fn handle_snapshot(
-        &mut self,
-        apply_ctx: &mut ApplyContext<EK>,
-        snap_task: GenSnapTask,
-    ) {
+    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<EK>, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -3856,7 +3840,7 @@ where
                     {
                         unreachable!("should not request snapshot")
                     }
-                },
+                }
                 Msg::Change {
                     cmd,
                     region_epoch,

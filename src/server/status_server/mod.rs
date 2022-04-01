@@ -484,7 +484,6 @@ where
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
     }
-
 }
 
 impl<E, R> StatusServer<E, R>

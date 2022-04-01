@@ -50,8 +50,8 @@ use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
-use tikv::server::lock_manager::HackedLockManager as LockManager;
 use tikv::server::load_statistics::ThreadLoadPool;
+use tikv::server::lock_manager::HackedLockManager as LockManager;
 use tikv::server::resolve::{self, StoreAddrResolver};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
@@ -490,7 +490,6 @@ impl Simulator for ServerCluster {
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
-
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
