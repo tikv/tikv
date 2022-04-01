@@ -2336,6 +2336,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.108",
  "moka",
+ "num_cpus",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",

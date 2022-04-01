@@ -53,7 +53,7 @@ impl Engine {
         fs: Arc<dyn dfs::DFS>,
         opts: Arc<Options>,
         meta_iter: impl MetaIterator,
-        recoverer: impl RecoverHandler,
+        recoverer: impl RecoverHandler + 'static,
         id_allocator: Arc<dyn IDAllocator>,
         meta_change_listener: Box<dyn MetaChangeListener>,
         rate_limiter: Arc<IORateLimiter>,
@@ -122,7 +122,7 @@ impl Engine {
     fn load_shards(
         &self,
         metas: HashMap<u64, ShardMeta>,
-        recoverer: impl RecoverHandler,
+        recoverer: impl RecoverHandler + 'static,
     ) -> Result<()> {
         let mut parents = HashSet::new();
         for meta in metas.values() {
@@ -134,9 +134,25 @@ impl Engine {
                 }
             }
         }
+        let concurrency = num_cpus::get();
+        let (token_tx, token_rx) = tikv_util::mpsc::bounded(concurrency);
+        for _ in 0..concurrency {
+            token_tx.send(true).unwrap();
+        }
         for meta in metas.values() {
-            let shard = self.load_shard(meta)?;
-            recoverer.recover(&self, &shard, meta)?;
+            let meta = meta.clone();
+            let engine = self.clone();
+            let recoverer = recoverer.clone();
+            let token_tx = token_tx.clone();
+            token_rx.recv().unwrap();
+            std::thread::spawn(move || {
+                let shard = engine.load_shard(&meta).unwrap();
+                recoverer.recover(&engine, &shard, &meta).unwrap();
+                token_tx.send(true).unwrap();
+            });
+        }
+        for _ in 0..concurrency {
+            token_rx.recv().unwrap();
         }
         Ok(())
     }

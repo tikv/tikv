@@ -630,9 +630,9 @@ fn build_prewrite(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                     }
                     builder.append_lock(&raw_key, &lock.to_bytes());
                 }
-                _ => unreachable!(),
+                _ => unreachable!("cf {:?}", cf),
             },
-            _ => unreachable!(),
+            _ => unreachable!("modify {:?}", m),
         }
     }
 }

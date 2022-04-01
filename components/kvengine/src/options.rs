@@ -80,7 +80,7 @@ pub trait IDAllocator: Sync + Send {
     fn alloc_id(&self, count: usize) -> std::result::Result<Vec<u64>, String>;
 }
 
-pub trait RecoverHandler {
+pub trait RecoverHandler: Clone + Send {
     // Recovers from the shard's state to the state that is stored in the toState property.
     // So the Engine has a chance to execute pre-split command.
     // If toState is nil, the implementation should recovers to the latest state.
