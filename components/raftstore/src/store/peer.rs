@@ -2020,6 +2020,10 @@ where
                         self.term(),
                         self.raft_group.store().region(),
                     );
+
+                    if self.unsafe_recovery_state.is_some() {
+                        self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
+                    }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -2351,10 +2355,6 @@ where
             }
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
-
-            if self.unsafe_recovery_state.is_some() {
-                self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
-            }
         }
 
         Some(ReadyResult {
@@ -4510,7 +4510,7 @@ where
     ) {
         if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
             if let Some(target_index) = unsafe_recovery_state.wait_apply_target_index {
-                if self.raft_group.store().applied_index() >= target_index || force {
+                if self.raft_group.raft.raft_log.applied >= target_index || force {
                     if let Some(counter) = unsafe_recovery_state.wait_apply_task_counter.as_ref() {
                         if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
                             if let Err(e) = ctx

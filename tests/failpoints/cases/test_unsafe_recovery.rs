@@ -121,7 +121,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     let apply_triggered_pair2 = Arc::clone(&apply_triggered_pair);
     let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let apply_released_pair2 = Arc::clone(&apply_released_pair);
-    fail::cfg_callback("raft_before_apply_snap_callback", move || {
+    fail::cfg_callback("region_apply_snap", move || {
         {
             let (lock, cvar) = &*apply_triggered_pair2;
             let mut triggered = lock.lock().unwrap();
