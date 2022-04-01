@@ -273,6 +273,31 @@ mod tests {
 
         must_generate_buckets(&rx, &exp_bucket_keys);
 
+        // testing split bucket with end key ""
+        exp_bucket_keys.clear();
+
+        // now insert a few keys to grow the bucket 0010
+        let start = format!("{:04}", 10).into_bytes();
+        exp_bucket_keys.push(Key::from_raw(&start).as_encoded().clone());
+        let bucket_range = BucketRange(Key::from_raw(&start).as_encoded().clone(), vec![]);
+        for i in 11..20 {
+            let k = format!("{:04}", i).into_bytes();
+            exp_bucket_keys.push(Key::from_raw(&k).as_encoded().clone());
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            false,
+            CheckPolicy::Scan,
+            Some(vec![bucket_range]),
+        ));
+
+        must_generate_buckets(&rx, &exp_bucket_keys);
+
         exp_bucket_keys.clear();
         runnable.run(SplitCheckTask::split_check(
             region.clone(),

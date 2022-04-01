@@ -287,14 +287,13 @@ where
             CheckPolicy::Approximate => match host.approximate_split_keys(region, &self.engine) {
                 Ok(keys) => {
                     if host.enable_region_bucket() {
-                        match self.approximate_check_bucket(region, &mut host, bucket_ranges) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                error!(%e;
-                                    "approximate_check_bucket failed";
-                                    "region_id" => region_id,
-                                );
-                            }
+                        if let Err(e) =
+                            self.approximate_check_bucket(region, &mut host, bucket_ranges)
+                        {
+                            error!(%e;
+                                "approximate_check_bucket failed";
+                                "region_id" => region_id,
+                            );
                         }
                     }
                     keys.into_iter()
@@ -401,6 +400,7 @@ where
                         // find proper bucket range that covers e.key
                         while bucket_range_idx < bucket_range_list.len()
                             && origin_key >= bucket_range_list[bucket_range_idx].1.as_slice()
+                            && !bucket_range_list[bucket_range_idx].1.is_empty()
                         {
                             bucket_range_idx += 1;
                             bucket_size = 0;
@@ -425,9 +425,12 @@ where
             }
 
             if buckets.len() < bucket_range_list.len()
-                || bucket_range_list.is_empty() && !bucket.keys.is_empty()
+                || bucket_range_list.is_empty() && !skip_check_bucket
             {
                 buckets.push(bucket);
+                if !bucket_range_list.is_empty() {
+                    assert_eq!(buckets.len(), bucket_range_list.len());
+                }
             }
 
             // if we scan the whole range, we can update approximate size and keys with accurate value.
@@ -498,14 +501,11 @@ where
                         false,
                         CheckPolicy::Approximate,
                     );
-                    match self.approximate_check_bucket(&region, &mut host, None) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            error!(%e;
-                                "approximate_check_bucket failed";
-                                "region_id" => region.get_id(),
-                            );
-                        }
+                    if let Err(e) = self.approximate_check_bucket(&region, &mut host, None) {
+                        error!(%e;
+                            "approximate_check_bucket failed";
+                            "region_id" => region.get_id(),
+                        );
                     }
                 }
             }

@@ -4821,11 +4821,10 @@ where
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut i = 0;
-            let mut j = 0;
-            region_buckets = self.fsm.peer.region_buckets.as_ref().unwrap().clone();
+            region_buckets = self.fsm.peer.region_buckets.clone().unwrap();
             let mut meta = (*region_buckets.meta).clone();
-            for mut bucket in buckets {
-                while i < meta.keys.len() && meta.keys[i] != bucket_ranges[j].0 {
+            for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
+                while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
                     i += 1;
                 }
                 assert!(i != meta.keys.len());
@@ -4848,26 +4847,23 @@ where
                         // bucket is too small
                         region_buckets.left_merge(i);
                         meta.left_merge(i);
-                        j += 1;
                         continue;
                     }
                 } else {
                     // update size
                     meta.sizes[i] = bucket.size / (bucket.keys.len() + 1) as u64;
                     // insert new bucket keys (split the original bucket)
-                    for bucket_key in bucket.keys.drain(..) {
+                    for bucket_key in bucket.keys {
                         i += 1;
                         region_buckets.split(i);
                         meta.split(i, bucket_key);
                     }
                 }
                 i += 1;
-                j += 1;
             }
             meta.region_epoch = region_epoch;
             meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
-            assert_eq!(j, bucket_ranges.len());
         } else {
             info!(
                 "refresh_region_buckets re-generates buckets";
@@ -4954,6 +4950,7 @@ where
 
         let mut bucket_ranges = vec![];
         let mut j = 0;
+        assert_eq!(keys.len(), stats.write_bytes.len() + 1);
         for i in 0..stats.write_bytes.len() {
             let mut diff_in_bytes = stats.write_bytes[i];
             while j < last_keys.len() && keys[i] > last_keys[j] {
@@ -4971,11 +4968,7 @@ where
             let bucket_update_diff_size_threshold =
                 self.ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
             if diff_in_bytes >= bucket_update_diff_size_threshold {
-                if i == stats.write_bytes.len() - 1 {
-                    bucket_ranges.push(BucketRange(keys[i].clone(), vec![]));
-                } else {
-                    bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
-                }
+                bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
             }
         }
         Some(bucket_ranges)
