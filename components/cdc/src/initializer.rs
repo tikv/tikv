@@ -30,6 +30,7 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
+use kvproto::cdcpb::ChangeDataRequestKvApi;
 
 
 use crate::channel::CdcEvent;
@@ -81,7 +82,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) build_resolver: bool,
     pub(crate) ts_filter_ratio: f64,
 
-    pub(crate) kv_api: i32,// TODO modify to cdcpb
+    pub(crate) kv_api: ChangeDataRequestKvApi,
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -232,7 +233,7 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         let mut scanner_iter: Option<ScannerIter<S>> = None;
-        if kv_api == 0 {
+        if !(kv_api == ChangeDataRequestKvApi::RawKv) {
             let scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
                 .range(None, None)

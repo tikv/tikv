@@ -213,6 +213,7 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let req_kvapi = request.get_kv_api();
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -222,7 +223,7 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
+            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id, req_kvapi);
             let ret = scheduler
                 .schedule(Task::Register {
                     request,

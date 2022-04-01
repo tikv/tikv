@@ -8,8 +8,8 @@ use std::sync::Arc;
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use kvproto::cdcpb::{
-    Error as EventError, Event, EventEntries, EventLogType, EventRow, EventRowOpType,
-    Event_oneof_event,
+    ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
+    EventRowOpType, Event_oneof_event,
 };
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
@@ -117,7 +117,7 @@ pub struct Downstream {
     state: Arc<AtomicCell<DownstreamState>>,
 
     // TODO: modify proto
-    kv_api: i32,
+    kv_api: ChangeDataRequestKvApi,
 }
 
 impl Downstream {
@@ -130,6 +130,7 @@ impl Downstream {
         region_epoch: RegionEpoch,
         req_id: u64,
         conn_id: ConnID,
+        kv_api: ChangeDataRequestKvApi,
     ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
@@ -139,9 +140,7 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
-
-            // TODO: modify proto
-            kv_api: 0,
+            kv_api,
         }
     }
 
@@ -606,11 +605,11 @@ impl Delegate {
         }
 
         if !txn_rows.is_empty() {
-            self.sink_downstream(txn_rows, index, 0)?;
+            self.sink_downstream(txn_rows, index, ChangeDataRequestKvApi::TiBd)?;
         }
 
         if !raw_rows.is_empty() {
-            self.sink_downstream(raw_rows, index, 1)?;
+            self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
         }
 
         Ok(())
@@ -620,7 +619,7 @@ impl Delegate {
         &mut self,
         rows: HashMap<Vec<u8>, EventRow>,
         index: u64,
-        kv_api: i32,
+        kv_api: ChangeDataRequestKvApi,
     ) -> Result<()> {
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
@@ -1029,8 +1028,13 @@ mod tests {
         let (sink, mut drain) = crate::channel::channel(1, quota);
         let rx = drain.drain();
         let request_id = 123;
-        let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
+        let mut downstream = Downstream::new(
+            String::new(),
+            region_epoch,
+            request_id,
+            ConnID::new(),
+            ChangeDataRequestKvApi::TiBd,
+        );
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
@@ -1147,7 +1151,7 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            Downstream::new(peer, epoch, id, ConnID::new())
+            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiBd)
         };
 
         // Create a new delegate.
