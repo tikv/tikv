@@ -257,8 +257,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         })
     }
 
-    #[inline]
-    pub fn get_api_version(&self) -> ApiVersion {
+    pub fn api_version(&self) -> ApiVersion {
         self.api_version
     }
 
@@ -2672,6 +2671,7 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     pub fn new(lock_mgr: DummyLockManager, api_version: ApiVersion) -> Self {
         let engine = TestEngineBuilder::new()
             .api_version(api_version)
+            .causal_observer(true)
             .build()
             .unwrap();
 

@@ -35,6 +35,7 @@ impl SyncTestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new()
                 .api_version(api_version)
+                .causal_observer(true)
                 .build()
                 .unwrap(),
             config: None,
