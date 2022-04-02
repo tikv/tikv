@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use api_version::match_template_api_version;
+use api_version::dispatch_api_version;
 use api_version::APIVersion;
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
@@ -594,25 +594,20 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    if API::IS_TTL_ENABLED {
-                        cf_opts.add_table_properties_collector_factory(
-                            "tikv.ttl-properties-collector",
-                            TtlPropertiesCollectorFactory::<API>::default(),
-                        );
-                        cf_opts
-                            .set_compaction_filter_factory(
-                                "ttl_compaction_filter_factory",
-                                TTLCompactionFilterFactory::<API>::default(),
-                            )
-                            .unwrap();
-                    }
-                }
+        dispatch_api_version!(api_version, {
+            if API::IS_TTL_ENABLED {
+                cf_opts.add_table_properties_collector_factory(
+                    "tikv.ttl-properties-collector",
+                    TtlPropertiesCollectorFactory::<API>::default(),
+                );
+                cf_opts
+                    .set_compaction_filter_factory(
+                        "ttl_compaction_filter_factory",
+                        TTLCompactionFilterFactory::<API>::default(),
+                    )
+                    .unwrap();
             }
-        );
+        });
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }

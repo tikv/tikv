@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use api_version::{match_template_api_version, APIVersion, RawValue};
+use api_version::{dispatch_api_version, APIVersion, RawValue};
 use engine_traits::raw_ttl::ttl_to_expire_ts;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
@@ -61,12 +61,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 expire_ts: ttl_to_expire_ts(self.ttl),
                 is_delete: false,
             };
-            let encoded_raw_value = match_template_api_version!(
-                API,
-                match self.api_version {
-                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
-                }
-            );
+            let encoded_raw_value =
+                dispatch_api_version!(self.api_version, API::encode_raw_value_owned(raw_value));
             let m = Modify::Put(cf, key, encoded_raw_value);
             data.push(m);
             ProcessResult::RawCompareAndSwapRes {
@@ -120,12 +116,8 @@ mod tests {
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"rk";
 
-        let encoded_key: Key = match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => API::encode_raw_key_owned(key.to_vec(), None),
-            }
-        );
+        let encoded_key: Key =
+            dispatch_api_version!(api_version, API::encode_raw_key_owned(key.to_vec(), None));
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,

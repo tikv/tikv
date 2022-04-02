@@ -81,10 +81,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 
-use api_version::{
-    match_template_api_version, with_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL,
-    APIV2,
-};
+use api_version::{dispatch_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV1TTL, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::{future::BoxFuture, prelude::*};
@@ -1465,7 +1462,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
     ) -> BoxFuture<'static, Result<Option<Vec<u8>>>> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_get;
             let priority = ctx.get_priority();
             let priority_tag = get_priority_tag(priority);
@@ -1545,7 +1542,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ids: Vec<u64>,
         consumer: P,
     ) -> BoxFuture<'static, Result<()>> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_batch_get_command;
             // all requests in a batch have the same region, epoch, term, replica_read
             let priority = gets[0].get_context().get_priority();
@@ -1668,7 +1665,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         keys: Vec<Vec<u8>>,
     ) -> BoxFuture<'static, Result<Vec<Result<KvPair>>>> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_batch_get;
             let priority = ctx.get_priority();
             let priority_tag = get_priority_tag(priority);
@@ -1776,7 +1773,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_put;
             let api_version = self.api_version;
 
@@ -1853,7 +1850,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             Self::check_api_version(
                 self.api_version,
                 ctx.api_version,
@@ -1942,7 +1939,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             check_key_size!([&start_key, &end_key], self.max_key_size, callback);
             Self::check_api_version_ranges(
                 self.api_version,
@@ -2048,7 +2045,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse_scan: bool,
     ) -> BoxFuture<'static, Result<Vec<Result<KvPair>>>> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_scan;
             let priority = ctx.get_priority();
             let priority_tag = get_priority_tag(priority);
@@ -2177,7 +2174,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse_scan: bool,
     ) -> BoxFuture<'static, Result<Vec<Result<KvPair>>>> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_batch_scan;
             let priority = ctx.get_priority();
             let priority_tag = get_priority_tag(priority);
@@ -2335,7 +2332,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
     ) -> BoxFuture<'static, Result<Option<u64>>> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             const CMD: CommandKind = CommandKind::raw_get_key_ttl;
             let priority = ctx.get_priority();
             let priority_tag = get_priority_tag(priority);
@@ -2418,7 +2415,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             Self::check_api_version(
                 self.api_version,
                 ctx.api_version,
@@ -2447,7 +2444,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        with_api_version!(self.api_version, {
+        dispatch_api_version!(self.api_version, {
             Self::check_api_version(
                 self.api_version,
                 ctx.api_version,
