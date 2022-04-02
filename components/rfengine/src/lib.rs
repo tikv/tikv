@@ -8,6 +8,9 @@ pub mod traits;
 pub mod worker;
 pub mod writer;
 
+#[macro_use]
+extern crate serde_derive;
+
 pub use engine::*;
 use iterator::*;
 use load::*;

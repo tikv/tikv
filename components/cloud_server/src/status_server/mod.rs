@@ -68,7 +68,8 @@ pub struct StatusServer {
     router: RaftRouter,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
-    engine: kvengine::Engine,
+    kvengine: kvengine::Engine,
+    rfengine: rfengine::RFEngine,
 }
 
 impl StatusServer {
@@ -78,7 +79,8 @@ impl StatusServer {
         security_config: Arc<SecurityConfig>,
         router: RaftRouter,
         store_path: PathBuf,
-        engine: kvengine::Engine,
+        kvengine: kvengine::Engine,
+        rfengine: rfengine::RFEngine,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -98,7 +100,8 @@ impl StatusServer {
             router,
             security_config,
             store_path,
-            engine,
+            kvengine,
+            rfengine,
         })
     }
 
@@ -343,19 +346,46 @@ impl StatusServer {
         }
     }
 
-    async fn dump_engine_stats(
+    async fn dump_kvengine_stats(
         req: Request<Body>,
         engine: kvengine::Engine,
     ) -> hyper::Result<Response<Body>> {
-        let mut shard_stats = engine.get_shard_stats();
-        shard_stats.sort_by(|a, b| b.total_size.cmp(&a.total_size));
         let path = req.uri().path();
+        let mut last = get_last_path_segment(path);
         let res;
-        if path.starts_with("/kvengine/sum") {
-            let engine_stats = kvengine::Engine::get_engine_stats(shard_stats);
-            res = serde_json::to_string_pretty(&engine_stats);
-        } else {
+        if let Ok(region_id) = u64::from_str(last) {
+            let shard_stats = engine.get_shard_stat(region_id);
             res = serde_json::to_string_pretty(&shard_stats);
+        } else if path.starts_with("/kvengine/all") {
+            let all_shard_stats = engine.get_all_shard_stats();
+            res = serde_json::to_string_pretty(&all_shard_stats);
+        } else {
+            let mut all_shard_stats = engine.get_all_shard_stats();
+            let engine_stats = kvengine::Engine::get_engine_stats(all_shard_stats);
+            res = serde_json::to_string_pretty(&engine_stats);
+        }
+        Ok(match res {
+            Ok(json) => Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json))
+                .unwrap(),
+            Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+        })
+    }
+
+    async fn dump_rfengine_stats(
+        req: Request<Body>,
+        engine: rfengine::RFEngine,
+    ) -> hyper::Result<Response<Body>> {
+        let path = req.uri().path();
+        let mut last = get_last_path_segment(path);
+        let res;
+        if let Ok(region_id) = u64::from_str(last) {
+            let region_stats = engine.get_region_stats(region_id);
+            res = serde_json::to_string_pretty(&region_stats);
+        } else {
+            let engine_stats = engine.get_engine_stats();
+            res = serde_json::to_string_pretty(&engine_stats);
         }
         Ok(match res {
             Ok(json) => Response::builder()
@@ -379,6 +409,17 @@ impl StatusServer {
     }
 }
 
+fn get_last_path_segment(path: &str) -> &str {
+    let mut last = "";
+    for i in (0..path.len()).rev() {
+        if path.as_bytes()[i] == '/' as u8 {
+            last = &path[i + 1..];
+            break;
+        }
+    }
+    last
+}
+
 impl StatusServer {
     pub async fn dump_region_meta(
         req: Request<Body>,
@@ -399,7 +440,8 @@ impl StatusServer {
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
-        let engine = self.engine.clone();
+        let engine = self.kvengine.clone();
+        let rfengine = self.rfengine.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -408,6 +450,7 @@ impl StatusServer {
             let router = router.clone();
             let store_path = store_path.clone();
             let engine = engine.clone();
+            let rfengine = rfengine.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -417,6 +460,7 @@ impl StatusServer {
                     let router = router.clone();
                     let store_path = store_path.clone();
                     let engine = engine.clone();
+                    let rfengine = rfengine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -481,7 +525,10 @@ impl StatusServer {
                                 Self::change_log_level(req).await
                             }
                             (Method::GET, path) if path.starts_with("/kvengine") => {
-                                Self::dump_engine_stats(req, engine).await
+                                Self::dump_kvengine_stats(req, engine).await
+                            }
+                            (Method::GET, path) if path.starts_with("/rfengine") => {
+                                Self::dump_rfengine_stats(req, rfengine).await
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }

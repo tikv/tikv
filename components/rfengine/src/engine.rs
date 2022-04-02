@@ -9,6 +9,7 @@ use raft_proto::eraftpb;
 use slog_global::info;
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
+use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use std::{
@@ -518,6 +519,47 @@ impl RFEngine {
             region_id, dependent_id, dependents_len
         );
     }
+
+    pub fn get_engine_stats(&self) -> EngineStats {
+        let mut total_mem_size = 0;
+        let mut total_mem_entries = 0;
+        let mut regions_stats = vec![];
+        for region in self.regions.iter() {
+            let region_stats = region.read().unwrap().get_stats();
+            total_mem_size += region_stats.size;
+            total_mem_entries += region_stats.num_logs;
+            regions_stats.push(region_stats);
+        }
+        regions_stats.sort_by(|a, b| (b.size).cmp(&a.size));
+        regions_stats.truncate(10);
+        let mut disk_size = 0;
+        let mut num_files = 0;
+        if let Ok(read_dir) = self.dir.read_dir() {
+            for x in read_dir {
+                if let Ok(e) = x {
+                    if let Ok(m) = e.metadata() {
+                        num_files += 1;
+                        disk_size += m.size();
+                    }
+                }
+            }
+        }
+        EngineStats {
+            total_mem_size,
+            total_mem_entries,
+            disk_size,
+            num_files,
+            top_10_size_regions: regions_stats,
+        }
+    }
+
+    pub fn get_region_stats(&self, region_id: u64) -> RegionStats {
+        if let Some(mref) = self.regions.get(&region_id) {
+            mref.read().unwrap().get_stats()
+        } else {
+            RegionStats::default()
+        }
+    }
 }
 
 pub(crate) fn maybe_create_dir(dir: &Path) -> Result<()> {
@@ -600,17 +642,39 @@ impl RegionData {
         let first = self.raft_logs.first_index();
         dependent_empty && first > 0 && self.truncated_idx > first
     }
+
+    pub(crate) fn get_stats(&self) -> RegionStats {
+        let mut size = 0;
+        for block in &self.raft_logs.blocks {
+            size += block.size;
+        }
+        let first_idx = self.raft_logs.first_index();
+        let last_idx = self.raft_logs.last_index();
+        let num_logs = (last_idx - first_idx) as usize;
+        RegionStats {
+            id: self.region_id,
+            size,
+            num_logs,
+            first_idx,
+            last_idx,
+            num_states: self.states.len(),
+            dep_count: self.dependents.len(),
+            truncated_idx: self.truncated_idx,
+        }
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct RaftLogBlock {
     logs: VecDeque<RaftLogOp>,
+    size: usize,
 }
 
 impl RaftLogBlock {
     fn new() -> Self {
         Self {
             logs: VecDeque::with_capacity(256),
+            size: 0,
         }
     }
 
@@ -631,6 +695,7 @@ impl RaftLogBlock {
                     truncated_block.logs.push_back(first);
                     continue;
                 }
+                self.size -= first.data.len();
             }
             break;
         }
@@ -646,7 +711,13 @@ impl RaftLogBlock {
                 self.logs.push_back(back);
                 break;
             }
+            self.size -= back.data.len();
         }
+    }
+
+    fn append(&mut self, op: RaftLogOp) {
+        self.size += op.data.len();
+        self.logs.push_back(op);
     }
 }
 
@@ -701,7 +772,7 @@ impl RaftLogs {
             }
         }
         let back_block = self.blocks.back_mut().unwrap();
-        back_block.logs.push_back(op);
+        back_block.append(op);
         truncated_blocks
     }
 
@@ -790,6 +861,31 @@ impl From<ParseIntError> for Error {
     fn from(_: ParseIntError) -> Self {
         Error::ParseError
     }
+}
+
+#[derive(Default, Serialize, Deserialize, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct EngineStats {
+    pub total_mem_size: usize,
+    pub total_mem_entries: usize,
+    pub num_files: usize,
+    pub disk_size: u64,
+    pub top_10_size_regions: Vec<RegionStats>,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct RegionStats {
+    pub id: u64,
+    pub size: usize,
+    pub num_logs: usize,
+    pub num_states: usize,
+    pub first_idx: u64,
+    pub last_idx: u64,
+    pub truncated_idx: u64,
+    pub dep_count: usize,
 }
 
 #[cfg(test)]

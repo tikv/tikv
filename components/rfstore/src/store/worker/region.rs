@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use tikv_util::mpsc::Receiver;
 use tikv_util::worker::{Runnable, Scheduler};
-use tikv_util::{error, info, warn};
+use tikv_util::{error, warn};
 
 /// Region related task
 #[derive(Debug)]
