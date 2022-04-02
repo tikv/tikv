@@ -293,7 +293,7 @@ impl<T: Simulator> Cluster<T> {
         engines: Engines<RocksEngine, RocksEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
         router: &RaftRouter<RocksEngine, RocksEngine>,
-    ) -> (FFIHelperSet, TiKvConfig) {
+    ) -> (FFIHelperSet, Config) {
         let proxy = Box::new(raftstore::engine_store_ffi::RaftStoreProxy::new(
             AtomicU8::new(raftstore::engine_store_ffi::RaftProxyStatus::Idle as u8),
             key_mgr.clone(),

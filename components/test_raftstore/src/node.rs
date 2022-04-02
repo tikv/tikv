@@ -287,15 +287,6 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
-        let mut raftstore_cfg = cfg.raft_store;
-        raftstore_cfg.validate().unwrap();
-
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        cfg_controller.register(
-            Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store)),
-        );
-
         node.try_bootstrap_store(engines.clone())?;
         node.start(
             engines.clone(),
@@ -310,6 +301,17 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
         )?;
+
+        let mut raftstore_cfg = cfg.tikv.raft_store;
+        raftstore_cfg.validate().unwrap();
+        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.refresh_config_scheduler(),
+                raft_store,
+            )),
+        );
 
         assert!(
             engines
@@ -327,17 +329,6 @@ impl Simulator for NodeCluster {
             snap_mgr_path
                 .as_ref()
                 .map(|p| p.path().to_str().unwrap().to_owned())
-        );
-
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate().unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        cfg_controller.register(
-            Module::Raftstore,
-            Box::new(RaftstoreConfigManager::new(
-                node.refresh_config_scheduler(),
-                raft_store,
-            )),
         );
 
         if let Some(tmp) = snap_mgr_path {
