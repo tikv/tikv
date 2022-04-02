@@ -73,7 +73,7 @@ impl Engine {
         if max_capacity < 512 {
             max_capacity = 512
         }
-        let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity, 64);
+        let cache: SegmentedCache<BlockCacheKey, Bytes> = SegmentedCache::new(max_capacity as u64, 256);
         let (flush_tx, flush_rx) = mpsc::bounded(opts.num_mem_tables);
         let (free_tx, free_rx) = mpsc::unbounded();
         let core = EngineCore {

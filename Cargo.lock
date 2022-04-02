@@ -764,7 +764,7 @@ dependencies = [
  "crossbeam-skiplist",
  "fail 0.5.0",
  "futures 0.3.15",
- "parking_lot",
+ "parking_lot 0.11.1",
  "rand 0.8.3",
  "tikv_alloc",
  "tokio",
@@ -889,9 +889,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.2"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e54ea8bc3fb1ee042f5aace6e3c6e025d3874866da222930f70ce62aceba0bfa"
+checksum = "5aaa7bd5fb665c6864b5f963dd9097905c54125909c7aa94c9e18507cdbe6c53"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.5",
@@ -1489,7 +1489,7 @@ dependencies = [
  "nix 0.19.0",
  "online_config",
  "openssl",
- "parking_lot",
+ "parking_lot 0.11.1",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
@@ -1917,7 +1917,7 @@ dependencies = [
  "grpcio-sys",
  "libc 0.2.108",
  "log",
- "parking_lot",
+ "parking_lot 0.11.1",
  "protobuf",
 ]
 
@@ -2120,7 +2120,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
- "parking_lot",
+ "parking_lot 0.11.1",
  "tokio",
  "tokio-openssl",
  "tower-layer",
@@ -2740,30 +2740,24 @@ dependencies = [
 
 [[package]]
 name = "moka"
-version = "0.5.4"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9059092f53dfb5e675db0cca75a326913aa85773f9d3e2ea201e412cf3a15a52"
+checksum = "55327ce58eed74a69fd80c75da97a08fbcbf61dbcb6917fcf8b84fa6435e70bb"
 dependencies = [
  "crossbeam-channel",
- "moka-cht",
+ "crossbeam-epoch 0.8.2",
+ "crossbeam-utils 0.8.5",
  "num_cpus",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.0",
  "quanta",
  "scheduled-thread-pool",
  "skeptic",
+ "smallvec",
+ "tagptr",
  "thiserror",
+ "triomphe",
  "uuid",
-]
-
-[[package]]
-name = "moka-cht"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "829e4b3f52dff046d1824842169dc0a91319f5e923e20a651b4e85697e03feea"
-dependencies = [
- "crossbeam-epoch 0.8.2",
- "num_cpus",
 ]
 
 [[package]]
@@ -3139,7 +3133,17 @@ checksum = "6d7744ac029df22dca6284efe4e898991d28e3085c706c972bcd7da4a27a15eb"
 dependencies = [
  "instant",
  "lock_api",
- "parking_lot_core",
+ "parking_lot_core 0.8.3",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87f5ec2493a61ac0506c0f4199f99070cbe83857b0337006a30f3e6719b8ef58"
+dependencies = [
+ "lock_api",
+ "parking_lot_core 0.9.2",
 ]
 
 [[package]]
@@ -3154,6 +3158,19 @@ dependencies = [
  "redox_syscall 0.2.10",
  "smallvec",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "995f667a6c822200b0433ac218e05582f0e2efa1b922a3fd2fbaadc5f87bab37"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libc 0.2.108",
+ "redox_syscall 0.2.10",
+ "smallvec",
+ "windows-sys",
 ]
 
 [[package]]
@@ -3419,7 +3436,7 @@ dependencies = [
  "libc 0.2.108",
  "log",
  "nix 0.23.0",
- "parking_lot",
+ "parking_lot 0.11.1",
  "prost",
  "prost-build",
  "prost-derive",
@@ -3526,7 +3543,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.108",
  "memchr",
- "parking_lot",
+ "parking_lot 0.11.1",
  "protobuf",
  "reqwest",
  "thiserror",
@@ -3727,7 +3744,7 @@ dependencies = [
  "nix 0.23.0",
  "num-derive",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.11.1",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -3805,7 +3822,7 @@ dependencies = [
  "openssl",
  "ordered-float 2.8.0",
  "panic_hook",
- "parking_lot",
+ "parking_lot 0.11.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -4520,7 +4537,7 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6f74fd1204073fa02d5d5d68bec8021be4c38690b61264b2fdb48083d0e7d7"
 dependencies = [
- "parking_lot",
+ "parking_lot 0.11.1",
 ]
 
 [[package]]
@@ -5103,6 +5120,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tagptr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
 name = "take_mut"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5138,7 +5161,7 @@ dependencies = [
  "chrono",
  "http",
  "lock_api",
- "parking_lot",
+ "parking_lot 0.11.1",
  "ring",
  "serde",
  "serde_json",
@@ -5671,7 +5694,7 @@ dependencies = [
  "online_config",
  "openssl",
  "panic_hook",
- "parking_lot",
+ "parking_lot 0.11.1",
  "paste 1.0.4",
  "pd_client",
  "pin-project",
@@ -6007,7 +6030,7 @@ dependencies = [
  "mio 0.7.11",
  "num_cpus",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.11.1",
  "pin-project-lite",
  "signal-hook-registry",
  "tokio-macros",
@@ -6134,6 +6157,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f50de3927f93d202783f4513cda820ab47ef17f624b03c096e86ef00c67e6b5f"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "triomphe"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c45e322b26410d7260e00f64234810c2f17d7ece356182af4df8f7ff07890f09"
+dependencies = [
+ "memoffset 0.6.4",
+ "serde",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -6493,6 +6527,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
+name = "windows-sys"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5acdd78cb4ba54c0045ac14f62d8f94a03d10047904ae2a40afa1e99d8f70825"
+dependencies = [
+ "windows_aarch64_msvc",
+ "windows_i686_gnu",
+ "windows_i686_msvc",
+ "windows_x86_64_gnu",
+ "windows_x86_64_msvc",
+]
+
+[[package]]
+name = "windows_aarch64_msvc"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17cffbe740121affb56fad0fc0e421804adf0ae00891205213b5cecd30db881d"
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2564fde759adb79129d9b4f54be42b32c89970c18ebf93124ca8870a498688ed"
+
+[[package]]
+name = "windows_i686_msvc"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cd9d32ba70453522332c14d38814bceeb747d80b3958676007acadd7e166956"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfce6deae227ee8d356d19effc141a509cc503dfd1f850622ec4b0f84428e1f4"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d19538ccc21819d01deaf88d6a17eae6596a12e9aafdbb97916fb49896d89de9"
+
+[[package]]
 name = "winreg"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6559,7 +6636,7 @@ dependencies = [
  "fail 0.5.0",
  "lazy_static",
  "num_cpus",
- "parking_lot_core",
+ "parking_lot_core 0.8.3",
  "prometheus",
  "rand 0.8.3",
 ]

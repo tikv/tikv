@@ -186,12 +186,21 @@ impl SSTableCore {
         }
         let cache = self.cache.as_ref().unwrap();
         let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
-        if let Some(block) = cache.get(&cache_key) {
-            return Ok(block);
+        let mut error = None;
+        let block = cache.get_with(cache_key, || {
+            match self.read_block_from_file(addr, length) {
+                Ok(block) => block,
+                Err(err) => {
+                    error = Some(err);
+                    Bytes::new()
+                }
+            }
+        });
+        if error.is_some() {
+            Err(error.unwrap())
+        } else {
+            Ok(block)
         }
-        let block = self.read_block_from_file(addr, length)?;
-        cache.insert(cache_key, block.clone());
-        Ok(block)
     }
 
     fn read_block_from_file(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {

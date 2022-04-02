@@ -27,7 +27,7 @@ fslock = "0.1.7"
 hex = "0.4"
 http = "0.2"
 hyper = "0.14"
-moka = "0.5.1"
+moka = "0.8"
 num_cpus = "1"
 farmhash = "1.1.5"
 kvenginepb = { path = "../kvenginepb", default-features = false }
