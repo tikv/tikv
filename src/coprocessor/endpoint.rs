@@ -82,7 +82,6 @@ impl<E: Engine> Endpoint<E> {
         cfg: &Config,
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
-        perf_level: PerfLevel,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
@@ -99,7 +98,7 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             semaphore,
             concurrency_manager,
-            perf_level,
+            perf_level: engine_rocks::raw_util::to_raw_perf_level(cfg.end_point_perf_level),
             resource_tag_factory,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
@@ -845,7 +844,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -887,7 +885,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -926,7 +923,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -950,7 +946,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -997,7 +992,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1046,7 +1040,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1072,7 +1065,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1126,7 +1118,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1155,7 +1146,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1255,7 +1245,6 @@ mod tests {
             },
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1324,7 +1313,6 @@ mod tests {
             &config,
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1653,7 +1641,6 @@ mod tests {
             &Config::default(),
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -1717,7 +1704,6 @@ mod tests {
             &config,
             read_pool.handle(),
             cm,
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );

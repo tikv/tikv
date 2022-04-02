@@ -418,6 +418,7 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
+
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::quota_limiter::QuotaLimiter;
@@ -503,7 +504,6 @@ mod tests {
             &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );

@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
-use engine_rocks::PerfLevel;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::coprocessor;
 use kvproto::kvrpcpb::*;
@@ -254,7 +253,6 @@ fn init_coprocessor_with_data(
         &tikv::server::Config::default(),
         pool.handle(),
         cm,
-        PerfLevel::EnableCount,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
     )
