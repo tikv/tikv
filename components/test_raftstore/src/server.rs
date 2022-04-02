@@ -1,11 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
-
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
