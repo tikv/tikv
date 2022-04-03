@@ -236,9 +236,9 @@ mod tests {
     use crate::storage::lock_manager::{DummyLockManager, LockManager};
     use crate::storage::txn::commands;
     use crate::storage::{Storage, TestStorageBuilder};
-    use kvproto::kvrpcpb::{ApiVersion, Context};
-    use std::sync::mpsc::channel;
     use api_version::{APIVersion, APIV1};
+    use kvproto::kvrpcpb::Context;
+    use std::sync::mpsc::channel;
     use tikv_kv::Engine;
     use txn_types::Mutation;
 

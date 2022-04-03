@@ -13,7 +13,9 @@ use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
 fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine)
+        .build()
+        .unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -35,7 +37,9 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: 
 
 fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine)
+        .build()
+        .unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -64,7 +68,9 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config:
 
 fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine)
+        .build()
+        .unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)

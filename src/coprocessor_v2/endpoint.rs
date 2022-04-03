@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::APIVersion;
 use coprocessor_plugin_api::*;
 use kvproto::kvrpcpb;
 use semver::VersionReq;
 use std::future::Future;
 use std::sync::Arc;
-use api_version::APIVersion;
 
 use super::config::Config;
 use super::plugin_registry::PluginRegistry;

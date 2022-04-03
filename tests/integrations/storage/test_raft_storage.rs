@@ -263,7 +263,8 @@ fn check_data<E: Engine, Api: APIVersion>(
 #[test]
 fn test_auto_gc() {
     let count = 3;
-    let (mut cluster, first_leader_storage, ctx) = new_raft_storage_with_store_count::<API>(count, "");
+    let (mut cluster, first_leader_storage, ctx) =
+        new_raft_storage_with_store_count::<API>(count, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish

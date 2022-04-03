@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use api_version::{APIVersion, match_template_api_version};
+use api_version::{match_template_api_version, APIVersion};
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
@@ -3979,13 +3979,11 @@ mod tests {
             Some(cfg.rocksdb.build_opt()),
         )
         .unwrap();
-        let storage = TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-        )
-        .config(cfg.storage.clone())
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager {})
+                .config(cfg.storage.clone())
+                .build()
+                .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::new(

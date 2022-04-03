@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use grpcio::*;
 use kvproto::kvrpcpb::{
-    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context,
-    GetRequest, Op, PrewriteRequest, RawPutRequest,
+    self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest, Op,
+    PrewriteRequest, RawPutRequest,
 };
 use kvproto::tikvpb::TikvClient;
 
-use api_version::{APIV1, APIVersion};
+use api_version::{APIVersion, APIV1};
 use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;

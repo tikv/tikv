@@ -6,6 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use api_version::APIVersion;
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
@@ -13,7 +14,6 @@ use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
-use api_version::APIVersion;
 
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
@@ -414,12 +414,11 @@ mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::TestStorageBuilder;
     use api_version::APIV1;
+    use engine_rocks::{PerfLevel, RocksSnapshot};
     use grpcio::EnvBuilder;
-    use kvproto::kvrpcpb::ApiVersion;
+    use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
-    use engine_rocks::{PerfLevel, RocksSnapshot};
-    use kvproto::raft_serverpb::RaftMessage;
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::quota_limiter::QuotaLimiter;

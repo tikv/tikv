@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use api_version::APIV1;
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::Context;
 
 use engine_rocks::PerfLevel;
 use resource_metering::ResourceTagFactory;

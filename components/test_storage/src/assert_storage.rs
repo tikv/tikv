@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 
 use api_version::{APIVersion, APIV1};
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};

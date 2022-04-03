@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use crate::Config;
-use api_version::{APIVersion, dispatch_api_version};
+use api_version::{dispatch_api_version, APIVersion};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -376,7 +376,7 @@ impl ServerCluster {
                     key_manager.clone(),
                     cfg.storage.api_version(),
                 )
-                    .unwrap(),
+                .unwrap(),
             )
         };
         let import_service = ImportSSTService::new(
@@ -463,7 +463,7 @@ impl ServerCluster {
                 None,
                 debug_thread_pool.clone(),
             )
-                .unwrap();
+            .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
             svr.register_service(create_debug(debug_service.clone()));
             svr.register_service(create_deadlock(deadlock_service.clone()));
@@ -564,22 +564,25 @@ impl Simulator for ServerCluster {
     fn run_node(
         &mut self,
         node_id: u64,
-        mut cfg: Config,
+        cfg: Config,
         engines: Engines<RocksEngine, RocksEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RocksEngine>,
         system: RaftBatchSystem<RocksEngine, RocksEngine>,
     ) -> ServerResult<u64> {
-        dispatch_api_version!(cfg.storage.api_version(), self.run_node_impl::<API>(
-            node_id,
-            cfg,
-            engines,
-            store_meta,
-            key_manager,
-            router,
-            system,
-        ))
+        dispatch_api_version!(
+            cfg.storage.api_version(),
+            self.run_node_impl::<API>(
+                node_id,
+                cfg,
+                engines,
+                store_meta,
+                key_manager,
+                router,
+                system,
+            )
+        )
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {

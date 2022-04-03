@@ -1047,7 +1047,7 @@ mod tests {
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{ApiVersion, Op};
+    use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Peer;
     use raft::StateRole;
     use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;

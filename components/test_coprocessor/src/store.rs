@@ -4,7 +4,7 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
+use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use api_version::APIV1;
 use collections::HashMap;

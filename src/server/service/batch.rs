@@ -13,8 +13,8 @@ use crate::storage::{
     Storage,
 };
 use crate::storage::{ResponseBatchConsumer, Result};
-use kvproto::kvrpcpb::*;
 use api_version::APIVersion;
+use kvproto::kvrpcpb::*;
 use tikv_util::future::poll_future_notify;
 use tikv_util::mpsc::batch::Sender;
 use tikv_util::time::Instant;

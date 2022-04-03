@@ -13,7 +13,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::Context;
 use kvproto::resource_usage_agent::{
     ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
 };
@@ -84,13 +84,11 @@ impl TestSuite {
         );
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::<_, _, API>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-        )
-        .set_resource_tag_factory(resource_tag_factory.clone())
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilder::<_, _, API>::from_engine_and_lock_mgr(engine, DummyLockManager {})
+                .set_resource_tag_factory(resource_tag_factory.clone())
+                .build()
+                .unwrap();
 
         let (tx, rx) = unbounded();
 

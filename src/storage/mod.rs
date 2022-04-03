@@ -96,6 +96,7 @@ use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
+use std::marker::PhantomData;
 use std::{
     borrow::Cow,
     iter,
@@ -104,7 +105,6 @@ use std::{
         Arc,
     },
 };
-use std::marker::PhantomData;
 use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};

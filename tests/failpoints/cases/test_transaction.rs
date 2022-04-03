@@ -4,7 +4,7 @@ use api_version::APIV1;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{
-    self as pb, ApiVersion, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+    self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
 };
 use kvproto::tikvpb::TikvClient;
 use raftstore::store::util::new_peer;
@@ -198,12 +198,13 @@ macro_rules! lock_release_test {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
-                engine,
-                DummyLockManager {},
-            )
-            .build()
-            .unwrap();
+            let storage =
+                TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
+                    engine,
+                    DummyLockManager {},
+                )
+                .build()
+                .unwrap();
 
             let key = Key::from_raw(b"k");
             let cm = storage.get_concurrency_manager();

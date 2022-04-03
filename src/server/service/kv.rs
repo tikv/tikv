@@ -60,7 +60,12 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: APIVersion> {
+pub struct Service<
+    T: RaftStoreRouter<E::Local> + 'static,
+    E: Engine,
+    L: LockManager,
+    Api: APIVersion,
+> {
     store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
@@ -87,8 +92,12 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     reject_messages_on_memory_ratio: f64,
 }
 
-impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockManager + Clone, Api: APIVersion>
-    Clone for Service<T, E, L, Api>
+impl<
+    T: RaftStoreRouter<E::Local> + Clone + 'static,
+    E: Engine + Clone,
+    L: LockManager + Clone,
+    Api: APIVersion,
+> Clone for Service<T, E, L, Api>
 {
     fn clone(&self) -> Self {
         Service {
@@ -108,7 +117,9 @@ impl<T: RaftStoreRouter<E::Local> + Clone + 'static, E: Engine + Clone, L: LockM
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: APIVersion> Service<T, E, L, Api> {
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: APIVersion>
+    Service<T, E, L, Api>
+{
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
@@ -195,7 +206,9 @@ macro_rules! handle_request {
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: APIVersion> Tikv for Service<T, E, L, Api> {
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: APIVersion> Tikv
+    for Service<T, E, L, Api>
+{
     handle_request!(kv_get, future_get, GetRequest, GetResponse);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(

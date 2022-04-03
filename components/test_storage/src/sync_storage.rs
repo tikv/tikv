@@ -6,9 +6,7 @@ use std::sync::{atomic::AtomicU64, Arc};
 use api_version::APIVersion;
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{
-    ApiVersion, ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest,
-};
+use kvproto::kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
@@ -97,7 +95,10 @@ pub struct SyncTestStorage<E: Engine, Api: APIVersion> {
 }
 
 impl<E: Engine, Api: APIVersion> SyncTestStorage<E, Api> {
-    pub fn from_storage(storage: Storage<E, DummyLockManager, Api>, config: GcConfig) -> Result<Self> {
+    pub fn from_storage(
+        storage: Storage<E, DummyLockManager, Api>,
+        config: GcConfig,
+    ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
