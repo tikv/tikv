@@ -25,6 +25,7 @@ use std::{
     u64,
 };
 
+use api_version::{APIVersion, dispatch_api_version};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -124,7 +125,7 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     macro_rules! run_impl {
-        ($ER: ty) => {{
+        ($ER: ty, $API: ty) => {{
             let mut tikv = TiKVServer::<$ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
@@ -140,7 +141,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let listener = tikv.init_flow_receiver();
             let (engines, engines_info) = tikv.init_raw_engines(listener);
             tikv.init_engines(engines.clone());
-            let server_config = tikv.init_servers();
+            let server_config = tikv.init_servers::<$API>();
             tikv.register_services();
             tikv.init_metrics_flusher(fetcher, engines_info);
             tikv.init_storage_stats_task(engines);
@@ -152,11 +153,13 @@ pub fn run_tikv(config: TiKvConfig) {
         }};
     }
 
-    if !config.raft_engine.enable {
-        run_impl!(RocksEngine)
-    } else {
-        run_impl!(RaftLogEngine)
-    }
+    dispatch_api_version!(config.storage.api_version(), {
+        if !config.raft_engine.enable {
+            run_impl!(RocksEngine, API)
+        } else {
+            run_impl!(RaftLogEngine, API)
+        }
+    })
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -566,7 +569,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers<Api: APIVersion>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
@@ -673,7 +676,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage(
+        let storage = create_raft_storage::<_, _, _, Api>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,

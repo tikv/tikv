@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 
+use api_version::APIV1;
 use collections::HashMap;
 use test_storage::SyncTestStorage;
 use tidb_query_datatype::codec::{datum, table, Datum};
@@ -18,6 +19,8 @@ use tikv::storage::{
     SnapshotStore, Storage, TestStorageBuilder,
 };
 use txn_types::{Key, Mutation, TimeStamp};
+
+type API = APIV1;
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
@@ -105,7 +108,7 @@ impl<'a, E: Engine> Delete<'a, E> {
 
 /// A store that operates over MVCC and support transactions.
 pub struct Store<E: Engine> {
-    store: SyncTestStorage<E>,
+    store: SyncTestStorage<E, API>,
     current_ts: TimeStamp,
     last_committed_ts: TimeStamp,
     handles: Vec<Vec<u8>>,
@@ -113,7 +116,7 @@ pub struct Store<E: Engine> {
 
 impl Store<RocksEngine> {
     pub fn new() -> Self {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilder::<_, _, API>::new(DummyLockManager {})
             .build()
             .unwrap();
         Self::from_storage(storage)
@@ -127,7 +130,7 @@ impl Default for Store<RocksEngine> {
 }
 
 impl<E: Engine> Store<E> {
-    pub fn from_storage(storage: Storage<E, DummyLockManager>) -> Self {
+    pub fn from_storage(storage: Storage<E, DummyLockManager, API>) -> Self {
         Self {
             store: SyncTestStorage::from_storage(storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),
@@ -194,7 +197,7 @@ impl<E: Engine> Store<E> {
         self.store.get_engine()
     }
 
-    pub fn get_storage(&self) -> SyncTestStorage<E> {
+    pub fn get_storage(&self) -> SyncTestStorage<E, API> {
         self.store.clone()
     }
 

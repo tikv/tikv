@@ -26,11 +26,13 @@ use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder}
 use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp};
 
+type API = api_version::APIV1;
+
 pub struct TestSuite {
     pubsub_server_port: u16,
     receiver_server: Option<MockReceiverServer>,
 
-    storage: Storage<RocksEngine, DummyLockManager>,
+    storage: Storage<RocksEngine, DummyLockManager, API>,
     cfg_controller: ConfigController,
     resource_tag_factory: ResourceTagFactory,
 
@@ -82,10 +84,9 @@ impl TestSuite {
         );
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilder::<_, _, API>::from_engine_and_lock_mgr(
             engine,
             DummyLockManager {},
-            ApiVersion::V1,
         )
         .set_resource_tag_factory(resource_tag_factory.clone())
         .build()
@@ -120,7 +121,7 @@ impl TestSuite {
         }
     }
 
-    pub fn get_storage(&self) -> Storage<RocksEngine, DummyLockManager> {
+    pub fn get_storage(&self) -> Storage<RocksEngine, DummyLockManager, API> {
         self.storage.clone()
     }
 

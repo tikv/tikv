@@ -1043,6 +1043,7 @@ mod tests {
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
+    use api_version::{APIVersion, APIV1};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
@@ -1163,8 +1164,8 @@ mod tests {
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
-    fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockManager>,
+    fn check_data<E: Engine, Api: APIVersion>(
+        storage: &Storage<E, DummyLockManager, Api>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = block_on(storage.scan(
@@ -1197,10 +1198,9 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilder::<_, _, APIV1>::from_engine_and_lock_mgr(
             engine.clone(),
             DummyLockManager {},
-            ApiVersion::V1,
         )
         .build()
         .unwrap();
@@ -1362,10 +1362,9 @@ mod tests {
     fn test_physical_scan_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
             DummyLockManager {},
-            ApiVersion::V1,
         )
         .build()
         .unwrap();

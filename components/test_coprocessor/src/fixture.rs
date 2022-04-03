@@ -4,6 +4,7 @@ use super::*;
 
 use std::sync::Arc;
 
+use api_version::APIV1;
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::{ApiVersion, Context};
 
@@ -80,7 +81,7 @@ pub fn init_data_with_details<E: Engine>(
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
     let storage =
-        TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {}, ApiVersion::V1)
+        TestStorageBuilder::<_, _, APIV1>::from_engine_and_lock_mgr(engine, DummyLockManager {})
             .build()
             .unwrap();
     let mut store = Store::from_storage(storage);

@@ -12,6 +12,7 @@ use kvproto::kvrpcpb::{
 };
 use kvproto::tikvpb::TikvClient;
 
+use api_version::{APIV1, APIVersion};
 use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
@@ -42,10 +43,9 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage0 = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine0,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -240,10 +240,9 @@ fn test_scale_scheduler_pool() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .config(cluster.cfg.tikv.storage.clone())
     .build()
@@ -341,7 +340,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilder::<_, _, api_version::APIV1>::new(DummyLockManager {})
             .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -368,7 +367,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+    let storage = TestStorageBuilder::<_, _, api_version::APIV1>::new(DummyLockManager {})
         .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -512,10 +511,9 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine.clone(),
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -630,8 +628,8 @@ fn expect_locked(err: tikv::storage::Error, key: &[u8], lock_ts: TimeStamp) {
     assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
 }
 
-fn test_async_apply_prewrite_impl<E: Engine>(
-    storage: &Storage<E, DummyLockManager>,
+fn test_async_apply_prewrite_impl<E: Engine, Api: APIVersion>(
+    storage: &Storage<E, DummyLockManager, Api>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -810,10 +808,9 @@ fn test_async_apply_prewrite() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .async_apply_prewrite(true)
     .build()
@@ -912,10 +909,9 @@ fn test_async_apply_prewrite_fallback() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .async_apply_prewrite(true)
     .build()
@@ -977,8 +973,8 @@ fn test_async_apply_prewrite_fallback() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 }
 
-fn test_async_apply_prewrite_1pc_impl<E: Engine>(
-    storage: &Storage<E, DummyLockManager>,
+fn test_async_apply_prewrite_1pc_impl<E: Engine, Api: APIVersion>(
+    storage: &Storage<E, DummyLockManager, Api>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -1101,10 +1097,9 @@ fn test_async_apply_prewrite_1pc() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .async_apply_prewrite(true)
     .build()
@@ -1132,10 +1127,9 @@ fn test_atomic_cas_lock_by_latch() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1222,10 +1216,9 @@ fn test_before_async_write_deadline() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1258,10 +1251,9 @@ fn test_before_propose_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .build()
     .unwrap();
@@ -1295,10 +1287,9 @@ fn test_resolve_lock_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+    let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
         engine,
         DummyLockManager {},
-        ApiVersion::V1,
     )
     .build()
     .unwrap();

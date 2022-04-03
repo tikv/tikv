@@ -13,6 +13,7 @@ use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
+use api_version::APIVersion;
 
 use crate::coprocessor::Endpoint;
 use crate::coprocessor_v2;
@@ -78,11 +79,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     Server<T, S, E>
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager>(
+    pub fn new<L: LockManager, Api: APIVersion>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L>,
+        storage: Storage<E, L, Api>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
@@ -410,13 +411,13 @@ mod tests {
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
     use crate::server::TestRaftStoreRouter;
+    use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::TestStorageBuilder;
+    use api_version::APIV1;
     use grpcio::EnvBuilder;
     use kvproto::kvrpcpb::ApiVersion;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
-
-    use crate::storage::lock_manager::DummyLockManager;
     use engine_rocks::{PerfLevel, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
     use resource_metering::ResourceTagFactory;
@@ -468,7 +469,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilder::<_, _, APIV1>::new(DummyLockManager {})
             .build()
             .unwrap();
 

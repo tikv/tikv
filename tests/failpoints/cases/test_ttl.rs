@@ -389,14 +389,15 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
 
 #[test]
 fn test_stoarge_raw_batch_put_ttl() {
-    test_stoarge_raw_batch_put_ttl_impl(ApiVersion::V1ttl);
-    test_stoarge_raw_batch_put_ttl_impl(ApiVersion::V2);
+    test_stoarge_raw_batch_put_ttl_impl::<APIV1TTL>();
+    test_stoarge_raw_batch_put_ttl_impl::<APIV2>();
 }
 
-fn test_stoarge_raw_batch_put_ttl_impl(api_version: ApiVersion) {
+fn test_stoarge_raw_batch_put_ttl_impl<Api: APIVersion>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    let api_version = Api::TAG;
+    let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager {})
         .build()
         .unwrap();
     let (tx, rx) = channel();

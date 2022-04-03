@@ -31,6 +31,7 @@ bitflags::bitflags! {
 
 impl APIVersion for APIV2 {
     const TAG: ApiVersion = ApiVersion::V2;
+    const CLIENT_TAG: ApiVersion = ApiVersion::V2;
     const IS_TTL_ENABLED: bool = true;
 
     fn parse_key_mode(key: &[u8]) -> KeyMode {

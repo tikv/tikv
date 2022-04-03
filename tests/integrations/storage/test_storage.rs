@@ -11,6 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
+use api_version::APIVersion;
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
@@ -18,6 +19,8 @@ use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
 use txn_types::{Key, Mutation, TimeStamp};
+
+type API = api_version::APIV1;
 
 #[test]
 fn test_txn_store_get() {
@@ -676,7 +679,7 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (_cluster, raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+    let (_cluster, raft_store) = AssertionStorage::<_, API>::new_raft_storage_with_store_count(3, key);
     store.test_txn_store_gc(key);
     raft_store.test_txn_store_gc(key);
 }
@@ -702,7 +705,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
 pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
     let (mut cluster, mut store) =
-        AssertionStorage::new_raft_storage_with_store_count(3, prefix.as_str());
+        AssertionStorage::<_, API>::new_raft_storage_with_store_count(3, prefix.as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     if !keys.is_empty() {
         store.batch_put_ok_for_cluster(&mut cluster, &keys, repeat(b"v1" as &[u8]), 5, 10);
@@ -750,7 +753,7 @@ fn test_txn_store_gc3() {
     let key = "k";
     let store = AssertionStorage::default();
     store.test_txn_store_gc3(key.as_bytes()[0]);
-    let (mut cluster, mut raft_store) = AssertionStorage::new_raft_storage_with_store_count(3, key);
+    let (mut cluster, mut raft_store) = AssertionStorage::<_, API>::new_raft_storage_with_store_count(3, key);
     raft_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
 }
 
@@ -932,7 +935,7 @@ fn test_txn_store_txnkv_api_version() {
     ];
 
     for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(storage_api_version);
+        let mut store = AssertionStorage::<_, API>::new();
         store.ctx.set_api_version(req_api_version);
 
         let mut end_key = key.to_vec();
@@ -995,7 +998,7 @@ fn test_txn_store_rawkv_api_version() {
     let cf = "";
 
     for (storage_api_version, req_api_version, key, is_legal) in test_data.into_iter() {
-        let mut store = AssertionStorage::new(storage_api_version);
+        let mut store = AssertionStorage::<_, API>::new();
         store.ctx.set_api_version(req_api_version);
 
         let mut end_key = key.to_vec();
@@ -1144,7 +1147,7 @@ impl Oracle {
 
 const INC_MAX_RETRY: usize = 100;
 
-fn inc<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
+fn inc<E: Engine, Api: APIVersion>(store: &SyncTestStorage<E, Api>, oracle: &Oracle, key: &[u8]) -> Result<i32, ()> {
     let key_address = Key::from_raw(key);
     for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
@@ -1225,7 +1228,7 @@ fn format_key(x: usize) -> Vec<u8> {
     format!("k{}", x).into_bytes()
 }
 
-fn inc_multi<E: Engine>(store: &SyncTestStorage<E>, oracle: &Oracle, n: usize) -> bool {
+fn inc_multi<E: Engine, Api: APIVersion>(store: &SyncTestStorage<E, Api>, oracle: &Oracle, n: usize) -> bool {
     'retry: for i in 0..INC_MAX_RETRY {
         let start_ts = oracle.get_ts();
         let keys: Vec<Key> = (0..n).map(format_key).map(|x| Key::from_raw(&x)).collect();

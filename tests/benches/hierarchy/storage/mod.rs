@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::APIV1;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::Context;
@@ -12,7 +13,7 @@ use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
 fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine).build().unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -34,7 +35,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: 
 
 fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine).build().unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -63,7 +64,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config:
 
 fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilder::<_, APIV1>::from_engine(engine).build().unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)

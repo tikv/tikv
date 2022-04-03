@@ -6,7 +6,7 @@ use tidb_query_datatype::codec::table;
 use tikv::storage::{kv::RocksEngine, mvcc::SnapshotReader, Engine};
 use txn_types::{Key, Mutation};
 
-fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine> {
+fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine, api_version::APIV1> {
     let store = SyncTestStorageBuilder::default().build().unwrap();
     for ts in 1..=n {
         let mutation = Mutation::make_put(key.clone(), b"value".to_vec());
