@@ -848,6 +848,10 @@ pub mod tests {
                         let k = keys::data_key(k.as_encoded());
                         wb.delete_cf(cf, &k).unwrap();
                     }
+                    Modify::SingleDelete(cf, k) => {
+                        let k = keys::data_key(k.as_encoded());
+                        wb.single_delete_cf(cf, &k).unwrap();
+                    }
                     Modify::PessimisticLock(k, lock) => {
                         let k = keys::data_key(k.as_encoded());
                         let v = lock.into_lock().to_bytes();
@@ -860,7 +864,6 @@ pub mod tests {
                             wb.delete_range_cf(cf, &k1, &k2).unwrap();
                         }
                     }
-                    Modify::SingleDelete(..) => unimplemented!(),
                 }
             }
             wb.write().unwrap();
