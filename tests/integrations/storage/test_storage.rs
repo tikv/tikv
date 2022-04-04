@@ -20,8 +20,6 @@ use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;
 use txn_types::{Key, Mutation, TimeStamp};
 
-type API = api_version::APIV1;
-
 #[test]
 fn test_txn_store_get() {
     let store = AssertionStorage::default();
@@ -679,8 +677,7 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (_cluster, raft_store) =
-        AssertionStorage::<_, API>::new_raft_storage_with_store_count(3, key);
+    let (_cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
     store.test_txn_store_gc(key);
     raft_store.test_txn_store_gc(key);
 }
@@ -706,7 +703,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
 pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String) {
     let (mut cluster, mut store) =
-        AssertionStorage::<_, API>::new_raft_storage_with_store_count(3, prefix.as_str());
+        AssertionStorageApiV1::new_raft_storage_with_store_count(3, prefix.as_str());
     let keys: Vec<String> = (0..n).map(|i| format!("{}{}", prefix, i)).collect();
     if !keys.is_empty() {
         store.batch_put_ok_for_cluster(&mut cluster, &keys, repeat(b"v1" as &[u8]), 5, 10);
@@ -755,7 +752,7 @@ fn test_txn_store_gc3() {
     let store = AssertionStorage::default();
     store.test_txn_store_gc3(key.as_bytes()[0]);
     let (mut cluster, mut raft_store) =
-        AssertionStorage::<_, API>::new_raft_storage_with_store_count(3, key);
+        AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
     raft_store.test_txn_store_gc3_for_cluster(&mut cluster, key.as_bytes()[0]);
 }
 

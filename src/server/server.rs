@@ -412,8 +412,7 @@ mod tests {
     use crate::coprocessor::{self, readpool_impl};
     use crate::server::TestRaftStoreRouter;
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::TestStorageBuilder;
-    use api_version::APIV1;
+    use crate::storage::TestStorageBuilderApiV1;
     use engine_rocks::{PerfLevel, RocksSnapshot};
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
@@ -468,7 +467,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::<_, _, APIV1>::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
             .build()
             .unwrap();
 

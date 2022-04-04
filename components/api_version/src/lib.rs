@@ -76,6 +76,7 @@ pub struct APIV1TTL;
 #[derive(Default, Clone, Copy)]
 pub struct APIV2;
 
+// TODO: move `match_template_api_version!` usage to `dispatch_api_version!`.
 #[macro_export]
 macro_rules! match_template_api_version {
      ($t:tt, $($tail:tt)*) => {{

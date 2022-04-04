@@ -7,7 +7,7 @@ use engine_rocks::raw::CompactOptions;
 use engine_rocks::util::get_cf_handle;
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::Context;
 use tikv::config::DbConfig;
 use tikv::server::ttl::check_ttl_and_compact_files;
 use tikv::storage::kv::{SnapContext, TestEngineBuilder};
@@ -396,18 +396,12 @@ fn test_stoarge_raw_batch_put_ttl() {
 fn test_stoarge_raw_batch_put_ttl_impl<Api: APIVersion>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let api_version = Api::TAG;
     let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager {})
         .build()
         .unwrap();
     let (tx, rx) = channel();
-    let req_api_version = if api_version == ApiVersion::V1ttl {
-        ApiVersion::V1
-    } else {
-        api_version
-    };
     let ctx = Context {
-        api_version: req_api_version,
+        api_version: Api::CLIENT_TAG,
         ..Default::default()
     };
 

@@ -21,6 +21,8 @@ pub struct AssertionStorage<E: Engine, Api: APIVersion> {
     pub ctx: Context,
 }
 
+pub type AssertionStorageApiV1<E> = AssertionStorage<E, APIV1>;
+
 impl Default for AssertionStorage<RocksEngine, APIV1> {
     fn default() -> Self {
         AssertionStorage {

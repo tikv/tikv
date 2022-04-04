@@ -235,8 +235,8 @@ mod tests {
     use super::*;
     use crate::storage::lock_manager::{DummyLockManager, LockManager};
     use crate::storage::txn::commands;
-    use crate::storage::{Storage, TestStorageBuilder};
-    use api_version::{APIVersion, APIV1};
+    use crate::storage::{Storage, TestStorageBuilderApiV1};
+    use api_version::APIVersion;
     use kvproto::kvrpcpb::Context;
     use std::sync::mpsc::channel;
     use tikv_kv::Engine;
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect() {
-        let storage = TestStorageBuilder::<_, _, APIV1>::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
             .build()
             .unwrap();
         let mut data = vec![];
@@ -404,7 +404,7 @@ mod tests {
     // with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
-        let storage = TestStorageBuilder::<_, _, APIV1>::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
             .build()
             .unwrap();
         for &start in &[100, 104, 108, 112] {
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect_rollback_and_delete() {
-        let storage = TestStorageBuilder::<_, _, APIV1>::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
             .build()
             .unwrap();
         let data = vec![

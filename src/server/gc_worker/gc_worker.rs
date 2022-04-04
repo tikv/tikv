@@ -1042,8 +1042,8 @@ mod tests {
     use crate::storage::txn::tests::{
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
-    use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
-    use api_version::{APIVersion, APIV1};
+    use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilderApiV1};
+    use api_version::APIVersion;
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
@@ -1198,12 +1198,10 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::<_, _, APIV1>::from_engine_and_lock_mgr(
-            engine.clone(),
-            DummyLockManager {},
-        )
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
+                .build()
+                .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
         let (tx, _rx) = mpsc::channel();
@@ -1362,7 +1360,7 @@ mod tests {
     fn test_physical_scan_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage = TestStorageBuilder::<_, DummyLockManager, APIV1>::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
             DummyLockManager {},
         )

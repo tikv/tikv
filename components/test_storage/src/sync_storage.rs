@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{atomic::AtomicU64, Arc};
 
-use api_version::APIVersion;
+use api_version::{APIVersion, APIV1};
 use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
@@ -30,6 +30,10 @@ pub struct SyncTestStorageBuilder<E: Engine, Api: APIVersion> {
     _phantom: PhantomData<Api>,
 }
 
+/// SyncTestStorageBuilder for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type SyncTestStorageBuilderApiV1<E> = SyncTestStorageBuilder<E, APIV1>;
+
 impl<Api: APIVersion> SyncTestStorageBuilder<RocksEngine, Api> {
     pub fn new() -> Self {
         Self {
@@ -44,7 +48,7 @@ impl<Api: APIVersion> SyncTestStorageBuilder<RocksEngine, Api> {
     }
 }
 
-impl Default for SyncTestStorageBuilder<RocksEngine, api_version::APIV1> {
+impl Default for SyncTestStorageBuilder<RocksEngine, APIV1> {
     fn default() -> Self {
         Self::new()
     }
@@ -77,10 +81,10 @@ impl<E: Engine, Api: APIVersion> SyncTestStorageBuilder<E, Api> {
             self.engine.clone(),
             DummyLockManager {},
         );
-        if let Some(mut config) = self.config.take() {
-            config.set_api_version(Api::TAG);
+        if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
+        builder = builder.set_api_version(Api::TAG);
         SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
     }
 }
@@ -93,6 +97,10 @@ pub struct SyncTestStorage<E: Engine, Api: APIVersion> {
     gc_worker: GcWorker<E, RaftStoreBlackHole>,
     store: Storage<E, DummyLockManager, Api>,
 }
+
+/// SyncTestStorage for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, APIV1>;
 
 impl<E: Engine, Api: APIVersion> SyncTestStorage<E, Api> {
     pub fn from_storage(

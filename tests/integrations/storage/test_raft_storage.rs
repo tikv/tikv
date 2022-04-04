@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::Duration;
 
-use api_version::APIVersion;
+use api_version::{APIVersion, APIV1};
 use collections::HashMap;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
@@ -19,14 +19,12 @@ use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
-type API = api_version::APIV1;
-
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,
-    SyncTestStorage<SimulateEngine, API>,
+    SyncTestStorageApiV1<SimulateEngine>,
     Context,
 ) {
-    new_raft_storage_with_store_count::<API>(1, "")
+    new_raft_storage_with_store_count::<APIV1>(1, "")
 }
 
 #[test]
@@ -264,7 +262,7 @@ fn check_data<E: Engine, Api: APIVersion>(
 fn test_auto_gc() {
     let count = 3;
     let (mut cluster, first_leader_storage, ctx) =
-        new_raft_storage_with_store_count::<API>(count, "");
+        new_raft_storage_with_store_count::<APIV1>(count, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish
@@ -280,7 +278,7 @@ fn test_auto_gc() {
             let mut config = GcConfig::default();
             // Do not skip GC
             config.ratio_threshold = 0.9;
-            let storage = SyncTestStorageBuilder::<_, API>::from_engine(engine.clone())
+            let storage = SyncTestStorageBuilderApiV1::from_engine(engine.clone())
                 .gc_config(config)
                 .build()
                 .unwrap();
