@@ -235,6 +235,19 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                     }
                 }
             }
+            CmdType::SingleDelete => {
+                let mut single_delete = req.take_single_delete();
+                match single_delete.cf.as_str() {
+                    CF_LOCK => {
+                        let key = Key::from_encoded(single_delete.take_key());
+                        let mut row = changes.entry(key).or_default();
+                        row.lock = Some(KeyOp::Delete);
+                    }
+                    _ => {
+                        unimplemented!();
+                    }
+                }
+            }
             _ => {
                 debug!(
                     "skip other command";
