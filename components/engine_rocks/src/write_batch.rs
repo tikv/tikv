@@ -105,9 +105,9 @@ impl Mutable for RocksWriteBatch {
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        if cf == "lock" {
-            println!("Put cf : key {:?} cf {:?} value {:?} ", key, cf, value);
-        }
+        // if cf == "lock" {
+        //     println!("Put cf : key {:?} cf {:?} value {:?} ", key, cf, value);
+        // }
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.put_cf(handle, key, value).map_err(Error::Engine)
     }
@@ -117,13 +117,13 @@ impl Mutable for RocksWriteBatch {
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        println!("Delete cf : key {:?} cf {:?}", key, cf);
+        // println!("Delete cf : key {:?} cf {:?}", key, cf);
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
     }
 
     fn single_delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        println!("Single Delete cf : key {:?} cf {:?}", key, cf);
+        // println!("Single Delete cf : key {:?} cf {:?}", key, cf);
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb.single_delete_cf(handle, key).map_err(Error::Engine)
     }
