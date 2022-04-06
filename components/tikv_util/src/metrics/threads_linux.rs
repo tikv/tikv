@@ -1,20 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use collections::HashMap;
+use lazy_static::lazy_static;
+use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, GaugeVec, IntGaugeVec, Opts};
 
-use crate::sys::thread::{self, Pid};
 use crate::time::Instant;
+
 use procinfo::pid;
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
-    let pid = thread::process_id();
+    let pid = unsafe { libc::getpid() };
     let tc = ThreadsCollector::new(pid, namespace);
     prometheus::register(Box::new(tc)).map_err(|e| to_io_err(format!("{:?}", e)))
 }
@@ -37,7 +40,7 @@ impl Metrics {
                  seconds by threads.",
             )
             .namespace(ns.clone()),
-            &["name"],
+            &["name", "tid"],
         )
         .unwrap();
         let threads_state = IntGaugeVec::new(
@@ -50,7 +53,7 @@ impl Metrics {
                 "threads_io_bytes_total",
                 "Total number of bytes which threads cause to be fetched from or sent to the storage layer.",
             ).namespace(ns.clone()),
-            &["name", "io"],
+            &["name", "tid", "io"],
         )
         .unwrap();
         let voluntary_ctxt_switches = IntGaugeVec::new(
@@ -59,7 +62,7 @@ impl Metrics {
                 "Number of thread voluntary context switches.",
             )
             .namespace(ns.clone()),
-            &["name"],
+            &["name", "tid"],
         )
         .unwrap();
         let nonvoluntary_ctxt_switches = IntGaugeVec::new(
@@ -68,7 +71,7 @@ impl Metrics {
                 "Number of thread nonvoluntary context switches.",
             )
             .namespace(ns),
-            &["name"],
+            &["name", "tid"],
         )
         .unwrap();
 
@@ -103,14 +106,14 @@ impl Metrics {
 /// A collector to collect threads metrics, including CPU usage
 /// and threads state.
 struct ThreadsCollector {
-    pid: Pid,
+    pid: pid_t,
     descs: Vec<Desc>,
     metrics: Mutex<Metrics>,
     tid_retriever: Mutex<TidRetriever>,
 }
 
 impl ThreadsCollector {
-    fn new<S: Into<String>>(pid: Pid, namespace: S) -> ThreadsCollector {
+    fn new<S: Into<String>>(pid: pid_t, namespace: S) -> ThreadsCollector {
         let metrics = Metrics::new(namespace);
         ThreadsCollector {
             pid,
@@ -139,14 +142,14 @@ impl Collector for ThreadsCollector {
         }
         for tid in tids {
             let tid = *tid;
-            if let Ok(stat) = thread::full_thread_stat(self.pid, tid) {
+            if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 // Threads CPU time.
-                let total = thread::linux::cpu_total(&stat);
+                let total = cpu_total(&stat);
                 // sanitize thread name before push metrics.
                 let name = sanitize_thread_name(tid, &stat.command);
                 let cpu_total = metrics
                     .cpu_totals
-                    .get_metric_with_label_values(&[&name])
+                    .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                     .unwrap();
                 cpu_total.set(total);
 
@@ -163,13 +166,13 @@ impl Collector for ThreadsCollector {
                     // Threads IO.
                     let read_total = metrics
                         .io_totals
-                        .get_metric_with_label_values(&[&name, "read"])
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid), "read"])
                         .unwrap();
                     read_total.set(read_bytes as f64);
 
                     let write_total = metrics
                         .io_totals
-                        .get_metric_with_label_values(&[&name, "write"])
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid), "write"])
                         .unwrap();
                     write_total.set(write_bytes as f64);
                 }
@@ -179,7 +182,7 @@ impl Collector for ThreadsCollector {
                     let voluntary_ctxt_switches = status.voluntary_ctxt_switches;
                     let voluntary_total = metrics
                         .voluntary_ctxt_switches
-                        .get_metric_with_label_values(&[&name])
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
                     voluntary_total.set(voluntary_ctxt_switches as i64);
 
@@ -187,7 +190,7 @@ impl Collector for ThreadsCollector {
                     let nonvoluntary_ctxt_switches = status.nonvoluntary_ctxt_switches;
                     let nonvoluntary_total = metrics
                         .nonvoluntary_ctxt_switches
-                        .get_metric_with_label_values(&[&name])
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
                     nonvoluntary_total.set(nonvoluntary_ctxt_switches as i64);
                 }
@@ -202,6 +205,38 @@ impl Collector for ThreadsCollector {
     }
 }
 
+/// Gets thread ids of the given process id.
+/// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
+pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
+    let mut tids: Vec<i32> = fs::read_dir(format!("/proc/{}/task", pid))?
+        .filter_map(|task| {
+            let file_name = match task {
+                Ok(t) => t.file_name(),
+                Err(e) => {
+                    error!("read task failed"; "pid" => pid, "err" => ?e);
+                    return None;
+                }
+            };
+
+            match file_name.to_str() {
+                Some(tid) => match tid.parse() {
+                    Ok(tid) => Some(tid),
+                    Err(e) => {
+                        error!("read task failed"; "pid" => pid, "err" => ?e);
+                        None
+                    }
+                },
+                None => {
+                    error!("read task failed"; "pid" => pid);
+                    None
+                }
+            }
+        })
+        .collect();
+    tids.sort_unstable();
+    Ok(tids)
+}
+
 /// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
 ///
 /// Examples:
@@ -214,7 +249,7 @@ impl Collector for ThreadsCollector {
 /// assert_eq!(sanitize_thread_name(1, "@123"), "123");
 /// assert_eq!(sanitize_thread_name(1, "@@@@"), "1");
 /// ```
-fn sanitize_thread_name(tid: Pid, raw: &str) -> String {
+fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     let mut name = String::with_capacity(raw.len());
     // sanitize thread name.
     for c in raw.chars() {
@@ -251,8 +286,21 @@ fn state_to_str(state: &pid::State) -> &str {
     }
 }
 
+pub fn cpu_total(state: &pid::Stat) -> f64 {
+    (state.utime + state.stime) as f64 / *CLK_TCK
+}
+
 fn to_io_err(s: String) -> Error {
     Error::new(ErrorKind::Other, s)
+}
+
+lazy_static! {
+    // getconf CLK_TCK
+    static ref CLK_TCK: f64 = {
+        unsafe {
+            libc::sysconf(libc::_SC_CLK_TCK) as f64
+        }
+    };
 }
 
 #[inline]
@@ -279,14 +327,14 @@ fn collect_metrics_by_name(
 
 #[inline]
 fn update_metric(
-    metrics: &mut HashMap<String, f64>,
-    rates: &mut HashMap<String, f64>,
-    name: &String,
+    metrics: &mut HashMap<i32, f64>,
+    rates: &mut HashMap<i32, f64>,
+    tid: i32,
     metric_new: f64,
     time_delta: f64,
 ) {
-    let metric_old = metrics.entry(name.clone()).or_insert(0.0);
-    let rate = rates.entry(name.clone()).or_insert(0.0);
+    let metric_old = metrics.entry(tid).or_insert(0.0);
+    let rate = rates.entry(tid).or_insert(0.0);
 
     let metric_delta = metric_new - *metric_old;
     if metric_delta > 0.0 && time_delta > 0.0 {
@@ -312,7 +360,7 @@ impl ThreadMetrics {
 
 /// Use to collect cpu usages and disk I/O rates
 pub struct ThreadInfoStatistics {
-    pid: Pid,
+    pid: pid_t,
     last_instant: Instant,
     tid_names: HashMap<i32, String>,
     tid_retriever: TidRetriever,
@@ -322,11 +370,12 @@ pub struct ThreadInfoStatistics {
 
 impl ThreadInfoStatistics {
     pub fn new() -> Self {
-        let pid = thread::process_id();
+        let pid = unsafe { libc::getpid() };
 
         let mut thread_stats = Self {
             pid,
             last_instant: Instant::now(),
+            tid_names: HashMap::default(),
             tid_retriever: TidRetriever::new(pid),
             metrics_rate: ThreadMetrics::default(),
             metrics_total: ThreadMetrics::default(),
@@ -350,16 +399,17 @@ impl ThreadInfoStatistics {
         for tid in tids {
             let tid = *tid;
 
-            if let Ok(stat) = thread::full_thread_stat(self.pid, tid) {
+            if let Ok(stat) = pid::stat_task(self.pid, tid) {
                 let name = get_name(&stat.command);
+                self.tid_names.entry(tid).or_insert(name);
 
                 // To get a percentage result,
                 // we pre-multiply `cpu_time` by 100 here rather than inside the `update_metric`.
-                let cpu_time = thread::linux::cpu_total(&stat) * 100.0;
+                let cpu_time = cpu_total(&stat) * 100.0;
                 update_metric(
                     &mut self.metrics_total.cpu_times,
                     &mut self.metrics_rate.cpu_times,
-                    &name,
+                    tid,
                     cpu_time,
                     time_delta,
                 );
@@ -372,7 +422,7 @@ impl ThreadInfoStatistics {
                     update_metric(
                         &mut self.metrics_total.read_ios,
                         &mut self.metrics_rate.read_ios,
-                        &name,
+                        tid,
                         read_bytes as f64,
                         time_delta,
                     );
@@ -380,7 +430,7 @@ impl ThreadInfoStatistics {
                     update_metric(
                         &mut self.metrics_total.write_ios,
                         &mut self.metrics_rate.write_ios,
-                        &name,
+                        tid,
                         write_bytes as f64,
                         time_delta,
                     );
@@ -392,15 +442,15 @@ impl ThreadInfoStatistics {
     }
 
     pub fn get_cpu_usages(&self) -> HashMap<String, u64> {
-        collect_metrics_by_name(self.tid_names, &self.metrics_rate.cpu_times)
+        collect_metrics_by_name(&self.tid_names, &self.metrics_rate.cpu_times)
     }
 
     pub fn get_read_io_rates(&self) -> HashMap<String, u64> {
-        collect_metrics_by_name(self.tid_names, &self.metrics_rate.read_ios)
+        collect_metrics_by_name(&self.tid_names, &self.metrics_rate.read_ios)
     }
 
     pub fn get_write_io_rates(&self) -> HashMap<String, u64> {
-        collect_metrics_by_name(self.tid_names, &self.metrics_rate.write_ios)
+        collect_metrics_by_name(&self.tid_names, &self.metrics_rate.write_ios)
     }
 }
 
@@ -415,31 +465,28 @@ const TID_MAX_UPDATE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// A helper that buffers the thread id list internally.
 struct TidRetriever {
-    pid: Pid,
+    pid: pid_t,
     tid_buffer: Vec<i32>,
     tid_buffer_last_update: Instant,
     tid_buffer_update_interval: Duration,
 }
 
 impl TidRetriever {
-    pub fn new(pid: Pid) -> Self {
-        let mut tid_buffer: Vec<_> = thread::thread_ids(pid).unwrap();
-        tid_buffer.sort_unstable();
+    pub fn new(pid: pid_t) -> Self {
         Self {
             pid,
-            tid_buffer,
+            tid_buffer: get_thread_ids(pid).unwrap(),
             tid_buffer_last_update: Instant::now(),
             tid_buffer_update_interval: TID_MIN_UPDATE_INTERVAL,
         }
     }
 
-    pub fn get_tids(&mut self) -> (&[Pid], bool) {
+    pub fn get_tids(&mut self) -> (&[pid_t], bool) {
         // Update the tid list according to tid_buffer_update_interval.
         // If tid is not changed, update the tid list less frequently.
         let mut updated = false;
         if self.tid_buffer_last_update.saturating_elapsed() >= self.tid_buffer_update_interval {
-            let mut new_tid_buffer: Vec<_> = thread::thread_ids(self.pid).unwrap();
-            new_tid_buffer.sort_unstable();
+            let new_tid_buffer = get_thread_ids(self.pid).unwrap();
             if new_tid_buffer == self.tid_buffer {
                 self.tid_buffer_update_interval *= 2;
                 if self.tid_buffer_update_interval > TID_MAX_UPDATE_INTERVAL {
@@ -457,24 +504,12 @@ impl TidRetriever {
     }
 }
 
-pub fn dump_thread_stats() -> String {
-    let pid = unsafe { libc::getpid() };
-    let tids = get_thread_ids(pid).unwrap();
-    let mut res: Vec<pid::Stat> = Default::default();
-    for tid in tids {
-        if let Ok(stat) = pid::stat_task(pid, tid) {
-            res.push(stat);
-        }
-    }
-    format!("total count {}\n{:#?}", res.len(), res)
-}
-
 #[cfg(test)]
 mod tests {
     use std::env::temp_dir;
     use std::io::Write;
     use std::time::Duration;
-    use std::{fs, sync};
+    use std::{fs, sync, thread};
 
     use super::*;
 
@@ -483,7 +518,7 @@ mod tests {
         let name = "testthreadio";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
-        let h = std::thread::Builder::new()
+        let h = thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
                 // Make `io::write_bytes` > 0
@@ -502,13 +537,13 @@ mod tests {
         rx1.recv().unwrap();
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as usize };
-        let pid = thread::process_id();
-        let tids: Vec<_> = thread::thread_ids(pid).unwrap();
+        let pid = unsafe { libc::getpid() };
+        let tids = get_thread_ids(pid).unwrap();
         assert!(tids.len() >= 2);
 
         tids.iter()
             .find(|t| {
-                thread::full_thread_stat(pid, **t)
+                pid::stat_task(pid, **t)
                     .map(|stat| stat.command == name)
                     .unwrap_or(false)
             })
@@ -532,7 +567,7 @@ mod tests {
     ) -> (sync::mpsc::Sender<()>, sync::mpsc::Receiver<()>) {
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
-        std::thread::Builder::new()
+        thread::Builder::new()
             .name(str1.to_owned())
             .spawn(move || {
                 tx1.send(()).unwrap();
@@ -574,10 +609,10 @@ mod tests {
         let mut thread_info = ThreadInfoStatistics::new();
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 };
-        let pid = thread::process_id();
-        let tids: Vec<_> = thread::thread_ids(pid).unwrap();
+        let pid = unsafe { libc::getpid() };
+        let tids = get_thread_ids(pid).unwrap();
         for tid in tids {
-            if let Ok(stat) = thread::full_thread_stat(pid, tid) {
+            if let Ok(stat) = pid::stat_task(pid, tid) {
                 if stat.command.starts_with(s1) {
                     rx1.recv().unwrap();
                     thread_info.record();
@@ -618,7 +653,7 @@ mod tests {
     ) -> (sync::mpsc::Sender<()>, sync::mpsc::Receiver<()>) {
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
-        std::thread::Builder::new()
+        thread::Builder::new()
             .name(name)
             .spawn(move || {
                 tx1.send(()).unwrap();
@@ -648,10 +683,10 @@ mod tests {
 
         let mut thread_info = ThreadInfoStatistics::new();
 
-        let pid = thread::process_id();
-        let tids: Vec<_> = thread::thread_ids(pid).unwrap();
+        let pid = unsafe { libc::getpid() };
+        let tids = get_thread_ids(pid).unwrap();
         for tid in tids {
-            if let Ok(stat) = thread::full_thread_stat(pid, tid) {
+            if let Ok(stat) = pid::stat_task(pid, tid) {
                 if stat.command.starts_with(tn) {
                     rx.recv().unwrap();
                     thread_info.record();
@@ -709,10 +744,11 @@ mod tests {
 
     #[test]
     fn test_smoke() {
-        let pid = thread::process_id();
+        let pid = unsafe { libc::getpid() };
         let tc = ThreadsCollector::new(pid, "smoke");
         tc.collect();
         tc.desc();
         monitor_threads("smoke").unwrap();
     }
 }
+
