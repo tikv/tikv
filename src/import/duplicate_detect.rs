@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let mut data = vec![];
@@ -404,7 +404,7 @@ mod tests {
     // with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         for &start in &[100, 104, 108, 112] {
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect_rollback_and_delete() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let data = vec![

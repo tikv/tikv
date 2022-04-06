@@ -1199,7 +1199,7 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let storage =
-            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
                 .unwrap();
         let gate = FeatureGate::default();
@@ -1362,7 +1362,7 @@ mod tests {
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
-            DummyLockManager {},
+            DummyLockManager,
         )
         .build()
         .unwrap();

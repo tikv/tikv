@@ -113,7 +113,7 @@ pub struct Store<E: Engine> {
 
 impl Store<RocksEngine> {
     pub fn new() -> Self {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager {})
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         Self::from_storage(storage)

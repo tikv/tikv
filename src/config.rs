@@ -3980,7 +3980,7 @@ mod tests {
         )
         .unwrap();
         let storage =
-            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager {})
+            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager)
                 .config(cfg.storage.clone())
                 .build()
                 .unwrap();

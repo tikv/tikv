@@ -54,7 +54,7 @@ fn test_txn_failpoints() {
 #[test]
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
 
@@ -101,7 +101,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 #[test]
 fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
 
@@ -142,7 +142,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
 #[test]
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
 
@@ -189,7 +189,7 @@ macro_rules! lock_release_test {
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let storage =
-                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
+                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
                     .build()
                     .unwrap();
 
@@ -265,7 +265,7 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();
@@ -320,7 +320,7 @@ fn test_max_commit_ts_error() {
 #[test]
 fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();

@@ -396,7 +396,7 @@ fn test_stoarge_raw_batch_put_ttl() {
 fn test_stoarge_raw_batch_put_ttl_impl<Api: APIVersion>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager {})
+    let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
         .build()
         .unwrap();
     let (tx, rx) = channel();

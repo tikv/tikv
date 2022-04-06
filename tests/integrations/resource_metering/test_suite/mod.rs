@@ -82,11 +82,10 @@ impl TestSuite {
         );
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage =
-            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager {})
-                .set_resource_tag_factory(resource_tag_factory.clone())
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .set_resource_tag_factory(resource_tag_factory.clone())
+            .build()
+            .unwrap();
 
         let (tx, rx) = unbounded();
 
