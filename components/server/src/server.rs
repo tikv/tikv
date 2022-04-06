@@ -105,8 +105,8 @@ use crate::raft_engine_switch::*;
 use crate::{memory::*, setup::*, signal_handler};
 
 #[inline]
-fn run_impl<Er: ConfiguredRaftEngine>(config: TiKvConfig) {
-    let mut tikv = TiKVServer::<Er>::init(config);
+fn run_impl<CEr: ConfiguredRaftEngine>(config: TiKvConfig) {
+    let mut tikv = TiKVServer::<CEr>::init(config);
 
     // Must be called after `TiKVServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -1363,11 +1363,11 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<Er: ConfiguredRaftEngine> TiKVServer<Er> {
+impl<CEr: ConfiguredRaftEngine> TiKVServer<CEr> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, Er>, Arc<EnginesResourceInfo>) {
+    ) -> (Engines<RocksEngine, CEr>, Arc<EnginesResourceInfo>) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1375,7 +1375,7 @@ impl<Er: ConfiguredRaftEngine> TiKVServer<Er> {
             .unwrap();
 
         // Create raft engine
-        let raft_engine = Er::build(self, &env, &block_cache);
+        let raft_engine = CEr::build(self, &env, &block_cache);
 
         // Create kv engine.
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
@@ -1564,8 +1564,8 @@ pub struct EnginesResourceInfo {
 impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
-    fn new<Er: ConfiguredRaftEngine>(
-        engines: &Engines<RocksEngine, Er>,
+    fn new<CEr: ConfiguredRaftEngine>(
+        engines: &Engines<RocksEngine, CEr>,
         max_samples_to_preserve: usize,
     ) -> Self {
         let raft_engine = engines.raft.as_rocks_engine().cloned();
