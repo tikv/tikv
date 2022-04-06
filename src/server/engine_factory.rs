@@ -2,7 +2,9 @@
 
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine_rocks::raw::{Cache, Env};
-use engine_rocks::{CompactionListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine};
+use engine_rocks::{
+    CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
+};
 use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::store::{RaftRouter, StoreMsg};
@@ -12,13 +14,62 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 struct FactoryInner {
-    env: Option<Arc<Env>>,
+    env: Arc<Env>,
     region_info_accessor: Option<RegionInfoAccessor>,
     block_cache: Option<Cache>,
     rocksdb_config: Arc<DbConfig>,
     store_path: PathBuf,
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
+}
+
+pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
+    inner: FactoryInner,
+    router: Option<RaftRouter<RocksEngine, ER>>,
+}
+
+impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
+    pub fn new(env: Arc<Env>, config: &TiKvConfig, store_path: impl Into<PathBuf>) -> Self {
+        Self {
+            inner: FactoryInner {
+                env,
+                region_info_accessor: None,
+                block_cache: None,
+                rocksdb_config: Arc::new(config.rocksdb.clone()),
+                store_path: store_path.into(),
+                api_version: config.storage.api_version(),
+                flow_listener: None,
+            },
+            router: None,
+        }
+    }
+
+    pub fn region_info_accessor(mut self, accessor: RegionInfoAccessor) -> Self {
+        self.inner.region_info_accessor = Some(accessor);
+        self
+    }
+
+    pub fn block_cache(mut self, cache: Cache) -> Self {
+        self.inner.block_cache = Some(cache);
+        self
+    }
+
+    pub fn flow_listener(mut self, listener: FlowListener) -> Self {
+        self.inner.flow_listener = Some(listener);
+        self
+    }
+
+    pub fn compaction_filter_router(mut self, router: RaftRouter<RocksEngine, ER>) -> Self {
+        self.router = Some(router);
+        self
+    }
+
+    pub fn build(self) -> KvEngineFactory<ER> {
+        KvEngineFactory {
+            inner: Arc::new(self.inner),
+            router: self.router,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -28,30 +79,6 @@ pub struct KvEngineFactory<ER: RaftEngine> {
 }
 
 impl<ER: RaftEngine> KvEngineFactory<ER> {
-    #[inline]
-    pub fn new(
-        env: Option<Arc<Env>>,
-        config: &TiKvConfig,
-        region_info_accessor: Option<RegionInfoAccessor>,
-        block_cache: Option<Cache>,
-        store_path: PathBuf,
-        router: Option<RaftRouter<RocksEngine, ER>>,
-        flow_listener: Option<engine_rocks::FlowListener>,
-    ) -> KvEngineFactory<ER> {
-        KvEngineFactory {
-            inner: Arc::new(FactoryInner {
-                env,
-                region_info_accessor,
-                block_cache,
-                rocksdb_config: Arc::new(config.rocksdb.clone()),
-                store_path,
-                api_version: config.storage.api_version(),
-                flow_listener,
-            }),
-            router,
-        }
-    }
-
     fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
         let ch = match &self.router {
             Some(r) => Mutex::new(r.clone()),
@@ -88,9 +115,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
     fn create_tablet(&self, tablet_path: &Path) -> Result<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
-        if let Some(env) = &self.inner.env {
-            kv_db_opts.set_env(env.clone());
-        }
+        kv_db_opts.set_env(self.inner.env.clone());
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }

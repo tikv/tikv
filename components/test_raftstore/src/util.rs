@@ -40,7 +40,7 @@ use raftstore::Result;
 use rand::RngCore;
 use tempfile::TempDir;
 use tikv::config::*;
-use tikv::server::KvEngineFactory;
+use tikv::server::KvEngineFactoryBuilder;
 use tikv::storage::point_key_range;
 use tikv_util::config::*;
 use tikv_util::time::ThreadReadId;
@@ -649,15 +649,14 @@ pub fn create_test_engine(
 
     let mut raft_engine = RocksEngine::from_db(raft_engine);
     raft_engine.set_shared_block_cache(cache.is_some());
-    let factory = Box::new(KvEngineFactory::new(
-        Some(env),
-        &cfg,
-        None,
-        cache,
-        dir.path().to_path_buf(),
-        router,
-        None,
-    ));
+    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+    if let Some(cache) = cache {
+        builder = builder.block_cache(cache);
+    }
+    if let Some(router) = router {
+        builder = builder.compaction_filter_router(router);
+    }
+    let factory = builder.build();
     let engine = factory.create_tablet().unwrap();
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)

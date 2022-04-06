@@ -33,7 +33,7 @@ pub use self::raftkv::RaftKv;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::{Server, GRPC_THREAD_PREFIX};
 pub use self::transport::ServerTransport;
-pub use engine_factory::KvEngineFactory;
+pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;

@@ -81,8 +81,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TTLChecker,
-        KvEngineFactory, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
-        GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
+        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
         self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
@@ -1369,15 +1369,14 @@ impl<Er: ConfiguredRaftEngine> TiKVServer<Er> {
         let raft_engine = Er::build(self, &env, &block_cache);
 
         // Create kv engine.
-        let factory = KvEngineFactory::new(
-            Some(env),
-            &self.config,
-            Some(self.region_info_accessor.clone()),
-            block_cache,
-            self.store_path.clone(),
-            Some(self.router.clone()),
-            Some(flow_listener),
-        );
+        let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
+            .compaction_filter_router(self.router.clone())
+            .region_info_accessor(self.region_info_accessor.clone())
+            .flow_listener(flow_listener);
+        if let Some(cache) = block_cache {
+            builder = builder.block_cache(cache);
+        }
+        let factory = builder.build();
         let kv_engine = factory
             .create_tablet()
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
