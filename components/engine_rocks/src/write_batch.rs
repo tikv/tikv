@@ -18,8 +18,7 @@ impl WriteBatchExt for RocksEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn support_write_batch_vec(&self) -> bool {
-        let options = self.as_inner().get_db_options();
-        options.is_enable_multi_batch_write()
+        false
     }
 
     fn write_batch(&self) -> Self::WriteBatch {
@@ -213,15 +212,9 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
-        if self.index > 0 {
-            self.get_db()
-                .multi_batch_write(self.as_inner(), &opt.into_raw())
-                .map_err(Error::Engine)
-        } else {
-            self.get_db()
-                .write_opt(&self.wbs[0], &opt.into_raw())
-                .map_err(Error::Engine)
-        }
+        self.get_db()
+            .write_opt(&self.wbs[0], &opt.into_raw())
+            .map_err(Error::Engine)
     }
 
     fn data_size(&self) -> usize {

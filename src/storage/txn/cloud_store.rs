@@ -104,7 +104,9 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
             upper_bound.clone(),
             &mut stats,
         )?;
-        let iter = self.snapshot.new_iterator(WRITE_CF, desc, false, Some(self.start_ts));
+        let iter = self
+            .snapshot
+            .new_iterator(WRITE_CF, desc, false, Some(self.start_ts));
         Ok(CloudStoreScanner {
             iter,
             desc,

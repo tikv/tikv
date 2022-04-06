@@ -1,9 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::mvcc::{Result, TxnCommitRecord};
+use bytes::Bytes;
 use rfstore::{UserMeta, EXTRA_CF, LOCK_CF, WRITE_CF};
 use std::sync::Arc;
-use bytes::Bytes;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub struct CloudReader {

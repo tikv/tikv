@@ -599,8 +599,7 @@ impl DefaultCfConfig {
             cf_opts
                 .set_compaction_filter_factory(
                     "ttl_compaction_filter_factory",
-                    Box::new(TTLCompactionFilterFactory { api_version })
-                        as Box<dyn CompactionFilterFactory>,
+                    TTLCompactionFilterFactory { api_version },
                 )
                 .unwrap();
         }
@@ -683,7 +682,7 @@ impl WriteCfConfig {
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
-        let e = Box::new(FixedSuffixSliceTransform::new(8));
+        let e = FixedSuffixSliceTransform::new(8);
         cf_opts
             .set_prefix_extractor("FixedSuffixSliceTransform", e)
             .unwrap();
@@ -702,7 +701,7 @@ impl WriteCfConfig {
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
-                Box::new(WriteCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                WriteCompactionFilterFactory {},
             )
             .unwrap();
         cf_opts.set_titandb_options(&self.titan.build_opts());
@@ -772,7 +771,7 @@ impl LockCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
-        let f = Box::new(NoopSliceTransform);
+        let f = NoopSliceTransform;
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
@@ -846,7 +845,7 @@ impl RaftCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_RAFT, cache, no_region_info_accessor);
-        let f = Box::new(NoopSliceTransform);
+        let f = NoopSliceTransform;
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
             .unwrap();
@@ -1070,7 +1069,6 @@ impl DbConfig {
             (self.enable_pipelined_write || self.enable_multi_batch_write)
                 && !self.enable_unordered_write,
         );
-        opts.enable_multi_batch_write(self.enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(RocksEventListener::new("kv"));
         opts.set_info_log(RocksdbLogger::default());
@@ -1192,7 +1190,7 @@ impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
-        let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
+        let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
