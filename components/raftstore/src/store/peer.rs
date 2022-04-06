@@ -1620,7 +1620,7 @@ where
         false
     }
 
-    fn force_forward_commit_index(&mut self) {
+    pub fn maybe_force_forward_commit_index(&mut self) {
         let expected_alive_voter = match &self.force_leader {
             Some(ForceLeaderState::ForceLeader {
                 expected_alive_voter,
@@ -1644,6 +1644,12 @@ where
                 replicated_idx = p.matched;
             }
         }
+
+        if self.raft_group.store().term(replicated_idx).unwrap() < self.term() {
+            // do not commit logs of previous term directly
+            return;
+        }
+
         self.raft_group.raft.raft_log.committed =
             std::cmp::max(self.raft_group.raft.raft_log.committed, replicated_idx);
     }
@@ -2541,7 +2547,7 @@ where
 
             if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
                 // forward commit index, the committed entries will be applied in the next raft base tick round
-                self.force_forward_commit_index();
+                self.maybe_force_forward_commit_index();
             }
         }
 
@@ -2583,7 +2589,7 @@ where
         let persist_index = self.raft_group.raft.raft_log.persisted;
         if let Some(ForceLeaderState::ForceLeader { .. }) = self.force_leader {
             // forward commit index, the committed entries will be applied in the next raft base tick round
-            self.force_forward_commit_index();
+            self.maybe_force_forward_commit_index();
         }
         self.mut_store().update_cache_persisted(persist_index);
 
@@ -4206,6 +4212,10 @@ where
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
+    }
+
+    pub fn voters(&self) -> raft::util::Union<'_> {
+        self.raft_group.raft.prs().conf().voters().ids()
     }
 
     pub fn term(&self) -> u64 {
