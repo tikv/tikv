@@ -17,7 +17,7 @@ use test_raftstore::sleep_ms;
 #[test]
 fn test_failed_pending_batch() {
     // For test that a pending cmd batch contains a error like epoch not match.
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
@@ -71,7 +71,7 @@ fn test_failed_pending_batch() {
 
 #[test]
 fn test_region_ready_after_deregister() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
@@ -103,7 +103,7 @@ fn test_region_ready_after_deregister() {
 
 #[test]
 fn test_connections_register() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let fp = "cdc_incremental_scan_start";
     fail::cfg(fp, "pause").unwrap();
@@ -166,7 +166,7 @@ fn test_connections_register() {
 
 #[test]
 fn test_merge() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     // Split region
     let region = suite.cluster.get_region(&[]);
     suite.cluster.must_split(&region, b"k1");
@@ -269,7 +269,7 @@ fn test_merge() {
 
 #[test]
 fn test_deregister_pending_downstream() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let build_resolver_fp = "before_schedule_resolver_ready";
     fail::cfg(build_resolver_fp, "pause").unwrap();

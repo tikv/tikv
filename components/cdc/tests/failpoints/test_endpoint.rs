@@ -19,7 +19,7 @@ use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_double_scan_deregister() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let (k, v) = (b"key1".to_vec(), b"value".to_vec());
     // Prewrite
@@ -77,7 +77,7 @@ fn test_cdc_double_scan_deregister() {
 
 #[test]
 fn test_cdc_double_scan_io_error() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let (k, v) = (b"key1".to_vec(), b"value".to_vec());
     // Prewrite
@@ -169,7 +169,7 @@ fn test_cdc_double_scan_io_error() {
 fn test_cdc_scan_continues_after_region_split() {
     fail::cfg("cdc_after_incremental_scan_blocks_regional_errors", "pause").unwrap();
 
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let (k, v) = (b"key1".to_vec(), b"value".to_vec());
     // Prewrite

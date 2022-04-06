@@ -224,8 +224,8 @@ impl Default for TestSuiteBuilder {
 }
 
 impl TestSuite {
-    pub fn new(count: usize) -> TestSuite {
-        let mut cluster = new_server_cluster(1, count);
+    pub fn new(count: usize, api_version: ApiVersion) -> TestSuite {
+        let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
 
@@ -279,6 +279,24 @@ impl TestSuite {
             "{:?}",
             prewrite_resp.get_errors()
         );
+    }
+
+    pub fn must_kv_raw_v2(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
+        let mut rawkv_req = RawPutRequest::default();
+        let mut context = self.get_context(region_id);
+        context.set_api_version(ApiVersion::V2);
+        rawkv_req.set_context(context);
+        rawkv_req.set_key(key);
+        rawkv_req.set_value(value);
+        rawkv_req.set_ttl(u64::MAX);
+
+        let rawkv_resp = self.get_tikv_client(region_id).raw_put(&rawkv_req).unwrap();
+        assert!(
+            !rawkv_resp.has_region_error(),
+            "{:?}",
+            rawkv_resp.get_region_error()
+        );
+        assert!(rawkv_resp.error.is_empty(), "{:?}", rawkv_resp.get_error());
     }
 
     pub fn must_kv_commit(

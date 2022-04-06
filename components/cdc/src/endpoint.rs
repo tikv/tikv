@@ -1206,7 +1206,7 @@ mod tests {
     use std::ops::{Deref, DerefMut};
 
     use engine_rocks::RocksEngine;
-    use kvproto::cdcpb::Header;
+    use kvproto::cdcpb::{Header, ChangeDataRequestKvApi};
     use kvproto::errorpb::Error as ErrorHeader;
     use raftstore::errors::{DiscardReason, Error as RaftStoreError};
     use raftstore::store::msg::CasualMessage;

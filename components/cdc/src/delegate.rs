@@ -2,6 +2,7 @@
 //
 use api_version::{APIVersion, KeyMode, APIV2};
 use std::mem;
+use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -655,15 +656,13 @@ impl Delegate {
 
     fn sink_put(
         &mut self,
-        mut put: PutRequest,
+        put: PutRequest,
         is_one_pc: bool,
         txn_rows: &mut HashMap<Vec<u8>, EventRow>,
         raw_rows: &mut HashMap<Vec<u8>, EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
-        let key = put.take_key();
-        let key_mode = APIV2::parse_key_mode(&key);
-
+        let key_mode = APIV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows)
         } else {

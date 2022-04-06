@@ -582,6 +582,7 @@ mod tests {
         speed_limit: usize,
         buffer: usize,
         engine: Option<RocksEngine>,
+        kv_api: ChangeDataRequestKvApi,
     ) -> (
         LazyWorker<Task>,
         Runtime,
@@ -622,7 +623,7 @@ mod tests {
             max_scan_batch_size: 1024,
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
-            kv_api: ChangeDataRequestKvApi::TiBd,
+            kv_api,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
@@ -660,7 +661,7 @@ mod tests {
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
         let (mut worker, pool, mut initializer, rx, mut drain) =
-            mock_initializer(total_bytes, buffer, Some(engine.kv_engine()));
+            mock_initializer(total_bytes, buffer, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiBd);
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -748,7 +749,7 @@ mod tests {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
                 let (mut worker, pool, mut initializer, _rx, mut drain) =
-                    mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()));
+                    mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiBd);
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
 
@@ -799,7 +800,7 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, _pool, mut initializer, rx, _drain) =
-            mock_initializer(total_bytes, buffer, None);
+            mock_initializer(total_bytes, buffer, None, ChangeDataRequestKvApi::TiBd);
 
         // Errors reported by region should deregister region.
         initializer.build_resolver = false;
@@ -841,49 +842,53 @@ mod tests {
 
     #[test]
     fn test_initializer_initialize() {
-        let total_bytes = 1;
-        let buffer = 1;
-        let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, buffer, None);
+        let kv_api_set:[ChangeDataRequestKvApi;2] = [ChangeDataRequestKvApi::TiBd, ChangeDataRequestKvApi::RawKv];
 
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        let raft_router = MockRaftStoreRouter::new();
-        let concurrency_semaphore = Arc::new(Semaphore::new(1));
+        for kv_api in kv_api_set {
+            let total_bytes = 1;
+            let buffer = 1;
+            let (mut worker, pool, mut initializer, _rx, _drain) =
+                mock_initializer(total_bytes, buffer, None, kv_api);
 
-        initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(
-            change_cmd,
-            raft_router.clone(),
-            concurrency_semaphore.clone(),
-        ))
-        .unwrap_err();
+            let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
+            let raft_router = MockRaftStoreRouter::new();
+            let concurrency_semaphore = Arc::new(Semaphore::new(1));
 
-        let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore_ = concurrency_semaphore.clone();
-        pool.spawn(async move {
-            let _permit = concurrency_semaphore_.acquire().await;
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-        });
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
+            initializer.downstream_state.store(DownstreamState::Stopped);
+            block_on(initializer.initialize(
+                change_cmd,
+                raft_router.clone(),
+                concurrency_semaphore.clone(),
+            ))
+            .unwrap_err();
 
-        let (tx1, rx1) = sync_channel(1);
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        pool.spawn(async move {
-            let res = initializer
-                .initialize(change_cmd, raft_router, concurrency_semaphore)
-                .await;
-            tx1.send(res).unwrap();
-        });
-        // Must timeout because there is no enough permit.
-        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
+            let (tx, rx) = sync_channel(1);
+            let concurrency_semaphore_ = concurrency_semaphore.clone();
+            pool.spawn(async move {
+                let _permit = concurrency_semaphore_.acquire().await;
+                tx.send(()).unwrap();
+                tx.send(()).unwrap();
+                tx.send(()).unwrap();
+            });
+            rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
-        // Release the permit
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        res.unwrap_err();
+            let (tx1, rx1) = sync_channel(1);
+            let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
+            pool.spawn(async move {
+                let res = initializer
+                    .initialize(change_cmd, raft_router, concurrency_semaphore)
+                    .await;
+                tx1.send(res).unwrap();
+            });
+            // Must timeout because there is no enough permit.
+            rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
-        worker.stop();
+            // Release the permit
+            rx.recv_timeout(Duration::from_millis(200)).unwrap();
+            let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
+            res.unwrap_err();
+
+            worker.stop();
+        }
     }
 }
