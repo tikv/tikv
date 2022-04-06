@@ -81,8 +81,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TTLChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
-        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
+        GRPC_THREAD_PREFIX,
     },
     storage::{
         self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
@@ -1279,6 +1279,7 @@ trait ConfiguredRaftEngine: RaftEngine {
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
+    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
@@ -1316,6 +1317,13 @@ impl ConfiguredRaftEngine for RocksEngine {
 
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         Some(self)
+    }
+
+    fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
+        cfg_controller.register(
+            tikv::config::Module::Raftdb,
+            Box::new(DBConfigManger::new(self.clone(), DBType::Raft, share_cache)),
+        );
     }
 }
 
@@ -1366,6 +1374,7 @@ impl<Er: ConfiguredRaftEngine> TiKVServer<Er> {
             .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
             .unwrap();
 
+        // Create raft engine
         let raft_engine = Er::build(self, &env, &block_cache);
 
         // Create kv engine.
@@ -1391,16 +1400,9 @@ impl<Er: ConfiguredRaftEngine> TiKVServer<Er> {
                 self.config.storage.block_cache.shared,
             )),
         );
-        if let Some(e) = engines.raft.as_rocks_engine() {
-            cfg_controller.register(
-                tikv::config::Module::Raftdb,
-                Box::new(DBConfigManger::new(
-                    e.clone(),
-                    DBType::Raft,
-                    self.config.storage.block_cache.shared,
-                )),
-            );
-        }
+        engines
+            .raft
+            .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
             &engines, 180, /*max_samples_to_preserve*/
