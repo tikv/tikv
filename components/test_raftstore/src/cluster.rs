@@ -10,7 +10,7 @@ use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::kvrpcpb::Context;
-use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
+use kvproto::metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
@@ -30,12 +30,14 @@ use engine_traits::{
     CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
-use pd_client::PdClient;
+use kvproto::pdpb::CheckPolicy;
+use pd_client::{BucketStat, PdClient};
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
 use raftstore::store::*;
 use raftstore::{Error, Result};
+use std::sync::mpsc::channel;
 use tikv::server::Result as ServerResult;
 use tikv_util::thread_group::GroupProperties;
 use tikv_util::time::Instant;
@@ -1048,6 +1050,21 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn must_get_buckets(&mut self, region_id: u64) -> BucketStat {
+        let timer = Instant::now();
+        let timeout = Duration::from_secs(5);
+        let mut tried_times = 0;
+        // At least retry once.
+        while tried_times < 2 || timer.saturating_elapsed() < timeout {
+            tried_times += 1;
+            match self.pd_client.get_buckets(region_id) {
+                Some(buckets) => return buckets,
+                None => sleep_ms(100),
+            }
+        }
+        panic!("failed to get buckets for region {}", region_id);
+    }
+
     pub fn get_region_epoch(&self, region_id: u64) -> RegionEpoch {
         block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
@@ -1139,6 +1156,28 @@ impl<T: Simulator> Cluster<T> {
             )
             .unwrap()
             .unwrap()
+    }
+
+    pub fn must_peer_state(&self, region_id: u64, store_id: u64, peer_state: PeerState) {
+        for _ in 0..100 {
+            let state = self
+                .get_engine(store_id)
+                .c()
+                .get_msg_cf::<RegionLocalState>(
+                    engine_traits::CF_RAFT,
+                    &keys::region_state_key(region_id),
+                )
+                .unwrap()
+                .unwrap();
+            if state.get_state() == peer_state {
+                return;
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, peer_state
+        );
     }
 
     pub fn wait_last_index(
@@ -1645,19 +1684,77 @@ impl<T: Simulator> Cluster<T> {
     pub fn refresh_region_bucket_keys(
         &mut self,
         region: &metapb::Region,
-        bucket_keys: Vec<Vec<u8>>,
-    ) {
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+        expect_buckets: Option<Buckets>,
+    ) -> u64 {
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let (tx, rx) = channel();
+        let cb = Callback::Test {
+            cb: Box::new(move |stat: PeerInternalStat| {
+                if let Some(expect_buckets) = expect_buckets {
+                    assert_eq!(expect_buckets.get_keys(), stat.buckets.keys);
+                    assert_eq!(
+                        expect_buckets.get_keys().len() - 1,
+                        stat.buckets.sizes.len()
+                    );
+                }
+                tx.send(stat.buckets.version).unwrap();
+            }),
+        };
         CasualRouter::send(
             &router,
             region.get_id(),
             CasualMessage::RefreshRegionBuckets {
                 region_epoch: region.get_region_epoch().clone(),
-                bucket_keys,
+                buckets,
+                bucket_ranges,
+                cb,
             },
         )
         .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
+    pub fn send_half_split_region_message(
+        &mut self,
+        region: &metapb::Region,
+        expected_bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let (tx, rx) = channel();
+        let cb = Callback::Test {
+            cb: Box::new(move |stat: PeerInternalStat| {
+                assert_eq!(
+                    expected_bucket_ranges.is_none(),
+                    stat.bucket_ranges.is_none()
+                );
+                if let Some(expected_bucket_ranges) = expected_bucket_ranges {
+                    let actual_bucket_ranges = stat.bucket_ranges.unwrap();
+                    assert_eq!(expected_bucket_ranges.len(), actual_bucket_ranges.len());
+                    for i in 0..actual_bucket_ranges.len() {
+                        assert_eq!(expected_bucket_ranges[i].0, actual_bucket_ranges[i].0);
+                        assert_eq!(expected_bucket_ranges[i].1, actual_bucket_ranges[i].1);
+                    }
+                }
+                tx.send(1).unwrap();
+            }),
+        };
+
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::HalfSplitRegion {
+                region_epoch: region.get_region_epoch().clone(),
+                policy: CheckPolicy::Scan,
+                source: "test",
+                cb,
+            },
+        )
+        .unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 }
 

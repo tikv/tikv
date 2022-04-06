@@ -58,7 +58,7 @@ use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
     HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress,
-    RegionTask,
+    RegionTask, SplitCheckTask,
 };
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
@@ -608,6 +608,7 @@ where
     apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
     pub region_buckets: Option<BucketStat>,
+    pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
 }
@@ -735,6 +736,7 @@ where
             persisted_number: 0,
             apply_snap_ctx: None,
             region_buckets: None,
+            last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
         };
 
@@ -811,6 +813,7 @@ where
             RegionChangeEvent::Create,
             self.get_role(),
         );
+        self.maybe_gen_approximate_buckets(ctx);
     }
 
     #[inline]
@@ -990,7 +993,13 @@ where
             &mut kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge_state.clone(),
+            // Only persist the `merge_state` if the merge is known to be succeeded
+            // which is determined by the `keep_data` flag
+            if keep_data {
+                self.pending_merge_state.clone()
+            } else {
+                None
+            },
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
@@ -2709,7 +2718,7 @@ where
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(states);
+            self.pending_reads.advance_leader_reads(&self.tag, states);
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
@@ -4364,6 +4373,22 @@ where
                 .propose_check_epoch(cmd, self.term())
                 .is_none()
     }
+
+    pub fn maybe_gen_approximate_buckets<T>(&self, ctx: &PollContext<EK, ER, T>) {
+        if ctx.coprocessor_host.cfg.enable_region_bucket && !self.region().get_peers().is_empty() {
+            if let Err(e) = ctx
+                .split_check_scheduler
+                .schedule(SplitCheckTask::ApproximateBuckets(self.region().clone()))
+            {
+                error!(
+                    "failed to schedule check approximate buckets";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "err" => %e,
+                );
+            }
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -4552,6 +4577,17 @@ where
         };
 
         send_msg.set_to_peer(to_peer);
+
+        if msg.get_from() != self.peer.get_id() {
+            debug!(
+                "redirecting message";
+                "msg_type" => ?msg.get_msg_type(),
+                "from" => msg.get_from(),
+                "to" => msg.get_to(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
 
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet

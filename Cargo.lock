@@ -638,6 +638,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 
 [[package]]
+name = "causal_ts"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "futures 0.3.15",
+ "kvproto",
+ "lazy_static",
+ "parking_lot 0.12.0",
+ "pd_client",
+ "prometheus",
+ "raft",
+ "raftstore",
+ "serde",
+ "serde_derive",
+ "slog",
+ "slog-global",
+ "test_raftstore",
+ "thiserror",
+ "tikv_alloc",
+ "tikv_util",
+ "txn_types",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2016,9 +2043,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6b007f9db2cf73dae2664bc723b4dd21c67d7a97024e07cca7b9d4171c395c0"
+checksum = "d3e636f21532a4a55b3c43d8852014686f54898dd0ea083e40a6b040bbc6d737"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2053,9 +2080,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.0+1.44.0"
+version = "0.10.1+1.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "842c75c8037bee3058ce0998b4e3d7c8d2554f2c26135aa9297fe64fab3079d3"
+checksum = "925586932dbbea927e913783da0be160ee74e0b0519d7b20cec35547a0a84631"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -2501,7 +2528,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#296331e0533ee9d7141f03b5f4cc5d7c442600d6"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4992ab1233c7593d0277a5cc4a903fc661df81b2"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2520,7 +2547,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#296331e0533ee9d7141f03b5f4cc5d7c442600d6"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4992ab1233c7593d0277a5cc4a903fc661df81b2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3534,7 +3561,7 @@ dependencies = [
 [[package]]
 name = "procinfo"
 version = "0.4.2"
-source = "git+https://github.com/tikv/procinfo-rs?rev=5125fc1a69496b73b26b3c08b6e8afc3c665a56e#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
+source = "git+https://github.com/tikv/procinfo-rs?rev=6599eb9dca74229b2c1fcc44118bef7eff127128#6599eb9dca74229b2c1fcc44118bef7eff127128"
 dependencies = [
  "byteorder",
  "libc 0.2.119",
@@ -3660,7 +3687,8 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#3d94cb5cf0492da4947546b0c2a0b083edbf9328"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a27c16860a320789970c9113070f024ce4d731bfb8a5a64d1cb1104d91a20e7"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3690,7 +3718,8 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine?branch=0.1.x#3d94cb5cf0492da4947546b0c2a0b083edbf9328"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df4b44c9eef66d50090923642d940c6e40dd978d018075ab17bcf62ab8d505c7"
 dependencies = [
  "clap 3.1.6",
  "raft-engine",
@@ -4177,7 +4206,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#296331e0533ee9d7141f03b5f4cc5d7c442600d6"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4992ab1233c7593d0277a5cc4a903fc661df81b2"
 dependencies = [
  "libc 0.2.119",
  "librocksdb_sys",
@@ -4599,6 +4628,7 @@ name = "server"
 version = "0.0.1"
 dependencies = [
  "backup",
+ "causal_ts",
  "cdc",
  "chrono",
  "clap 2.33.0",
@@ -5259,6 +5289,7 @@ dependencies = [
  "arrow",
  "batch-system",
  "byteorder",
+ "causal_ts",
  "cdc",
  "collections",
  "concurrency_manager",
@@ -5541,6 +5572,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "case_macros",
+ "causal_ts",
  "chrono",
  "codec",
  "collections",
