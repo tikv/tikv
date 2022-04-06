@@ -295,6 +295,11 @@ impl File for LocalFile {
         self.fd.read_at(&mut buf, off)?;
         Ok(Bytes::from(buf))
     }
+
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> crate::dfs::Result<()> {
+        self.fd.read_at(buf, offset)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

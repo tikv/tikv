@@ -2335,6 +2335,7 @@ dependencies = [
  "kvenginepb",
  "lazy_static",
  "libc 0.2.108",
+ "lz4",
  "moka",
  "num_cpus",
  "prometheus",
@@ -2356,6 +2357,7 @@ dependencies = [
  "tokio",
  "txn_types",
  "xorf",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -2528,10 +2530,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "lz4-sys"
-version = "1.9.2"
+name = "lz4"
+version = "1.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dca79aa95d8b3226213ad454d328369853be3a1382d89532a854f4d69640acae"
+checksum = "4edcb94251b1c375c459e5abe9fb0168c1c826c3370172684844f8f3f8d1a885"
+dependencies = [
+ "libc 0.2.108",
+ "lz4-sys",
+]
+
+[[package]]
+name = "lz4-sys"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7be8908e2ed6f31c02db8a9fa962f03e36c53fbfde437363eae3306b85d7e17"
 dependencies = [
  "cc",
  "libc 0.2.108",
@@ -6658,12 +6670,10 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.19+zstd.1.4.8"
+version = "1.6.3+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec24a9273d24437afb8e71b16f3d9a5d569193cccdb7896213b59f552f387674"
+checksum = "fc49afa5c8d634e75761feda8c592051e7eeb4683ba827211eb0d731d3402ea8"
 dependencies = [
  "cc",
- "glob",
- "itertools 0.9.0",
  "libc 0.2.108",
 ]

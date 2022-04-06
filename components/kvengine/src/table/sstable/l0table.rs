@@ -157,10 +157,10 @@ pub struct L0Builder {
 }
 
 impl L0Builder {
-    pub fn new(fid: u64, opt: TableBuilderOptions, version: u64) -> Self {
+    pub fn new(fid: u64, block_size: usize, version: u64) -> Self {
         let mut builders = Vec::with_capacity(4);
         for _ in 0..NUM_CFS {
-            let builder = Builder::new(fid, opt);
+            let builder = Builder::new(fid, block_size, NO_COMPRESSION);
             builders.push(builder);
         }
         Self {

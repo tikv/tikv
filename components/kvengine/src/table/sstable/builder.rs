@@ -16,7 +16,9 @@ pub const PROP_KEY_BIGGEST: &str = "biggest";
 pub const EXTRA_END: u8 = 255;
 pub const EXTRA_FILTER: u8 = 1;
 pub const EXTRA_FILTER_TYPE_BINARY_FUSE_8: u8 = 1;
-const NO_COMPRESSION: u8 = 0;
+pub const NO_COMPRESSION: u8 = 0;
+pub const LZ4_COMPRESSION: u8 = 1;
+pub const ZSTD_COMPRESSION: u8 = 2;
 const TABLE_FORMAT: u16 = 1;
 pub const MAGIC_NUMBER: u32 = 2940551257;
 pub const META_HAS_OLD: u8 = 1 << 1;
@@ -26,6 +28,7 @@ pub const BLOCK_ADDR_SIZE: usize = mem::size_of::<BlockAddress>();
 pub struct TableBuilderOptions {
     pub block_size: usize,
     pub max_table_size: usize,
+    pub compression_tps: [u8; 3],
 }
 
 impl Default for TableBuilderOptions {
@@ -33,6 +36,7 @@ impl Default for TableBuilderOptions {
         Self {
             block_size: 64 * 1024,
             max_table_size: 16 * 1024 * 1024,
+            compression_tps: [LZ4_COMPRESSION, LZ4_COMPRESSION, ZSTD_COMPRESSION],
         }
     }
 }
@@ -110,11 +114,13 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn new(fid: u64, opt: TableBuilderOptions) -> Self {
+    pub fn new(fid: u64, block_size: usize, compression_tp: u8) -> Self {
         let mut x = Self::default();
         x.fid = fid;
         x.checksum_tp = CRC32_IEEE;
-        x.block_size = opt.block_size;
+        x.block_size = block_size;
+        x.block_builder.compression_tp = compression_tp;
+        x.old_builder.compression_tp = compression_tp;
         x
     }
 
@@ -195,7 +201,7 @@ impl Builder {
         footer.index_offset = footer.old_data_offset + old_data_section_size;
         footer.old_index_offset = footer.index_offset + index_section_size;
         footer.properties_offset = footer.old_index_offset + old_index_section_size;
-        footer.compression_type = NO_COMPRESSION;
+        footer.compression_type = self.block_builder.compression_tp;
         footer.checksum_type = self.checksum_tp;
         footer.table_format_version = TABLE_FORMAT;
         footer.magic = MAGIC_NUMBER;
@@ -294,6 +300,31 @@ impl BlockBuffer {
         self.entry_sizes.truncate(0);
         self.size = 0;
     }
+
+    fn build_entry(&self, buf: &mut Vec<u8>, i: usize, common_prefix_len: usize) {
+        let key = self.tmp_keys.get_entry(i);
+        let key_suffix = &key[common_prefix_len..];
+        buf.put_u16_le(key_suffix.len() as u16);
+        buf.extend_from_slice(key_suffix);
+        let val_bin = self.tmp_vals.get_entry(i);
+        let v = Value::decode(val_bin);
+        let mut meta = v.meta;
+        let old_ver = self.old_vers[i];
+        if old_ver != 0 {
+            meta |= META_HAS_OLD;
+        } else {
+            // The val meta from the old table may have `metaHasOld` flag, need to unset it.
+            meta &= !META_HAS_OLD;
+        }
+        buf.push(meta);
+        buf.put_u64_le(v.version);
+        if old_ver != 0 {
+            buf.put_u64_le(old_ver);
+        }
+        buf.push(v.user_meta().len() as u8);
+        buf.extend_from_slice(v.user_meta());
+        buf.extend_from_slice(v.get_value());
+    }
 }
 
 #[derive(Default)]
@@ -302,6 +333,8 @@ struct BlockBuilder {
     block: BlockBuffer,
     block_keys: EntrySlice,
     block_addrs: Vec<BlockAddress>,
+    compression_tp: u8,
+    compression_buf: Vec<u8>,
 }
 
 impl BlockBuilder {
@@ -335,22 +368,32 @@ impl BlockBuilder {
         self.block_keys.append(self.block.tmp_keys.get_entry(0));
         self.block_addrs
             .push(BlockAddress::new(fid, self.buf.len() as u32));
-        self.buf.put_u32_le(0);
+        self.buf.put_u32_le(0); // checksum place holder.
         let begin_off = self.buf.len();
-        let num_entries = self.block.tmp_keys.length();
-        self.buf.put_u32_le(num_entries as u32);
         let common_prefix_len = self.get_block_common_prefix_len();
+        let buf: &mut Vec<u8>;
+        if self.compression_tp == NO_COMPRESSION {
+            buf = &mut self.buf;
+        } else {
+            self.compression_buf.truncate(0);
+            buf = &mut self.compression_buf;
+        }
+        let num_entries = self.block.tmp_keys.length();
+        buf.put_u32_le(num_entries as u32);
         let mut offset = 0u32;
         for i in 0..num_entries {
-            self.buf.put_u32_le(offset);
+            buf.put_u32_le(offset);
             // The entry size calculated in the first pass use full key size, we need to subtract common prefix size.
             offset += self.block.entry_sizes[i] - common_prefix_len as u32;
         }
-        self.buf.put_u16_le(common_prefix_len as u16);
+        buf.put_u16_le(common_prefix_len as u16);
         let common_prefix = &self.block.tmp_keys.get_entry(0)[..common_prefix_len];
-        self.buf.extend_from_slice(common_prefix);
+        buf.extend_from_slice(common_prefix);
         for i in 0..num_entries {
-            self.build_entry(i, common_prefix_len);
+            self.block.build_entry(buf, i, common_prefix_len);
+        }
+        if self.compression_tp != NO_COMPRESSION {
+            self.compress();
         }
         let mut checksum = 0u32;
         if checksum_tp == CRC32_IEEE {
@@ -359,31 +402,6 @@ impl BlockBuilder {
         let slice = self.buf.as_mut_slice();
         LittleEndian::write_u32(&mut slice[(begin_off - 4)..], checksum);
         self.block.reset()
-    }
-
-    fn build_entry(&mut self, i: usize, common_prefix_len: usize) {
-        let key = self.block.tmp_keys.get_entry(i);
-        let key_suffix = &key[common_prefix_len..];
-        self.buf.put_u16_le(key_suffix.len() as u16);
-        self.buf.extend_from_slice(key_suffix);
-        let val_bin = self.block.tmp_vals.get_entry(i);
-        let v = Value::decode(val_bin);
-        let mut meta = v.meta;
-        let old_ver = self.block.old_vers[i];
-        if old_ver != 0 {
-            meta |= META_HAS_OLD;
-        } else {
-            // The val meta from the old table may have `metaHasOld` flag, need to unset it.
-            meta &= !META_HAS_OLD;
-        }
-        self.buf.push(meta);
-        self.buf.put_u64_le(v.version);
-        if old_ver != 0 {
-            self.buf.put_u64_le(old_ver);
-        }
-        self.buf.push(v.user_meta().len() as u8);
-        self.buf.extend_from_slice(v.user_meta());
-        self.buf.extend_from_slice(v.get_value());
     }
 
     fn get_block_common_prefix_len(&self) -> usize {
@@ -457,6 +475,35 @@ impl BlockBuilder {
             self.buf.extend_from_slice(&bin);
         } else {
             warn!("failed to build binary fuse 8 filter");
+        }
+    }
+
+    fn compress(&mut self) {
+        unsafe {
+            let buf_len = self.buf.len();
+            let compress_bound = if self.compression_tp == LZ4_COMPRESSION {
+                lz4::block::compress_bound(self.compression_buf.len()).unwrap() + 4
+            } else {
+                zstd_sys::ZSTD_compressBound(self.compression_buf.len())
+            };
+            self.buf.reserve(compress_bound);
+            self.buf.set_len(buf_len + compress_bound);
+            let src = &self.compression_buf;
+            let dst = &mut self.buf[buf_len..];
+            let size = if self.compression_tp == LZ4_COMPRESSION {
+                lz4::block::compress_to_buffer(src, None, true, dst).unwrap()
+            } else if self.compression_tp == ZSTD_COMPRESSION {
+                zstd_sys::ZSTD_compress(
+                    dst.as_mut_ptr() as *mut libc::c_void,
+                    dst.len(),
+                    src.as_ptr() as *const libc::c_void,
+                    src.len(),
+                    zstd_sys::ZSTD_defaultCLevel(),
+                )
+            } else {
+                panic!("unexpected compression type {}", self.compression_tp);
+            };
+            self.buf.set_len(buf_len + size);
         }
     }
 }

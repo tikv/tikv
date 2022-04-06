@@ -172,8 +172,11 @@ impl Engine {
         // TODO: handle alloc_id error.
         let fid = self.id_allocator.alloc_id(1).unwrap().pop().unwrap();
 
-        let mut l0_builder =
-            sstable::L0Builder::new(fid, self.opts.table_builder_options, m.get_version());
+        let mut l0_builder = sstable::L0Builder::new(
+            fid,
+            self.opts.table_builder_options.block_size,
+            m.get_version(),
+        );
         for cf in 0..NUM_CFS {
             let skl = m.get_cf(cf);
             if skl.is_empty() {

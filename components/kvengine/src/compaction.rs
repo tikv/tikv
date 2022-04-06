@@ -99,16 +99,8 @@ pub struct CompactionRequest {
     pub safe_ts: u64,
     pub block_size: usize,
     pub max_table_size: usize,
+    pub compression_tp: u8,
     pub file_ids: Vec<u64>,
-}
-
-impl CompactionRequest {
-    pub(crate) fn get_table_builder_options(&self) -> sstable::TableBuilderOptions {
-        sstable::TableBuilderOptions {
-            block_size: self.block_size,
-            max_table_size: self.max_table_size as usize,
-        }
-    }
 }
 
 pub struct CompactDef {
@@ -464,6 +456,7 @@ impl Engine {
             safe_ts: load_u64(&self.managed_safe_ts),
             block_size: self.opts.table_builder_options.block_size,
             max_table_size: self.opts.table_builder_options.max_table_size,
+            compression_tp: self.opts.table_builder_options.compression_tps[level],
             overlap: level == 0,
             tops: vec![],
             bottoms: vec![],
@@ -682,7 +675,7 @@ struct CompactL0Helper {
     last_key: BytesMut,
     skip_key: BytesMut,
     safe_ts: u64,
-    opts: sstable::TableBuilderOptions,
+    max_table_size: usize,
     end: Vec<u8>,
 }
 
@@ -690,11 +683,11 @@ impl CompactL0Helper {
     fn new(cf: usize, req: &CompactionRequest) -> Self {
         Self {
             cf,
-            builder: sstable::Builder::new(0, req.get_table_builder_options()),
+            builder: sstable::Builder::new(0, req.block_size, req.compression_tp),
             last_key: BytesMut::new(),
             skip_key: BytesMut::new(),
             safe_ts: req.safe_ts,
-            opts: req.get_table_builder_options(),
+            max_table_size: req.max_table_size,
             end: req.end.clone(),
         }
     }
@@ -721,7 +714,7 @@ impl CompactL0Helper {
             }
             if key != self.last_key {
                 // We only break on table size.
-                if self.builder.estimated_size() > self.opts.max_table_size {
+                if self.builder.estimated_size() > self.max_table_size {
                     break;
                 }
                 if key >= self.end.as_slice() {
@@ -792,7 +785,7 @@ pub(crate) fn compact_tables(
 
     let mut last_key = BytesMut::new();
     let mut skip_key = BytesMut::new();
-    let mut builder = sstable::Builder::new(0, req.get_table_builder_options());
+    let mut builder = sstable::Builder::new(0, req.block_size, req.compression_tp);
     let mut id_idx = 0;
     let (tx, rx) = tikv_util::mpsc::bounded(req.file_ids.len());
     let mut reach_end = false;

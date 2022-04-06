@@ -189,6 +189,7 @@ pub struct TableIterator {
     err: Option<table::Error>,
     key_buf: BytesMut,
     iter_state: IterState,
+    block_buf: Vec<u8>,
 }
 
 impl TableIterator {
@@ -203,6 +204,7 @@ impl TableIterator {
             err: None,
             key_buf: BytesMut::new(),
             iter_state: IterState::NewVersion,
+            block_buf: vec![],
         }
     }
 
@@ -219,7 +221,7 @@ impl TableIterator {
     fn set_block(&mut self, b_pos: i32) -> bool {
         self.b_pos = b_pos;
         let block: Bytes;
-        match self.t.load_block(self.b_pos as usize) {
+        match self.t.load_block(self.b_pos as usize, &mut self.block_buf) {
             Ok(b) => {
                 block = b;
             }
@@ -235,7 +237,10 @@ impl TableIterator {
     fn set_old_block(&mut self, b_pos: i32) -> bool {
         self.old_b_pos = b_pos;
         let block: Bytes;
-        match self.t.load_old_block(self.old_b_pos as usize) {
+        match self
+            .t
+            .load_old_block(self.old_b_pos as usize, &mut self.block_buf)
+        {
             Ok(b) => {
                 block = b;
             }

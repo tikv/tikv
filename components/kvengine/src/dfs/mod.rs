@@ -46,6 +46,9 @@ pub trait File: Sync + Send {
 
     // read reads the data at given offset.
     fn read(&self, off: u64, length: usize) -> Result<Bytes>;
+
+    // read_at reads the data to the buffer.
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<()>;
 }
 
 pub struct InMemFS {
@@ -133,6 +136,12 @@ impl File for InMemFile {
     fn read(&self, off: u64, length: usize) -> Result<Bytes> {
         let off_usize = off as usize;
         Ok(self.data.slice(off_usize..off_usize + length))
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<()> {
+        let off_usize = offset as usize;
+        let length = buf.len();
+        Ok(buf.copy_from_slice(&self.data[off_usize..off_usize + length]))
     }
 }
 

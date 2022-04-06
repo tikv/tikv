@@ -169,7 +169,7 @@ impl SSTableCore {
         })
     }
 
-    pub fn load_block(&self, pos: usize) -> Result<Bytes> {
+    pub fn load_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
         let addr = self.idx.block_addrs[pos];
         let length: usize;
         if pos + 1 < self.idx.num_blocks() {
@@ -177,39 +177,75 @@ impl SSTableCore {
         } else {
             length = self.start_off as usize + self.footer.data_len() - addr.curr_off as usize;
         }
-        self.load_block_by_addr_len(addr, length)
+        self.load_block_by_addr_len(addr, length, buf)
     }
 
-    fn load_block_by_addr_len(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {
+    fn load_block_by_addr_len(
+        &self,
+        addr: BlockAddress,
+        length: usize,
+        buf: &mut Vec<u8>,
+    ) -> Result<Bytes> {
         if self.cache.is_none() {
-            return self.read_block_from_file(addr, length);
+            return self.read_block_from_file(addr, length, buf);
         }
         let cache = self.cache.as_ref().unwrap();
         let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
-        let mut error = None;
-        let block = cache.get_with(cache_key, || {
-            match self.read_block_from_file(addr, length) {
-                Ok(block) => block,
-                Err(err) => {
-                    error = Some(err);
-                    Bytes::new()
-                }
+        cache
+            .try_get_with(cache_key, || self.read_block_from_file(addr, length, buf))
+            .map_err(|err| err.as_ref().clone())
+    }
+
+    fn read_block_from_file(
+        &self,
+        addr: BlockAddress,
+        length: usize,
+        buf: &mut Vec<u8>,
+    ) -> Result<Bytes> {
+        let compression_type = self.footer.compression_type;
+        if compression_type == NO_COMPRESSION {
+            let raw_block = self.file.read(addr.curr_off as u64, length)?;
+            validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
+            return Ok(raw_block.slice(4..));
+        }
+        buf.truncate(0);
+        buf.reserve(length);
+        unsafe {
+            buf.set_len(length);
+        }
+        self.file.read_at(buf, addr.curr_off as u64)?;
+        validate_checksum(buf, self.footer.checksum_type)?;
+        let content = &buf[4..];
+        match compression_type {
+            LZ4_COMPRESSION => {
+                let block = lz4::block::decompress(content, None)?;
+                Ok(Bytes::from(block))
             }
-        });
-        if error.is_some() {
-            Err(error.unwrap())
-        } else {
-            Ok(block)
+            ZSTD_COMPRESSION => {
+                let capacity = unsafe {
+                    zstd_sys::ZSTD_getFrameContentSize(
+                        content.as_ptr() as *const libc::c_void,
+                        content.len(),
+                    ) as usize
+                };
+                let mut block = Vec::<u8>::with_capacity(capacity);
+                unsafe {
+                    let result = zstd_sys::ZSTD_decompress(
+                        block.as_mut_ptr() as *mut libc::c_void,
+                        capacity,
+                        content.as_ptr() as *const libc::c_void,
+                        content.len(),
+                    );
+                    assert_eq!(zstd_sys::ZSTD_isError(result), 0u32);
+                    block.set_len(capacity);
+                }
+                Ok(Bytes::from(block))
+            }
+            _ => panic!("unknown compression type {}", compression_type),
         }
     }
 
-    fn read_block_from_file(&self, addr: BlockAddress, length: usize) -> Result<Bytes> {
-        let raw_block = self.file.read(addr.curr_off as u64, length)?;
-        validate_checksum(raw_block.chunk(), self.footer.checksum_type)?;
-        return Ok(raw_block.slice(4..));
-    }
-
-    pub fn load_old_block(&self, pos: usize) -> Result<Bytes> {
+    pub fn load_old_block(&self, pos: usize, buf: &mut Vec<u8>) -> Result<Bytes> {
         let addr = self.old_idx.block_addrs[pos];
         let length: usize;
         if pos + 1 < self.old_idx.num_blocks() {
@@ -217,7 +253,7 @@ impl SSTableCore {
         } else {
             length = self.footer.index_offset as usize - addr.curr_off as usize;
         }
-        self.load_block_by_addr_len(addr, length)
+        self.load_block_by_addr_len(addr, length, buf)
     }
 
     pub fn id(&self) -> u64 {
@@ -452,11 +488,7 @@ pub(crate) fn build_test_table_with_kvs(key_vals: Vec<(String, String)>) -> Arc<
 
 #[cfg(test)]
 pub(crate) fn new_table_builder_for_test(id: u64) -> Builder {
-    let opts = TableBuilderOptions {
-        block_size: 4096,
-        max_table_size: 32 * 1024,
-    };
-    Builder::new(id, opts)
+    Builder::new(id, 4096, NO_COMPRESSION)
 }
 
 #[cfg(test)]
