@@ -19,7 +19,7 @@ use tikv_util::{debug, info};
 
 use crate::store::metrics::*;
 use crate::store::worker::query_stats::{is_read_query, QueryStats};
-use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
+use crate::store::worker::split_config::get_sample_num;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
@@ -442,8 +442,8 @@ impl ReadStats {
                 *bucket_stat = new;
             }
             let mut delta = metapb::BucketStats::default();
-            delta.set_write_bytes(vec![write.read_bytes as u64]);
-            delta.set_read_bytes(vec![data.read_bytes as u64]);
+            delta.set_read_bytes(vec![(write.read_bytes + data.read_bytes) as u64]);
+            delta.set_read_keys(vec![(write.read_keys + data.read_keys) as u64]);
             let start = start.unwrap_or_default();
             let end = end.unwrap_or_default();
             merge_bucket_stats(
@@ -463,7 +463,7 @@ impl ReadStats {
 impl Default for ReadStats {
     fn default() -> ReadStats {
         ReadStats {
-            sample_num: DEFAULT_SAMPLE_NUM,
+            sample_num: get_sample_num(),
             region_infos: HashMap::default(),
             region_buckets: HashMap::default(),
         }
@@ -632,6 +632,7 @@ impl AutoSplitController {
 mod tests {
     use super::*;
     use crate::store::util::build_key_range;
+    use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
     use txn_types::Key;
 
     enum Position {

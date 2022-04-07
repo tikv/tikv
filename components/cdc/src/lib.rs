@@ -8,6 +8,7 @@ mod config;
 mod delegate;
 mod endpoint;
 mod errors;
+mod initializer;
 pub mod metrics;
 mod observer;
 mod old_value;

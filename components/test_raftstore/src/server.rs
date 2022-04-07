@@ -348,6 +348,7 @@ impl Simulator for ServerCluster {
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
+            cfg.quota.max_delay_duration,
         ));
         let store = create_raft_storage(
             engine,
@@ -501,7 +502,8 @@ impl Simulator for ServerCluster {
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.tikv.split)));
+        let split_config_manager =
+            SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
         let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
