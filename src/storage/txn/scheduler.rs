@@ -1072,7 +1072,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
             sched_pool
                 .spawn(async move {
-
                     self.release_lock(&task_lock, cid);
 
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
