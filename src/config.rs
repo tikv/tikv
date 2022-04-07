@@ -3612,6 +3612,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::config::ServerConfigManager;
     use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config_manager::StorageConfigManger;
     use crate::storage::lock_manager::DummyLockManager;
@@ -3625,6 +3626,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_kv::RocksEngine as RocksDBEngine;
+    use tikv_util::config::VersionTrack;
     use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
     use tikv_util::sys::SysQuota;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
@@ -4419,6 +4421,37 @@ mod tests {
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.async_consume(sample));
         assert_eq!(should_delay, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_change_server_config() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (scheduler, _receiver) = dummy_scheduler();
+        let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        cfg_controller.register(
+            Module::Server,
+            Box::new(ServerConfigManager::new(scheduler, version_tracker.clone())),
+        );
+
+        let check_cfg = |cfg: &TiKvConfig| {
+            assert_eq!(&cfg_controller.get_current(), cfg);
+            assert_eq!(&*version_tracker.value(), &cfg.server);
+        };
+
+        cfg_controller
+            .update_config("server.max-grpc-send-msg-len", "10000")
+            .unwrap();
+        cfg.server.max_grpc_send_msg_len = 10000;
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("server.raft-msg-max-batch-size", "32")
+            .unwrap();
+        cfg.server.raft_msg_max_batch_size = 32;
+        assert_eq!(cfg_controller.get_current(), cfg);
+        check_cfg(&cfg);
     }
 
     #[test]
