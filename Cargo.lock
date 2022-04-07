@@ -5155,6 +5155,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto",
+ "protobuf",
  "rand 0.8.3",
  "tempfile",
  "test_raftstore",

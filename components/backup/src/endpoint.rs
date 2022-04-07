@@ -185,35 +185,33 @@ impl BackupConverter {
             self.dst_api_ver,
             Some(TimeStamp::from(BACKUP_V1_TO_V2_TS)),
         ) {
-            return Ok(dest_key);
+            Ok(dest_key)
         } else {
             error!("convert raw key fails";
                 "key" => &log_wrappers::Value::key(key),
                 "cur_api_version" => self.cur_api_ver as i32,
                 "dst_api_ver" => self.dst_api_ver as i32,
             );
-            return Err(Error::ApiConvertFail {
+            Err(Error::ApiConvertFail {
                 cur_api_ver: self.cur_api_ver as i32,
                 dst_api_ver: self.dst_api_ver as i32,
-            });
+            })
         }
     }
 
     fn convert_to_dest_raw_value(&self, value: &[u8]) -> Result<Vec<u8>> {
-        if let Ok(dest_value) =
-            convert_raw_value(value, self.cur_api_ver, self.dst_api_ver)
-        {
-            return Ok(dest_value);
+        if let Ok(dest_value) = convert_raw_value(value, self.cur_api_ver, self.dst_api_ver) {
+            Ok(dest_value)
         } else {
             error!("convert raw value fails";
                 "value" => &log_wrappers::Value::key(value),
                 "cur_api_version" => self.cur_api_ver as i32,
                 "dst_api_version" => self.dst_api_ver as i32,
             );
-            return Err(Error::ApiConvertFail {
+            Err(Error::ApiConvertFail {
                 cur_api_ver: self.cur_api_ver as i32,
                 dst_api_ver: self.dst_api_ver as i32,
-            });
+            })
         }
     }
 
@@ -535,8 +533,8 @@ impl BackupRange {
                     )));
                 };
                 debug!("backup raw key";
-                    "key" => &log_wrappers::Value::key(key),
-                    "value" => &log_wrappers::Value::value(value),
+                    "key" => &log_wrappers::Value::key(&self.converter.convert_to_dest_raw_key(key)?.into_encoded()),
+                    "value" => &log_wrappers::Value::value(&self.converter.convert_to_dest_raw_value(value)?),
                     "valid" => is_valid,
                 );
                 cursor.next(cfstatistics);
@@ -546,7 +544,7 @@ impl BackupRange {
             }
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain(..), false) {
+            if let Err(e) = writer.write(batch.drain(..), true) {
                 error_unknown!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
@@ -1209,6 +1207,7 @@ pub mod tests {
     use rand::Rng;
     use std::sync::Mutex;
     use tempfile::TempDir;
+    use tikv::coprocessor::checksum_crc64_xor;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::config::ReadableSize;
@@ -1637,6 +1636,43 @@ pub mod tests {
         )
     }
 
+    fn convert_test_backup_raw_key(
+        raw_key: String,
+        ts: u64,
+        cur_ver: ApiVersion,
+        dst_ver: ApiVersion,
+    ) -> Key {
+        if cur_ver == dst_ver {
+            match_template_api_version!(
+                API,
+                match cur_ver {
+                    ApiVersion::API => {
+                        return API::encode_raw_key_owned(
+                            raw_key.into_bytes(),
+                            Some(TimeStamp::from(ts)),
+                        );
+                    }
+                }
+            )
+        } else if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl)
+            && dst_ver == ApiVersion::V2
+        {
+            let mut dst_key = raw_key;
+            dst_key.insert(0, RAW_KEY_PREFIX as char);
+            return generate_engine_test_key(dst_key, BACKUP_V1_TO_V2_TS, dst_ver);
+        }
+        Key::from_encoded(raw_key.into_bytes())
+    }
+
+    fn convert_test_backup_raw_value(
+        value: String,
+        cur_ver: ApiVersion,
+        dst_ver: ApiVersion,
+    ) -> Vec<u8> {
+        let value = generate_engine_test_value(value, cur_ver);
+        convert_raw_value(&value, cur_ver, dst_ver).unwrap()
+    }
+
     fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
         let limiter = Arc::new(IORateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
@@ -1654,11 +1690,17 @@ pub mod tests {
         let end_key_idx = 10;
         let ctx = Context::default();
         let mut i = start_key_idx;
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
         while i < end_key_idx {
             let key_str = generate_test_raw_key(i);
             let value_str = generate_test_raw_value(i);
-            let key = generate_engine_test_key(key_str, i as u64, cur_api_ver);
-            let value = generate_engine_test_value(value_str, cur_api_ver);
+            let key = generate_engine_test_key(key_str.clone(), i as u64, cur_api_ver);
+            let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
+            let dest_key = convert_test_backup_raw_key(key_str, i as u64, cur_api_ver, dst_api_ver);
+            let dest_value = convert_test_backup_raw_value(value_str, cur_api_ver, dst_api_ver);
+            checksum =
+                checksum_crc64_xor(checksum, digest.clone(), dest_key.as_encoded(), &dest_value);
             let ret = engine.put(&ctx, key, value);
             assert!(ret.is_ok());
             i += 1;
@@ -1697,19 +1739,14 @@ pub mod tests {
         info!("{:?}", files);
         assert_eq!(files.len(), file_len /* default cf*/, "{:?}", resp);
         assert_eq!(files[0].total_kvs, (end_key_idx - start_key_idx) as u64);
+        assert_eq!(files[0].crc64xor, checksum);
         let kv_backup_size = {
-            let mut raw_key_str = generate_test_raw_key(0);
-            if cur_api_ver != ApiVersion::V2 && dst_api_ver == ApiVersion::V2 {
-                raw_key_str.insert(0, RAW_KEY_PREFIX as char);
-            }
+            let raw_key_str = generate_test_raw_key(0);
             let raw_value_str = generate_test_raw_value(0);
-            let key = generate_engine_test_key(generate_test_raw_key(0), 0, dst_api_ver);
-            let value = generate_engine_test_value(raw_value_str, dst_api_ver);
-            if cur_api_ver == ApiVersion::V1 && dst_api_ver == ApiVersion::V2 {
-                key.len() + value.len() - 8 // api v1 donnot encode expire ts in value
-            } else {
-                key.len() + value.len()
-            }
+            let backup_key = convert_test_backup_raw_key(raw_key_str, 0, cur_api_ver, dst_api_ver);
+            let backup_value =
+                convert_test_backup_raw_value(raw_value_str, cur_api_ver, dst_api_ver);
+            backup_key.len() + backup_value.len()
         };
         assert_eq!(
             files[0].total_bytes,

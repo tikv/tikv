@@ -555,14 +555,21 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dest_api_version: ApiV
     }
     // Keys are order by lexicographical order, 'a'-'z' will cover all.
     let (admin_checksum, admin_total_kvs, admin_total_bytes) =
-        suite.raw_kv_checksum("a".to_owned(), "z".to_owned(), CF_DEFAULT);
+        suite.raw_kv_checksum("ra".to_owned(), "rz".to_owned(), CF_DEFAULT);
+
+    let (store_checksum, store_kvs, store_bytes) =
+        suite.storage_raw_checksum("ra".to_owned(), "rz".to_owned());
+
+    assert_eq!(admin_checksum, store_checksum);
+    assert_eq!(admin_total_kvs, store_kvs);
+    assert_eq!(admin_total_bytes, store_bytes);
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
-        vec![], // start
-        vec![], // end
+        "ra".to_owned().into_bytes(), // start
+        "rz".to_owned().into_bytes(), // end
         cf,
         &storage_path,
         dest_api_version,
@@ -581,7 +588,7 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dest_api_version: ApiV
         total_kvs += f.get_total_kvs();
         total_bytes += f.get_total_bytes();
     }
-    assert_eq!(total_kvs, key_count + 1);
+    assert_eq!(total_kvs, key_count);
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);

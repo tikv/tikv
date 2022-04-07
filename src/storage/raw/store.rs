@@ -3,6 +3,7 @@
 use super::encoded::RawEncodeSnapshot;
 use super::raw_mvcc::RawMvccSnapshot;
 
+use crate::coprocessor::checksum_crc64_xor;
 use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
 use crate::storage::Statistics;
@@ -141,9 +142,15 @@ impl<'a, S: Snapshot> RawStore<S> {
         statistics: &'a mut Vec<Statistics>,
     ) -> Result<(u64, u64, u64)> {
         match self {
-            RawStore::V1(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
-            RawStore::V1TTL(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
-            RawStore::V2(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
+            RawStore::V1(inner) => {
+                raw_checksum_ranges(&inner.snapshot, cf, ranges, statistics).await
+            }
+            RawStore::V1TTL(inner) => {
+                raw_checksum_ranges(&inner.snapshot.snap, cf, ranges, statistics).await
+            }
+            RawStore::V2(inner) => {
+                raw_checksum_ranges(&inner.snapshot.snap, cf, ranges, statistics).await
+            }
         }
     }
 }
@@ -278,45 +285,43 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         }
         Ok(pairs)
     }
-
-    pub async fn raw_checksum_ranges(
-        &'a self,
-        cf: CfName,
-        ranges: &[KeyRange],
-        statistics: &'a mut Vec<Statistics>,
-    ) -> Result<(u64, u64, u64)> {
-        let mut total_bytes = 0;
-        let mut total_kvs = 0;
-        let mut digest = crc64fast::Digest::new();
-        let mut row_count = 0;
-        let mut time_slice_start = Instant::now();
-        for r in ranges {
-            let mut stats = Statistics::default();
-            let cf_stats = stats.mut_cf_statistics(cf);
-            let mut opts = IterOptions::new(None, None, false);
-            opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
-            let mut cursor =
-                Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
-            cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
-            while cursor.valid()? {
-                row_count += 1;
-                if row_count >= MAX_BATCH_SIZE {
-                    if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
-                        reschedule().await;
-                        time_slice_start = Instant::now();
-                    }
-                    row_count = 0;
+}
+pub async fn raw_checksum_ranges<S: Snapshot>(
+    snapshot: &S,
+    cf: CfName,
+    ranges: &[KeyRange],
+    statistics: &mut Vec<Statistics>,
+) -> Result<(u64, u64, u64)> {
+    let mut total_bytes = 0;
+    let mut total_kvs = 0;
+    let digest = crc64fast::Digest::new();
+    let mut checksum: u64 = 0;
+    let mut row_count = 0;
+    let mut time_slice_start = Instant::now();
+    for r in ranges {
+        let mut stats = Statistics::default();
+        let cf_stats = stats.mut_cf_statistics(cf);
+        let mut opts = IterOptions::new(None, None, false);
+        opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
+        let mut cursor = Cursor::new(snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
+        cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
+        while cursor.valid()? {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
                 }
-                let k = cursor.key(cf_stats);
-                let v = cursor.value(cf_stats);
-                digest.write(k);
-                digest.write(v);
-                total_kvs += 1;
-                total_bytes += k.len() + v.len();
-                cursor.next(cf_stats);
+                row_count = 0;
             }
-            statistics.push(stats);
+            let k = cursor.key(cf_stats);
+            let v = cursor.value(cf_stats);
+            checksum = checksum_crc64_xor(checksum, digest.clone(), k, v);
+            total_kvs += 1;
+            total_bytes += k.len() + v.len();
+            cursor.next(cf_stats);
         }
-        Ok((digest.sum64(), total_kvs, total_bytes as u64))
+        statistics.push(stats);
     }
+    Ok((checksum, total_kvs, total_bytes as u64))
 }

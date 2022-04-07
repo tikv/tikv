@@ -47,7 +47,7 @@ impl APIVersion for APIV1 {
                 assert_eq!(APIV2::parse_key_mode(key), KeyMode::Raw);
                 let (mut user_key, _) = APIV2::decode_raw_key(&Key::from_encoded_slice(key), true)?;
                 user_key.remove(0); // remove first byte `RAW_KEY_PREFIX`
-                return Ok(Self::encode_raw_key_owned(user_key, None));
+                Ok(Self::encode_raw_key_owned(user_key, None))
             }
         }
     }

@@ -364,12 +364,32 @@ impl TestSuite {
         if !iter.seek(&start).unwrap() {
             return (0, 0, 0);
         }
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
         while iter.valid().unwrap() {
+            let key = iter.key();
+            let value = iter.value();
             total_kvs += 1;
-            total_bytes += (iter.key().len() + iter.value().len()) as u64;
+            total_bytes += (key.len() + value.len()) as u64;
+            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
             iter.next().unwrap();
         }
-        (0, total_kvs, total_bytes)
+        (checksum, total_kvs, total_bytes)
+    }
+
+    pub fn storage_raw_checksum(&self, start: String, end: String) -> (u64, u64, u64) {
+        let mut req = RawChecksumRequest::default();
+        let mut context = self.context.clone();
+        if context.api_version == ApiVersion::V1ttl {
+            context.api_version = ApiVersion::V1;
+        }
+        req.set_context(context);
+        let mut range = KeyRange::default();
+        range.set_start_key(start.into_bytes());
+        range.set_end_key(end.into_bytes());
+        req.set_ranges(protobuf::RepeatedField::from_vec(vec![range]));
+        let response = self.tikv_cli.raw_checksum(&req).unwrap();
+        (response.checksum, response.total_kvs, response.total_bytes)
     }
 }
 
