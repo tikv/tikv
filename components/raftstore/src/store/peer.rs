@@ -461,12 +461,11 @@ pub enum ForceLeaderState {
     ForceLeader { failed_stores: HashSet<u64> },
 }
 
-pub struct UnsafeRecoveryState {
-    // During unsafe recovery, in order to make sure the report send to PD contains the up-to-date
-    // information, each peer has to make sure that certain entries are not only commited but also
-    // applied, and who ever is the last one needs to schedule the reporting.
-    pub wait_apply_target_index: Option<u64>,
-    pub wait_apply_task_counter: Option<Arc<AtomicUsize>>,
+pub enum UnsafeRecoveryState {
+    WaitApply {
+        target_index: u64,
+        task_counter: Arc<AtomicUsize>,
+    },
 }
 
 #[derive(Getters)]
@@ -4496,9 +4495,9 @@ where
         ctx: &PollContext<EK, ER, T>,
         counter: Arc<AtomicUsize>,
     ) {
-        self.unsafe_recovery_state = Some(UnsafeRecoveryState {
-            wait_apply_target_index: Some(self.raft_group.store().commit_index()),
-            wait_apply_task_counter: Some(counter),
+        self.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
+            target_index: self.raft_group.store().commit_index(),
+            task_counter: counter,
         });
         self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
     }
@@ -4509,16 +4508,16 @@ where
         force: bool,
     ) {
         if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
-            if let Some(target_index) = unsafe_recovery_state.wait_apply_target_index {
-                if self.raft_group.raft.raft_log.applied >= target_index || force {
-                    if let Some(counter) = unsafe_recovery_state.wait_apply_task_counter.as_ref() {
-                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                            store_heartbeat_pd(ctx, /*send_detailed_report=*/ true);
-                        }
-                    }
-                    // Reset the state if the wait is finished.
-                    self.unsafe_recovery_state = None;
+            let UnsafeRecoveryState::WaitApply {
+                target_index,
+                task_counter,
+            } = unsafe_recovery_state;
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                if task_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    store_heartbeat_pd(ctx, /*send_detailed_report=*/ true);
                 }
+                // Reset the state if the wait is finished.
+                self.unsafe_recovery_state = None;
             }
         }
     }
