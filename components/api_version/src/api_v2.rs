@@ -31,6 +31,7 @@ bitflags::bitflags! {
 
 impl APIVersion for APIV2 {
     const TAG: ApiVersion = ApiVersion::V2;
+    #[cfg(test)]
     const CLIENT_TAG: ApiVersion = ApiVersion::V2;
     const IS_TTL_ENABLED: bool = true;
 

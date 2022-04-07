@@ -160,7 +160,7 @@ pub fn run_tikv(config: TiKvConfig) {
         } else {
             run_impl::<RaftLogEngine, API>(config)
         }
-    }
+    })
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
