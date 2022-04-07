@@ -842,6 +842,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.region_info_accessor.clone(),
                 self.router.clone(),
                 self.pd_client.clone(),
+                self.concurrency_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.to_stop.push(backup_stream_worker);

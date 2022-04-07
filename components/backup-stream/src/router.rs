@@ -132,14 +132,6 @@ impl ApplyEvents {
                 }
                 continue;
             }
-            // use the key ts as min_ts would be safe.
-            // - if it is uncommitted, the lock would be tracked, preventing resolved ts
-            //   advanced incorrectly.
-            // - if it is committed, it is safe(hopefully) to advance resolved ts to it.
-            //   (Will something like one PC break this?)
-            // note: maybe get this ts from PD? The current implement cannot advance the resolved ts
-            //       if there is no write.
-            resolver.resolve(Key::decode_ts_from(&key).unwrap_or_default());
             let item = ApplyEvent {
                 key,
                 value,
@@ -714,10 +706,12 @@ impl StreamTaskInfo {
     pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let w = self.flushing_files.read().await;
         // Let's flush all files first...
-        futures::future::join_all(
-            w.iter()
-                .map(|(_, f)| async move { f.lock().await.inner.flush().await }),
-        )
+        futures::future::join_all(w.iter().map(|(_, f)| async move {
+            let file = &mut f.lock().await.inner;
+            file.flush().await?;
+            file.get_ref().sync_all().await?;
+            Result::Ok(())
+        }))
         .await
         .into_iter()
         .map(|r| r.map_err(Error::from))

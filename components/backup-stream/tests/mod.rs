@@ -4,7 +4,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    iter::FromIterator,
     path::Path,
     sync::Arc,
 };
@@ -14,10 +13,11 @@ use backup_stream::{
     observer::BackupStreamObserver,
     Endpoint, Task,
 };
-use futures::executor::block_on;
+use futures::{executor::block_on, Future};
 use grpcio::ChannelBuilder;
 use kvproto::{brpb::Local, tikvpb::*};
 use kvproto::{brpb::StorageBackend, kvrpcpb::*};
+use pd_client::PdClient;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use tikv::config::BackupStreamConfig;
@@ -26,6 +26,7 @@ use tikv_util::{
         number::NumberEncoder,
         stream_event::{EventIterator, Iterator},
     },
+    info,
     worker::LazyWorker,
     HandyRwLock,
 };
@@ -121,6 +122,7 @@ impl Suite {
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
         let raft_router = sim.get_server_router(id);
+        let cm = sim.get_concurrency_manager(id);
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let mut cfg = BackupStreamConfig::default();
         cfg.enable = true;
@@ -135,6 +137,7 @@ impl Suite {
             regions,
             raft_router,
             cluster.pd_client.clone(),
+            cm,
         );
         worker.start(endpoint);
     }
@@ -185,29 +188,41 @@ impl Suite {
         .unwrap();
     }
 
-    fn write_records(&mut self, from: usize, n: usize, for_table: i64) {
+    async fn write_records(&mut self, from: usize, n: usize, for_table: i64) -> HashSet<Vec<u8>> {
+        let mut inserted = HashSet::default();
         for ts in (from..(from + n)).map(|x| x * 2) {
             let ts = ts as u64;
             let key = make_record_key(for_table, ts);
             let muts = vec![mutation(key.clone(), b"hello, world".to_vec())];
             let enc_key = Key::from_raw(&key).into_encoded();
             let region = self.cluster.get_region_id(&enc_key);
-            self.must_kv_prewrite(region, muts, key.clone(), TimeStamp::new(ts));
-            self.must_kv_commit(
-                region,
-                vec![key.clone()],
-                TimeStamp::new(ts),
-                TimeStamp::new(ts + 1),
-            );
+            let start_ts = self.cluster.pd_client.get_tso().await.unwrap();
+            self.must_kv_prewrite(region, muts, key.clone(), start_ts);
+            let commit_ts = self.cluster.pd_client.get_tso().await.unwrap();
+            self.must_kv_commit(region, vec![key.clone()], start_ts, commit_ts);
+            inserted.insert(make_encoded_record_key(
+                for_table,
+                ts,
+                commit_ts.into_inner(),
+            ));
         }
+        inserted
     }
 
-    fn just_async_commit_prewrite(&mut self, ts: u64, for_table: i64) {
+    fn just_commit_a_key(&mut self, key: Vec<u8>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let enc_key = Key::from_raw(&key).into_encoded();
+        let region = self.cluster.get_region_id(&enc_key);
+        self.must_kv_commit(region, vec![key], start_ts, commit_ts)
+    }
+
+    fn just_async_commit_prewrite(&mut self, ts: u64, for_table: i64) -> TimeStamp {
         let key = make_record_key(for_table, ts);
         let muts = vec![mutation(key.clone(), b"hello, world".to_vec())];
         let enc_key = Key::from_raw(&key).into_encoded();
         let region = self.cluster.get_region_id(&enc_key);
-        self.must_kv_async_commit_prewrite(region, muts, key, TimeStamp::new(ts));
+        let ts = self.must_kv_async_commit_prewrite(region, muts, key, TimeStamp::new(ts));
+        info!("async prewrite success!"; "min_commit_ts" => %ts);
+        ts
     }
 
     fn force_flush_files(&self, task: &str) {
@@ -219,12 +234,13 @@ impl Suite {
         }
     }
 
-    fn check_for_write_records(&self, n: u64, for_table: i64, path: &Path) {
-        let mut remain_keys: HashSet<Vec<u8>> = HashSet::from_iter(
-            (0..n)
-                .map(|x| x * 2)
-                .map(|n| make_encoded_record_key(for_table, n, n + 1)),
-        );
+    fn check_for_write_records<'a>(
+        &self,
+        path: &Path,
+        key_set: impl std::iter::Iterator<Item = &'a [u8]>,
+    ) {
+        let mut remain_keys = key_set.collect::<HashSet<_>>();
+        let n = remain_keys.len();
         let mut extra_key = 0;
         let mut extra_len = 0;
         for entry in WalkDir::new(path) {
@@ -399,25 +415,39 @@ impl Suite {
     }
 }
 
+fn run_async_test<T>(test: impl Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(test)
+}
+
 mod test {
     use std::time::Duration;
 
     use backup_stream::metadata::MetadataClient;
+    use txn_types::TimeStamp;
 
-    use crate::make_split_key_at_record;
+    use crate::{make_record_key, make_split_key_at_record, run_async_test};
 
     #[test]
     fn basic() {
         test_util::init_log_for_test();
         let mut suite = super::Suite::new("basic", 4);
 
-        // write data before the task starting, for testing incremental scanning.
-        suite.write_records(0, 128, 1);
-        suite.must_register_task(1, "test_basic");
-        suite.write_records(128, 128, 1);
-        suite.force_flush_files("test_basic");
-        std::thread::sleep(Duration::from_secs(4));
-        suite.check_for_write_records(256, 1, suite.flushed_files.path());
+        run_async_test(async {
+            // write data before the task starting, for testing incremental scanning.
+            let round1 = suite.write_records(0, 128, 1).await;
+            suite.must_register_task(1, "test_basic");
+            let round2 = suite.write_records(256, 128, 1).await;
+            suite.force_flush_files("test_basic");
+            std::thread::sleep(Duration::from_secs(4));
+            suite.check_for_write_records(
+                suite.flushed_files.path(),
+                round1.union(&round2).map(Vec::as_slice),
+            );
+        });
         suite.cluster.shutdown();
     }
 
@@ -425,50 +455,69 @@ mod test {
     fn with_split() {
         test_util::init_log_for_test();
         let mut suite = super::Suite::new("with_split", 4);
-        suite.write_records(0, 128, 1);
-        suite.must_split(&make_split_key_at_record(1, 42));
-        suite.must_register_task(1, "test_with_split");
-        suite.write_records(128, 128, 1);
-        suite.force_flush_files("test_with_split");
-        std::thread::sleep(Duration::from_secs(4));
-        suite.check_for_write_records(256, 1, suite.flushed_files.path());
+        run_async_test(async {
+            let round1 = suite.write_records(0, 128, 1).await;
+            suite.must_split(&make_split_key_at_record(1, 42));
+            suite.must_register_task(1, "test_with_split");
+            let round2 = suite.write_records(256, 128, 1).await;
+            suite.force_flush_files("test_with_split");
+            std::thread::sleep(Duration::from_secs(4));
+            suite.check_for_write_records(
+                suite.flushed_files.path(),
+                round1.union(&round2).map(Vec::as_slice),
+            );
+        });
         suite.cluster.shutdown();
     }
 
     #[test]
+    /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
         test_util::init_log_for_test();
         let mut suite = super::Suite::new("leader_down", 4);
         suite.must_register_task(1, "test_leader_down");
-
-        suite.write_records(0, 128, 1);
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
         let leader = suite.cluster.leader_of_region(1).unwrap().get_store_id();
         suite.cluster.stop_node(leader);
-        suite.write_records(128, 128, 1);
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
         std::thread::sleep(Duration::from_secs(4));
-        suite.check_for_write_records(256, 1, suite.flushed_files.path());
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        );
         suite.cluster.shutdown();
     }
 
-    #[tokio::test]
-    // FIXME: This test case cannot pass for now.
-    async fn async_commit() {
+    #[test]
+    /// This case tests whehter the checkpoint ts (next backup ts) can be advanced correctly
+    /// when async commit is enabled.
+    fn async_commit() {
         test_util::init_log_for_test();
         let mut suite = super::Suite::new("async_commit", 3);
-        suite.must_register_task(1, "test_async_commit");
-
-        suite.write_records(0, 128, 1);
-        suite.just_async_commit_prewrite(128, 1);
-        suite.write_records(130, 128, 1);
-        suite.force_flush_files("test_async_commit");
-        std::thread::sleep(Duration::from_secs(4));
-        let cli = MetadataClient::new(suite.meta_store, 1);
-        assert_eq!(
-            cli.global_progress_of_task("test_async_commit")
+        run_async_test(async {
+            suite.must_register_task(1, "test_async_commit");
+            suite.write_records(0, 128, 1).await;
+            let ts = suite.just_async_commit_prewrite(256, 1);
+            suite.write_records(258, 128, 1).await;
+            suite.force_flush_files("test_async_commit");
+            std::thread::sleep(Duration::from_secs(4));
+            let cli = MetadataClient::new(suite.meta_store.clone(), 1);
+            assert_eq!(
+                cli.global_progress_of_task("test_async_commit")
+                    .await
+                    .unwrap(),
+                256
+            );
+            suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
+            suite.force_flush_files("test_async_commit");
+            std::thread::sleep(Duration::from_secs(4));
+            let cp = cli
+                .global_progress_of_task("test_async_commit")
                 .await
-                .unwrap(),
-            128
-        );
+                .unwrap();
+            assert!(cp > 514, "it is {:?}", cp);
+        });
+        suite.cluster.shutdown();
     }
 }

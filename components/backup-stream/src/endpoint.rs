@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use concurrency_manager::ConcurrencyManager;
 use dashmap::DashMap;
 use engine_traits::KvEngine;
 
@@ -61,6 +62,7 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
     router: RT,
     pd_client: Arc<PDC>,
     resolvers: Arc<DashMap<u64, Resolver>>,
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -80,6 +82,7 @@ where
         accessor: R,
         router: RT,
         pd_client: Arc<PDC>,
+        cm: ConcurrencyManager,
     ) -> Self {
         let pool = create_tokio_runtime(config.num_threads, "br-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
@@ -120,6 +123,7 @@ where
             router,
             pd_client,
             resolvers: Default::default(),
+            concurrency_manager: cm,
         }
     }
 }
@@ -140,6 +144,7 @@ where
         accessor: R,
         router: RT,
         pd_client: Arc<PDC>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
         let pool = create_tokio_runtime(config.num_threads, "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
@@ -190,6 +195,7 @@ where
             router,
             pd_client,
             resolvers: Default::default(),
+            concurrency_manager,
         }
     }
 }
@@ -414,12 +420,19 @@ where
     }
 
     /// try advance the resolved ts by the pd tso.
-    async fn try_resolve(pd_client: Arc<PDC>, resolvers: Arc<DashMap<u64, Resolver>>) -> TimeStamp {
-        let tso = pd_client
+    async fn try_resolve(
+        cm: &ConcurrencyManager,
+        pd_client: Arc<PDC>,
+        resolvers: Arc<DashMap<u64, Resolver>>,
+    ) -> TimeStamp {
+        let pd_tso = pd_client
             .get_tso()
             .await
             .map_err(|err| Error::from(err).report("failed to get tso from pd"))
             .unwrap_or_default();
+        let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
+        let tso = Ord::min(pd_tso, min_ts);
+        info!("backup stream using tso for resolving"; "min_ts" => %min_ts, "pd_tso" => %pd_tso);
         let new_tso = resolvers
             .as_ref()
             .iter_mut()
@@ -436,11 +449,12 @@ where
         pd_cli: Arc<PDC>,
         resolvers: Arc<DashMap<u64, Resolver>>,
         meta_cli: MetadataClient<S>,
+        concurrency_manager: ConcurrencyManager,
     ) {
         let start = Instant::now_coarse();
         // NOTE: Maybe push down the resolve step to the router?
         //       Or if there are too many duplicated `Flush` command, we may do some useless works.
-        let new_rts = Self::try_resolve(pd_cli.clone(), resolvers).await;
+        let new_rts = Self::try_resolve(&concurrency_manager, pd_cli.clone(), resolvers).await;
         metrics::FLUSH_DURATION
             .with_label_values(&["resolve_by_now"])
             .observe(start.saturating_elapsed_secs());
@@ -450,6 +464,7 @@ where
                 // We cannot advance the resolved ts for now.
                 return;
             }
+            concurrency_manager.update_max_ts(TimeStamp::new(rts));
             if let Err(err) = pd_cli
                 .update_service_safe_point(
                     format!("backup-stream-{}-{}", task, store_id),
@@ -484,11 +499,12 @@ where
             .clone();
         let pd_cli = self.pd_client.clone();
         let resolvers = self.resolvers.clone();
+        let cm = self.concurrency_manager.clone();
         self.pool.spawn(async move {
             let info = router.get_task_info(&task).await;
             // This should only happen in testing, it would be to unwrap...
             let _ = info.unwrap().set_flushing_status_cas(false, true);
-            Self::flush_for_task(task, store_id, router, pd_cli, resolvers, cli).await;
+            Self::flush_for_task(task, store_id, router, pd_cli, resolvers, cli, cm).await;
         });
     }
 
@@ -501,8 +517,9 @@ where
             .clone();
         let pd_cli = self.pd_client.clone();
         let resolvers = self.resolvers.clone();
+        let cm = self.concurrency_manager.clone();
         self.pool.spawn(Self::flush_for_task(
-            task, store_id, router, pd_cli, resolvers, cli,
+            task, store_id, router, pd_cli, resolvers, cli, cm,
         ));
     }
 

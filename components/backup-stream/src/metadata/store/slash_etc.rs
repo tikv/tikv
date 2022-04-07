@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use async_trait::async_trait;
+use slog_global::error;
 use std::{
     cell::Cell,
     collections::{BTreeMap, HashMap},
@@ -155,7 +156,7 @@ impl MetaStore for SlashEtcStore {
     ) -> Result<KvChangeSubscription> {
         let mut data = self.lock().await;
         if start_rev != data.revision + 1 {
-            panic!(
+            error!(
                 "start from arbitrary revision is not supported yet; only watch (current_rev + 1) supported. (self.revision = {}; start_rev = {})",
                 data.revision, start_rev
             );
