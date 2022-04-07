@@ -487,6 +487,7 @@ impl SSTImporter {
             default_meta,
             write_meta,
             self.key_manager.clone(),
+            self.api_version,
         ))
     }
 

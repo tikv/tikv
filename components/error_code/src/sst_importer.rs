@@ -20,5 +20,6 @@ define_error_codes!(
     FILE_CONFLICT => ("FileConflict", "", ""),
     TTL_NOT_ENABLED => ("TTLNotEnabled", "", ""),
     TTLS_LEN_NOT_EQUALS_TO_PAIRS => ("TTLsLenNotEqualsToPairs", "", ""),
-    INCOMPATIBLE_API_VERSION => ("IncompatibleApiVersion", "", "")
+    INCOMPATIBLE_API_VERSION => ("IncompatibleApiVersion", "", ""),
+    INVALID_KEY_MODE => ("InvalidKeyMode", "", "")
 );

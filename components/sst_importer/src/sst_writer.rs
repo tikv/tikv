@@ -1,8 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::dispatch_api_version;
-use api_version::APIVersion;
-use api_version::RawValue;
+use api_version::{APIVersion, KeyMode, RawValue};
 use engine_traits::raw_ttl::ttl_to_expire_ts;
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -13,9 +12,16 @@ use engine_traits::{KvEngine, SstWriter};
 use tikv_util::time::Instant;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
 
+use crate::errors::Error;
 use crate::import_file::ImportPath;
 use crate::metrics::*;
 use crate::Result;
+
+#[derive(Debug)]
+pub enum SstWriterType {
+    Txn,
+    Raw,
+}
 
 pub struct TxnSSTWriter<E: KvEngine> {
     default: E::SstWriter,
@@ -29,6 +35,7 @@ pub struct TxnSSTWriter<E: KvEngine> {
     write_path: ImportPath,
     write_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
+    api_version: ApiVersion,
 }
 
 impl<E: KvEngine> TxnSSTWriter<E> {
@@ -40,6 +47,7 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         default_meta: SstMeta,
         write_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
+        api_version: ApiVersion,
     ) -> Self {
         TxnSSTWriter {
             default,
@@ -53,6 +61,7 @@ impl<E: KvEngine> TxnSSTWriter<E> {
             write_bytes: 0,
             write_meta,
             key_manager,
+            api_version,
         }
     }
 
@@ -61,6 +70,15 @@ impl<E: KvEngine> TxnSSTWriter<E> {
 
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
         for m in batch.get_pairs().iter() {
+            dispatch_api_version!(self.api_version, {
+                if API::parse_key_mode(m.get_key()) == KeyMode::Raw {
+                    return Err(Error::InvalidKeyMode {
+                        storage_api_version: self.api_version,
+                        writer: SstWriterType::Txn,
+                        key: log_wrappers::hex_encode_upper(m.get_key()),
+                    });
+                }
+            });
             let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
             self.put(k.as_encoded(), m.get_value(), m.get_op())?;
         }
@@ -195,14 +213,23 @@ impl<E: KvEngine> RawSSTWriter<E> {
             };
 
             for m in batch.take_pairs().into_iter() {
+                if API::parse_key_mode(m.get_key()) != KeyMode::Raw {
+                    return Err(Error::InvalidKeyMode {
+                        storage_api_version: self.api_version,
+                        writer: SstWriterType::Raw,
+                        key: log_wrappers::hex_encode_upper(m.get_key()),
+                    });
+                }
                 match m.get_op() {
                     PairOp::Put => {
+                        let key =
+                            API::encode_raw_key(m.get_key(), Some(TimeStamp::new(batch.get_ts())));
                         let value = RawValue {
                             user_value: m.get_value(),
                             expire_ts,
                             is_delete: false,
                         };
-                        self.put(m.get_key(), &API::encode_raw_value(value), PairOp::Put)?;
+                        self.put(key.as_encoded(), &API::encode_raw_value(value), PairOp::Put)?;
                     }
                     PairOp::Delete => {
                         self.put(m.get_key(), &[], PairOp::Delete)?;
@@ -250,6 +277,7 @@ mod tests {
     use engine_traits::DATA_CFS;
     use test_sst_importer::*;
     use uuid::Uuid;
+    use api_version::APIV2;
 
     use super::*;
     use crate::{Config, SSTImporter};
@@ -317,46 +345,59 @@ mod tests {
 
         let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = RawWriteBatch::default();
+        batch.set_ts(0);
         let mut pairs = vec![];
+        let key1: &[u8] = if api_version == ApiVersion::V2 { b"rk1" } else { b"k1" };
+        let key2: &[u8] = if api_version == ApiVersion::V2 { b"rk2" } else { b"k2" };
 
-        // put value
-        let mut pair = Pair::default();
-        pair.set_key(b"k1".to_vec());
-        pair.set_value(b"short_value".to_vec());
-        pairs.push(pair);
+        dispatch_api_version!(api_version, {
+            // put value
+            let mut pair = Pair::default();
+            pair.set_key(
+                API::encode_raw_key(key1, Some(TimeStamp::new(0)))
+                    .as_encoded()
+                    .to_vec(),
+            );
+            pair.set_value(b"short_value".to_vec());
+            pairs.push(pair);
 
-        // delete value
-        let mut pair = Pair::default();
-        pair.set_key(b"k2".to_vec());
-        pair.set_op(PairOp::Delete);
-        pairs.push(pair);
+            // delete value
+            let mut pair = Pair::default();
+            pair.set_key(
+                API::encode_raw_key(key2, Some(TimeStamp::new(0)))
+                    .as_encoded()
+                    .to_vec(),
+            );
+            pair.set_op(PairOp::Delete);
+            pairs.push(pair);
 
-        // generate meta
-        batch.set_ttl(10);
-        batch.set_pairs(pairs.into());
-        w.write(batch).unwrap();
-        assert_eq!(w.default_entries, 1);
-        assert_eq!(w.default_deletes, 1);
-        match api_version {
-            ApiVersion::V1ttl => {
-                // ttl takes 8 more bytes
-                assert_eq!(
-                    w.default_bytes as usize,
-                    b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
-                );
+            // generate meta
+            batch.set_ttl(10);
+            batch.set_pairs(pairs.into());
+            w.write(batch).unwrap();
+            assert_eq!(w.default_entries, 1);
+            assert_eq!(w.default_deletes, 1);
+            match api_version {
+                ApiVersion::V1ttl => {
+                    // ttl takes 8 more bytes
+                    assert_eq!(
+                        w.default_bytes as usize,
+                        b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
+                    );
+                }
+                ApiVersion::V2 => {
+                    // ttl takes 8 more bytes and meta take 1 more byte
+                    assert_eq!(
+                        w.default_bytes as usize,
+                        b"zk1".len() + b"short_value".len() + b"zk2".len() + 9
+                    );
+                }
+                _ => unreachable!(),
             }
-            ApiVersion::V2 => {
-                // ttl takes 8 more bytes and meta take 1 more byte
-                assert_eq!(
-                    w.default_bytes as usize,
-                    b"zk1".len() + b"short_value".len() + b"zk2".len() + 9
-                );
-            }
-            _ => unreachable!(),
-        }
 
-        let metas = w.finish().unwrap();
-        assert_eq!(metas.len(), 1);
+            let metas = w.finish().unwrap();
+            assert_eq!(metas.len(), 1);
+        })
     }
 
     #[test]
@@ -373,6 +414,34 @@ mod tests {
         let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = RawWriteBatch::default();
         batch.set_ttl(10);
+        assert!(w.write(batch).is_err());
+    }
+
+    #[test]
+    fn test_raw_write_invalid_key_mode() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V2).unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let mut batch = RawWriteBatch::default();
+
+        // put an invalid key
+        let mut pair = Pair::default();
+        pair.set_key(
+            APIV2::encode_raw_key(b"k1", Some(TimeStamp::new(0)))
+                .as_encoded()
+                .to_vec(),
+        );
+        pair.set_value(b"short_value".to_vec());
+        let pairs = vec![pair];
+        batch.set_pairs(pairs.into());
+
         assert!(w.write(batch).is_err());
     }
 }
