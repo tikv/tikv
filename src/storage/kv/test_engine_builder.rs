@@ -23,6 +23,9 @@ pub struct TestEngineBuilder {
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IORateLimiter>>,
     api_version: ApiVersion,
+    // Indicate whether causal observer is enabled. For RawKV API V2 only.
+    // Causal observer is to acquire causal timestamp and append to key.
+    enable_causal_observer: bool,
 }
 
 impl TestEngineBuilder {
@@ -32,6 +35,7 @@ impl TestEngineBuilder {
             cfs: None,
             io_rate_limiter: None,
             api_version: ApiVersion::V1,
+            enable_causal_observer: false,
         }
     }
 
@@ -58,6 +62,11 @@ impl TestEngineBuilder {
 
     pub fn io_rate_limiter(mut self, limiter: Option<Arc<IORateLimiter>>) -> Self {
         self.io_rate_limiter = limiter;
+        self
+    }
+
+    pub fn causal_observer(mut self, enable: bool) -> Self {
+        self.enable_causal_observer = enable;
         self
     }
 
@@ -105,14 +114,24 @@ impl TestEngineBuilder {
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(
+        let mut engine = RocksEngine::new(
             &path,
             &cfs,
             Some(cfs_opts),
             cache.is_some(),
             self.io_rate_limiter,
             None, /* CFOptions */
-        )
+        )?;
+
+        // Register causal observer for RawKV API V2
+        // To acquire causal timestamp and append to key.
+        if self.enable_causal_observer && api_version == ApiVersion::V2 {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(engine.mut_coprocessor());
+        }
+
+        Ok(engine)
     }
 }
 

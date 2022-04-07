@@ -24,6 +24,7 @@ use crate::storage::{
 };
 use crate::{coprocessor_v2, log_net_error};
 use crate::{forward_duplex, forward_unary};
+use api_version::{dispatch_api_version, APIVersion};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
@@ -40,9 +41,11 @@ use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
+use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::memory::{MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
+use raftstore::store::memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES};
+use raftstore::store::metrics::RAFT_ENTRIES_CACHES_GAUGE;
 use raftstore::store::CheckLeaderTask;
 use raftstore::store::{Callback, CasualMessage, RaftCmdExtraOpts};
 use raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
@@ -767,11 +770,16 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager> Tikv for
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
-            if !req.get_split_key().is_empty() {
-                vec![req.get_split_key().to_vec()]
-            } else {
-                req.take_split_keys().to_vec()
-            }
+            dispatch_api_version!(self.storage.api_version(), {
+                if !req.get_split_key().is_empty() {
+                    vec![API::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
+                } else {
+                    req.take_split_keys()
+                        .into_iter()
+                        .map(|x| API::encode_raw_key_owned(x, None).into_encoded())
+                        .collect()
+                }
+            })
         } else {
             if !req.get_split_key().is_empty() {
                 vec![Key::from_raw(req.get_split_key()).into_encoded()]
@@ -2024,8 +2032,6 @@ pub mod batch_commands_request {
     }
 }
 
-use protobuf::RepeatedField;
-
 /// To measure execute time for a given request.
 #[derive(Debug)]
 pub struct GrpcRequestDuration {
@@ -2106,7 +2112,17 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
-        if raft_msg_usage as f64 > usage as f64 * reject_messages_on_memory_ratio {
+        let cached_entries = RAFT_ENTRIES_CACHES_GAUGE.get() as u64;
+        let applying_entries = MEMTRACE_APPLYS.sum() as u64;
+        if (raft_msg_usage + cached_entries + applying_entries) as f64
+            > usage as f64 * reject_messages_on_memory_ratio
+        {
+            debug!("need reject log append on memory limit";
+                "raft messages" => raft_msg_usage,
+                "cached entries" => cached_entries,
+                "applying entries" => applying_entries,
+                "current usage" => usage,
+                "reject ratio" => reject_messages_on_memory_ratio);
             return true;
         }
     }

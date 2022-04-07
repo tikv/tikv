@@ -19,7 +19,7 @@ use tikv_util::{debug, info};
 
 use crate::store::metrics::*;
 use crate::store::worker::query_stats::{is_read_query, QueryStats};
-use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
+use crate::store::worker::split_config::get_sample_num;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
@@ -463,7 +463,7 @@ impl ReadStats {
 impl Default for ReadStats {
     fn default() -> ReadStats {
         ReadStats {
-            sample_num: DEFAULT_SAMPLE_NUM,
+            sample_num: get_sample_num(),
             region_infos: HashMap::default(),
             region_buckets: HashMap::default(),
         }
@@ -632,6 +632,7 @@ impl AutoSplitController {
 mod tests {
     use super::*;
     use crate::store::util::build_key_range;
+    use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
     use txn_types::Key;
 
     enum Position {

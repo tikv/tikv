@@ -16,11 +16,11 @@ use crate::CausalTsProvider;
 /// CausalObserver appends timestamp for RawKV V2 data,
 /// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
-pub struct CausalObserver<TS: CausalTsProvider> {
-    causal_ts_provider: Arc<TS>,
+pub struct CausalObserver<Ts: CausalTsProvider> {
+    causal_ts_provider: Arc<Ts>,
 }
 
-impl<TS: CausalTsProvider> Clone for CausalObserver<TS> {
+impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
@@ -31,8 +31,8 @@ impl<TS: CausalTsProvider> Clone for CausalObserver<TS> {
 // Causal observer's priority should be higher than all other observers, to avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
-impl<TS: CausalTsProvider + 'static> CausalObserver<TS> {
-    pub fn new(causal_ts_provider: Arc<TS>) -> Self {
+impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
+    pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
         Self { causal_ts_provider }
     }
 
@@ -47,9 +47,9 @@ impl<TS: CausalTsProvider + 'static> CausalObserver<TS> {
     }
 }
 
-impl<TS: CausalTsProvider> Coprocessor for CausalObserver<TS> {}
+impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
 
-impl<TS: CausalTsProvider> QueryObserver for CausalObserver<TS> {
+impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
     fn pre_propose_query(
         &self,
         _: &mut ObserverContext<'_>,
@@ -73,7 +73,7 @@ impl<TS: CausalTsProvider> QueryObserver for CausalObserver<TS> {
     }
 }
 
-impl<TS: CausalTsProvider> RoleObserver for CausalObserver<TS> {
+impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         if role_change.state == StateRole::Leader {

@@ -74,18 +74,38 @@ pub struct APIV1TTL;
 #[derive(Default, Clone, Copy)]
 pub struct APIV2;
 
+// TODO: Not good enough. Consider `proc_macro_attribute` ?
+/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `APIVersion`
+///
+/// For example, the following code
+///
+/// ```ignore
+/// let encoded_key = dispatch_api_version(api_version, API::encode_raw_key(key));
+/// ```
+///
+/// generates
+///
+/// ```ignore
+/// let encoded_key = match api_version {
+///     ApiVersion::V1 => APIV1::encode_raw_key(key),
+///     ApiVersion::V1ttl => APIV1TTL::encode_raw_key(key),
+///     ApiVersion::V2 => APIV2::encode_raw_key(key),
+/// };
+/// ```
 #[macro_export]
-macro_rules! match_template_api_version {
-     ($t:tt, $($tail:tt)*) => {{
-         $crate::match_template! {
-             $t = [
+macro_rules! dispatch_api_version {
+    ($api_version:expr, $e:expr) => {{
+        $crate::match_template! {
+            API = [
                 V1 => $crate::APIV1,
                 V1ttl => $crate::APIV1TTL,
                 V2 => $crate::APIV2,
             ],
-            $($tail)*
-         }
-     }}
+            match $api_version {
+                ApiVersion::API => $e,
+            }
+        }
+    }};
 }
 
 /// The key mode inferred from the key prefix.
@@ -389,15 +409,10 @@ mod tests {
         ];
 
         for (bytes, api_version) in cases {
-            match_template_api_version!(
-                API,
-                match api_version {
-                    ApiVersion::API => {
-                        assert!(API::decode_raw_value(&bytes).is_err());
-                        assert!(API::decode_raw_value_owned(bytes).is_err());
-                    }
-                }
-            )
+            dispatch_api_version!(api_version, {
+                assert!(API::decode_raw_value(&bytes).is_err());
+                assert!(API::decode_raw_value_owned(bytes).is_err());
+            });
         }
     }
 
@@ -430,34 +445,29 @@ mod tests {
         encoded_bytes: &[u8],
         api_version: ApiVersion,
     ) {
-        match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    let raw_value = RawValue {
-                        user_value,
-                        expire_ts,
-                        is_delete,
-                    };
-                    assert_eq!(&API::encode_raw_value(raw_value), encoded_bytes);
-                    assert_eq!(API::decode_raw_value(encoded_bytes).unwrap(), raw_value);
+        dispatch_api_version!(api_version, {
+            let raw_value = RawValue {
+                user_value,
+                expire_ts,
+                is_delete,
+            };
+            assert_eq!(&API::encode_raw_value(raw_value), encoded_bytes);
+            assert_eq!(API::decode_raw_value(encoded_bytes).unwrap(), raw_value);
 
-                    let raw_value = RawValue {
-                        user_value: user_value.to_vec(),
-                        expire_ts,
-                        is_delete,
-                    };
-                    assert_eq!(
-                        API::encode_raw_value_owned(raw_value.clone()),
-                        encoded_bytes
-                    );
-                    assert_eq!(
-                        API::decode_raw_value_owned(encoded_bytes.to_vec()).unwrap(),
-                        raw_value
-                    );
-                }
-            }
-        )
+            let raw_value = RawValue {
+                user_value: user_value.to_vec(),
+                expire_ts,
+                is_delete,
+            };
+            assert_eq!(
+                API::encode_raw_value_owned(raw_value.clone()),
+                encoded_bytes
+            );
+            assert_eq!(
+                API::decode_raw_value_owned(encoded_bytes.to_vec()).unwrap(),
+                raw_value
+            );
+        });
     }
 
     #[test]
@@ -525,31 +535,26 @@ mod tests {
         api_version: ApiVersion,
         expected_ts: Option<TimeStamp>,
     ) {
-        match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    let encoded_key = Key::from_encoded_slice(encoded_bytes);
+        dispatch_api_version!(api_version, {
+            let encoded_key = Key::from_encoded_slice(encoded_bytes);
 
-                    assert_eq!(
-                        &API::encode_raw_key(user_key, ts).into_encoded(),
-                        encoded_bytes
-                    );
-                    assert_eq!(
-                        API::decode_raw_key(&encoded_key, expected_ts.is_some()).unwrap(),
-                        (user_key.to_vec(), expected_ts)
-                    );
+            assert_eq!(
+                &API::encode_raw_key(user_key, ts).into_encoded(),
+                encoded_bytes
+            );
+            assert_eq!(
+                API::decode_raw_key(&encoded_key, expected_ts.is_some()).unwrap(),
+                (user_key.to_vec(), expected_ts)
+            );
 
-                    assert_eq!(
-                        &API::encode_raw_key_owned(user_key.to_vec(), ts).into_encoded(),
-                        encoded_bytes
-                    );
-                    assert_eq!(
-                        API::decode_raw_key_owned(encoded_key, expected_ts.is_some()).unwrap(),
-                        (user_key.to_vec(), expected_ts)
-                    );
-                }
-            }
-        )
+            assert_eq!(
+                &API::encode_raw_key_owned(user_key.to_vec(), ts).into_encoded(),
+                encoded_bytes
+            );
+            assert_eq!(
+                API::decode_raw_key_owned(encoded_key, expected_ts.is_some()).unwrap(),
+                (user_key.to_vec(), expected_ts)
+            );
+        });
     }
 }
