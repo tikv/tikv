@@ -1157,7 +1157,7 @@ where
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
-            store_start_time: self.store_start_time.clone(),
+            store_start_time: self.store_start_time,
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
@@ -1225,7 +1225,7 @@ where
         RaftPollerBuilder {
             cfg: self.cfg.clone(),
             store: self.store.clone(),
-            store_start_time: self.store_start_time.clone(),
+            store_start_time: self.store_start_time,
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
