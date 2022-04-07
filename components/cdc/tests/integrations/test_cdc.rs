@@ -182,7 +182,7 @@ fn test_cdc_basic() {
 }
 
 #[test]
-fn test_cdc_rawkv() {
+fn test_cdc_rawkv_basic() {
     init_log_for_test();
     let mut suite = TestSuite::new(1, ApiVersion::V2);
 
@@ -221,10 +221,10 @@ fn test_cdc_rawkv() {
         .unwrap();
 
     let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
-
     suite.must_kv_raw_v2(1, k.clone(), v.clone());
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
+
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
@@ -564,6 +564,56 @@ fn test_cdc_scan() {
         other => panic!("unknown event {:?}", other),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_rawkv_scan() {
+    let mut suite = TestSuite::new(3, ApiVersion::V2);
+
+    let (k1, v1) = (b"rkey1".to_vec(), b"value".to_vec());
+    suite.must_kv_raw_v2(1, k1.clone(), v1.clone());
+
+    let (k2, v2) = (b"rkey2".to_vec(), b"value".to_vec());
+    suite.must_kv_raw_v2(1, k2.clone(), v2.clone());
+
+    let mut req = suite.new_changedata_request(1);
+    req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    if events.len() == 1 {
+        events.extend(receive_event(false).events.into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+
+    match events.remove(0).event.unwrap() {
+        // Batch size is set to 3.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k1, "{:?}", es);
+            assert_eq!(e.value, v1, "{:?}", es);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k2, "{:?}", es);
+            assert_eq!(e.value, v2, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {

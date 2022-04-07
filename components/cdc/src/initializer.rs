@@ -661,7 +661,7 @@ mod tests {
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
         let (mut worker, pool, mut initializer, rx, mut drain) =
-            mock_initializer(total_bytes, buffer, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiBd);
+            mock_initializer(total_bytes, buffer, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiDb);
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -749,7 +749,7 @@ mod tests {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
                 let (mut worker, pool, mut initializer, _rx, mut drain) =
-                    mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiBd);
+                    mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiDb);
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
 
@@ -800,7 +800,7 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, _pool, mut initializer, rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, ChangeDataRequestKvApi::TiBd);
+            mock_initializer(total_bytes, buffer, None, ChangeDataRequestKvApi::TiDb);
 
         // Errors reported by region should deregister region.
         initializer.build_resolver = false;
@@ -842,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_initializer_initialize() {
-        let kv_api_set:[ChangeDataRequestKvApi;2] = [ChangeDataRequestKvApi::TiBd, ChangeDataRequestKvApi::RawKv];
+        let kv_api_set:[ChangeDataRequestKvApi;2] = [ChangeDataRequestKvApi::TiDb, ChangeDataRequestKvApi::RawKv];
 
         for kv_api in kv_api_set {
             let total_bytes = 1;

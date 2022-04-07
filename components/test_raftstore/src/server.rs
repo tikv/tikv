@@ -21,6 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use crate::Config;
+use causal_ts;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -335,6 +336,12 @@ impl Simulator for ServerCluster {
         } else {
             None
         };
+
+        if cfg.tikv.storage.api_version == 2 {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(&mut coprocessor_host);
+        }
 
         // Start resource metering.
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =

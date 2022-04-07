@@ -117,7 +117,6 @@ pub struct Downstream {
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
 
-    // TODO: modify proto
     kv_api: ChangeDataRequestKvApi,
 }
 
@@ -606,7 +605,7 @@ impl Delegate {
         }
 
         if !txn_rows.is_empty() {
-            self.sink_downstream(txn_rows, index, ChangeDataRequestKvApi::TiBd)?;
+            self.sink_downstream(txn_rows, index, ChangeDataRequestKvApi::TiDb)?;
         }
 
         if !raw_rows.is_empty() {
@@ -986,8 +985,9 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow, is_ignore_dele
     row.key = decoded_key;
     row.value = decoded_value.user_value.to_vec();
 
-    // TODO: add ttl
-
+    if let Some(expire_ts) = decoded_value.expire_ts {
+        row.expire_ts_unix_secs = expire_ts;
+    }
     if decoded_value.is_delete {
         row.op_type = EventRowOpType::Delete;
     } else {
@@ -1032,7 +1032,7 @@ mod tests {
             region_epoch,
             request_id,
             ConnID::new(),
-            ChangeDataRequestKvApi::TiBd,
+            ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id, Default::default());
@@ -1150,7 +1150,7 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiBd)
+            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiDb)
         };
 
         // Create a new delegate.

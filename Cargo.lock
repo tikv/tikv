@@ -2464,7 +2464,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#8c4cd3f937480cdc56e012b066cbb12d0d010163"
+source = "git+https://github.com/pingcap/kvproto.git#f7a7c8ccda74ae17acdde7b47cf829ac6f5c2a52"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5202,6 +5202,7 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "backtrace",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",
