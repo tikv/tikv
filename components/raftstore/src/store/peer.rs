@@ -2021,6 +2021,7 @@ where
                     );
 
                     if self.unsafe_recovery_state.is_some() {
+                        debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
                     }
                 }
@@ -4495,6 +4496,12 @@ where
         ctx: &PollContext<EK, ER, T>,
         counter: Arc<AtomicUsize>,
     ) {
+        info!(
+            "unsafe recovery wait apply";
+            "target_index" => self.raft_group.store().commit_index(),
+            "task_counter" => counter.load(Ordering::Relaxed)
+        );
+
         self.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
             target_index: self.raft_group.store().commit_index(),
             task_counter: counter,
@@ -4508,11 +4515,23 @@ where
         force: bool,
     ) {
         if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
+            debug!(
+                "unsafe recovery may be finish wait apply";
+                "applied" =>  self.raft_group.raft.raft_log.applied,
+                "force" => force
+            );
             let UnsafeRecoveryState::WaitApply {
                 target_index,
                 task_counter,
             } = unsafe_recovery_state;
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                info!(
+                    "unsafe recovery finish wait apply";
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                    "counter" =>  task_counter.load(Ordering::Relaxed)
+                );
                 if task_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
                     store_heartbeat_pd(ctx, /*send_detailed_report=*/ true);
                 }

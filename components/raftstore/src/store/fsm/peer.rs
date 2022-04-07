@@ -1902,6 +1902,7 @@ where
         }
         // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
         if self.fsm.peer.unsafe_recovery_state.is_some() {
+            debug!("unsafe recovery finishes applying an entry");
             self.fsm
                 .peer
                 .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false);

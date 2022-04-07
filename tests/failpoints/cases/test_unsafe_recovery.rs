@@ -7,6 +7,7 @@ use futures::executor::block_on;
 use pd_client::PdClient;
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 
 #[allow(clippy::mutex_atomic)]
 #[test]
@@ -97,6 +98,9 @@ fn test_unsafe_recover_send_report() {
 #[test]
 fn test_unsafe_recover_wait_for_snapshot_apply() {
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
+    cluster.cfg.raft_store.merge_max_log_gap = 3;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -110,7 +114,8 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     let store2_peer = find_peer(&region, nodes[1]).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.stop_node(nodes[1]);
-    (0..10).for_each(|_| cluster.must_put(b"random_key1", b"random_val1"));
+    // at least 4m data
+    (0..10).for_each(|_| cluster.must_put(b"random_k", b"random_v"));
     // Sleep for a while to ensure all logs are compacted.
     sleep_ms(100);
     // Makes the group lose its quorum.
@@ -123,6 +128,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     let apply_released_pair2 = Arc::clone(&apply_released_pair);
     fail::cfg_callback("region_apply_snap", move || {
         {
+            debug!("unsafe recovery test, snapshot apply triggered");
             let (lock, cvar) = &*apply_triggered_pair2;
             let mut triggered = lock.lock().unwrap();
             *triggered = true;
@@ -134,12 +140,20 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
             while !*released {
                 released = cvar2.wait(released).unwrap();
             }
+            debug!("unsafe recovery test, snapshot apply released");
         }
     })
     .unwrap();
 
     cluster.run_node(nodes[1]).unwrap();
 
+    {
+        let (lock, cvar) = &*apply_triggered_pair;
+        let mut triggered = lock.lock().unwrap();
+        while !*triggered {
+            triggered = cvar.wait(triggered).unwrap();
+        }
+    }
     // Triggers the unsafe recovery store reporting process.
     pd_client.must_set_require_report(true);
     cluster.must_send_store_heartbeat(nodes[1]);
