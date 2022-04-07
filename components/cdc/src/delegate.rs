@@ -467,10 +467,8 @@ impl Delegate {
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    let skip = decode_rawkv(kv_pair.0, kv_pair.1, &mut row, true);
-                    if skip {
-                        continue;
-                    }
+                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row, true);
+
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                         rows.push(Vec::with_capacity(entries_len));
@@ -675,11 +673,8 @@ impl Delegate {
         rows: &mut HashMap<Vec<u8>, EventRow>,
     ) -> Result<()> {
         let mut row = EventRow::default();
-        if decode_rawkv(put.take_key(), put.take_value(), &mut row, false) {
-            return Ok(());
-        }
+        decode_rawkv(put.take_key(), put.take_value(), &mut row, false);
 
-        // TODO: validate commit_ts must be greater than the current resolved_ts ?
         match rows.get_mut(&row.key) {
             Some(row_with_value) => {
                 row.value = mem::take(&mut row_with_value.value);
@@ -689,7 +684,6 @@ impl Delegate {
                 rows.insert(row.key.clone(), row);
             }
         }
-
         Ok(())
     }
 
@@ -973,12 +967,9 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow, is_ignore_delete: bool) -> bool {
-    let decoded_value = APIV2::decode_raw_value(&value).unwrap();
-    if decoded_value.is_delete && is_ignore_delete {
-        return true;
-    }
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow, is_ignore_delete: bool) {
     let (decoded_key, ts) = APIV2::decode_raw_key(&Key::from_encoded(key), true).unwrap();
+    let decoded_value = APIV2::decode_raw_value_owned(value1).unwrap();
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
@@ -988,14 +979,13 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow, is_ignore_dele
     if let Some(expire_ts) = decoded_value.expire_ts {
         row.expire_ts_unix_secs = expire_ts;
     }
+
     if decoded_value.is_delete {
         row.op_type = EventRowOpType::Delete;
     } else {
         row.op_type = EventRowOpType::Put;
     }
     set_event_row_type(row, EventLogType::Committed);
-
-    false
 }
 
 fn decode_default(value: Vec<u8>, row: &mut EventRow) {

@@ -576,6 +576,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     ) {
         let region_id = request.region_id;
         let kv_api = request.get_kv_api();
+        let api_version = self.config.api_version.clone();
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
 
@@ -593,6 +594,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             err_event.set_cluster_id_mismatch(err);
 
             let _ = downstream.sink_error_event(region_id, err_event);
+            return;
+        }
+
+        if (kv_api == ChangeDataRequestKvApi::RawKv || kv_api == ChangeDataRequestKvApi::TxnKv) && api_version != 2 {
+            error!("only api version2 supportes the change data request of RawKv and TxnKv"; "api_version" => api_version);
             return;
         }
 

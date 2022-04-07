@@ -2325,6 +2325,7 @@ pub struct CdcConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
+    pub api_version: u8,
 }
 
 impl Default for CdcConfig {

@@ -233,7 +233,7 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         let mut scanner_iter: Option<ScannerIter<S>>;
-        if !(kv_api == ChangeDataRequestKvApi::RawKv) {
+        if kv_api == ChangeDataRequestKvApi::TiDb {
             let scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
                 .range(None, None)
@@ -244,6 +244,8 @@ impl<E: KvEngine> Initializer<E> {
             scanner_iter = Some(ScannerIter::Scanner(scanner));
         } else {
             let iter_opt = IterOptions::default();
+            iter_opt.set_lower_bound(b"r", 1);
+            iter_opt.set_upper_bound(b"s", 1);
             let mut iter = RawMvccSnapshot::from_snapshot(snap)
                 .iter(iter_opt)
                 .unwrap();
