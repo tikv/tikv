@@ -4,7 +4,6 @@ use super::*;
 
 impl APIVersion for APIV1 {
     const TAG: ApiVersion = ApiVersion::V1;
-    #[cfg(test)]
     const CLIENT_TAG: ApiVersion = ApiVersion::V1;
     const IS_TTL_ENABLED: bool = false;
 
