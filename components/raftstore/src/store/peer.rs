@@ -3855,7 +3855,7 @@ where
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
-        if self.force_leader.is_some() {
+        if let Some(ForceLeaderState::ForceLeader { .. }) = &self.force_leader {
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader

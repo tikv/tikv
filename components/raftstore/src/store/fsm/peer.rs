@@ -1447,8 +1447,10 @@ where
 
         self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.peer.raft_group.raft.pre_vote = true;
-        // let it trigger election immediately.
-        let _ = self.fsm.peer.raft_group.campaign();
+        if self.fsm.peer.raft_group.raft.promotable() {
+            // let it trigger election immediately.
+            let _ = self.fsm.peer.raft_group.campaign();
+        }
         self.fsm.has_ready = true;
     }
 
@@ -4431,7 +4433,7 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
-        if self.fsm.peer.force_leader.is_some() {
+        if let Some(ForceLeaderState::ForceLeader { .. }) = &self.fsm.peer.force_leader {
             // in force leader state, forbid requests to make the recovery progress less error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer

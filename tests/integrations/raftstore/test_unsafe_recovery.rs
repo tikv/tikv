@@ -10,6 +10,7 @@ use kvproto::metapb;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_unsafe_recover_update_region() {
@@ -88,6 +89,30 @@ fn test_unsafe_recover_create_region() {
     assert_eq!(create.get_id(), region.get_id());
 }
 
+fn must_get_error_recovery_in_progress<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &metapb::Region,
+    cmd: kvproto::raft_cmdpb::Request,
+) {
+    let req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        true,
+    );
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap();
+    assert_eq!(
+        resp.get_header().get_error().get_recovery_in_progress(),
+        &kvproto::errorpb::RecoveryInProgress {
+            region_id: region.get_id(),
+            ..Default::default()
+        }
+    );
+}
+
+// Test the case that two of three nodes fail and force leader on the rest node.
 #[test]
 fn test_force_leader_three_nodes() {
     let mut cluster = new_node_cluster(0, 3);
@@ -107,7 +132,7 @@ fn test_force_leader_three_nodes() {
 
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // majority is lost, can't propose command successfully.
+    // quorum is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
@@ -124,39 +149,24 @@ fn test_force_leader_three_nodes() {
         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
     // forbid writes in force leader state
     let put = new_put_cmd(b"k3", b"v3");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_millis(10))
-        .unwrap();
-    assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
-            region_id: region.get_id(),
-            ..Default::default()
-        }
-    );
+    must_get_error_recovery_in_progress(&mut cluster, &region, put);
     // forbid reads in force leader state
     let get = new_get_cmd(b"k1");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![get], true);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_millis(10))
-        .unwrap();
-    assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
-            region_id: region.get_id(),
-            ..Default::default()
-        }
-    );
+    must_get_error_recovery_in_progress(&mut cluster, &region, get);
+    // forbid read index in force leader state
+    let read_index = new_read_index_cmd();
+    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
     cluster.exit_force_leader(region.get_id(), 1);
 
-    // majority is formed, can propose command successfully now
+    // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
 
+// Test the case that three of five nodes fail and force leader on one of the
+// rest nodes.
 #[test]
 fn test_force_leader_five_nodes() {
     let mut cluster = new_node_cluster(0, 5);
@@ -177,7 +187,7 @@ fn test_force_leader_five_nodes() {
 
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // majority is lost, can't propose command successfully.
+    // quorum is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
@@ -197,39 +207,25 @@ fn test_force_leader_five_nodes() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     // forbid writes in force leader state
     let put = new_put_cmd(b"k3", b"v3");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_millis(10))
-        .unwrap();
-    assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
-            region_id: region.get_id(),
-            ..Default::default()
-        }
-    );
+    must_get_error_recovery_in_progress(&mut cluster, &region, put);
     // forbid reads in force leader state
     let get = new_get_cmd(b"k1");
-    let req = new_request(region.get_id(), region.take_region_epoch(), vec![get], true);
-    let resp = cluster
-        .call_command_on_leader(req, Duration::from_millis(10))
-        .unwrap();
-    assert_eq!(
-        resp.get_header().get_error().get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
-            region_id: region.get_id(),
-            ..Default::default()
-        }
-    );
+    must_get_error_recovery_in_progress(&mut cluster, &region, get);
+    // forbid read index in force leader state
+    let read_index = new_read_index_cmd();
+    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
+
     cluster.exit_force_leader(region.get_id(), 1);
 
-    // majority is formed, can propose command successfully now
+    // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
 
+// Test the case that three of five nodes fail and force leader on the rest node
+// which is a learner.
 #[test]
 fn test_force_leader_for_learner() {
     let mut cluster = new_node_cluster(0, 5);
@@ -262,7 +258,7 @@ fn test_force_leader_for_learner() {
 
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // majority is lost, can't propose command successfully.
+    // quorum is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(10))
@@ -285,7 +281,7 @@ fn test_force_leader_for_learner() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     cluster.exit_force_leader(region.get_id(), 1);
 
-    // majority is formed, can propose command successfully now
+    // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k2"), None);
     assert_eq!(cluster.must_get(b"k3"), None);
@@ -293,6 +289,7 @@ fn test_force_leader_for_learner() {
     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
 }
 
+// Test the case that none of five nodes fails and force leader on one of the nodes.
 #[test]
 fn test_force_leader_on_healthy_region() {
     let mut cluster = new_node_cluster(0, 5);
@@ -307,7 +304,7 @@ fn test_force_leader_on_healthy_region() {
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
-    // try to enter force leader, it can't succeed due to majority isn't lost
+    // try to enter force leader, it can't succeed due to quorum isn't lost
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
 
     // put and get can propose successfully.
@@ -321,6 +318,8 @@ fn test_force_leader_on_healthy_region() {
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
 
+// Test the case that three of five nodes fail and force leader on the one not
+// having latest log
 #[test]
 fn test_force_leader_on_wrong_leader() {
     let mut cluster = new_node_cluster(0, 5);
@@ -350,7 +349,7 @@ fn test_force_leader_on_wrong_leader() {
 
     let put = new_put_cmd(b"k3", b"v3");
     let req = new_request(region.get_id(), region.take_region_epoch(), vec![put], true);
-    // majority is lost, can't propose command successfully.
+    // quorum is lost, can't propose command successfully.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(100))
@@ -376,6 +375,8 @@ fn test_force_leader_on_wrong_leader() {
     must_get_none(&cluster.get_engine(2), b"k2");
 }
 
+// Test the case that three of five nodes fail and force leader twice on
+// peers on different nodes
 #[test]
 fn test_force_leader_twice_on_different_peers() {
     let mut cluster = new_node_cluster(0, 5);
@@ -437,11 +438,13 @@ fn test_force_leader_twice_on_different_peers() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     cluster.exit_force_leader(region.get_id(), 2);
 
-    // majority is formed, can propose command successfully now
+    // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
 
+// Test the case that three of five nodes fail and force leader twice on
+// peer on the same node
 #[test]
 fn test_force_leader_twice_on_same_peer() {
     let mut cluster = new_node_cluster(0, 5);
@@ -482,11 +485,13 @@ fn test_force_leader_twice_on_same_peer() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     cluster.exit_force_leader(region.get_id(), 1);
 
-    // majority is formed, can propose command successfully now
+    // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
 
+// Test the case that three of five nodes fail and force leader doesn't finish
+// in one election rounds due to network partition.
 #[test]
 fn test_force_leader_multiple_election_rounds() {
     let mut cluster = new_node_cluster(0, 5);
@@ -529,7 +534,7 @@ fn test_force_leader_multiple_election_rounds() {
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
     cluster.exit_force_leader(region.get_id(), 1);
 
-    // majority is formed, can propose command successfully now
+    // quorum is formed, can propose command successfully now
     cluster.must_put(b"k4", b"v4");
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
