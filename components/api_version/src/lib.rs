@@ -14,6 +14,9 @@ use txn_types::{Key, TimeStamp};
 
 pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     const TAG: ApiVersion;
+    /// Corresponding TAG of client requests. For test only.
+    #[cfg(any(test, feature = "testexport"))]
+    const CLIENT_TAG: ApiVersion;
     const IS_TTL_ENABLED: bool;
 
     /// Parse the key prefix and infer key mode. It's safe to parse either raw key or encoded key.
@@ -74,7 +77,22 @@ pub struct APIV1TTL;
 #[derive(Default, Clone, Copy)]
 pub struct APIV2;
 
-// TODO: Not good enough. Consider `proc_macro_attribute` ?
+#[macro_export]
+macro_rules! dispatch_api_version {
+    ($api_version:expr, $e:expr) => {{
+        $crate::match_template! {
+            API = [
+                V1 => $crate::APIV1,
+                V1ttl => $crate::APIV1TTL,
+                V2 => $crate::APIV2,
+            ],
+            match $api_version {
+                ApiVersion::API => $e,
+            }
+        }
+    }};
+}
+
 /// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `APIVersion`
 ///
 /// For example, the following code
@@ -102,7 +120,7 @@ macro_rules! dispatch_api_version {
                 V2 => $crate::APIV2,
             ],
             match $api_version {
-                ApiVersion::API => $e,
+                kvproto::kvrpcpb::ApiVersion::API => $e,
             }
         }
     }};

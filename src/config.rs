@@ -3612,6 +3612,7 @@ mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
     use crate::storage::{Storage, TestStorageBuilder};
+    use api_version::{APIVersion, APIV1};
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
     use kvproto::kvrpcpb::CommandPri;
@@ -3952,14 +3953,15 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
-    fn new_engines(
+    fn new_engines<Api: APIVersion>(
         cfg: TiKvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager>,
+        Storage<RocksDBEngine, DummyLockManager, Api>,
         ConfigController,
         ReceiverWrapper<TTLCheckerTask>,
         Arc<FlowController>,
     ) {
+        assert_eq!(Api::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
             ALL_CFS,
@@ -3973,14 +3975,11 @@ mod tests {
             Some(cfg.rocksdb.build_opt()),
         )
         .unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .config(cfg.storage.clone())
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager)
+                .config(cfg.storage.clone())
+                .build()
+                .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::new(
@@ -4013,7 +4012,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, _, flow_controller) = new_engines(cfg);
+        let (storage, cfg_controller, _, flow_controller) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4142,7 +4141,7 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
@@ -4216,7 +4215,7 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
@@ -4239,7 +4238,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
@@ -4285,7 +4284,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (_, cfg_controller, mut rx, _) = new_engines(cfg);
+        let (_, cfg_controller, mut rx, _) = new_engines::<APIV1>(cfg);
 
         // Can not update shared block cache through rocksdb module
         cfg_controller
@@ -4302,7 +4301,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let scheduler = storage.get_scheduler();
 
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
