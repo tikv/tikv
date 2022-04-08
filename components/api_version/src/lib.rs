@@ -15,6 +15,7 @@ use txn_types::{Key, TimeStamp};
 pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
     const TAG: ApiVersion;
     /// Corresponding TAG of client requests. For test only.
+    #[cfg(any(test, feature = "testexport"))]
     const CLIENT_TAG: ApiVersion;
     const IS_TTL_ENABLED: bool;
 
