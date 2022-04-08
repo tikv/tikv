@@ -7,7 +7,7 @@ use engine_rocks::raw::CompactOptions;
 use engine_rocks::util::get_cf_handle;
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::Context;
 use tikv::config::DbConfig;
 use tikv::server::ttl::check_ttl_and_compact_files;
 use tikv::storage::kv::{SnapContext, TestEngineBuilder};
@@ -389,24 +389,19 @@ fn test_ttl_iterator_impl<API: APIVersion>() {
 
 #[test]
 fn test_stoarge_raw_batch_put_ttl() {
-    test_stoarge_raw_batch_put_ttl_impl(ApiVersion::V1ttl);
-    test_stoarge_raw_batch_put_ttl_impl(ApiVersion::V2);
+    test_stoarge_raw_batch_put_ttl_impl::<APIV1TTL>();
+    test_stoarge_raw_batch_put_ttl_impl::<APIV2>();
 }
 
-fn test_stoarge_raw_batch_put_ttl_impl(api_version: ApiVersion) {
+fn test_stoarge_raw_batch_put_ttl_impl<Api: APIVersion>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
         .build()
         .unwrap();
     let (tx, rx) = channel();
-    let req_api_version = if api_version == ApiVersion::V1ttl {
-        ApiVersion::V1
-    } else {
-        api_version
-    };
     let ctx = Context {
-        api_version: req_api_version,
+        api_version: Api::CLIENT_TAG,
         ..Default::default()
     };
 

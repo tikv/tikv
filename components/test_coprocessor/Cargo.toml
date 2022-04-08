@@ -14,6 +14,7 @@ test-engines-panic = [
 ]
 
 [dependencies]
+api_version = { path = "../api_version" }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
