@@ -11,3 +11,6 @@ pub mod test_receiver;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod test_pubsub;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod test_cpu;

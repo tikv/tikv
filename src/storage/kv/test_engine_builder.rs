@@ -111,6 +111,7 @@ impl TestEngineBuilder {
             Some(cfs_opts),
             cache.is_some(),
             self.io_rate_limiter,
+            None, /* CFOptions */
         )
     }
 }
@@ -123,8 +124,8 @@ impl Default for TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::CfStatistics;
     use super::super::PerfStatisticsInstant;
+    use super::super::{CfStatistics, TEST_ENGINE_CFS};
     use super::super::{Engine, Snapshot};
     use super::*;
     use crate::storage::{Cursor, CursorBuilder, ScanMode};

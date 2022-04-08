@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask,
-    Result,
+    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineReadOnly,
+    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType, WithIOType};
 use kvproto::raft_serverpb::RaftLocalState;
@@ -100,24 +100,25 @@ impl Write for ManagedWriter {
 }
 
 impl WriteExt for ManagedWriter {
-    fn truncate(&self, offset: usize) -> IoResult<()> {
-        match self.inner.as_ref() {
+    fn truncate(&mut self, offset: usize) -> IoResult<()> {
+        self.seek(SeekFrom::Start(offset as u64))?;
+        match self.inner.as_mut() {
             Either::Left(writer) => writer.truncate(offset),
-            Either::Right(writer) => writer.inner().truncate(offset),
+            Either::Right(writer) => writer.inner_mut().truncate(offset),
         }
     }
 
-    fn sync(&self) -> IoResult<()> {
-        match self.inner.as_ref() {
+    fn sync(&mut self) -> IoResult<()> {
+        match self.inner.as_mut() {
             Either::Left(writer) => writer.sync(),
-            Either::Right(writer) => writer.inner().sync(),
+            Either::Right(writer) => writer.inner_mut().sync(),
         }
     }
 
-    fn allocate(&self, offset: usize, size: usize) -> IoResult<()> {
-        match self.inner.as_ref() {
+    fn allocate(&mut self, offset: usize, size: usize) -> IoResult<()> {
+        match self.inner.as_mut() {
             Either::Left(writer) => writer.allocate(offset, size),
-            Either::Right(writer) => writer.inner().allocate(offset, size),
+            Either::Right(writer) => writer.inner_mut().allocate(offset, size),
         }
     }
 }
@@ -162,9 +163,13 @@ impl FileSystem for ManagedFileSystem {
     type Writer = ManagedWriter;
 
     fn create<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
+        let base = Arc::new(self.base_level_file_system.create(path.as_ref())?);
+        if let Some(ref manager) = self.key_manager {
+            manager.new_file(path.as_ref().to_str().unwrap())?;
+        }
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_level_file_system.create(path.as_ref())?),
+            base,
         })
     }
 

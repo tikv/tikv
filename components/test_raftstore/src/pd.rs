@@ -25,7 +25,9 @@ use raft::eraftpb::ConfChangeType;
 use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{
+    BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::QueryStats;
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -300,6 +302,7 @@ struct PdCluster {
     region_last_report_ts: HashMap<u64, UnixSecs>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
+    buckets: HashMap<u64, BucketStat>,
 
     store_stats: HashMap<u64, pdpb::StoreStats>,
     store_hotspots: HashMap<u64, HashMap<u64, pdpb::PeerStat>>,
@@ -316,6 +319,7 @@ struct PdCluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+    min_resolved_ts: u64,
 
     replication_status: Option<ReplicationStatus>,
     region_replication_status: HashMap<u64, RegionReplicationStatus>,
@@ -354,11 +358,13 @@ impl PdCluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            min_resolved_ts: 0,
             replication_status: None,
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
             unsafe_recovery_store_reported: HashMap::default(),
+            buckets: HashMap::default(),
         }
     }
 
@@ -715,6 +721,14 @@ impl PdCluster {
 
     fn get_gc_safe_point(&self) -> u64 {
         self.gc_safe_point
+    }
+
+    fn set_min_resolved_ts(&mut self, min_resolved_ts: u64) {
+        self.min_resolved_ts = min_resolved_ts;
+    }
+
+    fn get_min_resolved_ts(&self) -> u64 {
+        self.min_resolved_ts
     }
 
     fn handle_store_heartbeat(&mut self) -> Result<pdpb::StoreHeartbeatResponse> {
@@ -1215,12 +1229,13 @@ impl TestPdClient {
         cluster.replication_status = Some(status);
     }
 
-    pub fn switch_replication_mode(&self, state: DrAutoSyncState) {
+    pub fn switch_replication_mode(&self, state: DrAutoSyncState, available_stores: Vec<u64>) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
         let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.set_state(state);
+        dr.available_stores = available_stores;
     }
 
     pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {
@@ -1256,6 +1271,10 @@ impl TestPdClient {
         self.cluster.wl().set_gc_safe_point(safe_point);
     }
 
+    pub fn get_min_resolved_ts(&self) -> u64 {
+        self.cluster.rl().get_min_resolved_ts()
+    }
+
     pub fn trigger_tso_failure(&self) {
         self.trigger_tso_failure.store(true, Ordering::SeqCst);
     }
@@ -1275,6 +1294,7 @@ impl TestPdClient {
         self.cluster.wl().check_merge_target_integrity = false;
     }
 
+    /// The next generated TSO will be `ts + 1`. See `get_tso()` and `batch_get_tso()`.
     pub fn set_tso(&self, ts: TimeStamp) {
         let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
         if old > ts.into_inner() {
@@ -1295,6 +1315,10 @@ impl TestPdClient {
 
     pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
         self.cluster.rl().get_store_reported(store_id)
+    }
+
+    pub fn get_buckets(&self, region_id: u64) -> Option<BucketStat> {
+        self.cluster.rl().buckets.get(&region_id).cloned()
     }
 }
 
@@ -1631,7 +1655,7 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
         fail_point!("test_raftstore_get_tso", |t| {
             let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
             Box::pin(async move {
@@ -1650,11 +1674,30 @@ impl PdClient for TestPdClient {
                 )),
             )));
         }
-        let tso = self.tso.fetch_add(1, Ordering::SeqCst);
-        Box::pin(ok(TimeStamp::new(tso)))
+        let tso = self.tso.fetch_add(count as u64, Ordering::SeqCst);
+        Box::pin(ok(TimeStamp::new(tso + count as u64)))
     }
 
     fn feature_gate(&self) -> &FeatureGate {
         &self.feature_gate
+    }
+
+    fn report_min_resolved_ts(&self, _store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        self.cluster.wl().set_min_resolved_ts(min_resolved_ts);
+        Box::pin(ok(()))
+    }
+
+    fn report_region_buckets(&self, bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        self.cluster
+            .wl()
+            .buckets
+            .insert(bucket_stat.meta.region_id, bucket_stat.clone());
+        ready(Ok(())).boxed()
     }
 }

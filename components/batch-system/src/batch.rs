@@ -294,7 +294,9 @@ impl HandleResult {
 /// Sync.
 pub trait PollHandler<N, C>: Send + 'static {
     /// This function is called at the very beginning of every round.
-    fn begin(&mut self, batch_size: usize);
+    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a Config);
 
     /// This function is called when handling readiness for control FSM.
     ///
@@ -388,8 +390,18 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
-            let max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
-            self.handler.begin(max_batch_size);
+            let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
+            // update some online config if needed.
+            {
+                // TODO: rust 2018 does not support capture disjoint field within a closure.
+                // See https://github.com/rust-lang/rust/issues/53488 for more details.
+                // We can remove this once we upgrade to rust 2021 or later edition.
+                let batch_size = &mut self.max_batch_size;
+                self.handler.begin(max_batch_size, |cfg| {
+                    *batch_size = cfg.max_batch_size();
+                });
+            }
+            max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
 
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());

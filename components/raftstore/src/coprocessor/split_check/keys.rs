@@ -277,6 +277,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
@@ -292,6 +293,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -304,6 +306,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -320,6 +323,7 @@ mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -335,7 +339,12 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region,
+            true,
+            CheckPolicy::Scan,
+            None,
+        ));
     }
 
     #[test]
