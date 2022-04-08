@@ -18,6 +18,7 @@ use std::usize;
 
 use api_version::match_template_api_version;
 use api_version::APIVersion;
+use api_version::{APIV1TTL, APIV2};
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -60,6 +61,7 @@ use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
+use crate::server::gc_worker::RawCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
@@ -593,25 +595,32 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        match_template_api_version!(
-            API,
-            match api_version {
-                ApiVersion::API => {
-                    if API::IS_TTL_ENABLED {
-                        cf_opts.add_table_properties_collector_factory(
-                            "tikv.ttl-properties-collector",
-                            TtlPropertiesCollectorFactory::<API>::default(),
-                        );
-                        cf_opts
-                            .set_compaction_filter_factory(
-                                "ttl_compaction_filter_factory",
-                                TTLCompactionFilterFactory::<API>::default(),
-                            )
-                            .unwrap();
-                    }
-                }
+        match api_version {
+            ApiVersion::V1 => {
+                // nothing to do
             }
-        );
+            ApiVersion::V1ttl => {
+                cf_opts.add_table_properties_collector_factory(
+                    "tikv.ttl-properties-collector",
+                    TtlPropertiesCollectorFactory::<APIV1TTL>::default(),
+                );
+                cf_opts
+                    .set_compaction_filter_factory(
+                        "ttl_compaction_filter_factory",
+                        TTLCompactionFilterFactory::<APIV1TTL>::default(),
+                    )
+                    .unwrap();
+            }
+            ApiVersion::V2 => {
+                //TODO add a new CompactionFilter for API V2
+                cf_opts
+                    .set_compaction_filter_factory(
+                        "apiv2_gc_compaction_filter_factory",
+                        RawCompactionFilterFactory,
+                    )
+                    .unwrap();
+            }
+        }
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }

@@ -19,16 +19,21 @@ use engine_traits::{
 use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
+use api_version::{APIV2, APIVersion, KeyMode, RawValue};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
+use api_version::api_v2::RAW_KEY_PREFIX;
+use engine_traits::raw_ttl::ttl_current_ts;
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::storage::lock_manager::DummyLockManager;
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
-const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
+const DEFAULT_DELETE_BATCH_COUNT: usize = 2;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
@@ -180,9 +185,9 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        let gc_context_option = GC_CONTEXT.lock().unwrap();
+        let gc_context_option = GC_CONTEXT.lock().unwrap();//初始化GC_CONTEXT=Mutex::new(None)
         let gc_context = match *gc_context_option {
-            Some(ref ctx) => ctx,
+            Some(ref ctx) => { ctx},
             None => return std::ptr::null_mut(),
         };
 
@@ -294,7 +299,6 @@ impl WriteCompactionFilter {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
-
         let write_batch = engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE);
         WriteCompactionFilter {
             safe_point,
@@ -352,14 +356,14 @@ impl WriteCompactionFilter {
         // Valid MVCC records should begin with `DATA_PREFIX`.
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
-        self.mvcc_deletions.push(key);
+        self.mvcc_deletions.push(key);// key= user key
     }
 
     fn gc_mvcc_deletions(&mut self) {
         if !self.mvcc_deletions.is_empty() {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
             let task = GcTask::GcKeys {
-                keys: mem::replace(&mut self.mvcc_deletions, empty),
+                keys: mem::replace(&mut self.mvcc_deletions, empty),//gc_keys->gc_key->gc->gc.run
                 safe_point: self.safe_point.into(),
                 store_id: self.regions_provider.0,
                 region_info_provider: self.regions_provider.1.clone(),
@@ -519,6 +523,205 @@ impl WriteCompactionFilter {
     }
 }
 
+
+//---------------------------------------
+
+pub struct RawCompactionFilterFactory;
+
+impl CompactionFilterFactory for RawCompactionFilterFactory {
+    fn create_compaction_filter(
+        &self,
+        context: &CompactionFilterContext,
+    ) -> *mut DBCompactionFilter {
+        //---------------- GC content --------------
+        let gc_context_option = GC_CONTEXT.lock().unwrap();
+        let gc_context = match *gc_context_option {
+            Some(ref ctx) => ctx,
+            None => return std::ptr::null_mut(),
+        };
+
+        //---------------- GC content END --------------
+        let db = gc_context.db.clone();
+        let gc_scheduler = gc_context.gc_scheduler.clone();
+        // let store_id = gc_context.store_id;
+        // let region_info_provider = gc_context.region_info_provider.clone();
+        let current = ttl_current_ts();
+        let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
+        let filter = RawCompactionFilter::new(db,
+                                              safe_point,
+                                              gc_scheduler,
+                                              current
+        );
+        let name = CString::new("raw_compaction_filter").unwrap();
+        unsafe { new_compaction_filter_raw(name, filter) }
+    }
+}
+
+//@@@ ------------------------------------------
+struct RawCompactionFilter {
+    safe_point: u64,
+    engine: RocksEngine,
+    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+    current_ts: u64,
+    mvcc_key_prefix: Vec<u8>,
+    mvcc_deletions: Vec<Key>,
+
+}
+
+// impl Drop for RawCompactionFilter {
+//     // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
+//     // becomes installed into the DB instance.
+//     fn drop(&mut self) {
+//         if self.mvcc_deletion_overlaps.take() == Some(0) {
+//             self.handle_bottommost_delete();
+//         }
+//         self.gc_mvcc_deletions();
+//
+//         if let Err(e) = self.flush_pending_writes_if_need(true) {
+//             error!("compaction filter flush writes fail"; "err" => ?e);
+//         }
+//         self.engine.sync_wal().unwrap();
+//
+//         self.switch_key_metrics();
+//         self.flush_metrics();
+//
+//         #[cfg(any(test, feature = "failpoints"))]
+//         for callback in &self.callbacks_on_drop {
+//             callback(self);
+//         }
+//     }
+// }
+
+impl CompactionFilter for RawCompactionFilter {
+    fn featured_filter(
+        &mut self,
+        level: usize,
+        key: &[u8],
+        sequence: u64,
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
+        //  return CompactionFilterDecision::Keep;
+        match self.do_filter(level, key, sequence, value, value_type) {
+            Ok(decision) => decision,
+            Err(e) => {
+                warn!("compaction filter meet error: {}", e);
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                CompactionFilterDecision::Keep
+            }
+        }
+    }
+}
+
+impl RawCompactionFilter {
+    fn new(
+        engine: RocksEngine,
+        safe_point: u64,
+        gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+        ts: u64,
+        // mvcc_key_prefix: Vec<u8>,
+        // mvcc_deletions: Vec<Key>,
+    ) -> Self {
+        // Safe point must have been initialized.
+        assert!(safe_point > 0);
+        debug!("gc in compaction filter"; "safe_point" => safe_point);
+        let write_batch = engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE);
+        RawCompactionFilter {
+            safe_point,
+            engine,
+            gc_scheduler,
+            current_ts: ts,
+            mvcc_key_prefix: vec![],
+            mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
+        }
+    }
+
+    fn do_filter(
+        &mut self,
+        _start_level: usize,
+        key: &[u8],
+        _sequence: u64,
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> Result<CompactionFilterDecision, String> {
+
+        let key_mode = APIV2::parse_key_mode(key);
+        if(key_mode != KeyMode::Raw){
+            return Ok(CompactionFilterDecision::Keep);
+        }
+
+        let (mvcc_key_prefix_vec, commit_ts_opt) = APIV2::decode_raw_key(&Key::from_encoded_slice(key), true).unwrap();
+        let testtestkey = Key::from_encoded_slice(&mvcc_key_prefix_vec);
+        let mvcc_key_prefix = mvcc_key_prefix_vec.as_slice();
+        let commit_ts = commit_ts_opt.unwrap().into_inner();
+        if commit_ts > self.safe_point {
+            return Ok(CompactionFilterDecision::Keep);
+        }
+
+        let raw_value = APIV2::decode_raw_value(&value)?;
+        if self.mvcc_key_prefix != mvcc_key_prefix  {
+            self.mvcc_key_prefix.clear();
+            self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
+            if raw_value.is_delete || raw_value.expire_ts.unwrap() < self.current_ts {
+                self.raw_handle_bottommost_delete();
+                if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+                    self.raw_gc_mvcc_deletions();
+                }
+            } else {
+                //the lastest version ,and not deleted or expaired ttl , need to be retained
+                return Ok(CompactionFilterDecision::Keep);
+            }
+        }else{
+                return Ok(CompactionFilterDecision::Remove);
+        }
+        return Ok(CompactionFilterDecision::Keep);
+    }
+
+    fn raw_gc_mvcc_deletions(&mut self) {
+        if !self.mvcc_deletions.is_empty() {
+            let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
+            let task = GcTask::RawGcKeys {
+                keys: mem::replace(&mut self.mvcc_deletions, empty),//gc_keys->gc_key->gc->gc.run
+                safe_point: self.safe_point.into(),
+            };
+            self.schedule_gc_task(task, false);
+        }
+    }
+
+    // `log_on_error` indicates whether to print an error log on scheduling failures.
+    // It's only enabled for `GcTask::OrphanVersions`.
+    fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
+        match self.gc_scheduler.schedule(task) {
+            Ok(_) => {}
+            Err(e) => {
+                if log_on_error {
+                    error!("compaction filter schedule {} fail", e);
+                }
+                match e {
+                    ScheduleError::Full(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                    }
+                    ScheduleError::Stopped(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                    }
+                }
+            }
+        }
+    }
+
+    fn raw_handle_bottommost_delete(&mut self) {
+        // Valid MVCC records should begin with `DATA_PREFIX`.
+        debug!("raw_handle_bottommost_delete:");
+        debug_assert_eq!(self.mvcc_key_prefix[0], RAW_KEY_PREFIX);
+        let key = Key::from_encoded_slice(&self.mvcc_key_prefix);
+        self.mvcc_deletions.push(key);// key= user key
+    }
+
+
+}
+
+//---------------------------------------
+
 struct CompactionFilterStats {
     versions: Cell<usize>, // Total stale versions meet by compaction filters.
     filtered: Cell<usize>, // Filtered versions by compaction filters.
@@ -588,7 +791,6 @@ impl CompactionFilter for WriteCompactionFilter {
             // If there are already some errors, do nothing.
             return CompactionFilterDecision::Keep;
         }
-
         match self.do_filter(level, key, sequence, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
@@ -692,7 +894,7 @@ pub mod test_utils {
     use engine_rocks::raw::{CompactOptions, CompactionOptions};
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
-    use engine_traits::{SyncMutable, CF_WRITE};
+    use engine_traits::{SyncMutable, CF_WRITE, CF_DEFAULT};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
@@ -767,11 +969,10 @@ pub mod test_utils {
                 feature_gate.set_version("5.0.0").unwrap();
                 feature_gate
             };
-
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
             *gc_context_opt = Some(GcContext {
                 db: engine.clone(),
-                store_id: 1,
+                store_id: 2,
                 safe_point,
                 cfg_tracker,
                 feature_gate,
@@ -800,6 +1001,21 @@ pub mod test_utils {
                 compact_opts.set_target_level(target_level as i32);
             }
             db.compact_range_cf_opt(handle, &compact_opts, self.start, self.end);
+            self.post_gc();
+        }
+
+        pub fn gcRaw(&mut self, engine: &RocksEngine) {
+            let _guard = LOCK.lock().unwrap();
+            self.prepare_gc(engine);
+
+            let db = engine.as_inner();
+            let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
+            let mut compact_opts = default_compact_options();
+            if let Some(target_level) = self.target_level {
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(target_level as i32);
+            }
+            db.compact_range_cf_opt(handle, &compact_opts, None,None);
             self.post_gc();
         }
 
@@ -842,6 +1058,10 @@ pub mod test_utils {
 
 #[cfg(test)]
 pub mod tests {
+    use std::fmt::Debug;
+    use std::{sync::mpsc::{channel, Sender}, thread};
+    use kvproto::kvrpcpb::Context;
+    use engine_rocks::util::get_cf_handle;
     use super::test_utils::*;
     use super::*;
 
@@ -849,7 +1069,10 @@ pub mod tests {
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
+    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE, CompactExt, CF_DEFAULT};
+    use test_util::init_log_for_test;
+    use tikv_util::future::paired_future_callback;
+    use crate::storage::{Callback, TestStorageBuilder};
 
     #[test]
     fn test_is_compaction_filter_allowed() {
@@ -877,29 +1100,184 @@ pub mod tests {
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGCRunner::new(0);
 
-        // GC can't delete keys after the given safe point.
+        // GC can't delete keys after the given safe point.   不清理ts>safepoint之后的数据
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
         gc_runner.safe_point(50).gc(&raw_engine);
         must_get(&engine, b"zkey", 110, &value);
 
-        // GC can't delete keys before the safe ponit if they are latest versions.
+        // GC can't delete keys before the safe ponit if they are latest versions.   如果是最新version，在safepoint之前，也不会删除
         gc_runner.safe_point(200).gc(&raw_engine);
         must_get(&engine, b"zkey", 110, &value);
 
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
         must_commit(&engine, b"zkey", 120, 130);
 
-        // GC can't delete the latest version before the safe ponit.
+        // GC can't delete the latest version before the safe ponit.  //和上面不同的是，110现在不是全局最新，但是是safepoint之前最新的，也不会被删除
         gc_runner.safe_point(115).gc(&raw_engine);
         must_get(&engine, b"zkey", 110, &value);
 
-        // GC a version will also delete the key on default CF.
+        // GC a version will also delete the key on default CF.   会清理default CF的key
         gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&engine, b"zkey", 110);
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_compaction_filter_basic_01() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::new(0);
+
+        // GC can't delete keys after the given safe point.   不清理ts>safepoint之后的数据
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&engine, b"zkey", 100, 110);
+        gc_runner.safe_point(50).gc(&raw_engine);
+        must_get(&engine, b"zkey", 110, &value);
+
+        // GC can't delete keys before the safe ponit if they are latest versions.   如果是最新version，在safepoint之前，也不会删除
+        gc_runner.safe_point(200).gc(&raw_engine);
+        must_get(&engine, b"zkey", 110, &value);
+
+        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
+        must_commit(&engine, b"zkey", 120, 130);
+
+        // GC can't delete the latest version before the safe ponit.  //和上面不同的是，110现在不是全局最新，但是是safepoint之前最新的，也不会被删除
+        gc_runner.safe_point(115).gc(&raw_engine);
+        must_get(&engine, b"zkey", 110, &value);
+
+        // GC a version will also delete the key on default CF.   会清理default CF的key
+        gc_runner.safe_point(200).gc(&raw_engine);
+        must_get_none(&engine, b"zkey", 110);
+        must_get_none(&engine, b"zkey", 100);
+        let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
+        let default_key = default_key.into_encoded();
+        assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_raw_compaction_filter() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+
+        let engine = TestEngineBuilder::new().api_version(ApiVersion::V2).build_with_cfg(&cfg).unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::new(0);
+
+        let value1 = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(TimeStamp::max().physical()),
+            is_delete: false,
+        };
+
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0a").append_ts(100.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0a").append_ts(90.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0a").append_ts(70.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+
+        gc_runner.safe_point(80).gcRaw(&raw_engine);
+        //Wait gc task end
+        thread::sleep(Duration::from_millis(1000));
+
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(100.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(90.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(70.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+
+        gc_runner.safe_point(90).gcRaw(&raw_engine);
+        //Wait gc task end
+        thread::sleep(Duration::from_millis(1000));
+
+        let isexit100 = raw_engine.get_value_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(100.into()).as_encoded().to_vec()).unwrap().is_none();
+        let isexit90 = raw_engine.get_value_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(90.into()).as_encoded().to_vec()).unwrap().is_none();
+        let isexit70 = raw_engine.get_value_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(70.into()).as_encoded().to_vec()).unwrap().is_none();
+        assert_eq!(isexit100, false);
+        //if ts == safepoint ,don't remove.
+        assert_eq!(isexit90, false);
+        //safepoint=80
+        // this version was removed
+        assert_eq!(isexit70, true);
+    }
+
+    #[test]
+    fn test_raw_call_gctask() {
+
+        let engine = TestEngineBuilder::new().api_version(ApiVersion::V2).build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::new(0);
+
+        let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
+            gc_runner.safe_point(500).gcRaw(&raw_engine);
+
+            // Wait up to 1 second, and treat as no task if timeout.
+            if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
+                assert!(expect_tasks, "a GC task is expected");
+                match task {
+                    GcTask::RawGcKeys { keys, .. } => {
+                        assert_eq!(keys.len(), 2);
+                        let got = keys[0].as_encoded();
+                        let expect = Key::from_raw(prefix).append_ts(9.into());
+                        let (usekey, userts) = APIV2::decode_raw_key(&expect, true).unwrap();
+                        assert_eq!(got, &usekey);
+                    }
+                    _ => unreachable!(),
+                }
+                return;
+            }
+            assert!(!expect_tasks, "no GC task is expected");
+        };
+
+        let value1 = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: false,
+        };
+
+        let value_is_delete = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: true,
+        };
+
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0a").append_ts(9.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value_is_delete.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0a").append_ts(5.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0a").append_ts(1.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(3.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(2.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+        raw_engine.put_cf(CF_DEFAULT, &*Key::from_raw(b"r\0b").append_ts(1.into()).as_encoded().to_vec(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.flush(true);
+
+        gc_and_check(true, b"r\0a");
     }
 
     // Test dirty versions before a deletion mark can be handled correctly.
@@ -919,7 +1297,7 @@ pub mod tests {
                 match task {
                     GcTask::GcKeys { keys, .. } => {
                         assert_eq!(keys.len(), 1);
-                        let got = keys[0].as_encoded();
+                        let got = keys[0].as_encoded();//keys[0]类型是Key
                         let expect = Key::from_raw(prefix);
                         assert_eq!(got, &expect.as_encoded()[1..]);
                     }
@@ -968,6 +1346,8 @@ pub mod tests {
     // filter will be created.
     #[test]
     fn test_mvcc_properties() {
+        info!("asdf123");
+        //assert_eq!(1,2);
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         cfg.writecf.dynamic_level_bytes = false;

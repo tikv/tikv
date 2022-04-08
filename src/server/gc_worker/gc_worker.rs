@@ -1,5 +1,4 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::fmt::{self, Display, Formatter};
 use std::iter::Peekable;
 use std::mem;
@@ -9,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::FlowInfo;
+use engine_rocks::{FlowInfo, RocksSnapshot};
 use engine_traits::{
     DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
     CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -18,11 +17,13 @@ use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use kvproto::metapb::Region;
+use api_version::{APIV2, APIVersion};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
+use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext, Snapshot};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
@@ -31,6 +32,10 @@ use txn_types::{Key, TimeStamp};
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
 use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
+use crate::storage::raw::encoded::RawEncodeSnapshot;
+use crate::storage::raw::raw_basic::{MvccRaw, RawBasicSnapshot};
+use crate::storage::raw::raw_mvcc::RawMvccSnapshot;
+
 use crate::storage::txn::Error as TxnError;
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
@@ -42,6 +47,7 @@ use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
 use super::{check_need_gc, Callback, Error, ErrorInner, Result};
 use crate::storage::txn::gc;
+
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -85,6 +91,10 @@ where
         store_id: u64,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     },
+    RawGcKeys {
+        keys: Vec<Key>,
+        safe_point: TimeStamp,
+    },
     UnsafeDestroyRange {
         ctx: Context,
         start_key: Key,
@@ -121,6 +131,7 @@ where
         match self {
             GcTask::Gc { .. } => GcCommandKind::gc,
             GcTask::GcKeys { .. } => GcCommandKind::gc_keys,
+            GcTask::RawGcKeys { .. } => GcCommandKind::raw_gc_keys,
             GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
             GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
             GcTask::OrphanVersions { .. } => GcCommandKind::orphan_versions,
@@ -148,6 +159,7 @@ where
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
+            GcTask::RawGcKeys { .. } => f.debug_struct("RawGcKeys").finish(),
             GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
@@ -305,7 +317,7 @@ where
 
     fn gc_keys(
         &mut self,
-        keys: Vec<Key>,
+        keys: Vec<Key>,//@@@这里的keys是GcTask传过来的多个userkey
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
@@ -368,7 +380,7 @@ where
 
         let mut txn = Self::new_txn();
         let mut reader = if count <= 1 {
-            MvccReader::new(snapshot, None, false)
+            MvccReader::new(snapshot, None, false)  //@@@@ snapshot @@@@
         } else {
             // keys are closing to each other in one batch of gc keys, so do not use
             // prefix seek here to avoid too many seeks
@@ -420,6 +432,93 @@ where
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
         Ok((handled_keys, wasted_keys))
+    }
+
+
+    ////读snapshot的数据
+    fn raw_gc_keys(
+        &mut self,
+        keys: Vec<Key>,
+        safe_point: TimeStamp,
+  //      regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+    ) -> Result<(usize, usize)> {
+        let mut mvccSnapshot
+            = RawBasicSnapshot::from_snapshot( self.engine.snapshot(Default::default()).unwrap());
+
+        let mut rawModifys =MvccRaw::new();
+
+        let mut keys_iter = keys.iter();
+        let mut next_gc_key = keys_iter.next();
+        while let Some(ref key) = next_gc_key {
+            self.raw_gc_key(safe_point,key,&mut rawModifys,&mut mvccSnapshot);// ,mvccSnapshot  根据key扫描 所有  这个key key.ts<=这个ts  的数据，放入rawModifys中
+            //flush_raw_gc;
+            Self::flush_raw_gc(rawModifys,&self.limiter, &self.engine);
+            //flush 之后重置rwModify=let RawModify=MvccRaw::new();
+            rawModifys=MvccRaw::new();
+            next_gc_key = keys_iter.next();
+        }
+        Ok((0, 0))
+    }
+
+    fn raw_gc_key(
+        &mut self,
+        safe_point: TimeStamp,
+        key: &Key,
+        //  gc_info: &mut GcInfo,
+        rawModifys: &mut MvccRaw,
+        snapshot: &mut RawBasicSnapshot<E::Snap>,
+    ) -> Result<()> {
+
+        let startKey = Key::from_raw(key.as_encoded()).append_ts(safe_point);
+        //let startKey = key.clone().append_ts(safe_point);
+
+        let mut cursor = CursorBuilder::new(snapshot, CF_DEFAULT)
+            .build()?;
+
+        let mut statistics= CfStatistics::default();
+
+        cursor.seek(&startKey, &mut statistics);
+
+        let temp=cursor.valid();
+        while cursor.valid()? {
+
+            let temp_key = Key::from_encoded_slice(cursor.key(&mut statistics));
+
+            let (usekey,userts) = APIV2::decode_raw_key(&temp_key, true)?;
+            let ts=userts.unwrap();
+            if(ts==safe_point){
+                cursor.next(&mut statistics);
+                continue;
+            }
+            let prefix_key = Key::from_encoded_slice(&usekey);
+
+            let write = Modify::Delete(CF_DEFAULT, temp_key);
+            rawModifys.write_size += write.size();
+
+            if prefix_key != key.clone() {
+                break;
+            }else{
+                rawModifys.modifies.push(write);
+            }
+            cursor.next(&mut statistics);
+        }
+
+        self.stats.data.add(&statistics);
+
+        Ok(())
+    }
+
+
+    // STEP-3 flush writeBatch to engine
+    fn flush_raw_gc(rawModifys: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
+        let write_size = rawModifys.write_size();
+        let modifies = rawModifys.into_modifies();
+        if !modifies.is_empty() {
+            //内部使用 limiter.blocking_consume(write_size);   进行限流
+            limiter.blocking_consume(write_size);
+            engine.modify_on_kv_engine(modifies)?;
+        }
+        Ok(())
     }
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
@@ -635,6 +734,23 @@ where
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
                 self.update_statistics_metrics();
             }
+            GcTask::RawGcKeys {
+                keys,
+                safe_point,
+            } => {
+                match self.raw_gc_keys(keys, safe_point) {
+                    Ok((handled, wasted)) => {
+                        GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
+                        GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
+                        update_metrics(false);
+                    }
+                    Err(e) => {
+                        warn!("GcKeys fail"; "err" => ?e);
+                        update_metrics(true);
+                    }
+                }
+                self.update_statistics_metrics();
+            }
             GcTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
@@ -704,7 +820,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
         }
         // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a callback.
-        GcTask::GcKeys { .. } | GcTask::OrphanVersions { .. } => {}
+        GcTask::GcKeys { .. } | GcTask::RawGcKeys { .. } | GcTask::OrphanVersions { .. } => {}
         #[cfg(any(test, feature = "testexport"))]
         GcTask::Validate(_) => {}
     }
@@ -1044,11 +1160,12 @@ mod tests {
     };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
-    use engine_traits::KvEngine;
+    use engine_traits::{Iterable, Iterator, KvEngine, Peekable, SyncMutable};
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{ApiVersion, Op};
     use kvproto::metapb::Peer;
     use raft::StateRole;
+    use api_version::RawValue;
     use raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
     use raftstore::coprocessor::RegionChangeEvent;
     use raftstore::router::RaftStoreBlackHole;
@@ -1056,6 +1173,7 @@ mod tests {
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
+    use crate::config::DbConfig;
 
     use super::*;
 
@@ -1586,6 +1704,98 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
+    }
+
+    #[test]
+    fn test_raw_gc_keys() {
+
+        //init engine and gc runner
+        let mut cfg = DbConfig::default();
+        cfg.defaultcf.disable_auto_compactions = true;
+        cfg.defaultcf.dynamic_level_bytes = false;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let kvdb=engine.get_rocksdb();
+
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let mut runner = GcRunner::new(
+            engine,
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+        //init engine and gc runner end...
+
+        // prepare data
+        let mut test_raws = vec![];
+
+        let value1 = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: false,
+        };
+
+        let value_is_delete = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: true,
+        };
+
+        test_raws.push((Key::from_raw(b"r\0a").append_ts(100.into()).as_encoded().to_vec(), APIV2::encode_raw_value_owned(value_is_delete.clone())));
+        test_raws.push((Key::from_raw(b"r\0a").append_ts(50.into()).as_encoded().to_vec(), APIV2::encode_raw_value_owned(value1.clone())));
+        test_raws.push((Key::from_raw(b"r\0a").append_ts(10.into()).as_encoded().to_vec(), APIV2::encode_raw_value_owned(value1.clone())));
+        test_raws.push((Key::from_raw(b"r\0a").append_ts(5.into()).as_encoded().to_vec(), APIV2::encode_raw_value_owned(value1.clone())));
+
+        test_raws.push((Key::from_raw(b"r\0b").append_ts(50.into()).as_encoded().to_vec(),  APIV2::encode_raw_value_owned(value_is_delete.clone())));
+        test_raws.push((Key::from_raw(b"r\0b").append_ts(20.into()).as_encoded().to_vec(), APIV2::encode_raw_value_owned(value1.clone())));
+        test_raws.push((Key::from_raw(b"r\0b").append_ts(10.into()).as_encoded().to_vec(), APIV2::encode_raw_value_owned(value1.clone())));
+
+        //init userkey--------
+        let mut keys =vec![];
+
+        //---------------------------
+        let rawA=Key::from_raw(b"r\0a").append_ts(100.into()).as_encoded().to_vec();
+        let rawB=Key::from_raw(b"r\0b").append_ts(100.into()).as_encoded().to_vec();
+
+        let whileKey=Key::from_encoded_slice(&rawA);
+        let (usekeyVec,userts) = APIV2::decode_raw_key(&whileKey, true).unwrap();
+        let userkey = Key::from_encoded_slice(&usekeyVec);
+        keys.push(userkey);         //7200610000000000FA
+
+        let whileKey=Key::from_encoded_slice(&rawB);
+        let (usekeyVec,userts) = APIV2::decode_raw_key(&whileKey, true).unwrap();
+        let userkey = Key::from_encoded_slice(&usekeyVec);
+        keys.push(userkey);         //7200610000000000FA
+
+        // Write key-value pairs
+        for &(ref rawkeyVec, ref value) in &test_raws {
+            let ctx = Context {
+                api_version: ApiVersion::V2,
+                ..Default::default()
+            };
+            kvdb.put_cf(CF_DEFAULT, rawkeyVec, value).unwrap();
+            kvdb.flush(true);
+        }
+
+        runner.raw_gc_keys(keys.clone(), TimeStamp::new(100)).unwrap();
+
+        let res02=kvdb.get_value(&*rawA);
+        assert_eq!(7, runner.stats.data.next );
+        assert_eq!(2, runner.stats.data.seek );
+        // if raw.ts == safepoint , it will not be delete; we just delete the raw.ts < safepoint
+        assert_eq!(res02.unwrap().is_none(),false);
+
+        runner.raw_gc_keys(keys.clone(), TimeStamp::new(120)).unwrap();
+        let res02=kvdb.get_value(&*rawA);
+        assert_eq!(8, runner.stats.data.next );
+        assert_eq!(4, runner.stats.data.seek );
+
+        assert_eq!(res02.unwrap().is_none(),true);
     }
 
     #[test]
