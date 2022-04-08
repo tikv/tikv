@@ -293,6 +293,9 @@ fn test_force_leader_for_learner() {
 #[test]
 fn test_force_leader_on_healthy_region() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -306,7 +309,8 @@ fn test_force_leader_on_healthy_region() {
 
     // try to enter force leader, it can't succeed due to quorum isn't lost
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
-
+    // make sure it leaves pre force leader state.
+    std::thread::sleep(Duration::from_millis(200));
     // put and get can propose successfully.
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
     cluster.must_put(b"k2", b"v2");

@@ -4433,7 +4433,7 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
-        if let Some(ForceLeaderState::ForceLeader { .. }) = &self.fsm.peer.force_leader {
+        if self.fsm.peer.force_leader.is_some() {
             // in force leader state, forbid requests to make the recovery progress less error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
