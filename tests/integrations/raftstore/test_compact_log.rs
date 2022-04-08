@@ -140,7 +140,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
                 &cluster.engines,
                 &before_states,
                 gc_limit * 2,
-                true, /*must_compacted*/
+                false, /*must_compacted*/
             )
         {
             return;

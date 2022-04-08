@@ -142,12 +142,9 @@ pub fn dump_raft_entries(
         })
         .unwrap();
     batch.append(region_id, entries).unwrap();
-    batch
-        .put_raft_state(
-            region_id,
-            &engine.get_raft_state(region_id).unwrap().unwrap(),
-        )
-        .unwrap();
+    if let Some(state) = engine.get_raft_state(region_id).unwrap() {
+        batch.put_raft_state(region_id, &state).unwrap();
+    }
     batch
 }
 
