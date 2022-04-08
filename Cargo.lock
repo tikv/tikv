@@ -3274,8 +3274,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7f64969ffd5dd8f39bd57a68ac53c163a095ed9d0fb707146da1b27025a3504"
+source = "git+https://github.com/solotzg/rust-prometheus.git?rev=b4fe98a06a58d29f9b9987a0d7186f6ed5230193#b4fe98a06a58d29f9b9987a0d7186f6ed5230193"
 dependencies = [
  "cfg-if 1.0.0",
  "fnv",
@@ -5975,8 +5974,3 @@ dependencies = [
  "itertools 0.9.0",
  "libc",
 ]
-
-[[patch.unused]]
-name = "prometheus"
-version = "0.12.0"
-source = "git+https://github.com/solotzg/rust-prometheus.git?rev=3bc64acb5f7a23685f9c8f54d4067eb4273260c7#3bc64acb5f7a23685f9c8f54d4067eb4273260c7"
