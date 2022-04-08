@@ -2,11 +2,12 @@
 
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::{Buf, Bytes, BytesMut};
 
 use crate::shard::{L0Tables, MemTables};
+use crate::table::memtable::Hint;
 use crate::table::table;
 use crate::*;
 
@@ -47,8 +48,8 @@ pub struct SnapAccess {
     write_sequence: u64,
     mem_tbls: MemTables,
     l0_tbls: L0Tables,
-
     scfs: Vec<ShardCF>,
+    get_hint: Mutex<Hint>,
 }
 
 impl Debug for SnapAccess {
@@ -79,6 +80,7 @@ impl SnapAccess {
             mem_tbls,
             l0_tbls,
             scfs,
+            get_hint: Mutex::new(Hint::new()),
         }
     }
 
@@ -134,7 +136,13 @@ impl SnapAccess {
         let key_hash = farmhash::fingerprint64(key);
         for i in 0..self.mem_tbls.tbls.len() {
             let tbl = self.mem_tbls.tbls[i].get_cf(cf);
-            let v = tbl.get(key, version);
+            let v = if i == 0 && cf == 0 {
+                // only use hint for the first mem-table and cf 0.
+                let mut hint = self.get_hint.lock().unwrap();
+                tbl.get_with_hint(key, version, &mut hint)
+            } else {
+                tbl.get(key, version)
+            };
             path.mem_table += 1;
             if v.is_valid() {
                 return v;
@@ -235,6 +243,32 @@ impl SnapAccess {
 
     pub fn get_l0_files(&self) -> Vec<u64> {
         self.shard.get_l0_files()
+    }
+
+    pub(crate) fn may_contains_in_older_table(&self, key: &[u8], cf: usize) -> bool {
+        let key_hash = farmhash::fingerprint64(key);
+        for tbl in &self.mem_tbls.tbls[1..] {
+            if tbl.get_cf(cf).get(key, u64::MAX).is_valid() {
+                return true;
+            }
+        }
+        for l0 in self.l0_tbls.tbls.as_ref() {
+            let l0_cf = l0.get_cf(cf);
+            if l0_cf.is_none() {
+                continue;
+            }
+            if l0_cf.as_ref().unwrap().may_contains(key_hash) {
+                return true;
+            }
+        }
+        for l in self.scfs[cf].levels.as_ref() {
+            if let Some(tbl) = l.get_table(key) {
+                if tbl.may_contains(key_hash) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 

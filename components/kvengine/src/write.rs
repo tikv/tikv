@@ -127,11 +127,12 @@ impl Engine {
 
     pub fn write(&self, wb: &mut WriteBatch) {
         let shard = self.get_shard(wb.shard_id).unwrap();
+        let snap = self.get_snap_access(wb.shard_id).unwrap();
         let version = shard.base_version + wb.sequence;
         self.update_write_batch_version(wb, version);
         let mem_tbl = shard.get_writable_mem_table();
         for cf in 0..NUM_CFS {
-            mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf));
+            mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf), &snap, cf);
         }
         for (k, v) in &wb.properties {
             shard.properties.set(k.as_str(), v.chunk());

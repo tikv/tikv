@@ -677,7 +677,7 @@ impl LevelHandler {
         tbl.unwrap().get(key, version, key_hash)
     }
 
-    fn get_table(&self, key: &[u8]) -> Option<&SSTable> {
+    pub(crate) fn get_table(&self, key: &[u8]) -> Option<&SSTable> {
         let idx = search(self.tables.len(), |i| self.tables[i].biggest() >= key);
         if idx >= self.tables.len() {
             return None;

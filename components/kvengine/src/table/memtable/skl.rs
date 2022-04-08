@@ -13,7 +13,10 @@ use crate::table::table::{Iterator, Value};
 use bytes::{Buf, BytesMut};
 
 use super::arena::*;
+use crate::table::is_deleted;
+use crate::SnapAccess;
 use std::cmp::Ordering::*;
+use std::iter::Iterator as StdIterator;
 
 pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
@@ -236,11 +239,20 @@ impl SkipListCore {
         self.height.load(Acquire) as usize
     }
 
-    pub fn put_batch(&self, batch: &mut WriteBatch) {
+    pub fn put_batch(&self, batch: &mut WriteBatch, snap: &SnapAccess, cf: usize) {
         let mut hint = self.hint.lock().unwrap();
         for i in 0..batch.entries.len() {
             let entry = &batch.entries[i];
-            self.put_with_hint(&batch.buf, entry, &mut hint);
+            if is_deleted(entry.meta) {
+                let key = entry.key(&batch.buf);
+                if snap.may_contains_in_older_table(key, cf) {
+                    self.put_with_hint(&batch.buf, entry, &mut hint);
+                } else {
+                    self.delete_with_hint(key, &mut hint);
+                }
+            } else {
+                self.put_with_hint(&batch.buf, entry, &mut hint);
+            }
         }
     }
 
@@ -600,6 +612,35 @@ impl SkipListCore {
 
     pub fn is_empty(&self) -> bool {
         self.get_next(self.head, 0).is_null()
+    }
+
+    pub fn delete_with_hint(&self, key: &[u8], h: &mut Hint) -> bool {
+        let list_height = self.get_height();
+        let recompute_height = self.calculate_recompute_height(key, h, list_height);
+        let mut node_addr = ArenaAddr(NULL_ARENA_ADDR);
+        if recompute_height > 0 {
+            for i in (0..recompute_height).rev() {
+                let (prev, next, matched) = self.find_splice_for_level(key, h.prev[i + 1], i);
+                h.prev[i] = prev;
+                h.next[i] = next;
+                if matched {
+                    node_addr = next;
+                }
+            }
+        } else {
+            node_addr = h.next[0];
+        }
+        if node_addr.is_null() {
+            return false;
+        }
+        let node = deref(self.arena.get_node(node_addr));
+        for i in (0..node.height).rev() {
+            let prev_node = deref(self.arena.get_node(h.prev[i]));
+            let next_addr = node.get_next_off(i);
+            assert!(prev_node.cas_next_off(i, node_addr, next_addr));
+            h.next[i] = next_addr;
+        }
+        true
     }
 }
 

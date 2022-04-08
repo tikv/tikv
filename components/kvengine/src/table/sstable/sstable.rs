@@ -78,6 +78,13 @@ impl SSTable {
         it.value()
     }
 
+    pub fn may_contains(&self, key_hash: u64) -> bool {
+        if let Some(filter) = self.idx.filter.as_ref() {
+            return filter.contains(&key_hash);
+        }
+        true
+    }
+
     pub fn has_overlap(&self, start: &[u8], end: &[u8], include_end: bool) -> bool {
         if start > self.biggest() {
             return false;
