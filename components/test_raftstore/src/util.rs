@@ -1206,7 +1206,7 @@ pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
         .unwrap_or_default()
 }
 
-pub fn is_compacted(
+pub fn check_compacted(
     all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,

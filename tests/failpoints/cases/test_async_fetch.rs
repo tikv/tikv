@@ -97,7 +97,7 @@ fn test_node_async_fetch() {
         assert_eq!(v2, Some(v));
 
         if i > 100
-            && is_compacted(
+            && check_compacted(
                 &cluster.engines,
                 &before_states,
                 1,
@@ -107,7 +107,7 @@ fn test_node_async_fetch() {
             return;
         }
     }
-    is_compacted(
+    check_compacted(
         &cluster.engines,
         &before_states,
         1,

@@ -23,7 +23,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_put(key, value);
 
         if i > 100
-            && is_compacted(
+            && check_compacted(
                 &cluster.engines,
                 &before_states,
                 1,
@@ -34,7 +34,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         }
     }
 
-    is_compacted(
+    check_compacted(
         &cluster.engines,
         &before_states,
         1,
@@ -89,17 +89,17 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(v2, Some(v));
 
         if i > 100
-            && is_compacted(
+            && check_compacted(
                 &cluster.engines,
                 &before_states,
                 1,
-                true, /*must_compacted*/
+                false, /*must_compacted*/
             )
         {
             return;
         }
     }
-    is_compacted(
+    check_compacted(
         &cluster.engines,
         &before_states,
         1,
@@ -136,7 +136,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(v2, Some(v));
 
         if i >= 200
-            && is_compacted(
+            && check_compacted(
                 &cluster.engines,
                 &before_states,
                 gc_limit * 2,
@@ -147,7 +147,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         }
     }
 
-    is_compacted(
+    check_compacted(
         &cluster.engines,
         &before_states,
         gc_limit * 2,

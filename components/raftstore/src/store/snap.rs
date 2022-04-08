@@ -577,7 +577,7 @@ impl Snapshot {
     }
 
     fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
-        let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
+        let cf_names = "(".to_owned() + SNAPSHOT_CFS.join("|").as_str() + ")";
         format!(
             "{}/{}_{}{}",
             dir_path.as_ref().display(),

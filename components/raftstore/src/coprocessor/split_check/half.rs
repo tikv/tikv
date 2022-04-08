@@ -201,7 +201,7 @@ mod tests {
     fn test_generate_region_bucket() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
+        let db_opts = DBOptions::default();
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {

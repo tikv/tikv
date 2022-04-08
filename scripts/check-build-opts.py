@@ -68,7 +68,7 @@ def cargo_check_test_engines_ext(kv_engine, raft_engine):
     cargo_run_test_engines("check", [], kv_engine, raft_engine)
 
 def cargo_test_test_engines_ext(kv_engine, raft_engine):
-    cargo_run_test_engines("test", ["--no-run"], kv_engine, raft_engine)
+    cargo_run_test_engines_ext("test", ["--no-run"], kv_engine, raft_engine)
 
 def cargo_run_test_engines_ext(cmd, extra_args, kv_engine, raft_engine):
     for (crate, path) in crates:
