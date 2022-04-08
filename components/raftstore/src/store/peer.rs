@@ -50,7 +50,7 @@ use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
-use crate::store::fsm::store::{store_heartbeat_pd, PollContext};
+use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
@@ -62,8 +62,8 @@ use crate::store::worker::{
     RegionTask, SplitCheckTask,
 };
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
-    RAFT_INIT_LOG_INDEX,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, StoreMsg,
+    TxnExt, RAFT_INIT_LOG_INDEX,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -4533,7 +4533,9 @@ where
                     "counter" =>  task_counter.load(Ordering::Relaxed)
                 );
                 if task_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                    store_heartbeat_pd(ctx, /*send_detailed_report=*/ true);
+                    if let Err(e) = ctx.router.send_control(StoreMsg::UnsafeRecoveryReport) {
+                        error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
+                    }
                 }
                 // Reset the state if the wait is finished.
                 self.unsafe_recovery_state = None;
