@@ -467,7 +467,7 @@ impl Delegate {
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row, true);
+                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row);
 
                     let row_size = row.key.len() + row.value.len();
                     if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -673,7 +673,7 @@ impl Delegate {
         rows: &mut HashMap<Vec<u8>, EventRow>,
     ) -> Result<()> {
         let mut row = EventRow::default();
-        decode_rawkv(put.take_key(), put.take_value(), &mut row, false);
+        decode_rawkv(put.take_key(), put.take_value(), &mut row);
 
         match rows.get_mut(&row.key) {
             Some(row_with_value) => {
@@ -967,9 +967,9 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow, is_ignore_delete: bool) {
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
     let (decoded_key, ts) = APIV2::decode_raw_key(&Key::from_encoded(key), true).unwrap();
-    let decoded_value = APIV2::decode_raw_value_owned(value1).unwrap();
+    let decoded_value = APIV2::decode_raw_value_owned(value).unwrap();
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;

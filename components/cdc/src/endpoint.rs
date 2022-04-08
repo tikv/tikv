@@ -17,7 +17,7 @@ use grpcio::Environment;
 use kvproto::cdcpb::{
     ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
     DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, Event_oneof_event,
-    ResolvedTs,
+    ResolvedTs, ChangeDataRequestKvApi,
 };
 use kvproto::metapb::Region;
 use kvproto::tikvpb::TikvClient;

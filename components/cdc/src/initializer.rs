@@ -243,7 +243,7 @@ impl<E: KvEngine> Initializer<E> {
 
             scanner_iter = Some(ScannerIter::Scanner(scanner));
         } else {
-            let iter_opt = IterOptions::default();
+            let mut iter_opt = IterOptions::default();
             iter_opt.set_lower_bound(b"r", 1);
             iter_opt.set_upper_bound(b"s", 1);
             let mut iter = RawMvccSnapshot::from_snapshot(snap)

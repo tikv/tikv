@@ -13,7 +13,6 @@ use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use test_util::init_log_for_test;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
@@ -22,7 +21,6 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
-    init_log_for_test();
     let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
@@ -183,7 +181,6 @@ fn test_cdc_basic() {
 
 #[test]
 fn test_cdc_rawkv_basic() {
-    init_log_for_test();
     let mut suite = TestSuite::new(1, ApiVersion::V2);
 
     // rawkv

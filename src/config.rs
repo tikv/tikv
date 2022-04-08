@@ -2325,6 +2325,7 @@ pub struct CdcConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
+    #[online_config(skip)]
     pub api_version: u8,
 }
 
@@ -2347,6 +2348,7 @@ impl Default for CdcConfig {
             old_value_cache_memory_quota: ReadableSize::mb(512),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
+            api_version: 1,
         }
     }
 }
