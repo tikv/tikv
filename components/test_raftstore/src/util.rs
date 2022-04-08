@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -12,13 +12,11 @@ use encryption_export::{
 };
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
-use engine_rocks::{
-    get_env, CompactionListener, Compat, RocksCompactionJobInfo, RocksEngine, RocksSnapshot,
-};
+use engine_rocks::{get_env, Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Engines, Iterable, Peekable, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
-    ALL_CFS, CF_DEFAULT, CF_RAFT,
+    TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -47,6 +45,7 @@ use raftstore::Result;
 use rand::RngCore;
 use tempfile::TempDir;
 use tikv::config::*;
+use tikv::server::KvEngineFactoryBuilder;
 use tikv::storage::point_key_range;
 use tikv_util::config::*;
 use tikv_util::time::ThreadReadId;
@@ -637,10 +636,6 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-fn dummpy_filter(_: &RocksCompactionJobInfo<'_>) -> bool {
-    true
-}
-
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
@@ -652,6 +647,8 @@ pub fn create_test_engine(
     TempDir,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
+    let mut cfg = cfg.clone();
+    cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
@@ -660,39 +657,6 @@ pub fn create_test_engine(
     #[allow(clippy::redundant_clone)]
     let env = get_env(key_manager.clone(), limiter.clone()).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
-
-    let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
-    let kv_path_str = kv_path.to_str().unwrap();
-
-    let mut kv_db_opt = cfg.rocksdb.build_opt();
-    #[allow(clippy::redundant_clone)]
-    kv_db_opt.set_env(env.clone());
-
-    if let Some(router) = router {
-        let router = Mutex::new(router);
-        let compacted_handler = Box::new(move |event| {
-            router
-                .lock()
-                .unwrap()
-                .send_control(StoreMsg::CompactedEvent(event))
-                .unwrap();
-        });
-        kv_db_opt.add_event_listener(CompactionListener::new(
-            compacted_handler,
-            Some(dummpy_filter),
-        ));
-    }
-
-    let kv_cfs_opt = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
-
-    let engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
-    );
-    let mut engine = RocksEngine::from_db(engine);
-    let shared_block_cache = cache.is_some();
-    engine.set_shared_block_cache(shared_block_cache);
 
     #[cfg(feature = "test-engine-raft-rocksdb")]
     let raft_engine = {
@@ -706,7 +670,7 @@ pub fn create_test_engine(
                 .unwrap(),
         );
         let mut engine = RocksEngine::from_db(engine);
-        engine.set_shared_block_cache(shared_block_cache);
+        engine.set_shared_block_cache(cache.is_some());
         engine
     };
     #[cfg(feature = "test-engine-raft-raft-engine")]
@@ -717,6 +681,15 @@ pub fn create_test_engine(
         RaftTestEngine::new(cfg, key_manager.clone(), limiter).unwrap()
     };
 
+    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+    if let Some(cache) = cache {
+        builder = builder.block_cache(cache);
+    }
+    if let Some(router) = router {
+        builder = builder.compaction_filter_router(router);
+    }
+    let factory = builder.build();
+    let engine = factory.create_tablet().unwrap();
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir)
 }

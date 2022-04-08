@@ -175,7 +175,7 @@ fn test_update_internal_apply_index() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
     // Simulate data lost in raft cf.
-    for (id, mut batch) in snaps.into_iter() {
+    for (id, mut batch) in snaps {
         cluster.stop_node(id);
         cluster
             .get_raft_engine(id)
