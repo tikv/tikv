@@ -12,6 +12,7 @@ use grpcio_health::proto::HealthCheckRequest;
 use grpcio_health::*;
 use tempfile::Builder;
 
+use api_version::{APIVersion, APIV1, APIV1TTL, APIV2};
 use kvproto::{
     coprocessor::*,
     debugpb,
@@ -601,16 +602,16 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    test_split_region_impl(false, ApiVersion::V1);
-    test_split_region_impl(false, ApiVersion::V2);
-    test_split_region_impl(true, ApiVersion::V1);
-    test_split_region_impl(true, ApiVersion::V1ttl);
-    test_split_region_impl(true, ApiVersion::V2);
+    test_split_region_impl::<APIV1>(false);
+    test_split_region_impl::<APIV2>(false);
+    test_split_region_impl::<APIV1>(true);
+    test_split_region_impl::<APIV1TTL>(true); // APIV1TTL for RawKV only.
+    test_split_region_impl::<APIV2>(true);
 }
 
-fn test_split_region_impl(is_raw_kv: bool, api_version: ApiVersion) {
+fn test_split_region_impl<Api: APIVersion>(is_raw_kv: bool) {
     let encode_key = |k: &[u8]| -> Vec<u8> {
-        if !is_raw_kv || api_version == ApiVersion::V2 {
+        if !is_raw_kv || Api::TAG == ApiVersion::V2 {
             Key::from_raw(k).into_encoded()
         } else {
             k.to_vec()
@@ -618,12 +619,12 @@ fn test_split_region_impl(is_raw_kv: bool, api_version: ApiVersion) {
     };
 
     let (mut cluster, leader, mut ctx) =
-        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(api_version));
+        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(Api::TAG));
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
-    ctx.set_api_version(api_version);
+    ctx.set_api_version(Api::CLIENT_TAG);
 
     // Split region commands
     let key = b"b";

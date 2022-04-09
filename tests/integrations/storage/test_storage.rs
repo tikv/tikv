@@ -1003,10 +1003,10 @@ fn test_txn_store_rawkv_api_version() {
             let mut store = AssertionStorage::<_, API>::new();
             store.ctx.set_api_version(req_api_version);
 
-        let mut end_key = key.to_vec();
-        if let Some(last_byte) = end_key.last_mut() {
-            *last_byte = 0xff;
-        }
+            let mut end_key = key.to_vec();
+            if let Some(last_byte) = end_key.last_mut() {
+                *last_byte = 0xff;
+            }
 
             let mut range = KeyRange::default();
             range.set_start_key(key.to_vec());

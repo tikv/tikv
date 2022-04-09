@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use api_version::{dispatch_api_version, APIVersion, RawValue};
+use api_version::{match_template_api_version, APIVersion, RawValue};
 use engine_traits::raw_ttl::ttl_to_expire_ts;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
@@ -17,6 +17,7 @@ use raw::RawStore;
 use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
+// TODO: consider add `APIVersion` generic parameter.
 command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value. The bool indicates whether they are equal.
@@ -61,8 +62,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 expire_ts: ttl_to_expire_ts(self.ttl),
                 is_delete: false,
             };
-            let encoded_raw_value =
-                dispatch_api_version!(self.api_version, API::encode_raw_value_owned(raw_value));
+            let encoded_raw_value = match_template_api_version!(
+                API,
+                match self.api_version {
+                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                }
+            );
             let m = Modify::Put(cf, key, encoded_raw_value);
             data.push(m);
             ProcessResult::RawCompareAndSwapRes {
@@ -96,6 +101,7 @@ mod tests {
     use super::*;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Engine, Statistics, TestEngineBuilder};
+    use api_version::dispatch_api_version;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;

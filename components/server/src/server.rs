@@ -716,7 +716,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Register causal observer for RawKV API V2
-        if let ApiVersion::V2 = self.config.storage.api_version() {
+        if let ApiVersion::V2 = Api::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 self.pd_client.clone(),
                 self.config.causal_ts.renew_interval.0,

@@ -24,7 +24,7 @@ use crate::storage::{
 };
 use crate::{coprocessor_v2, log_net_error};
 use crate::{forward_duplex, forward_unary};
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::APIVersion;
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
@@ -783,16 +783,15 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: API
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
-            dispatch_api_version!(self.storage.api_version(), {
-                if !req.get_split_key().is_empty() {
-                    vec![API::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
-                } else {
-                    req.take_split_keys()
-                        .into_iter()
-                        .map(|x| API::encode_raw_key_owned(x, None).into_encoded())
-                        .collect()
-                }
-            })
+            // TODO: process Txn & Raw data in a unified manner. CDC & BR have similar request.
+            if !req.get_split_key().is_empty() {
+                vec![Api::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
+            } else {
+                req.take_split_keys()
+                    .into_iter()
+                    .map(|x| Api::encode_raw_key_owned(x, None).into_encoded())
+                    .collect()
+            }
         } else {
             if !req.get_split_key().is_empty() {
                 vec![Key::from_raw(req.get_split_key()).into_encoded()]

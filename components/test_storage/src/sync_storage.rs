@@ -39,7 +39,6 @@ impl<Api: APIVersion> SyncTestStorageBuilder<RocksEngine, Api> {
         Self {
             engine: TestEngineBuilder::new()
                 .api_version(Api::TAG)
-                .causal_observer(true)
                 .build()
                 .unwrap(),
             config: None,

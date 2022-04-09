@@ -18,6 +18,7 @@ use yatp::task::future::reschedule;
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
+// TODO: refactor to utilize generic type `APIVersion` and eliminate matching `api_version`.
 pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S>),
     V1TTL(RawStoreInner<RawEncodeSnapshot<S, APIV1TTL>>),
