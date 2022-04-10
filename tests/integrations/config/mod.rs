@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
+use causal_ts::Config as CausalTsConfig;
 use collections::{HashMap, HashSet};
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
@@ -685,6 +686,7 @@ fn test_serde_custom_tikv_config() {
         enable_region_bucket: true,
         region_bucket_size: ReadableSize::mb(1),
         region_size_threshold_for_approximate: ReadableSize::mb(3),
+        region_bucket_merge_size_ratio: 0.4,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());
@@ -753,6 +755,10 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+    };
+    value.causal_ts = CausalTsConfig {
+        renew_interval: ReadableDuration::millis(100),
+        renew_batch_min_size: 100,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

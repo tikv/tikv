@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
+[features]
+testexport = []
+
 [dependencies]
 bitflags = "1.0.1"
 codec = { path = "../codec", default-features = false }

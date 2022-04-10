@@ -16,8 +16,8 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use api_version::match_template_api_version;
-use api_version::APIVersion;
+use api_version::{match_template_api_version, APIVersion};
+use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -2467,7 +2467,7 @@ impl LogConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
@@ -2485,6 +2485,18 @@ impl Default for QuotaConfig {
             foreground_read_bandwidth: ReadableSize(0),
             max_delay_duration: ReadableDuration::millis(500),
         }
+    }
+}
+
+impl QuotaConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        const MAX_DELAY_DURATION: ReadableDuration = ReadableDuration::micros(u64::MAX / 1000);
+
+        if self.max_delay_duration > MAX_DELAY_DURATION {
+            return Err(format!("quota.max-delay-duration must <= {}", MAX_DELAY_DURATION).into());
+        }
+
+        Ok(())
     }
 }
 
@@ -2543,7 +2555,7 @@ pub struct TiKvConfig {
     #[online_config(skip)]
     pub log: LogConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub quota: QuotaConfig,
 
     #[online_config(submodule)]
@@ -2606,6 +2618,9 @@ pub struct TiKvConfig {
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
+
+    #[online_config(skip)]
+    pub causal_ts: CausalTsConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2646,6 +2661,7 @@ impl Default for TiKvConfig {
             cdc: CdcConfig::default(),
             resolved_ts: ResolvedTsConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
+            causal_ts: CausalTsConfig::default(),
         }
     }
 }
@@ -2774,6 +2790,8 @@ impl TiKvConfig {
         self.gc.validate()?;
         self.resolved_ts.validate()?;
         self.resource_metering.validate()?;
+        self.quota.validate()?;
+        self.causal_ts.validate()?;
 
         if self.storage.flow_control.enable {
             // using raftdb write stall to control memtables as a safety net
@@ -3443,6 +3461,7 @@ pub enum Module {
     CDC,
     ResolvedTs,
     ResourceMetering,
+    Quota,
     Unknown(String),
 }
 
@@ -3468,6 +3487,7 @@ impl From<&str> for Module {
             "cdc" => Module::CDC,
             "resolved_ts" => Module::ResolvedTs,
             "resource_metering" => Module::ResourceMetering,
+            "quota" => Module::Quota,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -3586,6 +3606,7 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use itertools::Itertools;
     use tempfile::Builder;
 
@@ -3595,6 +3616,7 @@ mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
     use crate::storage::{Storage, TestStorageBuilder};
+    use api_version::{APIVersion, APIV1};
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
     use kvproto::kvrpcpb::CommandPri;
@@ -3603,6 +3625,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tikv_kv::RocksEngine as RocksDBEngine;
+    use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
     use tikv_util::sys::SysQuota;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
@@ -3934,14 +3957,15 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
-    fn new_engines(
+    fn new_engines<Api: APIVersion>(
         cfg: TiKvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager>,
+        Storage<RocksDBEngine, DummyLockManager, Api>,
         ConfigController,
         ReceiverWrapper<TTLCheckerTask>,
         Arc<FlowController>,
     ) {
+        assert_eq!(Api::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
             ALL_CFS,
@@ -3955,14 +3979,11 @@ mod tests {
             Some(cfg.rocksdb.build_opt()),
         )
         .unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .config(cfg.storage.clone())
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager)
+                .config(cfg.storage.clone())
+                .build()
+                .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::new(
@@ -3995,7 +4016,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, _, flow_controller) = new_engines(cfg);
+        let (storage, cfg_controller, _, flow_controller) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4124,7 +4145,7 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
@@ -4198,7 +4219,7 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
@@ -4221,7 +4242,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
@@ -4267,7 +4288,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (_, cfg_controller, mut rx, _) = new_engines(cfg);
+        let (_, cfg_controller, mut rx, _) = new_engines::<APIV1>(cfg);
 
         // Can not update shared block cache through rocksdb module
         cfg_controller
@@ -4284,7 +4305,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
         let scheduler = storage.get_scheduler();
 
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
@@ -4327,6 +4348,75 @@ mod tests {
         check_scale_pool_size(max_pool_size + 1, false);
         check_scale_pool_size(1, true);
         check_scale_pool_size(max_pool_size, true);
+    }
+
+    #[test]
+    fn test_change_quota_config() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.quota.foreground_cpu_time = 1000;
+        cfg.quota.foreground_write_bandwidth = ReadableSize::mb(128);
+        cfg.quota.foreground_read_bandwidth = ReadableSize::mb(256);
+        cfg.quota.max_delay_duration = ReadableDuration::secs(1);
+        cfg.validate().unwrap();
+
+        let quota_limiter = Arc::new(QuotaLimiter::new(
+            cfg.quota.foreground_cpu_time,
+            cfg.quota.foreground_write_bandwidth,
+            cfg.quota.foreground_read_bandwidth,
+            cfg.quota.max_delay_duration,
+        ));
+
+        let cfg_controller = ConfigController::new(cfg.clone());
+        cfg_controller.register(
+            Module::Quota,
+            Box::new(QuotaLimitConfigManager::new(Arc::clone(&quota_limiter))),
+        );
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        // u64::MAX ns casts to 213503d.
+        assert!(
+            cfg_controller
+                .update_config("quota.max-delay-duration", "213504d")
+                .is_err()
+        );
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        cfg_controller
+            .update_config("quota.foreground-cpu-time", "2000")
+            .unwrap();
+        cfg.quota.foreground_cpu_time = 2000;
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        cfg_controller
+            .update_config("quota.foreground-write-bandwidth", "256MB")
+            .unwrap();
+        cfg.quota.foreground_write_bandwidth = ReadableSize::mb(256);
+        assert_eq!(cfg_controller.get_current(), cfg);
+
+        let mut sample = quota_limiter.new_sample();
+        sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(125));
+
+        cfg_controller
+            .update_config("quota.foreground-read-bandwidth", "512MB")
+            .unwrap();
+        cfg.quota.foreground_read_bandwidth = ReadableSize::mb(512);
+        assert_eq!(cfg_controller.get_current(), cfg);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(250));
+
+        cfg_controller
+            .update_config("quota.max-delay-duration", "50ms")
+            .unwrap();
+        cfg.quota.max_delay_duration = ReadableDuration::millis(50);
+        assert_eq!(cfg_controller.get_current(), cfg);
+        let mut sample = quota_limiter.new_sample();
+        sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
+        let should_delay = block_on(quota_limiter.async_consume(sample));
+        assert_eq!(should_delay, Duration::from_millis(50));
     }
 
     #[test]

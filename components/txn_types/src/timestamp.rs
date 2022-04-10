@@ -34,6 +34,11 @@ impl TimeStamp {
         self.0 >> TSO_PHYSICAL_SHIFT_BITS
     }
 
+    /// Extracts logical part of a timestamp.
+    pub fn logical(self) -> u64 {
+        self.0 & ((1 << TSO_PHYSICAL_SHIFT_BITS) - 1)
+    }
+
     #[must_use]
     pub fn next(self) -> TimeStamp {
         assert!(self.0 < u64::MAX);
@@ -191,6 +196,9 @@ mod tests {
 
         let extracted_physical = ts.physical();
         assert_eq!(extracted_physical, physical);
+
+        let extracted_logical = ts.logical();
+        assert_eq!(extracted_logical, logical);
     }
 
     #[test]

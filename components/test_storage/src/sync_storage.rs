@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
 use std::sync::{atomic::AtomicU64, Arc};
 
+use api_version::{APIVersion, APIV1};
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{
-    ApiVersion, ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest,
-};
+use kvproto::kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
@@ -23,40 +23,44 @@ use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 /// A builder to build a `SyncTestStorage`.
 ///
 /// Only used for test purpose.
-pub struct SyncTestStorageBuilder<E: Engine> {
+pub struct SyncTestStorageBuilder<E: Engine, Api: APIVersion> {
     engine: E,
     config: Option<Config>,
     gc_config: Option<GcConfig>,
-    api_version: ApiVersion,
+    _phantom: PhantomData<Api>,
 }
 
-impl SyncTestStorageBuilder<RocksEngine> {
-    pub fn new(api_version: ApiVersion) -> Self {
+/// SyncTestStorageBuilder for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type SyncTestStorageBuilderApiV1<E> = SyncTestStorageBuilder<E, APIV1>;
+
+impl<Api: APIVersion> SyncTestStorageBuilder<RocksEngine, Api> {
+    pub fn new() -> Self {
         Self {
             engine: TestEngineBuilder::new()
-                .api_version(api_version)
+                .api_version(Api::TAG)
                 .build()
                 .unwrap(),
             config: None,
             gc_config: None,
-            api_version,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl Default for SyncTestStorageBuilder<RocksEngine> {
+impl Default for SyncTestStorageBuilder<RocksEngine, APIV1> {
     fn default() -> Self {
-        Self::new(ApiVersion::V1)
+        Self::new()
     }
 }
 
-impl<E: Engine> SyncTestStorageBuilder<E> {
+impl<E: Engine, Api: APIVersion> SyncTestStorageBuilder<E, Api> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             engine,
             config: None,
             gc_config: None,
-            api_version: ApiVersion::V1,
+            _phantom: PhantomData,
         }
     }
 
@@ -72,19 +76,15 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
-    pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(
+    pub fn build(mut self) -> Result<SyncTestStorage<E, Api>> {
+        let mut builder = TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(
             self.engine.clone(),
-            DummyLockManager {},
-            self.config
-                .as_ref()
-                .map(|cfg| cfg.api_version())
-                .unwrap_or_default(),
+            DummyLockManager,
         );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        builder = builder.set_api_version(self.api_version);
+        builder = builder.set_api_version(Api::TAG);
         SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
     }
 }
@@ -93,13 +93,20 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 ///
 /// Only used for test purpose.
 #[derive(Clone)]
-pub struct SyncTestStorage<E: Engine> {
+pub struct SyncTestStorage<E: Engine, Api: APIVersion> {
     gc_worker: GcWorker<E, RaftStoreBlackHole>,
-    store: Storage<E, DummyLockManager>,
+    store: Storage<E, DummyLockManager, Api>,
 }
 
-impl<E: Engine> SyncTestStorage<E> {
-    pub fn from_storage(storage: Storage<E, DummyLockManager>, config: GcConfig) -> Result<Self> {
+/// SyncTestStorage for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, APIV1>;
+
+impl<E: Engine, Api: APIVersion> SyncTestStorage<E, Api> {
+    pub fn from_storage(
+        storage: Storage<E, DummyLockManager, Api>,
+        config: GcConfig,
+    ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
@@ -124,7 +131,7 @@ impl<E: Engine> SyncTestStorage<E> {
             .unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager, Api> {
         self.store.clone()
     }
 

@@ -31,6 +31,8 @@ bitflags::bitflags! {
 
 impl APIVersion for APIV2 {
     const TAG: ApiVersion = ApiVersion::V2;
+    #[cfg(any(test, feature = "testexport"))]
+    const CLIENT_TAG: ApiVersion = ApiVersion::V2;
     const IS_TTL_ENABLED: bool = true;
 
     fn parse_key_mode(key: &[u8]) -> KeyMode {
@@ -119,7 +121,7 @@ impl APIVersion for APIV2 {
     }
 
     fn decode_raw_key(encoded_key: &Key, with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
-        debug_assert!(verify_encoded_key(encoded_key, with_ts));
+        debug_assert!(is_valid_encoded_key(encoded_key, with_ts));
         let ts = decode_raw_key_timestamp(encoded_key, with_ts)?;
         Ok((encoded_key.to_raw()?, ts))
     }
@@ -128,7 +130,7 @@ impl APIVersion for APIV2 {
         encoded_key: Key,
         with_ts: bool,
     ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
-        debug_assert!(verify_encoded_key(&encoded_key, with_ts));
+        debug_assert!(is_valid_encoded_key(&encoded_key, with_ts));
         let ts = decode_raw_key_timestamp(&encoded_key, with_ts)?;
         Ok((encoded_key.into_raw()?, ts))
     }
@@ -147,7 +149,9 @@ impl APIVersion for APIV2 {
         debug_assert_eq!(Self::parse_key_mode(&user_key), KeyMode::Raw);
         let src_len = user_key.len();
         let encoded_len = MemComparableByteCodec::encoded_len(src_len);
-        user_key.reserve(encoded_len - src_len + number::U64_SIZE * (ts.is_some() as usize));
+
+        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later, especially in raw write procedures.
+        user_key.reserve(encoded_len - src_len + number::U64_SIZE);
         user_key.resize(encoded_len, 0u8);
         MemComparableByteCodec::encode_all_in_place(&mut user_key, src_len);
 
@@ -160,14 +164,23 @@ impl APIVersion for APIV2 {
     }
 }
 
-#[inline]
-fn verify_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
-    let mut encoded_bytes = &encoded_key.as_encoded()[..];
-    if !matches!(APIV2::parse_key_mode(encoded_bytes), KeyMode::Raw) {
-        return false;
+impl APIV2 {
+    pub fn append_ts_on_encoded_bytes(encoded_bytes: &mut Vec<u8>, ts: TimeStamp) {
+        debug_assert!(is_valid_encoded_bytes(encoded_bytes, false));
+        encoded_bytes.encode_u64_desc(ts.into_inner()).unwrap();
     }
-    bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
+}
+
+#[inline]
+fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
+    APIV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
+        && bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
         && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
+}
+
+#[inline]
+fn is_valid_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
+    is_valid_encoded_bytes(encoded_key.as_encoded(), with_ts)
 }
 
 #[inline]
@@ -178,4 +191,84 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
         None
     };
     Ok(ts)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{APIVersion, APIV2};
+    use txn_types::Key;
+
+    #[test]
+    fn test_key_decode_err() {
+        let cases: Vec<(Vec<u8>, bool)> = vec![
+            // Invalid prefix
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], false),
+            // Memcomparable-encoded padding: n * 9 + Optional 8
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8], false),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], false),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], true),
+            (
+                vec![
+                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0,
+                ],
+                true,
+            ),
+            (
+                vec![
+                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb, 0, 0, 0, 0, 0,
+                    0, 0, 1, 0,
+                ],
+                true,
+            ),
+            // Memcomparable-encoded padding pattern: [.., 0, 0, 0, 0, 0xff - padding-len]
+            (vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb], false),
+            (vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6], false),
+        ];
+
+        for (idx, (bytes, with_ts)) in cases.into_iter().enumerate() {
+            let res = vec![
+                panic_hook::recover_safe(|| {
+                    let _ = APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
+                }),
+                panic_hook::recover_safe(|| {
+                    let _ = APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
+                }),
+            ];
+            for r in res {
+                assert!(r.is_err(), "case {}: {:?}", idx, r);
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_ts_on_encoded_bytes() {
+        let cases = vec![
+            (true, vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], 10),
+            (
+                true,
+                vec![
+                    b'r', 2, 3, 4, 5, 6, 7, 8, 0xff, 1, 2, 3, 4, 0, 0, 0, 0, 0xfb,
+                ],
+                20,
+            ),
+            (false, vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 1),
+            (false, vec![b'r', 2, 3, 4, 5, 6, 7, 8], 2),
+            (false, vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], 3),
+            (false, vec![b'r', 2, 3, 4, 0, 0, 1, 0, 0xfb], 4),
+            (false, vec![b'r', 2, 3, 4, 5, 6, 7, 8, 0xf6], 5),
+        ];
+
+        for (idx, (is_valid, mut bytes, ts)) in cases.into_iter().enumerate() {
+            if is_valid {
+                let expected = Key::from_encoded(bytes.clone()).append_ts(ts.into());
+                APIV2::append_ts_on_encoded_bytes(&mut bytes, ts.into());
+                assert_eq!(&bytes, expected.as_encoded(), "case {}", idx);
+            } else {
+                let r = panic_hook::recover_safe(|| {
+                    APIV2::append_ts_on_encoded_bytes(&mut bytes, ts.into());
+                });
+                assert!(r.is_err(), "case {}: {:?}", idx, r);
+            }
+        }
+    }
 }
