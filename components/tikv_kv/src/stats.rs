@@ -19,10 +19,11 @@ const STAT_NEXT_TOMBSTONE: &str = "next_tombstone";
 const STAT_PREV_TOMBSTONE: &str = "prev_tombstone";
 const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
-const STAT_TTL_TOMBSTONE: &str = "ttl_tombstone";
+/// Statistics of raw value tombstone by RawKV TTL expired or logical deleted.
+const STAT_RAW_VALUE_TOMBSTONE: &str = "raw_value_tombstone";
 
 thread_local! {
-    pub static TTL_TOMBSTONE : RefCell<usize> = RefCell::new(0);
+    pub static RAW_VALUE_TOMBSTONE : RefCell<usize> = RefCell::new(0);
 }
 
 pub enum StatsKind {
@@ -37,7 +38,7 @@ pub struct StatsCollector<'a> {
     kind: StatsKind,
 
     internal_tombstone: usize,
-    ttl_tombstone: usize,
+    raw_value_tombstone: usize,
 }
 
 impl<'a> StatsCollector<'a> {
@@ -46,14 +47,15 @@ impl<'a> StatsCollector<'a> {
             stats,
             kind,
             internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,
-            ttl_tombstone: TTL_TOMBSTONE.with(|m| *m.borrow()),
+            raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
     }
 }
 
 impl Drop for StatsCollector<'_> {
     fn drop(&mut self) {
-        self.stats.ttl_tombstone += TTL_TOMBSTONE.with(|m| *m.borrow()) - self.ttl_tombstone;
+        self.stats.raw_value_tombstone +=
+            RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
         let internal_tombstone =
             PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
         match self.kind {
@@ -96,7 +98,7 @@ pub struct CfStatistics {
     pub prev_tombstone: usize,
     pub seek_tombstone: usize,
     pub seek_for_prev_tombstone: usize,
-    pub ttl_tombstone: usize,
+    pub raw_value_tombstone: usize,
 }
 
 const STATS_COUNT: usize = 12;
@@ -120,7 +122,7 @@ impl CfStatistics {
             (STAT_PREV_TOMBSTONE, self.prev_tombstone),
             (STAT_SEEK_TOMBSTONE, self.seek_tombstone),
             (STAT_SEEK_FOR_PREV_TOMBSTONE, self.seek_for_prev_tombstone),
-            (STAT_TTL_TOMBSTONE, self.ttl_tombstone),
+            (STAT_RAW_VALUE_TOMBSTONE, self.raw_value_tombstone),
         ]
     }
 
@@ -140,7 +142,7 @@ impl CfStatistics {
                 GcKeysDetail::seek_for_prev_tombstone,
                 self.seek_for_prev_tombstone,
             ),
-            (GcKeysDetail::ttl_tombstone, self.ttl_tombstone),
+            (GcKeysDetail::raw_value_tombstone, self.raw_value_tombstone),
         ]
     }
 
@@ -159,7 +161,9 @@ impl CfStatistics {
         self.seek_for_prev_tombstone = self
             .seek_for_prev_tombstone
             .saturating_add(other.seek_for_prev_tombstone);
-        self.ttl_tombstone = self.ttl_tombstone.saturating_add(other.ttl_tombstone);
+        self.raw_value_tombstone = self
+            .raw_value_tombstone
+            .saturating_add(other.raw_value_tombstone);
     }
 
     /// Deprecated

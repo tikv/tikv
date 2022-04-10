@@ -34,9 +34,19 @@ pub mod tests {
     use std::sync::Arc;
 
     /// for TEST purpose.
-    #[derive(Default)]
     pub struct TestProvider {
         ts: Arc<AtomicU64>,
+    }
+
+    impl Default for TestProvider {
+        fn default() -> Self {
+            Self {
+                // `ts` starts from 1, to avoid generating `TimeStamp::zero()`,
+                // as `TimeStamp::zero()` would be a special value.
+                // E.g, in `RawMvccSnapshot`, `TimeStamp::zero()` is used as the exclusive upper-bound of a key.
+                ts: Arc::new(AtomicU64::new(1)),
+            }
+        }
     }
 
     impl CausalTsProvider for TestProvider {

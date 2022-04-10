@@ -14,7 +14,7 @@ use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
 };
 use file_system::IORateLimiter;
-use kvproto::kvrpcpb::Context;
+use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -151,10 +151,6 @@ impl RocksEngine {
         let core = self.core.lock().unwrap();
         core.worker.stop();
     }
-
-    pub fn mut_coprocessor(&mut self) -> &mut CoprocessorHost<BaseRocksEngine> {
-        &mut self.coprocessor
-    }
 }
 
 impl Display for RocksEngine {
@@ -208,7 +204,6 @@ impl Engine for RocksEngine {
         }
 
         // Trigger "pre_propose_query" observers for RawKV API V2.
-        use kvproto::{metapb, raft_cmdpb};
         let requests = batch
             .modifies
             .into_iter()
@@ -218,10 +213,9 @@ impl Engine for RocksEngine {
         cmd_req.set_requests(requests.into());
         let mut region = metapb::Region::default();
         region.set_id(1);
-        // TODO: uncomment after finish modification of Storage.
-        // self.coprocessor
-        //     .pre_propose(&region, &mut cmd_req)
-        //     .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
+        self.coprocessor
+            .pre_propose(&region, &mut cmd_req)
+            .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
         batch.modifies = cmd_req
             .take_requests()
             .into_iter()
@@ -255,6 +249,10 @@ impl Engine for RocksEngine {
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
+    }
+
+    fn mut_coprocessor(&mut self) -> Option<&mut CoprocessorHost<BaseRocksEngine>> {
+        Some(&mut self.coprocessor)
     }
 }
 

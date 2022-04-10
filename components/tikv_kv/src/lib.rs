@@ -53,10 +53,11 @@ pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-    StatisticsSummary, TTL_TOMBSTONE,
+    StatisticsSummary, RAW_VALUE_TOMBSTONE,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use raftstore::coprocessor::CoprocessorHost;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -89,6 +90,15 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+
+    pub fn key(&self) -> &Key {
+        match self {
+            Modify::Delete(_, ref k) => k,
+            Modify::Put(_, ref k, _) => k,
+            Modify::PessimisticLock(ref k, _) => k,
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
@@ -330,6 +340,12 @@ pub trait Engine: Send + Clone + 'static {
     // Some engines have a `TxnExtraScheduler`. This method is to send the extra
     // to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    // Some engines have a coprocessor. This method is to obtain it.
+    // By now only `RocksEngine` has the coprocessor, used for `CausalObserver` of RawKV API V2.
+    fn mut_coprocessor(&mut self) -> Option<&mut CoprocessorHost<Self::Local>> {
+        None
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in time.
