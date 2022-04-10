@@ -273,6 +273,7 @@ mod tests {
             ..Default::default()
         };
 
+        // TODO: Consider another way other than hard coding, to generate keys' prefix of test data.
         let test_data = vec![
             (b"r\0a".to_vec(), b"aa".to_vec(), 10),
             (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
