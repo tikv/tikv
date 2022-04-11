@@ -1365,6 +1365,7 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
+            self.on_force_leader_fail();
             return;
         }
 
@@ -1374,14 +1375,9 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_exit_pre_force_leader(&mut self) {
-        info!(
-            "exit pre force leader state";
-            "region_id" => self.fsm.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-        );
-
+    fn on_force_leader_fail(&mut self) {
         self.fsm.peer.raft_group.raft.pre_vote = true;
+        self.fsm.peer.raft_group.raft.set_check_quorum(true);
         self.fsm.peer.force_leader = None;
     }
 
@@ -1523,7 +1519,7 @@ where
                     "alive_voter" => ?expected_alive_voter,
                     "reason" => err,
                 );
-                self.on_exit_pre_force_leader();
+                self.on_force_leader_fail();
             }
             Ok(granted) => {
                 if granted == expected_alive_voter.len() {
@@ -1654,7 +1650,7 @@ where
                         "peer_id" => self.fsm.peer_id(),
                         "state" => ?r,
                     );
-                    self.on_exit_pre_force_leader();
+                    self.on_force_leader_fail();
                 }
             }
         }
