@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{FlowInfo, RocksSnapshot};
+use engine_rocks::FlowInfo;
 use engine_traits::{
     DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
     CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -23,7 +23,7 @@ use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
-use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext, Snapshot};
+use tikv_kv::{CfStatistics, CursorBuilder, Modify};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
@@ -32,9 +32,7 @@ use txn_types::{Key, TimeStamp};
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
 use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
-use crate::storage::raw::encoded::RawEncodeSnapshot;
 use crate::storage::raw::raw_basic::{MvccRaw, RawBasicSnapshot};
-use crate::storage::raw::raw_mvcc::RawMvccSnapshot;
 
 use crate::storage::txn::Error as TxnError;
 
@@ -435,26 +433,30 @@ where
     }
 
 
-    ////读snapshot的数据
     fn raw_gc_keys(
         &mut self,
         keys: Vec<Key>,
         safe_point: TimeStamp,
   //      regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
-        let mut mvccSnapshot
+        let mut mvcc_snapshot
             = RawBasicSnapshot::from_snapshot( self.engine.snapshot(Default::default()).unwrap());
 
-        let mut rawModifys =MvccRaw::new();
+        let mut raw_modifys =MvccRaw::new();
 
         let mut keys_iter = keys.iter();
         let mut next_gc_key = keys_iter.next();
         while let Some(ref key) = next_gc_key {
-            self.raw_gc_key(safe_point,key,&mut rawModifys,&mut mvccSnapshot);// ,mvccSnapshot  根据key扫描 所有  这个key key.ts<=这个ts  的数据，放入rawModifys中
+            if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifys, &mut mvcc_snapshot) {
+                GC_KEY_FAILURES.inc();
+                error!(?e; "Raw GC meets failure"; "key" => %key,);
+                // Switch to the next key if meets failure.
+            }
+
             //flush_raw_gc;
-            Self::flush_raw_gc(rawModifys,&self.limiter, &self.engine);
+            Self::flush_raw_gc(raw_modifys, &self.limiter, &self.engine)?;
             //flush 之后重置rwModify=let RawModify=MvccRaw::new();
-            rawModifys=MvccRaw::new();
+            raw_modifys =MvccRaw::new();
             next_gc_key = keys_iter.next();
         }
         Ok((0, 0))
@@ -465,11 +467,11 @@ where
         safe_point: TimeStamp,
         key: &Key,
         //  gc_info: &mut GcInfo,
-        rawModifys: &mut MvccRaw,
+        raw_modifys: &mut MvccRaw,
         snapshot: &mut RawBasicSnapshot<E::Snap>,
     ) -> Result<()> {
 
-        let startKey = Key::from_raw(key.as_encoded()).append_ts(safe_point);
+        let start_key = Key::from_raw(key.as_encoded()).append_ts(safe_point);
         //let startKey = key.clone().append_ts(safe_point);
 
         let mut cursor = CursorBuilder::new(snapshot, CF_DEFAULT)
@@ -477,28 +479,27 @@ where
 
         let mut statistics= CfStatistics::default();
 
-        cursor.seek(&startKey, &mut statistics);
+        cursor.seek(&start_key, &mut statistics)?;
 
-        let temp=cursor.valid();
         while cursor.valid()? {
 
             let temp_key = Key::from_encoded_slice(cursor.key(&mut statistics));
 
             let (usekey,userts) = APIV2::decode_raw_key(&temp_key, true)?;
             let ts=userts.unwrap();
-            if(ts==safe_point){
+            if ts==safe_point {
                 cursor.next(&mut statistics);
                 continue;
             }
             let prefix_key = Key::from_encoded_slice(&usekey);
 
             let write = Modify::Delete(CF_DEFAULT, temp_key);
-            rawModifys.write_size += write.size();
+            raw_modifys.write_size += write.size();
 
             if prefix_key != key.clone() {
                 break;
             }else{
-                rawModifys.modifies.push(write);
+                raw_modifys.modifies.push(write);
             }
             cursor.next(&mut statistics);
         }
@@ -510,9 +511,9 @@ where
 
 
     // STEP-3 flush writeBatch to engine
-    fn flush_raw_gc(rawModifys: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
-        let write_size = rawModifys.write_size();
-        let modifies = rawModifys.into_modifies();
+    fn flush_raw_gc(raw_modifys: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
+        let write_size = raw_modifys.write_size();
+        let modifies = raw_modifys.into_modifies();
         if !modifies.is_empty() {
             //内部使用 limiter.blocking_consume(write_size);   进行限流
             limiter.blocking_consume(write_size);
@@ -745,7 +746,7 @@ where
                         update_metrics(false);
                     }
                     Err(e) => {
-                        warn!("GcKeys fail"; "err" => ?e);
+                        warn!("Raw GcKeys fail"; "err" => ?e);
                         update_metrics(true);
                     }
                 }

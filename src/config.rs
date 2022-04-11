@@ -16,9 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use api_version::match_template_api_version;
-use api_version::APIVersion;
-use api_version::{APIV1TTL, APIV2};
+use api_version::APIV1TTL;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;

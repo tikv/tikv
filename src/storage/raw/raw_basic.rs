@@ -1,14 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{APIV2, APIVersion};
-use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
+use crate::storage::kv::{Iterator, Result, Snapshot};
 
 use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
 use engine_traits::{IterOptions, ReadOptions};
 use tikv_kv::Modify;
 use txn_types::{Key, TimeStamp, Value};
-
-const VEC_SHRINK_THRESHOLD: usize = 512; // shrink vec when it's over 512.
 
 #[derive(Clone)]
 pub struct RawBasicSnapshot<S: Snapshot> {
@@ -42,17 +40,6 @@ impl<S: Snapshot> RawBasicSnapshot<S> {
             Ok(None)
         }
     }
-
-    pub fn get_key_ttl_cf(
-        &self,
-        cf: CfName,
-        key: &Key,
-    ) -> Result<Option<u64>> {
-
-        Ok(None)
-    }
-
-
 
 }
 
@@ -125,78 +112,13 @@ impl<S: Snapshot> Snapshot for RawBasicSnapshot<S> {
 
 pub struct RawBasicIterator<I: Iterator> {
     inner: I,
-    cur_key: Option<Vec<u8>>,
-    cur_value: Option<Vec<u8>>,
-    is_valid: Option<bool>,
-    is_forward: bool,
-}
-
-fn is_user_key_eq(left: &[u8], right: &[u8]) -> bool {
-    let len = left.len();
-    if len != right.len() {
-        return false;
-    }
-    // ensure all keys is encoded with ts.
-    Key::is_user_key_eq(left, Key::truncate_ts_for(right).unwrap())
 }
 
 impl<I: Iterator> RawBasicIterator<I> {
     fn new(inner: I) -> Self {
         RawBasicIterator {
             inner,
-            cur_key: None,
-            cur_value: None,
-            is_valid: None,
-            is_forward: true,
         }
-    }
-
-    fn update_cur_kv(&mut self) {
-        if let Some(ref mut key) = self.cur_key {
-            key.clear();
-            key.extend_from_slice(self.inner.key());
-            if key.capacity() > key.len() * 2 && key.capacity() > VEC_SHRINK_THRESHOLD {
-                key.shrink_to_fit();
-            }
-        } else {
-            self.cur_key = Some(Vec::from(self.inner.key()));
-        };
-        if let Some(ref mut value) = self.cur_value {
-            value.clear();
-            value.extend_from_slice(self.inner.value());
-            if value.capacity() > value.len() * 2 && value.capacity() > VEC_SHRINK_THRESHOLD {
-                value.shrink_to_fit();
-            }
-        } else {
-            self.cur_value = Some(Vec::from(self.inner.value()));
-        };
-        self.is_valid = Some(true);
-    }
-
-    fn clear_cur_kv(&mut self) {
-        self.cur_key = None;
-        self.cur_value = None;
-        self.is_valid = None;
-    }
-
-    fn move_to_prev_max_ts(&mut self) -> Result<bool> {
-        if self.inner.valid()? {
-            self.update_cur_kv();
-            self.inner.prev()?;
-        } else {
-            self.clear_cur_kv();
-            return Ok(false);
-        }
-        while self.inner.valid()? {
-            // cur_key should not be None here.
-            if is_user_key_eq(self.cur_key.as_ref().unwrap(), self.inner.key()) {
-                self.update_cur_kv();
-                self.inner.prev()?;
-            } else {
-                break;
-            }
-        }
-        Ok(true)
     }
 }
 

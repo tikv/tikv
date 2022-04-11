@@ -19,18 +19,16 @@ use engine_traits::{
 use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
-use api_version::{APIV2, APIVersion, KeyMode, RawValue};
+use api_version::{APIV2, APIVersion, KeyMode};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
-use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 use api_version::api_v2::RAW_KEY_PREFIX;
 use engine_traits::raw_ttl::ttl_current_ts;
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::lock_manager::DummyLockManager;
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 2;
@@ -625,7 +623,7 @@ impl RawCompactionFilter {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
-        let write_batch = engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE);
+//        let write_batch = engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE);
         RawCompactionFilter {
             safe_point,
             engine,
@@ -646,12 +644,11 @@ impl RawCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
 
         let key_mode = APIV2::parse_key_mode(key);
-        if(key_mode != KeyMode::Raw){
+        if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
         }
 
         let (mvcc_key_prefix_vec, commit_ts_opt) = APIV2::decode_raw_key(&Key::from_encoded_slice(key), true).unwrap();
-        let testtestkey = Key::from_encoded_slice(&mvcc_key_prefix_vec);
         let mvcc_key_prefix = mvcc_key_prefix_vec.as_slice();
         let commit_ts = commit_ts_opt.unwrap().into_inner();
         if commit_ts > self.safe_point {
