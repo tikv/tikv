@@ -1287,7 +1287,7 @@ where
     fn on_enter_pre_force_leader(&mut self, failed_stores: HashSet<u64>) {
         match self.fsm.peer.force_leader {
             Some(ForceLeaderState::PreForceLeader { .. }) => {
-                self.fsm.peer.force_leader = None;
+                self.on_force_leader_fail();
             }
             Some(ForceLeaderState::ForceLeader { .. }) => {
                 // already is a force leader, do nothing
