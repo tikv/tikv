@@ -43,6 +43,7 @@ raftstore = { path = "../raftstore", default-features = false }
 rand = "0.8"
 resolved_ts = { path = "../resolved_ts" }
 security = { path = "../security", default-features = false }
+server = { path = "../server" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

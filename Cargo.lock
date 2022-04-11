@@ -5230,6 +5230,7 @@ dependencies = [
  "resolved_ts",
  "resource_metering",
  "security",
+ "server",
  "slog",
  "slog-global",
  "tempfile",

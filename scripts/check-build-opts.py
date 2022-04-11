@@ -65,7 +65,7 @@ def cargo_run_test_engines(cmd, extra_args, engines):
         run_and_collect_errors(args)
 
 def cargo_check_test_engines_ext(kv_engine, raft_engine):
-    cargo_run_test_engines("check", [], kv_engine, raft_engine)
+    cargo_run_test_engines_ext("check", [], kv_engine, raft_engine)
 
 def cargo_test_test_engines_ext(kv_engine, raft_engine):
     cargo_run_test_engines_ext("test", ["--no-run"], kv_engine, raft_engine)

@@ -12,7 +12,7 @@ use encryption_export::{
 };
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
-use engine_rocks::{get_env, Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Engines, Iterable, Peekable, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
@@ -43,6 +43,7 @@ pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::store::*;
 use raftstore::Result;
 use rand::RngCore;
+use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use tikv::config::*;
 use tikv::server::KvEngineFactoryBuilder;
@@ -129,7 +130,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     );
 }
 
-pub fn dump_raft_entries(
+pub fn dump_raft_data(
     engine: &RaftTestEngine,
     region_id: u64,
 ) -> <RaftTestEngine as RaftEngine>::LogBatch {
@@ -651,32 +652,12 @@ pub fn create_test_engine(
             .unwrap()
             .map(Arc::new);
 
-    #[allow(clippy::redundant_clone)]
-    let env = get_env(key_manager.clone(), limiter.clone()).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
+    let env = cfg
+        .build_shared_rocks_env(key_manager.clone(), limiter)
+        .unwrap();
 
-    #[cfg(feature = "test-engine-raft-rocksdb")]
-    let raft_engine = {
-        let path = dir.path().join("raft");
-        let mut db_opt = cfg.raftdb.build_opt();
-        db_opt.set_env(env);
-
-        let cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-        let engine = Arc::new(
-            engine_rocks::raw_util::new_engine_opt(path.to_str().unwrap(), db_opt, cfs_opt)
-                .unwrap(),
-        );
-        let mut engine = RocksEngine::from_db(engine);
-        engine.set_shared_block_cache(cache.is_some());
-        engine
-    };
-    #[cfg(feature = "test-engine-raft-raft-engine")]
-    let raft_engine = {
-        let path = dir.path().join("raft-engine");
-        let mut cfg = cfg.raft_engine.config();
-        cfg.dir = path.to_str().unwrap().to_owned();
-        RaftTestEngine::new(cfg, key_manager.clone(), limiter).unwrap()
-    };
+    let raft_engine = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
     let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
     if let Some(cache) = cache {
