@@ -28,8 +28,9 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
         iter_opt.set_fill_cache(opts.map_or(true, |v| v.fill_cache()));
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
-        let end_key = key.clone().append_ts(TimeStamp::zero());
-        iter_opt.set_upper_bound(end_key.as_encoded(), DATA_KEY_PREFIX_LEN);
+        let mut end_key = key.clone().append_ts(TimeStamp::zero()).into_encoded();
+        end_key.push(0); // `end_key` is inclusive.
+        iter_opt.set_vec_upper_bound(end_key, DATA_KEY_PREFIX_LEN);
         let mut iter = match cf {
             Some(cf_name) => self.iter_cf(cf_name, iter_opt)?,
             None => self.iter(iter_opt)?,
