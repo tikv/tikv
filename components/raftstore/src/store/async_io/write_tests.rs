@@ -7,33 +7,37 @@ use crate::Result;
 
 use collections::HashSet;
 use crossbeam::channel::unbounded;
-use engine_rocks::util::new_temp_engine;
-use engine_rocks::{RocksEngine, RocksWriteBatch};
-use engine_traits::{Mutable, Peekable, WriteBatchExt};
+use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
+use engine_traits::{Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
 use kvproto::raft_serverpb::RaftMessage;
 use tempfile::Builder;
 
 use super::*;
 
 fn must_have_entries_and_state(
-    raft_engine: &RocksEngine,
+    raft_engine: &RaftTestEngine,
     entries_state: Vec<(u64, Vec<Entry>, RaftLocalState)>,
 ) {
-    let snapshot = raft_engine.snapshot();
     for (region_id, entries, state) in entries_state {
         for e in entries {
-            let key = keys::raft_log_key(region_id, e.get_index());
-            let val = snapshot.get_msg::<Entry>(&key).unwrap().unwrap();
-            assert_eq!(val, e);
+            assert_eq!(
+                raft_engine
+                    .get_entry(region_id, e.get_index())
+                    .unwrap()
+                    .unwrap(),
+                e
+            );
         }
-        let val = snapshot
-            .get_msg::<RaftLocalState>(&keys::raft_state_key(region_id))
-            .unwrap()
-            .unwrap();
-        assert_eq!(val, state);
-        let key = keys::raft_log_key(region_id, state.get_last_index() + 1);
-        // last_index + 1 entry should not exist
-        assert!(snapshot.get_msg::<Entry>(&key).unwrap().is_none());
+        assert_eq!(
+            raft_engine.get_raft_state(region_id).unwrap().unwrap(),
+            state
+        );
+        assert!(
+            raft_engine
+                .get_entry(region_id, state.get_last_index() + 1)
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -145,33 +149,33 @@ fn must_wait_same_notifies(
 }
 
 fn init_write_batch(
-    engines: &Engines<RocksEngine, RocksEngine>,
-    task: &mut WriteTask<RocksEngine, RocksEngine>,
+    engines: &Engines<KvTestEngine, RaftTestEngine>,
+    task: &mut WriteTask<KvTestEngine, RaftTestEngine>,
 ) {
     task.kv_wb = Some(engines.kv.write_batch());
-    task.raft_wb = Some(engines.raft.write_batch());
+    task.raft_wb = Some(engines.raft.log_batch(0));
 }
 
 /// Help function for less code
 /// Option must not be none
-fn put_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8], value: &[u8]) {
+fn put_kv(wb: &mut Option<<KvTestEngine as WriteBatchExt>::WriteBatch>, key: &[u8], value: &[u8]) {
     wb.as_mut().unwrap().put(key, value).unwrap();
 }
 
 /// Help function for less code
 /// Option must not be none
-fn delete_kv(wb: &mut Option<RocksWriteBatch>, key: &[u8]) {
+fn delete_kv(wb: &mut Option<<KvTestEngine as WriteBatchExt>::WriteBatch>, key: &[u8]) {
     wb.as_mut().unwrap().delete(key).unwrap();
 }
 
 struct TestWorker {
-    worker: Worker<RocksEngine, RocksEngine, TestNotifier, TestTransport>,
+    worker: Worker<KvTestEngine, RaftTestEngine, TestNotifier, TestTransport>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
 
 impl TestWorker {
-    fn new(cfg: &Config, engines: &Engines<RocksEngine, RocksEngine>) -> Self {
+    fn new(cfg: &Config, engines: &Engines<KvTestEngine, RaftTestEngine>) -> Self {
         let (_, task_rx) = unbounded();
         let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
@@ -194,13 +198,13 @@ impl TestWorker {
 }
 
 struct TestWriters {
-    writers: StoreWriters<RocksEngine, RocksEngine>,
+    writers: StoreWriters<KvTestEngine, RaftTestEngine>,
     msg_rx: Receiver<RaftMessage>,
     notify_rx: Receiver<(u64, (u64, u64))>,
 }
 
 impl TestWriters {
-    fn new(cfg: &Config, engines: &Engines<RocksEngine, RocksEngine>) -> Self {
+    fn new(cfg: &Config, engines: &Engines<KvTestEngine, RaftTestEngine>) -> Self {
         let (msg_tx, msg_rx) = unbounded();
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
@@ -222,7 +226,7 @@ impl TestWriters {
         }
     }
 
-    fn write_sender(&self, id: usize) -> &Sender<WriteMsg<RocksEngine, RocksEngine>> {
+    fn write_sender(&self, id: usize) -> &Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
         &self.writers.senders()[id]
     }
 }
@@ -233,10 +237,9 @@ fn test_worker() {
     let engines = new_temp_engine(&path);
     let mut t = TestWorker::new(&Config::default(), &engines);
 
-    let mut task_1 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 10);
+    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
     init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
-    put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
     task_1.entries.append(&mut vec![
         new_entry(5, 5),
         new_entry(6, 5),
@@ -248,10 +251,9 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_1);
 
-    let mut task_2 = WriteTask::<RocksEngine, RocksEngine>::new(2, 2, 15);
+    let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 15);
     init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
-    put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
     task_2
         .entries
         .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
@@ -262,11 +264,9 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_2);
 
-    let mut task_3 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 11);
+    let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 11);
     init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
-    put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
-    delete_kv(&mut task_3.raft_wb, b"raft_k1");
     task_3
         .entries
         .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
@@ -284,11 +284,6 @@ fn test_worker() {
     assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
-
-    let snapshot = engines.raft.snapshot();
-    assert!(snapshot.get_value(b"raft_k1").unwrap().is_none());
-    assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
-    assert_eq!(snapshot.get_value(b"raft_k3").unwrap().unwrap(), b"raft_v3");
 
     must_have_same_notifies(vec![(1, (1, 11)), (2, (2, 15))], &t.notify_rx);
 
@@ -319,10 +314,9 @@ fn test_basic_flow() {
     cfg.store_io_pool_size = 2;
     let mut t = TestWriters::new(&cfg, &engines);
 
-    let mut task_1 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 10);
+    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
     init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
-    put_kv(&mut task_1.raft_wb, b"raft_k1", b"raft_v1");
     task_1
         .entries
         .append(&mut vec![new_entry(5, 5), new_entry(6, 5), new_entry(7, 5)]);
@@ -333,10 +327,9 @@ fn test_basic_flow() {
 
     t.write_sender(0).send(WriteMsg::WriteTask(task_1)).unwrap();
 
-    let mut task_2 = WriteTask::<RocksEngine, RocksEngine>::new(2, 2, 20);
+    let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
     init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
-    put_kv(&mut task_2.raft_wb, b"raft_k2", b"raft_v2");
     task_2
         .entries
         .append(&mut vec![new_entry(50, 12), new_entry(51, 13)]);
@@ -347,12 +340,10 @@ fn test_basic_flow() {
 
     t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
 
-    let mut task_3 = WriteTask::<RocksEngine, RocksEngine>::new(1, 1, 15);
+    let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 15);
     init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
     delete_kv(&mut task_3.kv_wb, b"kv_k1");
-    put_kv(&mut task_3.raft_wb, b"raft_k3", b"raft_v3");
-    delete_kv(&mut task_3.raft_wb, b"raft_k1");
     task_3.entries.append(&mut vec![new_entry(6, 6)]);
     task_3.cut_logs = Some((7, 8));
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
@@ -368,11 +359,6 @@ fn test_basic_flow() {
     assert!(snapshot.get_value(b"kv_k1").unwrap().is_none());
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
-
-    let snapshot = engines.raft.snapshot();
-    assert!(snapshot.get_value(b"raft_k1").unwrap().is_none());
-    assert_eq!(snapshot.get_value(b"raft_k2").unwrap().unwrap(), b"raft_v2");
-    assert_eq!(snapshot.get_value(b"raft_k3").unwrap().unwrap(), b"raft_v3");
 
     must_have_entries_and_state(
         &engines.raft,
