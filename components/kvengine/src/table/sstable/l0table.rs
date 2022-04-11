@@ -107,7 +107,7 @@ impl L0TableCore {
             if let Some(cf_tbl) = &cfs[i] {
                 let smallest = cf_tbl.smallest();
                 if smallest.len() > 0 {
-                    if smallest_buf.is_empty() || smallest_buf.chunk() < smallest {
+                    if smallest_buf.is_empty() || smallest_buf.chunk() > smallest {
                         smallest_buf.truncate(0);
                         smallest_buf.extend_from_slice(smallest);
                     }
