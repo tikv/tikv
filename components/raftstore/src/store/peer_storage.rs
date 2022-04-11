@@ -2118,7 +2118,7 @@ mod tests {
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(region_scheduler, raftlog_fetch_scheduler, path);
         let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
-        store.append(ents[1..].to_vec(), &mut write_task);
+        store.append(ents.to_vec(), &mut write_task);
         store.update_cache_persisted(ents.last().unwrap().get_index());
         store
             .apply_state
@@ -2266,7 +2266,7 @@ mod tests {
             );
             append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
 
-            assert_eq!(6, get_meta_key_count(&store));
+            assert_eq!(7, get_meta_key_count(&store));
 
             let mut kv_wb = store.engines.kv.write_batch();
             let mut raft_wb = store.engines.raft.log_batch(0);
