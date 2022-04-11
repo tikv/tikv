@@ -17,6 +17,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use getset::Getters;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
@@ -456,10 +457,11 @@ pub struct ReadyResult {
 
 #[derive(Debug)]
 pub enum ForceLeaderState {
-    PreForceLeader { expected_alive_voter: HashSet<u64> },
+    PreForceLeader { expected_alive_voter: HashSet<u64> }, // set of peer ids that should be alive
     ForceLeader { expected_alive_voter: HashSet<u64> },
 }
 
+#[derive(Getters)]
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -484,7 +486,8 @@ where
 
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
-    pub leader_lease: Lease,
+    #[getset(get = "pub")]
+    leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
 
     /// If it fails to send messages to leader.
@@ -1638,23 +1641,19 @@ where
         };
 
         let mut replicated_idx = self.raft_group.raft.raft_log.persisted;
+        let mut count = 0;
         for (peer_id, p) in self.raft_group.raft.prs().iter() {
-            let store_id = self
-                .region()
-                .get_peers()
-                .iter()
-                .find(|p| p.get_id() == *peer_id)
-                .unwrap()
-                .get_store_id();
-            if !expected_alive_voter.contains(&store_id) {
+            if !expected_alive_voter.contains(peer_id) {
                 continue;
             }
+            count += 1;
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
         }
+        assert_eq!(count, expected_alive_voter.len());
 
-        if self.raft_group.store().term(replicated_idx).unwrap() < self.term() {
+        if self.raft_group.store().term(replicated_idx).unwrap_or(0) < self.term() {
             // do not commit logs of previous term directly
             return;
         }

@@ -9,8 +9,10 @@ use futures::executor::block_on;
 use kvproto::metapb;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_unsafe_recover_update_region() {
@@ -229,6 +231,9 @@ fn test_force_leader_five_nodes() {
 #[test]
 fn test_force_leader_for_learner() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -265,11 +270,104 @@ fn test_force_leader_for_learner() {
             .is_err()
     );
 
+    // wait election timeout
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 2,
+    ));
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
     // promote the learner first and remove the peers on failed nodes
     cluster
         .pd_client
         .must_add_peer(region.get_id(), find_peer(&region, 1).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // quorum is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k2"), None);
+    assert_eq!(cluster.must_get(b"k3"), None);
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+    cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
+}
+
+// Test the case that three of five nodes fail and force leader on the rest node
+// with triggering snapshot.
+#[test]
+fn test_force_leader_trigger_snapshot() {
+    let mut cluster = new_node_cluster(0, 5);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store5 = find_peer(&region, 5).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    // Compact logs to force requesting snapshot after clearing send filters.
+    let state = cluster.truncated_state(region.get_id(), 1);
+    // Write some data to trigger snapshot.
+    for i in 100..150 {
+        let key = format!("k{}", i);
+        let value = format!("v{}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+    }
+    cluster.wait_log_truncated(region.get_id(), 1, state.get_index() + 40);
+    let state = cluster.truncated_state(region.get_id(), 1);
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    let state = cluster.truncated_state(region.get_id(), 2);
+
+    cluster.stop_node(1);
+    cluster.clear_send_filters();
+    // Isolate node 2
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgSnapshot),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter);
+    cluster.run_node(1).unwrap();
+
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+
+    let cmd = new_change_peer_request(
+        ConfChangeType::RemoveNode,
+        find_peer(&region, 3).unwrap().clone(),
+    );
+    let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
+    // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap()
+            .get_header()
+            .has_error()
+    );
+
+    // Permit snapshot message now, snapshot should be applied and advance commit index now.
+    cluster.sim.wl().clear_recv_filters(2);
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
@@ -499,6 +597,9 @@ fn test_force_leader_twice_on_same_peer() {
 #[test]
 fn test_force_leader_multiple_election_rounds() {
     let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(30);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -514,6 +615,12 @@ fn test_force_leader_multiple_election_rounds() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
+    // wait election timeout
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 2,
+    ));
     cluster.add_send_filter(IsolationFilterFactory::new(1));
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
@@ -522,7 +629,7 @@ fn test_force_leader_multiple_election_rounds() {
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 2,
+            * 6,
     ));
 
     cluster.clear_send_filters();
