@@ -320,6 +320,7 @@ fn test_force_leader_trigger_snapshot() {
     let peer_on_store5 = find_peer(&region, 5).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
 
+    // Isolate node 2
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // Compact logs to force requesting snapshot after clearing send filters.
@@ -331,24 +332,19 @@ fn test_force_leader_trigger_snapshot() {
         cluster.must_put(key.as_bytes(), value.as_bytes());
     }
     cluster.wait_log_truncated(region.get_id(), 1, state.get_index() + 40);
-    let state = cluster.truncated_state(region.get_id(), 1);
 
     cluster.stop_node(3);
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    let state = cluster.truncated_state(region.get_id(), 2);
-
-    cluster.stop_node(1);
-    cluster.clear_send_filters();
-    // Isolate node 2
+    // Recover the isolation of 2, but still don't permit snapshot
     let recv_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 2)
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgSnapshot),
     );
     cluster.sim.wl().add_recv_filter(2, recv_filter);
-    cluster.run_node(1).unwrap();
+    cluster.clear_send_filters();
 
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
 
@@ -366,7 +362,7 @@ fn test_force_leader_trigger_snapshot() {
             .has_error()
     );
 
-    // Permit snapshot message now, snapshot should be applied and advance commit index now.
+    // Permit snapshot message, snapshot should be applied and advance commit index now.
     cluster.sim.wl().clear_recv_filters(2);
     cluster
         .pd_client
@@ -615,15 +611,15 @@ fn test_force_leader_multiple_election_rounds() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
     // wait election timeout
     std::thread::sleep(Duration::from_millis(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
             * 2,
     ));
-    cluster.add_send_filter(IsolationFilterFactory::new(1));
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
-
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
     // wait multiple election rounds
     std::thread::sleep(Duration::from_millis(
