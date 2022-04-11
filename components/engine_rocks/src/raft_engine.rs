@@ -138,6 +138,7 @@ impl RaftEngineDebug for RocksEngine {
         )
     }
 }
+
 impl RocksEngine {
     fn gc_impl(
         &self,

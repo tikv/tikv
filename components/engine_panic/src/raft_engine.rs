@@ -32,10 +32,14 @@ impl RaftEngineReadOnly for PanicEngine {
 }
 
 impl RaftEngineDebug for PanicEngine {
-    fn scan_entries<F>(&self, raft_group_id: u64, f: F) -> Result<()>
+    fn scan_entries<F>(&self, _: u64, _: F) -> Result<()>
     where
         F: FnMut(&Entry) -> Result<bool>,
     {
+        panic!()
+    }
+
+    fn dump_all_data(&self, _: u64) -> <Self as RaftEngine>::LogBatch {
         panic!()
     }
 }

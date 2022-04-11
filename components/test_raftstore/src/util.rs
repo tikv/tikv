@@ -15,8 +15,8 @@ use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
-    TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
+    CF_DEFAULT, CF_RAFT,
 };
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -128,25 +128,6 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
         id,
         state
     );
-}
-
-pub fn dump_raft_data(
-    engine: &RaftTestEngine,
-    region_id: u64,
-) -> <RaftTestEngine as RaftEngine>::LogBatch {
-    let mut batch = engine.log_batch(0);
-    let mut entries = Vec::new();
-    engine
-        .scan_entries(region_id, |e| {
-            entries.push(e.clone());
-            Ok(true)
-        })
-        .unwrap();
-    batch.append(region_id, entries).unwrap();
-    if let Some(state) = engine.get_raft_state(region_id).unwrap() {
-        batch.put_raft_state(region_id, &state).unwrap();
-    }
-    batch
 }
 
 lazy_static! {
@@ -647,11 +628,12 @@ pub fn create_test_engine(
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
+    cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
+    cfg.raft_engine.mut_config().dir = cfg.infer_raft_engine_path(None).unwrap();
     let key_manager =
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-
     let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)

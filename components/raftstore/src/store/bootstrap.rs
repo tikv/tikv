@@ -125,7 +125,9 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use engine_traits::{Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, CF_DEFAULT};
+    use engine_traits::{
+        Engines, Peekable, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, CF_DEFAULT,
+    };
 
     #[test]
     fn test_bootstrap() {
@@ -177,8 +179,6 @@ mod tests {
             )
             .unwrap()
         );
-        raft_engine
-            .scan_entries(1, |_| panic!("range is not empty."))
-            .unwrap();
+        assert!(raft_engine.dump_all_data(1).is_empty());
     }
 }
