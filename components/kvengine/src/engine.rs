@@ -218,6 +218,7 @@ impl EngineCore {
         for cf in (0..NUM_CFS).rev() {
             shard.set_cf(cf, scf_builders[cf].build());
         }
+        shard.refresh_estimated_size();
         info!("load shard {}:{}", shard.id, shard.ver);
         self.shards.insert(shard.id, Arc::new(shard));
         let shard = self.get_shard(meta.id);
