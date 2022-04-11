@@ -161,8 +161,11 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
 seahash = "4.1.0"
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 pprof = { git = "https://github.com/YangKeao/pprof-rs.git", branch = "frame-pointer" , default-features = false, features = ["flamegraph", "frame-pointer", "protobuf-codec"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+pprof = { git = "https://github.com/YangKeao/pprof-rs.git", branch = "frame-pointer" , default-features = false, features = ["flamegraph", "backtrace-rs", "protobuf-codec"] }
 
 [dev-dependencies]
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
