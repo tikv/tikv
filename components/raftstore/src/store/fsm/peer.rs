@@ -1500,7 +1500,7 @@ where
         }
 
         let expected_alive_voter: HashSet<_> =
-            self.get_force_leader_expected_alive_voter(&failed_stores);
+            self.get_force_leader_expected_alive_voter(failed_stores);
         let check = || {
             if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
                 Err(format!(
