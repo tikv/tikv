@@ -180,9 +180,8 @@ fn parse_mountinfos_v1(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
         for controller in CONTROLLERS {
             if cg_info.super_options.contains_key(*controller) {
                 let key = controller.to_string();
-                let value = (cg_info.root, cg_info.mount_point);
-                assert!(ret.insert(key, value).is_none());
-                break;
+                let value = (cg_info.root.clone(), cg_info.mount_point.clone());
+                ret.insert(key, value);
             }
         }
     }
@@ -321,6 +320,36 @@ mod tests {
         let p = Process::new_with_root(PathBuf::from(dir)).unwrap();
         assert!(parse_mountinfos_v1(p.mountinfo().unwrap()).is_empty());
         assert!(parse_mountinfos_v2(p.mountinfo().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn test_cpuset_cpu_cpuacct() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&format!("{}/mountinfo", dir))
+            .unwrap();
+        f.write_all(b"30 26 0:27 / /sys/fs/cgroup/cpuset,cpu,cpuacct rw,nosuid,nodev,noexec,relatime shared:11 - cgroup cgroup rw,cpuset,cpu,cpuacct\n").unwrap();
+
+        let cgroups = parse_proc_cgroup_v1("3:cpuset,cpu,cpuacct:/\n");
+        let mount_points = {
+            let infos = Process::new_with_root(PathBuf::from(dir))
+                .and_then(|x| x.mountinfo())
+                .unwrap();
+            parse_mountinfos_v1(infos)
+        };
+
+        let cgroup_sys = CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2: false,
+        };
+        assert_eq!(cgroup_sys.cpu_quota(), None);
+        assert!(cgroup_sys.cpuset_cores().is_empty());
     }
 
     #[test]

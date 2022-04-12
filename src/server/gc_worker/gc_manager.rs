@@ -15,9 +15,10 @@ use crate::server::metrics::*;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 
+use super::compaction_filter::is_compaction_filter_allowed;
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowed, Result};
+use super::Result;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
