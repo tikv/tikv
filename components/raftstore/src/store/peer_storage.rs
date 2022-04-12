@@ -2266,7 +2266,7 @@ mod tests {
             );
             append_ents(&mut store, &[new_entry(5, 5), new_entry(6, 6)]);
 
-            assert_eq!(7, get_meta_key_count(&store));
+            assert_eq!(6, get_meta_key_count(&store));
 
             let mut kv_wb = store.engines.kv.write_batch();
             let mut raft_wb = store.engines.raft.log_batch(0);
@@ -2862,6 +2862,10 @@ mod tests {
     fn test_storage_append() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut tests = vec![
+            (
+                vec![new_entry(4, 6), new_entry(5, 6)],
+                vec![new_entry(4, 6), new_entry(5, 6)],
+            ),
             // truncate the existing entries and append
             (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
             // direct append

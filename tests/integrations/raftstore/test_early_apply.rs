@@ -6,6 +6,19 @@ use raftstore::store::*;
 use std::time::*;
 use test_raftstore::*;
 
+fn delete_old_data<E: RaftEngine>(engine: &E, id: u64) {
+    let mut deleter = engine.log_batch(0);
+    engine
+        .clean(
+            id,
+            0, /*first_index*/
+            &engine.get_raft_state(id).unwrap().unwrap(),
+            &mut deleter,
+        )
+        .unwrap();
+    engine.consume(&mut deleter, true /*sync*/).unwrap();
+}
+
 /// Allow lost situation.
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum DataLost {
@@ -65,6 +78,7 @@ where
     }
     // Simulate data lost in raft cf.
     for (id, mut batch) in ids.iter().zip(snaps) {
+        delete_old_data(&cluster.get_raft_engine(*id), *id);
         cluster
             .get_raft_engine(*id)
             .consume(&mut batch, true /*sync*/)
@@ -177,6 +191,7 @@ fn test_update_internal_apply_index() {
     // Simulate data lost in raft cf.
     for (id, mut batch) in snaps {
         cluster.stop_node(id);
+        delete_old_data(&cluster.get_raft_engine(id), id);
         cluster
             .get_raft_engine(id)
             .consume(&mut batch, true /*sync*/)
