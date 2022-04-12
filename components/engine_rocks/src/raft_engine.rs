@@ -312,8 +312,8 @@ impl RaftLogBatch for RocksWriteBatch {
         WriteBatch::is_empty(self)
     }
 
-    fn merge(&mut self, src: Self) {
-        WriteBatch::merge(self, src);
+    fn merge(&mut self, src: Self) -> Result<()> {
+        WriteBatch::merge(self, src)
     }
 }
 

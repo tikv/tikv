@@ -120,7 +120,7 @@ pub trait RaftLogBatch: Send {
     fn is_empty(&self) -> bool;
 
     /// Merge another RaftLogBatch to itself.
-    fn merge(&mut self, _: Self);
+    fn merge(&mut self, _: Self) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Default)]
