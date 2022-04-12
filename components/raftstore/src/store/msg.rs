@@ -24,6 +24,7 @@ use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, BucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
+use collections::HashSet;
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
@@ -336,6 +337,10 @@ where
         context: GetEntriesContext,
         res: Box<RaftlogFetchResult>,
     },
+    EnterForceLeaderState {
+        failed_stores: HashSet<u64>,
+    },
+    ExitForceLeaderState,
 }
 
 /// Message that will be sent to a peer.
