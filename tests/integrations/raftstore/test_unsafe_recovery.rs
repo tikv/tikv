@@ -425,6 +425,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
             .is_err()
     );
 
+    // an uncommitted conf-change
     let cmd = new_change_peer_request(
         ConfChangeType::RemoveNode,
         find_peer(&region, 2).unwrap().clone(),
@@ -443,6 +444,7 @@ fn test_force_leader_with_uncommitted_conf_change() {
             * 2,
     ));
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    // the uncommitted conf-change is committed successfully after being force leader
     cluster
         .pd_client
         .must_none_peer(region.get_id(), find_peer(&region, 2).unwrap().clone());

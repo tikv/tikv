@@ -1298,7 +1298,7 @@ where
 
         if self.fsm.peer.is_leader() {
             warn!(
-                "reject pre force leader due to already beging leader";
+                "reject pre force leader due to already being leader";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
@@ -1320,22 +1320,7 @@ where
             return;
         }
 
-        let region = self.region();
-        let expected_alive_voter = self
-            .fsm
-            .peer
-            .voters()
-            .iter()
-            .filter(|peer_id| {
-                let store_id = region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_id() == *peer_id)
-                    .unwrap()
-                    .get_store_id();
-                !failed_stores.contains(&store_id)
-            })
-            .collect();
+        let expected_alive_voter = self.get_force_leader_expected_alive_voter(&failed_stores);
         if self
             .fsm
             .peer
@@ -1476,6 +1461,25 @@ where
     }
 
     #[inline]
+    fn get_force_leader_expected_alive_voter(&self, failed_stores: &HashSet<u64>) -> HashSet<u64> {
+        let region = self.region();
+        self.fsm
+            .peer
+            .voters()
+            .iter()
+            .filter(|peer_id| {
+                let store_id = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == *peer_id)
+                    .unwrap()
+                    .get_store_id();
+                !failed_stores.contains(&store_id)
+            })
+            .collect()
+    }
+
+    #[inline]
     fn check_force_leader(&mut self) {
         let failed_stores = match &self.fsm.peer.force_leader {
             None => return,
@@ -1495,22 +1499,8 @@ where
             return;
         }
 
-        let region = self.region();
-        let expected_alive_voter: HashSet<_> = self
-            .fsm
-            .peer
-            .voters()
-            .iter()
-            .filter(|peer_id| {
-                let store_id = region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_id() == *peer_id)
-                    .unwrap()
-                    .get_store_id();
-                !failed_stores.contains(&store_id)
-            })
-            .collect();
+        let expected_alive_voter: HashSet<_> =
+            self.get_force_leader_expected_alive_voter(&failed_stores);
         let check = || {
             if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
                 Err(format!(
