@@ -462,6 +462,11 @@ pub enum ForceLeaderState {
 }
 
 pub enum UnsafeRecoveryState {
+    // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
+    // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
+    // new entry or a snapshot, if the target index is met, the caller substract 1 from the task
+    // counter, whoever executes the last task is responsible for triggering the reporting logic by
+    // sending a store heartbeat message to store fsm.
     WaitApply {
         target_index: u64,
         task_counter: Arc<AtomicUsize>,
@@ -4497,11 +4502,6 @@ where
         force: bool,
     ) {
         if let Some(unsafe_recovery_state) = &self.unsafe_recovery_state {
-            debug!(
-                "unsafe recovery may be finish wait apply";
-                "applied" =>  self.raft_group.raft.raft_log.applied,
-                "force" => force
-            );
             let UnsafeRecoveryState::WaitApply {
                 target_index,
                 task_counter,
@@ -4509,6 +4509,8 @@ where
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
                 info!(
                     "unsafe recovery finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
                     "target_index" => target_index,
                     "applied" =>  self.raft_group.raft.raft_log.applied,
                     "force" => force,

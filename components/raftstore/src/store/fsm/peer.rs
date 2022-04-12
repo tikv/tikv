@@ -875,6 +875,8 @@ where
     fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
         info!(
             "unsafe recovery wait apply";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
             "target_index" => self.fsm.peer.raft_group.raft.raft_log.committed,
             "task_counter" => counter.load(Ordering::Relaxed)
         );
@@ -885,12 +887,7 @@ where
         });
         self.fsm
             .peer
-            .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false);
-        if self.fsm.stopped {
-            self.fsm
-                .peer
-                .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ true);
-        }
+            .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ self.fsm.stopped);
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1914,7 +1911,6 @@ where
         }
         // After a log has been applied, check if we need to trigger the unsafe recovery reporting procedure.
         if self.fsm.peer.unsafe_recovery_state.is_some() {
-            debug!("unsafe recovery finishes applying an entry");
             self.fsm
                 .peer
                 .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false);
