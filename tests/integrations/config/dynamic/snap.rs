@@ -4,7 +4,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::time::Duration;
 
-use grpcio::EnvBuilder;
+use grpcio::{EnvBuilder, ResourceQuota};
 
 use raftstore::store::fsm::*;
 use raftstore::store::SnapManager;
@@ -50,6 +50,7 @@ fn start_server(
         Box::new(ServerConfigManager::new(
             snap_worker_scheduler,
             server_config.clone(),
+            ResourceQuota::new(None),
         )),
     );
     let snap_runner = SnapHandler::new(

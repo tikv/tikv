@@ -2044,8 +2044,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e636f21532a4a55b3c43d8852014686f54898dd0ea083e40a6b040bbc6d737"
+source = "git+https://github.com/glorv/grpc-rs?branch=mem-quota#fb3b8f9994a8eb72514fb6fb842f34061fdddcbc"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2081,8 +2080,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.10.1+1.44.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "925586932dbbea927e913783da0be160ee74e0b0519d7b20cec35547a0a84631"
+source = "git+https://github.com/glorv/grpc-rs?branch=mem-quota#fb3b8f9994a8eb72514fb6fb842f34061fdddcbc"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
