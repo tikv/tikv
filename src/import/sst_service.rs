@@ -884,7 +884,12 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
 
 fn make_request(reqs: &mut HashMap<Vec<u8>, Request>, context: Context) -> RaftCmdRequest {
     let mut cmd = RaftCmdRequest::default();
-    let header = make_request_header(context);
+    let mut header = make_request_header(context);
+    // Set the UUID of header to prevent raftstore batching our requests.
+    // The current `resolved_ts` observer assumes that each batch of request doesn't has
+    // two writes to the same key. (Even with 2 different TS). That was true for normal cases
+    // because the latches reject concurrency write to keys. However we have bypassed the latch layer :(
+    header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     cmd.set_header(header);
     cmd.set_requests(
         std::mem::take(reqs)
