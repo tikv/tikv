@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
@@ -67,7 +67,7 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{
     ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-    TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
@@ -873,7 +873,19 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
-        self.fsm.peer.unsafe_recovery_wait_apply(self.ctx, counter);
+        info!(
+            "unsafe recovery wait apply";
+            "target_index" => self.fsm.peer.raft_group.raft.raft_log.committed,
+            "task_counter" => counter.load(Ordering::Relaxed)
+        );
+
+        self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
+            target_index: self.fsm.peer.raft_group.raft.raft_log.committed,
+            task_counter: counter,
+        });
+        self.fsm
+            .peer
+            .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false);
         if self.fsm.stopped {
             self.fsm
                 .peer

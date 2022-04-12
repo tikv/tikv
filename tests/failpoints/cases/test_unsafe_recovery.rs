@@ -9,6 +9,21 @@ use raftstore::store::util::find_peer;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 
+fn set_to_true_and_notify(cvar_pair: Arc<(Mutex<bool>, Condvar)>) {
+    let (lock, cvar) = &*cvar_pair;
+    let mut val = lock.lock().unwrap();
+    *val = true;
+    cvar.notify_all();
+}
+
+fn wait_until_true(cvar_pair: Arc<(Mutex<bool>, Condvar)>) {
+    let (lock, cvar) = &*cvar_pair;
+    let mut val = lock.lock().unwrap();
+    while !*val {
+        val = cvar.wait(val).unwrap();
+    }
+}
+
 #[allow(clippy::mutex_atomic)]
 #[test]
 fn test_unsafe_recover_send_report() {
@@ -33,31 +48,14 @@ fn test_unsafe_recover_send_report() {
     let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let apply_released_pair2 = Arc::clone(&apply_released_pair);
     fail::cfg_callback("on_handle_apply_store_1", move || {
-        {
-            let (lock, cvar) = &*apply_triggered_pair2;
-            let mut triggered = lock.lock().unwrap();
-            *triggered = true;
-            cvar.notify_one();
-        }
-        {
-            let (lock2, cvar2) = &*apply_released_pair2;
-            let mut released = lock2.lock().unwrap();
-            while !*released {
-                released = cvar2.wait(released).unwrap();
-            }
-        }
+        set_to_true_and_notify(apply_triggered_pair2.clone());
+        wait_until_true(apply_released_pair2.clone());
     })
     .unwrap();
 
     // Mannually makes an update, and wait for the apply to be triggered, to simulate "some entries are commited but not applied" scenario.
     cluster.put(b"random_key2", b"random_val2").unwrap();
-    {
-        let (lock, cvar) = &*apply_triggered_pair;
-        let mut triggered = lock.lock().unwrap();
-        while !*triggered {
-            triggered = cvar.wait(triggered).unwrap();
-        }
-    }
+    wait_until_true(apply_triggered_pair);
 
     // Makes the group lose its quorum.
     cluster.stop_node(nodes[1]);
@@ -74,12 +72,7 @@ fn test_unsafe_recover_send_report() {
     }
 
     // Unblocks the apply process.
-    {
-        let (lock2, cvar2) = &*apply_released_pair;
-        let mut released = lock2.lock().unwrap();
-        *released = true;
-        cvar2.notify_all();
-    }
+    set_to_true_and_notify(apply_released_pair);
 
     // Store reports are sent once the entries are applied.
     let mut reported = false;
@@ -127,33 +120,15 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
     let apply_released_pair2 = Arc::clone(&apply_released_pair);
     fail::cfg_callback("region_apply_snap", move || {
-        {
-            debug!("unsafe recovery test, snapshot apply triggered");
-            let (lock, cvar) = &*apply_triggered_pair2;
-            let mut triggered = lock.lock().unwrap();
-            *triggered = true;
-            cvar.notify_one();
-        }
-        {
-            let (lock2, cvar2) = &*apply_released_pair2;
-            let mut released = lock2.lock().unwrap();
-            while !*released {
-                released = cvar2.wait(released).unwrap();
-            }
-            debug!("unsafe recovery test, snapshot apply released");
-        }
+        set_to_true_and_notify(apply_triggered_pair2.clone());
+        wait_until_true(apply_released_pair2.clone());
     })
     .unwrap();
 
     cluster.run_node(nodes[1]).unwrap();
 
-    {
-        let (lock, cvar) = &*apply_triggered_pair;
-        let mut triggered = lock.lock().unwrap();
-        while !*triggered {
-            triggered = cvar.wait(triggered).unwrap();
-        }
-    }
+    wait_until_true(apply_triggered_pair);
+
     // Triggers the unsafe recovery store reporting process.
     pd_client.must_set_require_report(true);
     cluster.must_send_store_heartbeat(nodes[1]);
@@ -165,12 +140,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     }
 
     // Unblocks the snap apply process.
-    {
-        let (lock2, cvar2) = &*apply_released_pair;
-        let mut released = lock2.lock().unwrap();
-        *released = true;
-        cvar2.notify_all();
-    }
+    set_to_true_and_notify(apply_released_pair);
 
     // Store reports are sent once the entries are applied.
     let mut reported = false;

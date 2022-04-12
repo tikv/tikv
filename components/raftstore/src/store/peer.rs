@@ -54,7 +54,7 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
-use crate::store::msg::RaftCommand;
+use crate::store::msg::{RaftCommand, StoreMsg};
 use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
@@ -62,8 +62,8 @@ use crate::store::worker::{
     RegionTask, SplitCheckTask,
 };
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, StoreMsg,
-    TxnExt, RAFT_INIT_LOG_INDEX,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
+    RAFT_INIT_LOG_INDEX,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -4491,30 +4491,12 @@ where
         }
     }
 
-    pub fn unsafe_recovery_wait_apply<T: Transport>(
-        &mut self,
-        ctx: &PollContext<EK, ER, T>,
-        counter: Arc<AtomicUsize>,
-    ) {
-        info!(
-            "unsafe recovery wait apply";
-            "target_index" => self.raft_group.store().commit_index(),
-            "task_counter" => counter.load(Ordering::Relaxed)
-        );
-
-        self.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
-            target_index: self.raft_group.store().commit_index(),
-            task_counter: counter,
-        });
-        self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
-    }
-
     pub fn unsafe_recovery_maybe_finish_wait_apply<T: Transport>(
         &mut self,
         ctx: &PollContext<EK, ER, T>,
         force: bool,
     ) {
-        if let Some(unsafe_recovery_state) = self.unsafe_recovery_state.as_ref() {
+        if let Some(unsafe_recovery_state) = &self.unsafe_recovery_state {
             debug!(
                 "unsafe recovery may be finish wait apply";
                 "applied" =>  self.raft_group.raft.raft_log.applied,
