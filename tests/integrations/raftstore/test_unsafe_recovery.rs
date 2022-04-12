@@ -317,8 +317,8 @@ fn test_force_leader_trigger_snapshot() {
     let region = cluster.get_region(b"k1");
     cluster.must_split(&region, b"k9");
     let region = cluster.get_region(b"k2");
-    let peer_on_store5 = find_peer(&region, 5).unwrap();
-    cluster.must_transfer_leader(region.get_id(), peer_on_store5.clone());
+    let peer_on_store1 = find_peer(&region, 1).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
     // Isolate node 2
     cluster.add_send_filter(IsolationFilterFactory::new(2));
@@ -346,6 +346,12 @@ fn test_force_leader_trigger_snapshot() {
     cluster.sim.wl().add_recv_filter(2, recv_filter);
     cluster.clear_send_filters();
 
+    // wait election timeout
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 2,
+    ));
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
 
     let cmd = new_change_peer_request(
@@ -359,7 +365,7 @@ fn test_force_leader_trigger_snapshot() {
             .call_command_on_leader(req, Duration::from_millis(10))
             .unwrap()
             .get_header()
-            .has_error()
+            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader 
     );
 
     // Permit snapshot message, snapshot should be applied and advance commit index now.
@@ -384,6 +390,11 @@ fn test_force_leader_trigger_snapshot() {
 }
 
 // Test the case that none of five nodes fails and force leader on one of the nodes.
+// Note: It still can't defend extreme misuse cases. For example, a group of a,
+// b and c. c is isolated from a, a is the leader. If c has increased its term 
+// by 2 somehow (for example false prevote success twice) and force leader is 
+// sent to b and break lease constrain, then b will reject a's heartbeat while
+// can vote for c. So c becomes leader and there are two leaders in the group.
 #[test]
 fn test_force_leader_on_healthy_region() {
     let mut cluster = new_node_cluster(0, 5);
