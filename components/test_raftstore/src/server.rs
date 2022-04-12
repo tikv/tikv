@@ -22,6 +22,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use crate::Config;
 use causal_ts;
+use api_version::{dispatch_api_version, APIVersion};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -232,10 +233,8 @@ impl ServerCluster {
             }),
         )
     }
-}
 
-impl Simulator for ServerCluster {
-    fn run_node(
+    fn run_node_impl<Api: APIVersion>(
         &mut self,
         node_id: u64,
         mut cfg: Config,
@@ -357,7 +356,7 @@ impl Simulator for ServerCluster {
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-        let store = create_raft_storage(
+        let store = create_raft_storage::<_, _, _, Api>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -565,6 +564,32 @@ impl Simulator for ServerCluster {
             .insert(node_id, concurrency_manager);
 
         Ok(node_id)
+    }
+}
+
+impl Simulator for ServerCluster {
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        cfg: Config,
+        engines: Engines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        key_manager: Option<Arc<DataKeyManager>>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+    ) -> ServerResult<u64> {
+        dispatch_api_version!(
+            cfg.storage.api_version(),
+            self.run_node_impl::<API>(
+                node_id,
+                cfg,
+                engines,
+                store_meta,
+                key_manager,
+                router,
+                system,
+            )
+        )
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {

@@ -9,7 +9,6 @@ use crate::storage::txn::commands::{
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
 use engine_traits::CfName;
-use kvproto::kvrpcpb::ApiVersion;
 
 command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
@@ -20,7 +19,6 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Modify>,
-            api_version: ApiVersion,
         }
 }
 

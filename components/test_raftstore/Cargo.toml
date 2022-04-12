@@ -17,6 +17,7 @@ test-engines-panic = [
 ]
 
 [dependencies]
+api_version = { path = "../api_version" }
 backtrace = "0.3"
 crossbeam = "0.8"
 engine_traits = { path = "../engine_traits", default-features = false }
