@@ -133,7 +133,7 @@ keys = { path = "../components/keys", default-features = false }
 profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }
 security = { path = "../components/security", default-features = false }
-sst_importer = {path = "../components/sst_importer", default-features = false }
+sst_importer = { path = "../components/sst_importer", default-features = false }
 tipb_helper = { path = "../components/tipb_helper", default-features = false }
 tidb_query_datatype = { path = "../components/tidb_query_datatype", default-features = false }
 test_backup = { path = "../components/test_backup", default-features = false }

@@ -42,7 +42,7 @@ error_code = { path = "../error_code", default-features = false }
 external_storage = { path = "../external_storage", default-features = false }
 external_storage_export = { path = "../external_storage/export", default-features = false }
 file_system = { path = "../file_system", default-features = false }
-encryption = {path = "../encryption", default-features = false}
+encryption = { path = "../encryption", default-features = false }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
