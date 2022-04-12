@@ -1002,8 +1002,7 @@ where
             },
         )?;
         // write kv rocksdb first in case of restart happen between two write
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
+        let write_opts = WriteOptions::new();
         kv_wb.write_opt(&write_opts)?;
 
         perf_context.start_observe();

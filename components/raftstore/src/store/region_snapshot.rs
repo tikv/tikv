@@ -87,13 +87,13 @@ where
     pub fn get_apply_index(&self) -> Result<u64> {
         let apply_index = self.apply_index.load(Ordering::SeqCst);
         if apply_index == 0 {
-            self.get_apply_index_from_storage()
+            Err(box_err!("Unable to get applied index"))
         } else {
             Ok(apply_index)
         }
     }
 
-    fn get_apply_index_from_storage(&self) -> Result<u64> {
+    /*fn get_apply_index_from_storage(&self) -> Result<u64> {
         let apply_state: Option<RaftApplyState> = self
             .snap
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(self.region.get_id()))?;
@@ -105,7 +105,7 @@ where
             }
             None => Err(box_err!("Unable to get applied index")),
         }
-    }
+    }*/
 
     pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator<S> {
         RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)

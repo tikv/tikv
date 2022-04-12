@@ -1180,7 +1180,7 @@ where
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, kv_wb: &mut impl Mutable) -> Result<()> {
+    fn save_apply_state_to(&self, kv_wb: &mut impl Mutable) -> Result<()> {
         kv_wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -1884,7 +1884,7 @@ pub fn do_snapshot<E>(
     kv_snap: E::Snapshot,
     region_id: u64,
     last_applied_index_term: u64,
-    last_applied_state: RaftApplyState,
+    apply_state: RaftApplyState,
     for_balance: bool,
 ) -> raft::Result<Snapshot>
 where
@@ -1895,7 +1895,7 @@ where
         "region_id" => region_id,
     );
 
-    let msg = kv_snap
+    /*let msg = kv_snap
         .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
         .map_err(into_other::<_, raft::Error>)?;
     let apply_state: RaftApplyState = match msg {
@@ -1907,7 +1907,7 @@ where
         }
         Some(state) => state,
     };
-    assert_eq!(apply_state, last_applied_state);
+    assert_eq!(apply_state, last_applied_state);*/
 
     let key = SnapKey::new(
         region_id,

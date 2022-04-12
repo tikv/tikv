@@ -483,8 +483,7 @@ where
             };
             raft_before_save_kv_on_store_3();
             let now = Instant::now();
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
+            let write_opts = WriteOptions::new();
             // TODO: Add perf context
             self.batch.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!(
@@ -718,8 +717,7 @@ where
     batch.add_write_task(task);
     batch.before_write_to_db(&StoreWriteMetrics::new(false));
     if !batch.kv_wb.is_empty() {
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
+        let write_opts = WriteOptions::new();
         batch.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
             panic!("test failed to write to kv engine: {:?}", e);
         });

@@ -43,11 +43,11 @@ impl WriteOptions {
         }
     }
 
-    pub fn set_sync(&mut self, sync: bool) {
+    pub fn set_must_sync(&mut self, sync: bool) {
         self.sync = sync;
     }
 
-    pub fn sync(&self) -> bool {
+    pub fn must_sync(&self) -> bool {
         self.sync
     }
 
