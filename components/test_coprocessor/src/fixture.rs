@@ -5,7 +5,7 @@ use super::*;
 use std::sync::Arc;
 
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::{ApiVersion, Context};
+use kvproto::kvrpcpb::Context;
 
 use engine_rocks::PerfLevel;
 use resource_metering::ResourceTagFactory;
@@ -16,7 +16,7 @@ use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::{Engine, TestEngineBuilder, TestStorageBuilder};
+use tikv::storage::{Engine, TestEngineBuilder, TestStorageBuilderApiV1};
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::thread_group::GroupProperties;
 
@@ -79,10 +79,9 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let storage =
-        TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {}, ApiVersion::V1)
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let mut store = Store::from_storage(storage);
 
     store.begin();

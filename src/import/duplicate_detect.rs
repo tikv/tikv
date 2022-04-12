@@ -235,14 +235,15 @@ mod tests {
     use super::*;
     use crate::storage::lock_manager::{DummyLockManager, LockManager};
     use crate::storage::txn::commands;
-    use crate::storage::{Storage, TestStorageBuilder};
-    use kvproto::kvrpcpb::{ApiVersion, Context};
+    use crate::storage::{Storage, TestStorageBuilderApiV1};
+    use api_version::APIVersion;
+    use kvproto::kvrpcpb::Context;
     use std::sync::mpsc::channel;
     use tikv_kv::Engine;
     use txn_types::Mutation;
 
-    fn prewrite_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn prewrite_data<E: Engine, L: LockManager, Api: APIVersion>(
+        storage: &Storage<E, L, Api>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -273,8 +274,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn rollback_data<E: Engine, L: LockManager, Api: APIVersion>(
+        storage: &Storage<E, L, Api>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -296,8 +297,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn write_data<E: Engine, L: LockManager, Api: APIVersion>(
+        storage: &Storage<E, L, Api>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {
@@ -347,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let mut data = vec![];
@@ -403,7 +404,7 @@ mod tests {
     // with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         for &start in &[100, 104, 108, 112] {
@@ -464,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect_rollback_and_delete() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let data = vec![
