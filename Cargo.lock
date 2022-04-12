@@ -4628,6 +4628,7 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "causal_ts",
  "cdc",
@@ -5165,6 +5166,7 @@ dependencies = [
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "collections",
  "concurrency_manager",
  "engine_rocks",
@@ -5201,6 +5203,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backtrace",
  "collections",
  "concurrency_manager",
@@ -5251,6 +5254,7 @@ dependencies = [
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "collections",
  "futures 0.3.15",
  "kvproto",
