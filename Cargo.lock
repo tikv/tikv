@@ -3690,8 +3690,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a27c16860a320789970c9113070f024ce4d731bfb8a5a64d1cb1104d91a20e7"
+source = "git+https://github.com/tikv/raft-engine.git#1e2a947359af6a353c3e4a1a10fdb2a05f35c57b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -3721,8 +3720,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df4b44c9eef66d50090923642d940c6e40dd978d018075ab17bcf62ab8d505c7"
+source = "git+https://github.com/tikv/raft-engine.git#1e2a947359af6a353c3e4a1a10fdb2a05f35c57b"
 dependencies = [
  "clap 3.1.6",
  "raft-engine",
@@ -4168,9 +4166,9 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 
 [[package]]
 name = "rhai"
-version = "1.5.0"
+version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49c94fda0280985896ed6d8bf0b43bbb5a7f0e39ccc8728ac907ddb4f06dae94"
+checksum = "898b114d6cfa18af4593393fdc6c7437118e7e624d97f635fba8c75fd5c06f56"
 dependencies = [
  "ahash 0.7.4",
  "instant",

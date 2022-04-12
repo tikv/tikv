@@ -2118,7 +2118,7 @@ mod tests {
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(region_scheduler, raftlog_fetch_scheduler, path);
         let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
-        store.append(ents.to_vec(), &mut write_task);
+        store.append(ents[1..].to_vec(), &mut write_task);
         store.update_cache_persisted(ents.last().unwrap().get_index());
         store
             .apply_state
@@ -2862,23 +2862,6 @@ mod tests {
     fn test_storage_append() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
         let mut tests = vec![
-            (
-                vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)],
-                vec![new_entry(4, 4), new_entry(5, 5)],
-            ),
-            (
-                vec![new_entry(3, 3), new_entry(4, 6), new_entry(5, 6)],
-                vec![new_entry(4, 6), new_entry(5, 6)],
-            ),
-            (
-                vec![
-                    new_entry(3, 3),
-                    new_entry(4, 4),
-                    new_entry(5, 5),
-                    new_entry(6, 5),
-                ],
-                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
-            ),
             // truncate the existing entries and append
             (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
             // direct append
@@ -3169,7 +3152,7 @@ mod tests {
         let td3 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let ents = &[new_entry(3, 3), new_entry(4, 3)];
         let mut s3 = new_storage_from_ents(sched, dummy_scheduler, &td3, ents);
-        validate_cache(&s3, &ents[0..]);
+        validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
         let snap_region = s3.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
         let mut snap_data = RaftSnapshotData::default();
