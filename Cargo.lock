@@ -2044,7 +2044,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.10.1"
-source = "git+https://github.com/glorv/grpc-rs?branch=mem-quota#fb3b8f9994a8eb72514fb6fb842f34061fdddcbc"
+source = "git+https://github.com/glorv/grpc-rs?branch=mem-quota#104fa0d8443940360db77763fd2986cee7b19952"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2080,7 +2080,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.10.1+1.44.0"
-source = "git+https://github.com/glorv/grpc-rs?branch=mem-quota#fb3b8f9994a8eb72514fb6fb842f34061fdddcbc"
+source = "git+https://github.com/glorv/grpc-rs?branch=mem-quota#104fa0d8443940360db77763fd2986cee7b19952"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
