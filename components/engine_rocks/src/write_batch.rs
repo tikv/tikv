@@ -94,8 +94,9 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
         self.wb.rollback_to_save_point().map_err(Error::Engine)
     }
 
-    fn merge(&mut self, other: Self) {
+    fn merge(&mut self, other: Self) -> Result<()> {
         self.wb.append(other.wb.data());
+        Ok(())
     }
 }
 

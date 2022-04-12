@@ -116,5 +116,5 @@ pub trait WriteBatch: Mutable {
     fn rollback_to_save_point(&mut self) -> Result<()>;
 
     /// Merge another WriteBatch to itself
-    fn merge(&mut self, src: Self);
+    fn merge(&mut self, src: Self) -> Result<()>;
 }
