@@ -1336,6 +1336,22 @@ where
                 !failed_stores.contains(&store_id)
             })
             .collect();
+        if self
+            .fsm
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .has_quorum(&expected_alive_voter)
+        {
+            warn!(
+                "reject pre force leader due to has quorum";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
         info!(
             "enter pre force leader state";
             "region_id" => self.fsm.region_id(),
@@ -1369,9 +1385,7 @@ where
             return;
         }
 
-        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader {
-            expected_alive_voter,
-        });
+        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader { failed_stores });
         self.fsm.has_ready = true;
     }
 
@@ -1389,18 +1403,21 @@ where
         );
         assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
 
-        let expected_alive_voter = match self.fsm.peer.force_leader.take() {
-            Some(ForceLeaderState::PreForceLeader {
-                expected_alive_voter,
-            }) => expected_alive_voter,
+        let failed_stores = match self.fsm.peer.force_leader.take() {
+            Some(ForceLeaderState::PreForceLeader { failed_stores }) => failed_stores,
             _ => unreachable!(),
         };
 
         let peer_ids: Vec<_> = self.fsm.peer.voters().iter().collect();
-        let mut count = 0;
         for peer_id in peer_ids {
-            if expected_alive_voter.contains(&peer_id) {
-                count += 1;
+            let store_id = self
+                .region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == peer_id)
+                .unwrap()
+                .get_store_id();
+            if !failed_stores.contains(&store_id) {
                 continue;
             }
 
@@ -1413,7 +1430,6 @@ where
             msg.to = self.fsm.peer.peer_id();
             self.fsm.peer.raft_group.step(msg).unwrap();
         }
-        assert_eq!(count, expected_alive_voter.len());
 
         // after receiving all votes, should become leader
         assert!(self.fsm.peer.is_leader());
@@ -1422,9 +1438,7 @@ where
         // make sure it's not hibernated
         self.reset_raft_tick(GroupState::Ordered);
 
-        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader {
-            expected_alive_voter,
-        });
+        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader { failed_stores });
         self.fsm.has_ready = true;
     }
 
@@ -1463,15 +1477,15 @@ where
 
     #[inline]
     fn check_force_leader(&mut self) {
-        let expected_alive_voter = match &self.fsm.peer.force_leader {
+        let failed_stores = match &self.fsm.peer.force_leader {
             None => return,
             Some(ForceLeaderState::ForceLeader { .. }) => {
-                self.fsm.peer.maybe_force_forward_commit_index();
+                if self.fsm.peer.maybe_force_forward_commit_index() {
+                    self.fsm.has_ready = true;
+                }
                 return;
             }
-            Some(ForceLeaderState::PreForceLeader {
-                expected_alive_voter,
-            }) => expected_alive_voter,
+            Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
         };
 
         if self.fsm.peer.raft_group.raft.election_elapsed + 1
@@ -1481,6 +1495,22 @@ where
             return;
         }
 
+        let region = self.region();
+        let expected_alive_voter: HashSet<_> = self
+            .fsm
+            .peer
+            .voters()
+            .iter()
+            .filter(|peer_id| {
+                let store_id = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == *peer_id)
+                    .unwrap()
+                    .get_store_id();
+                !failed_stores.contains(&store_id)
+            })
+            .collect();
         let check = || {
             if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
                 Err(format!(

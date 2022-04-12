@@ -457,8 +457,8 @@ pub struct ReadyResult {
 
 #[derive(Debug)]
 pub enum ForceLeaderState {
-    PreForceLeader { expected_alive_voter: HashSet<u64> }, // set of peer ids that should be alive
-    ForceLeader { expected_alive_voter: HashSet<u64> },
+    PreForceLeader { failed_stores: HashSet<u64> },
+    ForceLeader { failed_stores: HashSet<u64> },
 }
 
 #[derive(Getters)]
@@ -1632,34 +1632,37 @@ where
         false
     }
 
-    pub fn maybe_force_forward_commit_index(&mut self) {
-        let expected_alive_voter = match &self.force_leader {
-            Some(ForceLeaderState::ForceLeader {
-                expected_alive_voter,
-            }) => expected_alive_voter,
+    pub fn maybe_force_forward_commit_index(&mut self) -> bool {
+        let failed_stores = match &self.force_leader {
+            Some(ForceLeaderState::ForceLeader { failed_stores }) => failed_stores,
             _ => unreachable!(),
         };
 
+        let region = self.region();
         let mut replicated_idx = self.raft_group.raft.raft_log.persisted;
-        let mut count = 0;
         for (peer_id, p) in self.raft_group.raft.prs().iter() {
-            if !expected_alive_voter.contains(peer_id) {
+            let store_id = region
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == *peer_id)
+                .unwrap()
+                .get_store_id();
+            if failed_stores.contains(&store_id) {
                 continue;
             }
-            count += 1;
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
         }
-        assert_eq!(count, expected_alive_voter.len());
 
         if self.raft_group.store().term(replicated_idx).unwrap_or(0) < self.term() {
             // do not commit logs of previous term directly
-            return;
+            return false;
         }
 
         self.raft_group.raft.raft_log.committed =
             std::cmp::max(self.raft_group.raft.raft_log.committed, replicated_idx);
+        true
     }
 
     pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {

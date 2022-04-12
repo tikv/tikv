@@ -365,7 +365,7 @@ fn test_force_leader_trigger_snapshot() {
             .call_command_on_leader(req, Duration::from_millis(10))
             .unwrap()
             .get_header()
-            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader 
+            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
     );
 
     // Permit snapshot message, snapshot should be applied and advance commit index now.
@@ -389,10 +389,85 @@ fn test_force_leader_trigger_snapshot() {
     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
 }
 
+// Test the case that three of five nodes fail and force leader on the rest node
+// with uncommitted conf change.
+#[test]
+fn test_force_leader_with_uncommitted_conf_change() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store1 = find_peer(&region, 1).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    let put = new_put_cmd(b"k2", b"v2");
+    let req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![put],
+        true,
+    );
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .is_err()
+    );
+
+    let cmd = new_change_peer_request(
+        ConfChangeType::RemoveNode,
+        find_peer(&region, 2).unwrap().clone(),
+    );
+    let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .is_err()
+    );
+
+    // wait election timeout
+    std::thread::sleep(Duration::from_millis(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 2,
+    ));
+    cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
+    cluster
+        .pd_client
+        .must_none_peer(region.get_id(), find_peer(&region, 2).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // quorum is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k2"), Some(b"v2".to_vec()));
+    assert_eq!(cluster.must_get(b"k3"), None);
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+}
+
 // Test the case that none of five nodes fails and force leader on one of the nodes.
 // Note: It still can't defend extreme misuse cases. For example, a group of a,
-// b and c. c is isolated from a, a is the leader. If c has increased its term 
-// by 2 somehow (for example false prevote success twice) and force leader is 
+// b and c. c is isolated from a, a is the leader. If c has increased its term
+// by 2 somehow (for example false prevote success twice) and force leader is
 // sent to b and break lease constrain, then b will reject a's heartbeat while
 // can vote for c. So c becomes leader and there are two leaders in the group.
 #[test]
