@@ -1587,36 +1587,38 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
-                for (req, id) in gets.into_iter().zip(ids) {
+                for (mut req, id) in gets.into_iter().zip(ids) {
+                    let ctx = req.take_context();
+                    let key = Api::encode_raw_key_owned(req.take_key(), None);
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Don't place in loop of `snaps`, otherwise `snap.wait` may run in another thread,
+                    // and cause the `thread-local` statistics unstable for test.
+                    tls_collect_query(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        key.as_encoded(),
+                        key.as_encoded(),
+                        false,
+                        QueryKind::Get,
+                    );
+
                     let snap_ctx = SnapContext {
-                        pb_ctx: req.get_context(),
+                        pb_ctx: &ctx,
                         read_id: read_id.clone(),
                         ..Default::default()
                     };
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
-                    snaps.push((id, req, snap));
+                    snaps.push((id, key, ctx, req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 let begin_instant = Instant::now_coarse();
-                for (id, mut req, snap) in snaps {
-                    let ctx = req.take_context();
+                for (id, key, ctx, mut req, snap) in snaps {
                     let cf = req.take_cf();
-                    let key = req.take_key();
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
                             let buckets = snapshot.ext().get_buckets();
                             let store = RawStore::new(snapshot, api_version);
-                            let key = Api::encode_raw_key_owned(key, None);
-                            // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
-                            tls_collect_query(
-                                ctx.get_region_id(),
-                                ctx.get_peer(),
-                                key.as_encoded(),
-                                key.as_encoded(),
-                                false,
-                                QueryKind::Get,
-                            );
                             match Self::rawkv_cf(&cf, api_version) {
                                 Ok(cf) => {
                                     consumer.consume(
