@@ -596,7 +596,6 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
-    let cfg = cluster.cfg.clone();
     cluster.must_put(b"k1", b"v1");
 
     // Test adding nodes.
@@ -622,7 +621,7 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
         break;
     }
     assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 3);
-    leader_id = 3;
+    let leader_id = 3;
 
     // Cannot transfer when removed peer
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
