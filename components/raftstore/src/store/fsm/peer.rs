@@ -857,7 +857,10 @@ where
                     }
                 }
             } else if key.term <= compacted_term
-                && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
+                && (key.idx < compacted_idx
+                    || key.idx == compacted_idx
+                        && !is_applying_snap
+                        && !self.fsm.peer.pending_remove)
             {
                 info!(
                     "deleting applied snap file";
