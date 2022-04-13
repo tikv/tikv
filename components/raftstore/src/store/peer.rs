@@ -1000,6 +1000,13 @@ where
         self.get_store().is_applying_snapshot()
     }
 
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        self.get_store().is_handling_snapshot()
+    }
+
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {

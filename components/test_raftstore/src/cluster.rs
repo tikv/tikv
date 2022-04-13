@@ -1157,6 +1157,15 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn add_recv_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            for filter in factory.generate(node_id) {
+                sim.add_recv_filter(node_id, filter);
+            }
+        }
+    }
+
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
@@ -1205,6 +1214,13 @@ impl<T: Simulator> Cluster<T> {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             sim.clear_send_filters(node_id);
+        }
+    }
+
+    pub fn clear_recv_filters(&mut self) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.clear_recv_filters(node_id);
         }
     }
 
