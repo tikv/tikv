@@ -95,7 +95,7 @@ pub struct IOContext {
     pub(crate) io_type: IOType,
     /// Total I/O bytes used by current thread.
     pub(crate) total_read_bytes: usize,
-    /// Buffered I/O bytes used after `total_read_bytes` is refreshed, by
+    /// Buffered I/O bytes used after last refresh of `total_read_bytes`, by
     /// current thread.
     pub(crate) outstanding_read_bytes: usize,
     /// Unprocessed physical I/O bytes used by current thread.
