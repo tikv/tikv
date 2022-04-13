@@ -4514,7 +4514,7 @@ where
                     "target_index" => target_index,
                     "applied" =>  self.raft_group.raft.raft_log.applied,
                     "force" => force,
-                    "counter" =>  task_counter.load(Ordering::Relaxed)
+                    "counter" =>  task_counter.load(Ordering::SeqCst)
                 );
                 if task_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
                     if let Err(e) = ctx.router.send_control(StoreMsg::UnsafeRecoveryReport) {
