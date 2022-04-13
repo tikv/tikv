@@ -188,12 +188,7 @@ fn main() {
     }
 
     // for bench
-    if let Ok(v) = std::env::var("TIKV_BENCH_PROF") {
-        if v == "on" {
-            start_cpu_profiling();
-            println!("start cpu profiling for bench");
-        }
-    }
+    start_cpu_profiling();
 
     server::server::run_tikv(config);
 }
