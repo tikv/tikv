@@ -187,5 +187,63 @@ fn main() {
         process::exit(0)
     }
 
+    // for bench
+    if let Ok(v) = std::env::var("TIKV_BENCH_PROF") {
+        if v == "on" {
+            start_cpu_profiling();
+            println!("start cpu profiling for bench");
+        }
+    }
+
     server::server::run_tikv(config);
+}
+
+/* for bench */
+
+use lazy_static::lazy_static;
+use regex::Regex;
+
+lazy_static! {
+    static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
+    static ref THREAD_NAME_RE: Regex =
+        Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
+}
+
+fn extract_thread_name(thread_name: &str) -> String {
+    THREAD_NAME_RE
+        .captures(thread_name)
+        .and_then(|cap| {
+            cap.name("thread_name").map(|thread_name| {
+                THREAD_NAME_REPLACE_SEPERATOR_RE
+                    .replace_all(thread_name.as_str(), "-")
+                    .into_owned()
+            })
+        })
+        .unwrap_or_else(|| thread_name.to_owned())
+}
+
+fn start_cpu_profiling() {
+    std::thread::spawn(|| {
+        loop {
+            let guard = pprof::ProfilerGuardBuilder::default()
+                .frequency(99)
+                .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+                .build()
+                .unwrap();
+
+            std::thread::sleep(std::time::Duration::from_secs(120));
+
+            let report = guard
+                .report()
+                .frames_post_processor(move |frames| {
+                    let name = extract_thread_name(&frames.thread_name);
+                    frames.thread_name = name;
+                })
+                .build()
+                .unwrap();
+            let mut body = Vec::new();
+            report.flamegraph(&mut body).unwrap();
+            std::mem::drop(body);
+        }
+    });
 }

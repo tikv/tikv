@@ -5754,6 +5754,9 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "lazy_static",
+ "pprof",
+ "regex",
  "server",
  "tikv",
  "time",

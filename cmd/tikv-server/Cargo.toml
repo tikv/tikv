@@ -28,6 +28,12 @@ server = { path = "../../components/server", default-features = false }
 tikv = { path = "../../", default-features = false }
 toml = "0.5"
 
+# for bench
+pprof = { git = "https://github.com/mornyx/pprof-rs.git", branch = "unwind", default-features = false, features = ["flamegraph", "protobuf-codec"] }
+# pprof = { git = "https://github.com/YangKeao/pprof-rs.git", branch = "frame-pointer" , default-features = false, features = ["flamegraph", "frame-pointer", "protobuf-codec"] }
+lazy_static = "1.3"
+regex = "1.3"
+
 [build-dependencies]
 time = "0.1"
 cc = "1.0"
