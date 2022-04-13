@@ -273,8 +273,11 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         }
         let context_key = context.key.clone();
         snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
-
+        defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
+            fail_point!("receiving_snapshot_net_error", |_| {
+                return Err(box_err!("{} failed to receive snapshot", context_key));
+            });
             let mut chunk = item?;
             let data = chunk.take_data();
             if data.is_empty() {
@@ -288,10 +291,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
                 return Err(e);
             }
         }
-
-        let res = context.finish(raft_router);
-        snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-        res
+        context.finish(raft_router)
     };
 
     async move {

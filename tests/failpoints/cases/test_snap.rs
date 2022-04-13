@@ -14,6 +14,8 @@ use tikv_util::config::*;
 use tikv_util::time::Instant;
 use tikv_util::HandyRwLock;
 
+use kvproto::raft_serverpb::RaftMessage;
+
 #[test]
 fn test_overlap_cleanup() {
     let mut cluster = new_node_cluster(0, 3);
@@ -241,6 +243,59 @@ fn test_destroy_peer_on_pending_snapshot() {
     cluster.must_put(b"k120", b"v1");
     // After peer 4 has applied snapshot, data should be got.
     must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
+}
+
+// This test is to repro the issue #11618.
+// Basically it aborts a snapshot and wait for an election done. (without fix, raft will panic)
+// The test step is make peer 3 partitioned with rest.
+// And then recover from partition and the leader will try to send a snapshot to peer3.
+// Abort the snapshot and then wait for a election happening, we expect raft will panic
+#[test]
+fn test_abort_snapshot_and_wait_election() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 25; // > lease 240ms
+    cluster.cfg.raft_store.hibernate_regions = false;
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 1003));
+
+    cluster.must_put(b"k1", b"v1");
+    let region = cluster.get_region(b"k1");
+    // Ensure peer 3 is initialized.
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let apply_snapshot_fp = "region_apply_snap_abort";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 0..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+
+    // Wait for leader send snapshot.
+    let (sx, rx) = mpsc::sync_channel::<bool>(10);
+    let recv_snapshot_filter = RegionPacketFilter::new(region.get_id(), 3)
+        .direction(Direction::Recv)
+        .msg_type(MessageType::MsgSnapshot)
+        .allow(1)
+        .set_msg_callback(Arc::new(move |_| {
+            sx.send(true).unwrap();
+        }));
+    cluster.add_recv_filter(CloneFilterFactory(recv_snapshot_filter));
+
+    cluster.clear_send_filters(); // allow snapshot to sent over to peer 3
+    rx.recv().unwrap(); // got the snapshot message
+    cluster.add_send_filter(IsolationFilterFactory::new(3)); // partition the peer 3 again
+    sleep_ms(500); // wait for election happen and expect raft will panic
+    cluster.clear_send_filters();
+    cluster.clear_recv_filters();
 }
 
 #[test]
@@ -539,4 +594,46 @@ fn test_snapshot_gc_after_failed() {
     }
     fail::cfg("get_snapshot_for_gc", "off").unwrap();
     cluster.sim.wl().clear_recv_filters(3);
+}
+#[test]
+fn test_sending_fail_with_net_error() {
+    let mut cluster = new_server_cluster(1, 2);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    let (send_tx, send_rx) = mpsc::sync_channel(1);
+    // only send one MessageType::MsgSnapshot message
+    cluster.sim.wl().add_send_filter(
+        1,
+        Box::new(
+            RegionPacketFilter::new(r1, 1)
+                .allow(1)
+                .direction(Direction::Send)
+                .msg_type(MessageType::MsgSnapshot)
+                .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                    if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                        let _ = send_tx.send(());
+                    }
+                })),
+        ),
+    );
+
+    // peer2 will interrupt in receiving snapshot
+    fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // ready to send notify.
+    send_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // need to wait receiver handle the snapshot request
+    sleep_ms(100);
+
+    // peer2 will not become learner so ti will has k1 key and receiving count will zero
+    let engine2 = cluster.get_engine(2);
+    must_get_none(&engine2, b"k1");
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
 }

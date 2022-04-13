@@ -821,7 +821,13 @@ where
             &mut kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge_state.clone(),
+            // Only persist the `merge_state` if the merge is known to be succeeded
+            // which is determined by the `keep_data` flag
+            if keep_data {
+                self.pending_merge_state.clone()
+            } else {
+                None
+            },
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
@@ -1028,6 +1034,13 @@ where
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         self.get_store().is_applying_snapshot()
+    }
+
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        self.get_store().is_handling_snapshot()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
