@@ -4516,7 +4516,7 @@ where
                     "force" => force,
                     "counter" =>  task_counter.load(Ordering::SeqCst)
                 );
-                if task_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                if task_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
                     if let Err(e) = ctx.router.send_control(StoreMsg::UnsafeRecoveryReport) {
                         error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
                     }
