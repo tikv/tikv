@@ -66,11 +66,12 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{
-    ConsistencyState, Peer, PersistSnapshotResult, StaleState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+    TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
-use crate::store::util::{is_learner, KeysInfoFormatter};
+use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
 use crate::store::worker::{
     Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate,
     ReadProgress, RegionTask, SplitCheckTask,
@@ -1276,6 +1277,275 @@ where
             SignificantMsg::RaftlogFetched { context, res } => {
                 self.on_raft_log_fetched(context, res);
             }
+            SignificantMsg::EnterForceLeaderState { failed_stores } => {
+                self.on_enter_pre_force_leader(failed_stores)
+            }
+            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
+        }
+    }
+
+    fn on_enter_pre_force_leader(&mut self, failed_stores: HashSet<u64>) {
+        match self.fsm.peer.force_leader {
+            Some(ForceLeaderState::PreForceLeader { .. }) => {
+                self.on_force_leader_fail();
+            }
+            Some(ForceLeaderState::ForceLeader { .. }) => {
+                // already is a force leader, do nothing
+                return;
+            }
+            None => {}
+        }
+
+        if self.fsm.peer.is_leader() {
+            warn!(
+                "reject pre force leader due to already being leader";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
+        // When election timeout is triggered, leader_id is set to INVALID_ID.
+        // But learner(not promotable) is a exception here as it wouldn't tick
+        // election.
+        if self.fsm.peer.raft_group.raft.promotable()
+            && self.fsm.hibernate_state.group_state() != GroupState::Idle
+            && self.fsm.peer.leader_id() != raft::INVALID_ID
+        {
+            warn!(
+                "reject pre force leader due to leader lease may not expired";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
+        let expected_alive_voter = self.get_force_leader_expected_alive_voter(&failed_stores);
+        if self
+            .fsm
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .has_quorum(&expected_alive_voter)
+        {
+            warn!(
+                "reject pre force leader due to has quorum";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
+        info!(
+            "enter pre force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "alive_voter" => ?expected_alive_voter,
+        );
+
+        // Do not use prevote as prevote won't set `vote` to itself.
+        // When PD issues force leader on two different peer, it may cause
+        // two force leader in same term.
+        self.fsm.peer.raft_group.raft.pre_vote = false;
+        // trigger vote request to all voters, will check the vote result in `check_force_leader`
+        self.fsm.peer.raft_group.campaign().unwrap();
+        assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
+        if !self
+            .fsm
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .votes()
+            .get(&self.fsm.peer.peer_id())
+            .unwrap()
+        {
+            warn!(
+                "pre force leader failed to campaign";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            self.on_force_leader_fail();
+            return;
+        }
+
+        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader { failed_stores });
+        self.fsm.has_ready = true;
+    }
+
+    fn on_force_leader_fail(&mut self) {
+        self.fsm.peer.raft_group.raft.pre_vote = true;
+        self.fsm.peer.raft_group.raft.set_check_quorum(true);
+        self.fsm.peer.force_leader = None;
+    }
+
+    fn on_enter_force_leader(&mut self) {
+        info!(
+            "enter force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
+
+        let failed_stores = match self.fsm.peer.force_leader.take() {
+            Some(ForceLeaderState::PreForceLeader { failed_stores }) => failed_stores,
+            _ => unreachable!(),
+        };
+
+        let peer_ids: Vec<_> = self.fsm.peer.voters().iter().collect();
+        for peer_id in peer_ids {
+            let store_id = self
+                .region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == peer_id)
+                .unwrap()
+                .get_store_id();
+            if !failed_stores.contains(&store_id) {
+                continue;
+            }
+
+            // make fake vote response
+            let mut msg = raft::eraftpb::Message::new();
+            msg.msg_type = MessageType::MsgRequestVoteResponse;
+            msg.reject = false;
+            msg.term = self.fsm.peer.term();
+            msg.from = peer_id;
+            msg.to = self.fsm.peer.peer_id();
+            self.fsm.peer.raft_group.step(msg).unwrap();
+        }
+
+        // after receiving all votes, should become leader
+        assert!(self.fsm.peer.is_leader());
+        self.fsm.peer.raft_group.raft.set_check_quorum(false);
+
+        // make sure it's not hibernated
+        self.reset_raft_tick(GroupState::Ordered);
+
+        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader { failed_stores });
+        self.fsm.has_ready = true;
+    }
+
+    fn on_exit_force_leader(&mut self) {
+        if self.fsm.peer.force_leader.is_none() {
+            return;
+        }
+
+        info!(
+            "exit force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        self.fsm.peer.force_leader = None;
+        // make sure it's not hibernated
+        self.reset_raft_tick(GroupState::Ordered);
+        // leader lease shouldn't be renewed in force leader state.
+        assert_eq!(
+            self.fsm.peer.leader_lease().inspect(None),
+            LeaseState::Expired
+        );
+        self.fsm
+            .peer
+            .raft_group
+            .raft
+            .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
+
+        self.fsm.peer.raft_group.raft.set_check_quorum(true);
+        self.fsm.peer.raft_group.raft.pre_vote = true;
+        if self.fsm.peer.raft_group.raft.promotable() {
+            // let it trigger election immediately.
+            let _ = self.fsm.peer.raft_group.campaign();
+        }
+        self.fsm.has_ready = true;
+    }
+
+    #[inline]
+    fn get_force_leader_expected_alive_voter(&self, failed_stores: &HashSet<u64>) -> HashSet<u64> {
+        let region = self.region();
+        self.fsm
+            .peer
+            .voters()
+            .iter()
+            .filter(|peer_id| {
+                let store_id = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == *peer_id)
+                    .unwrap()
+                    .get_store_id();
+                !failed_stores.contains(&store_id)
+            })
+            .collect()
+    }
+
+    #[inline]
+    fn check_force_leader(&mut self) {
+        let failed_stores = match &self.fsm.peer.force_leader {
+            None => return,
+            Some(ForceLeaderState::ForceLeader { .. }) => {
+                if self.fsm.peer.maybe_force_forward_commit_index() {
+                    self.fsm.has_ready = true;
+                }
+                return;
+            }
+            Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+        };
+
+        if self.fsm.peer.raft_group.raft.election_elapsed + 1
+            < self.ctx.cfg.raft_election_timeout_ticks
+        {
+            // wait as longer as it can to collect responses of request vote
+            return;
+        }
+
+        let expected_alive_voter: HashSet<_> =
+            self.get_force_leader_expected_alive_voter(failed_stores);
+        let check = || {
+            if self.fsm.peer.raft_group.raft.state != StateRole::Candidate {
+                Err(format!(
+                    "unexpected role {:?}",
+                    self.fsm.peer.raft_group.raft.state
+                ))
+            } else {
+                let mut granted = 0;
+                for (id, vote) in self.fsm.peer.raft_group.raft.prs().votes() {
+                    if expected_alive_voter.contains(id) {
+                        if *vote {
+                            granted += 1;
+                        } else {
+                            return Err(format!("receive reject response from {}", *id));
+                        }
+                    } else if *id == self.fsm.peer_id() {
+                        // self may be a learner
+                        continue;
+                    } else {
+                        return Err(format!(
+                            "receive unexpected vote from {} vote {}",
+                            *id, *vote
+                        ));
+                    }
+                }
+                Ok(granted)
+            }
+        };
+
+        match check() {
+            Err(err) => {
+                warn!(
+                    "pre force leader check failed";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "alive_voter" => ?expected_alive_voter,
+                    "reason" => err,
+                );
+                self.on_force_leader_fail();
+            }
+            Ok(granted) => {
+                if granted == expected_alive_voter.len() {
+                    self.on_enter_force_leader();
+                }
+            }
         }
     }
 
@@ -1389,6 +1659,19 @@ where
                 self.register_raft_gc_log_tick();
                 self.register_check_leader_lease_tick();
                 self.register_report_region_buckets_tick();
+            }
+
+            if let Some(ForceLeaderState::ForceLeader { .. }) = self.fsm.peer.force_leader {
+                if r != StateRole::Leader {
+                    // for some reason, it's not leader anymore
+                    info!(
+                        "step down in force leader state";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "state" => ?r,
+                    );
+                    self.on_force_leader_fail();
+                }
             }
         }
     }
@@ -1519,6 +1802,8 @@ where
         }
 
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
+
+        self.check_force_leader();
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
@@ -1861,9 +2146,7 @@ where
             Either::Right(v) => v,
         };
 
-        if util::is_vote_msg(msg.get_message())
-            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
-        {
+        if util::is_vote_msg(msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
             if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
                 self.fsm.reset_hibernate_state(GroupState::Chaos);
                 self.register_raft_base_tick();
@@ -1875,7 +2158,7 @@ where
         let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
-        let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+        let result = if msg_type == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
         } else {
@@ -4177,6 +4460,16 @@ where
         let region_id = self.region_id();
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
+
+        if self.fsm.peer.force_leader.is_some() {
+            // in force leader state, forbid requests to make the recovery progress less error-prone
+            if !(msg.has_admin_request()
+                && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
+            {
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
+        }
 
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =
