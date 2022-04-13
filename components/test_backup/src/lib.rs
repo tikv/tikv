@@ -9,6 +9,7 @@ use std::{cmp, fs};
 use futures::channel::mpsc as future_mpsc;
 use grpcio::{ChannelBuilder, Environment};
 
+use api_version::{dispatch_api_version, APIVersion, RawValue};
 use backup::Task;
 use collections::HashMap;
 use engine_traits::IterOptions;
@@ -26,7 +27,6 @@ use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
-use tikv_util::codec::number::NumberEncoder;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::Instant;
 use tikv_util::worker::{LazyWorker, Worker};
@@ -96,10 +96,16 @@ impl TestSuite {
         }
 
         // Make sure there is a leader.
-        let mut tmp_value = String::from("foo").into_bytes();
-        tmp_value.encode_u64(u64::MAX).unwrap();
-        tmp_value.push(0);
-        cluster.must_put(b"foo", &tmp_value); // make raw apiv1ttl/apiv2 encode happy.
+        let tmp_value = String::from("foo").into_bytes();
+        let value = dispatch_api_version!(api_version, {
+            let raw_value = RawValue {
+                user_value: tmp_value,
+                expire_ts: None,
+                is_delete: false,
+            };
+            API::encode_raw_value_owned(raw_value)
+        });
+        cluster.must_put(b"foo", &value); // make raw apiv1ttl/apiv2 encode happy.
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
@@ -279,7 +285,7 @@ impl TestSuite {
         end_key: Vec<u8>,
         cf: String,
         path: &Path,
-        api_ver: ApiVersion,
+        dst_api_ver: ApiVersion,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::default();
         req.set_start_key(start_key);
@@ -287,7 +293,7 @@ impl TestSuite {
         req.set_storage_backend(make_local_backend(path));
         req.set_is_raw_kv(true);
         req.set_cf(cf);
-        req.set_dst_api_version(api_ver);
+        req.set_dst_api_version(dst_api_ver);
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();

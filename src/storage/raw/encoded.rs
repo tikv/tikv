@@ -12,7 +12,7 @@ use std::marker::PhantomData;
 use txn_types::{Key, Value};
 
 #[derive(Clone)]
-pub struct RawEncodeSnapshot<S: Snapshot, API: APIVersion> {
+pub struct RawEncodeSnapshot<S: Snapshot, Api: APIVersion> {
     pub snap: S,
     current_ts: u64,
     _phantom: PhantomData<Api>,

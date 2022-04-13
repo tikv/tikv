@@ -271,25 +271,12 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-
-        let tmp_cfg = cfg.clone();
-        self.coprocessor_hooks
-            .entry(node_id)
-            .or_default()
-            .push(Box::new(move |host: &mut CoprocessorHost<RocksEngine>| {
-                if 2 == tmp_cfg.tikv.storage.api_version {
-                    let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-                    let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-                    causal_ob.register_to(host);
-                }
-            }));
-        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
-            for hook in hooks {
-                hook(&mut coprocessor_host);
-            }
+        if ApiVersion::V2 == Api::TAG {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(&mut coprocessor_host);
         }
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         // Create storage.
         let pd_worker = LazyWorker::new("test-pd-worker");

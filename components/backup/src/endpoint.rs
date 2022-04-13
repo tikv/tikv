@@ -21,9 +21,6 @@ use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 use kvproto::metapb::*;
 use online_config::OnlineConfig;
 
-use api_version::{
-    convert_raw_key, convert_raw_value, match_template_api_version, APIVersion, KeyMode,
-};
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
@@ -44,13 +41,12 @@ use txn_types::{Key, Lock, TimeStamp};
 
 use crate::metrics::*;
 use crate::softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu};
-use crate::utils::ControlThreadPool;
+use crate::utils::{ControlThreadPool, KeyValueCodec};
 use crate::writer::{BackupWriterBuilder, CfNameWrap};
 use crate::Error;
 use crate::*;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
-const BACKUP_V1_TO_V2_TS: u64 = 1;
 
 #[derive(Clone)]
 struct Request {
@@ -143,90 +139,13 @@ impl Task {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-struct BackupConverter {
-    is_raw_kv: bool,
-    cur_api_ver: ApiVersion,
-    dst_api_ver: ApiVersion,
-}
-
-impl BackupConverter {
-    fn new(is_raw_kv: bool, cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> Self {
-        BackupConverter {
-            is_raw_kv,
-            cur_api_ver,
-            dst_api_ver,
-        }
-    }
-
-    fn is_valid_raw_value(&self, key: &[u8], value: &[u8]) -> Result<bool> {
-        if !self.is_raw_kv {
-            return Ok(false);
-        }
-        match_template_api_version!(
-            API,
-            match self.cur_api_ver {
-                ApiVersion::API => {
-                    let key_mode = API::parse_key_mode(key);
-                    if key_mode != KeyMode::Raw && key_mode != KeyMode::Unknown {
-                        return Ok(false);
-                    }
-                    let raw_value = API::decode_raw_value(value)?;
-                    return Ok(raw_value.is_valid(ttl_current_ts()));
-                }
-            }
-        );
-    }
-
-    fn convert_to_dest_raw_key(&self, key: &[u8]) -> Result<Key> {
-        if let Ok(dest_key) = convert_raw_key(
-            key,
-            self.cur_api_ver,
-            self.dst_api_ver,
-            Some(TimeStamp::from(BACKUP_V1_TO_V2_TS)),
-        ) {
-            Ok(dest_key)
-        } else {
-            error!("convert raw key fails";
-                "key" => &log_wrappers::Value::key(key),
-                "cur_api_version" => self.cur_api_ver as i32,
-                "dst_api_ver" => self.dst_api_ver as i32,
-            );
-            Err(Error::ApiConvertFail {
-                cur_api_ver: self.cur_api_ver as i32,
-                dst_api_ver: self.dst_api_ver as i32,
-            })
-        }
-    }
-
-    fn convert_to_dest_raw_value(&self, value: &[u8]) -> Result<Vec<u8>> {
-        if let Ok(dest_value) = convert_raw_value(value, self.cur_api_ver, self.dst_api_ver) {
-            Ok(dest_value)
-        } else {
-            error!("convert raw value fails";
-                "value" => &log_wrappers::Value::key(value),
-                "cur_api_version" => self.cur_api_ver as i32,
-                "dst_api_version" => self.dst_api_ver as i32,
-            );
-            Err(Error::ApiConvertFail {
-                cur_api_ver: self.cur_api_ver as i32,
-                dst_api_ver: self.dst_api_ver as i32,
-            })
-        }
-    }
-
-    fn use_raw_mvcc_snapshot(&self) -> bool {
-        self.is_raw_kv && self.cur_api_ver == ApiVersion::V2
-    }
-}
-
 #[derive(Debug)]
 pub struct BackupRange {
     start_key: Option<Key>,
     end_key: Option<Key>,
     region: Region,
     leader: Peer,
-    converter: BackupConverter,
+    codec: KeyValueCodec,
     cf: CfName,
 }
 
@@ -353,7 +272,7 @@ impl BackupRange {
         begin_ts: TimeStamp,
         saver: async_channel::Sender<InMemBackupFiles>,
     ) -> Result<Statistics> {
-        assert!(!self.converter.is_raw_kv);
+        assert!(!self.codec.is_raw_kv);
 
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
@@ -505,7 +424,7 @@ impl BackupRange {
         writer: &mut BackupRawKVWriter,
         snapshot: &S,
     ) -> Result<Statistics> {
-        assert!(self.converter.is_raw_kv);
+        assert!(self.codec.is_raw_kv);
         let start = Instant::now();
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
@@ -521,20 +440,21 @@ impl BackupRange {
             return Ok(statistics);
         }
         let mut batch = vec![];
+        let cur_ts = ttl_current_ts();
         loop {
             while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
                 let key = cursor.key(cfstatistics);
                 let value = cursor.value(cfstatistics);
-                let is_valid = self.converter.is_valid_raw_value(key, value)?;
+                let is_valid = self.codec.is_valid_raw_value(key, value, cur_ts)?;
                 if is_valid {
                     batch.push(Ok((
-                        self.converter.convert_to_dest_raw_key(key)?.into_encoded(),
-                        self.converter.convert_to_dest_raw_value(value)?,
+                        self.codec.convert_to_dst_raw_key(key)?.into_encoded(),
+                        self.codec.convert_to_dst_raw_value(value)?,
                     )));
                 };
                 debug!("backup raw key";
-                    "key" => &log_wrappers::Value::key(&self.converter.convert_to_dest_raw_key(key)?.into_encoded()),
-                    "value" => &log_wrappers::Value::value(&self.converter.convert_to_dest_raw_value(value)?),
+                    "key" => &log_wrappers::Value::key(&self.codec.convert_to_dst_raw_key(key)?.into_encoded()),
+                    "value" => &log_wrappers::Value::value(&self.codec.convert_to_dst_raw_value(value)?),
                     "valid" => is_valid,
                 );
                 cursor.next(cfstatistics);
@@ -598,7 +518,7 @@ impl BackupRange {
                 return Err(e.into());
             }
         };
-        let backup_ret = if self.converter.use_raw_mvcc_snapshot() {
+        let backup_ret = if self.codec.use_raw_mvcc_snapshot() {
             self.backup_raw(
                 &mut writer,
                 &RawMvccSnapshot::from_snapshot(engine_snapshot),
@@ -737,7 +657,7 @@ pub struct Progress<R: RegionInfoProvider> {
     end_key: Option<Key>,
     region_info: R,
     finished: bool,
-    converter: BackupConverter,
+    codec: KeyValueCodec,
     cf: CfName,
 }
 
@@ -747,7 +667,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         next_start: Option<Key>,
         end_key: Option<Key>,
         region_info: R,
-        converter: BackupConverter,
+        codec: KeyValueCodec,
         cf: CfName,
     ) -> Self {
         Progress {
@@ -756,7 +676,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             end_key,
             region_info,
             finished: false,
-            converter,
+            codec,
             cf,
         }
     }
@@ -777,7 +697,7 @@ impl<R: RegionInfoProvider> Progress<R> {
 
         let start_key = self.next_start.clone();
         let end_key = self.end_key.clone();
-        let converter = self.converter;
+        let codec = self.codec;
         let cf_name = self.cf;
         let res = self.region_info.seek_region(
             &start_key_,
@@ -804,7 +724,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                             end_key: ekey,
                             region: region.clone(),
                             leader,
-                            converter,
+                            codec,
                             cf: cf_name,
                         };
                         tx.send(backup_range).unwrap();
@@ -835,23 +755,6 @@ impl<R: RegionInfoProvider> Progress<R> {
         }
         branges
     }
-}
-
-fn encode_backup_key(key: Vec<u8>, is_raw_kv: bool, api_ver: ApiVersion) -> Option<Key> {
-    if key.is_empty() {
-        return None;
-    }
-    if !is_raw_kv || api_ver == ApiVersion::V2 {
-        return Some(Key::from_raw(&key));
-    }
-    Some(Key::from_encoded(key))
-}
-
-fn decode_backup_key(key: Key, is_raw_kv: bool, api_ver: ApiVersion) -> Vec<u8> {
-    if !is_raw_kv || api_ver == ApiVersion::V2 {
-        return key.into_raw().unwrap();
-    }
-    key.into_encoded()
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
@@ -951,7 +854,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     if batch.is_empty() {
                         return;
                     }
-                    (batch, progress.converter.is_raw_kv, progress.cf)
+                    (batch, progress.codec.is_raw_kv, progress.cf)
                 };
 
                 for brange in batch {
@@ -966,7 +869,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // TODO: make file_name unique and short
                     let key = brange.start_key.clone().and_then(|k| {
                         // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = decode_backup_key(k, is_raw_kv, cur_api_version);
+                        let input = KeyValueCodec::decode_backup_key(k, is_raw_kv, cur_api_version);
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
                     let name = backup_file_name(store_id, &brange.region, key);
@@ -1043,15 +946,20 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
             return;
         }
-        let start_key = encode_backup_key(request.start_key.clone(), is_raw_kv, self.api_version);
-        let end_key = encode_backup_key(request.end_key.clone(), is_raw_kv, self.api_version);
+        let start_key = KeyValueCodec::encode_backup_key(
+            request.start_key.clone(),
+            is_raw_kv,
+            self.api_version,
+        );
+        let end_key =
+            KeyValueCodec::encode_backup_key(request.end_key.clone(), is_raw_kv, self.api_version);
 
         let prs = Arc::new(Mutex::new(Progress::new(
             self.store_id,
             start_key,
             end_key,
             self.region_info.clone(),
-            BackupConverter::new(is_raw_kv, self.api_version, request.dst_api_ver),
+            KeyValueCodec::new(is_raw_kv, self.api_version, request.dst_api_ver),
             request.cf,
         )));
         let backend = match create_storage(&request.backend, self.get_config()) {
@@ -1193,7 +1101,8 @@ pub mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use api_version::{api_v2::RAW_KEY_PREFIX, RawValue};
+    use crate::utils::BACKUP_V1_TO_V2_TS;
+    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, APIVersion, RawValue};
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IOOp, IORateLimiter, IOType};
@@ -1404,7 +1313,7 @@ pub mod tests {
                     start_key,
                     end_key,
                     endpoint.region_info.clone(),
-                    BackupConverter::new(false, ApiVersion::V1, ApiVersion::V1),
+                    KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
                 );
 
@@ -1610,14 +1519,9 @@ pub mod tests {
     }
 
     fn generate_engine_test_key(user_key: String, ts: u64, api_ver: ApiVersion) -> Key {
-        match_template_api_version!(
-            API,
-            match api_ver {
-                ApiVersion::API => {
-                    return API::encode_raw_key_owned(user_key.into_bytes(), Some(ts.into()));
-                }
-            }
-        )
+        dispatch_api_version!(api_ver, {
+            return API::encode_raw_key_owned(user_key.into_bytes(), Some(ts.into()));
+        })
     }
 
     fn generate_engine_test_value(user_value: String, api_ver: ApiVersion) -> Vec<u8> {
@@ -1626,14 +1530,9 @@ pub mod tests {
             expire_ts: Some(u64::MAX),
             is_delete: false,
         };
-        match_template_api_version!(
-            API,
-            match api_ver {
-                ApiVersion::API => {
-                    return API::encode_raw_value_owned(raw_value);
-                }
-            }
-        )
+        dispatch_api_version!(api_ver, {
+            return API::encode_raw_value_owned(raw_value);
+        })
     }
 
     fn convert_test_backup_raw_key(
@@ -1643,17 +1542,9 @@ pub mod tests {
         dst_ver: ApiVersion,
     ) -> Key {
         if cur_ver == dst_ver {
-            match_template_api_version!(
-                API,
-                match cur_ver {
-                    ApiVersion::API => {
-                        return API::encode_raw_key_owned(
-                            raw_key.into_bytes(),
-                            Some(TimeStamp::from(ts)),
-                        );
-                    }
-                }
-            )
+            dispatch_api_version!(cur_ver, {
+                return API::encode_raw_key_owned(raw_key.into_bytes(), Some(TimeStamp::from(ts)));
+            })
         } else if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl)
             && dst_ver == ApiVersion::V2
         {
@@ -1670,7 +1561,9 @@ pub mod tests {
         dst_ver: ApiVersion,
     ) -> Vec<u8> {
         let value = generate_engine_test_value(value, cur_ver);
-        convert_raw_value(&value, cur_ver, dst_ver).unwrap()
+        dispatch_api_version!(dst_ver, {
+            API::convert_raw_value_from(cur_ver, &value).unwrap()
+        })
     }
 
     fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
@@ -1697,10 +1590,10 @@ pub mod tests {
             let value_str = generate_test_raw_value(i);
             let key = generate_engine_test_key(key_str.clone(), i as u64, cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
-            let dest_key = convert_test_backup_raw_key(key_str, i as u64, cur_api_ver, dst_api_ver);
-            let dest_value = convert_test_backup_raw_value(value_str, cur_api_ver, dst_api_ver);
+            let dst_key = convert_test_backup_raw_key(key_str, i as u64, cur_api_ver, dst_api_ver);
+            let dst_value = convert_test_backup_raw_value(value_str, cur_api_ver, dst_api_ver);
             checksum =
-                checksum_crc64_xor(checksum, digest.clone(), dest_key.as_encoded(), &dest_value);
+                checksum_crc64_xor(checksum, digest.clone(), dst_key.as_encoded(), &dst_value);
             let ret = engine.put(&ctx, key, value);
             assert!(ret.is_ok());
             i += 1;
@@ -1761,7 +1654,6 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw_v1() {
-        test_util::init_log_for_test();
         assert!(test_handle_backup_raw_task_impl(
             ApiVersion::V1,
             ApiVersion::V1
@@ -1770,7 +1662,6 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw_v1ttl() {
-        test_util::init_log_for_test();
         assert!(test_handle_backup_raw_task_impl(
             ApiVersion::V1ttl,
             ApiVersion::V1ttl
@@ -1779,7 +1670,6 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw_v2() {
-        test_util::init_log_for_test();
         assert!(test_handle_backup_raw_task_impl(
             ApiVersion::V2,
             ApiVersion::V2
@@ -1788,7 +1678,6 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw_v1_to_v2() {
-        test_util::init_log_for_test();
         assert!(test_handle_backup_raw_task_impl(
             ApiVersion::V1,
             ApiVersion::V2
@@ -1797,7 +1686,6 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw_v1ttl_to_v2() {
-        test_util::init_log_for_test();
         assert!(test_handle_backup_raw_task_impl(
             ApiVersion::V1ttl,
             ApiVersion::V2
@@ -1806,7 +1694,6 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw_invalid() {
-        test_util::init_log_for_test();
         assert!(!test_handle_backup_raw_task_impl(
             ApiVersion::V1,
             ApiVersion::V1ttl

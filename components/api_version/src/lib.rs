@@ -79,6 +79,9 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
 
     /// convertion between different ApiVersion encoded values.
     fn convert_raw_value_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
+        if src_api == Self::TAG {
+            return Ok(value.to_owned());
+        }
         match_template_api_version!(
             API,
             match src_api {
@@ -224,37 +227,6 @@ impl<T: AsRef<[u8]>> RawValue<T> {
                 .expire_ts
                 .map_or(true, |expire_ts| expire_ts > current_ts)
     }
-}
-
-pub fn convert_raw_key(
-    key: &[u8],
-    src_api_version: ApiVersion,
-    dst_api_version: ApiVersion,
-    ts: Option<TimeStamp>,
-) -> Result<Key> {
-    match_template_api_version!(
-        DST_API,
-        match dst_api_version {
-            ApiVersion::DST_API => {
-                return DST_API::convert_raw_key_from(src_api_version, key, ts);
-            }
-        }
-    )
-}
-
-pub fn convert_raw_value(
-    value: &[u8],
-    src_api_version: ApiVersion,
-    dst_api_version: ApiVersion,
-) -> Result<Vec<u8>> {
-    match_template_api_version!(
-        DST_API,
-        match dst_api_version {
-            ApiVersion::DST_API => {
-                return DST_API::convert_raw_value_from(src_api_version, value);
-            }
-        }
-    )
 }
 
 #[cfg(test)]
@@ -657,50 +629,38 @@ mod tests {
             .collect();
 
         for i in 0..apiv1_keys.len() {
-            assert_eq!(
-                convert_raw_key(
-                    apiv1_keys[i],
+            let dst_key = dispatch_api_version!(ApiVersion::V2, {
+                API::convert_raw_key_from(
                     ApiVersion::V1,
-                    ApiVersion::V2,
-                    Some(TimeStamp::from(timestamp))
-                )
-                .unwrap()
-                .into_encoded(),
-                apiv2_keys[i]
-            );
-            assert_eq!(
-                convert_raw_key(
                     apiv1_keys[i],
+                    Some(TimeStamp::from(timestamp)),
+                )
+            });
+            assert_eq!(dst_key.unwrap().into_encoded(), apiv2_keys[i]);
+            let dst_key = dispatch_api_version!(ApiVersion::V2, {
+                API::convert_raw_key_from(
                     ApiVersion::V1ttl,
-                    ApiVersion::V2,
-                    Some(TimeStamp::from(timestamp))
+                    apiv1_keys[i],
+                    Some(TimeStamp::from(timestamp)),
                 )
-                .unwrap()
-                .into_encoded(),
-                apiv2_keys[i]
-            );
-            assert_eq!(
-                convert_raw_key(
+            });
+            assert_eq!(dst_key.unwrap().into_encoded(), apiv2_keys[i]);
+            let dst_key = dispatch_api_version!(ApiVersion::V1, {
+                API::convert_raw_key_from(
+                    ApiVersion::V2,
                     &apiv2_keys[i],
-                    ApiVersion::V2,
-                    ApiVersion::V1,
-                    Some(TimeStamp::from(timestamp))
+                    Some(TimeStamp::from(timestamp)),
                 )
-                .unwrap()
-                .into_encoded(),
-                apiv1_keys[i]
-            );
-            assert_eq!(
-                convert_raw_key(
+            });
+            assert_eq!(dst_key.unwrap().into_encoded(), apiv1_keys[i]);
+            let dst_key = dispatch_api_version!(ApiVersion::V1ttl, {
+                API::convert_raw_key_from(
+                    ApiVersion::V2,
                     &apiv2_keys[i],
-                    ApiVersion::V2,
-                    ApiVersion::V1ttl,
-                    Some(TimeStamp::from(timestamp))
+                    Some(TimeStamp::from(timestamp)),
                 )
-                .unwrap()
-                .into_encoded(),
-                apiv1_keys[i]
-            );
+            });
+            assert_eq!(dst_key.unwrap().into_encoded(), apiv1_keys[i]);
         }
     }
 
@@ -733,22 +693,22 @@ mod tests {
             .collect();
 
         for i in 0..apiv1_values.len() {
-            assert_eq!(
-                convert_raw_value(apiv1_values[i], ApiVersion::V1, ApiVersion::V2).unwrap(),
-                apiv2_values[i]
-            );
-            assert_eq!(
-                convert_raw_value(&apiv1ttl_values[i], ApiVersion::V1ttl, ApiVersion::V2).unwrap(),
-                apiv2_values[i]
-            );
-            assert_eq!(
-                convert_raw_value(&apiv2_values[i], ApiVersion::V2, ApiVersion::V1).unwrap(),
-                apiv1_values[i]
-            );
-            assert_eq!(
-                convert_raw_value(&apiv2_values[i], ApiVersion::V2, ApiVersion::V1ttl).unwrap(),
-                apiv1ttl_values[i]
-            );
+            let dst_value = dispatch_api_version!(ApiVersion::V2, {
+                API::convert_raw_value_from(ApiVersion::V1, &apiv1_values[i])
+            });
+            assert_eq!(dst_value.unwrap(), apiv2_values[i]);
+            let dst_value = dispatch_api_version!(ApiVersion::V2, {
+                API::convert_raw_value_from(ApiVersion::V1ttl, &apiv1ttl_values[i])
+            });
+            assert_eq!(dst_value.unwrap(), apiv2_values[i]);
+            let dst_value = dispatch_api_version!(ApiVersion::V1, {
+                API::convert_raw_value_from(ApiVersion::V2, &apiv2_values[i])
+            });
+            assert_eq!(dst_value.unwrap(), apiv1_values[i]);
+            let dst_value = dispatch_api_version!(ApiVersion::V1ttl, {
+                API::convert_raw_value_from(ApiVersion::V2, &apiv2_values[i])
+            });
+            assert_eq!(dst_value.unwrap(), apiv1ttl_values[i]);
         }
     }
 }

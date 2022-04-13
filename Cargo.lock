@@ -394,6 +394,7 @@ dependencies = [
  "online_config",
  "pd_client",
  "prometheus",
+ "protobuf",
  "raft",
  "raftstore",
  "rand 0.8.3",
@@ -5143,6 +5144,7 @@ dependencies = [
 name = "test_backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "collections",
  "concurrency_manager",

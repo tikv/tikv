@@ -9,7 +9,7 @@ use std::{result, thread};
 use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
-use kvproto::kvrpcpb::{Context, ApiVersion};
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -168,23 +168,9 @@ impl<T: Simulator> Cluster<T> {
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
     ) -> Cluster<T> {
-        let mut cfg = Config {
-            tikv: new_tikv_config(id),
+        let cfg = Config {
+            tikv: new_tikv_config_with_api_ver(id, api_version),
             prefer_mem: true,
-        };
-        match api_version {
-            ApiVersion::V1 => {
-                cfg.tikv.storage.api_version = 1;
-                cfg.tikv.storage.enable_ttl = false;
-            }
-            ApiVersion::V1ttl => {
-                cfg.tikv.storage.api_version = 1;
-                cfg.tikv.storage.enable_ttl = true;
-            }
-            ApiVersion::V2 => {
-                cfg.tikv.storage.api_version = 2;
-                cfg.tikv.storage.enable_ttl = true;
-            }
         };
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {

@@ -541,7 +541,7 @@ fn test_backup_rawkv_v1_to_v2() {
     test_backup_rawkv_convert_impl(ApiVersion::V1, ApiVersion::V2)
 }
 
-fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dest_api_version: ApiVersion) {
+fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVersion) {
     let suite = TestSuite::new(3, 144 * 1024 * 1024, cur_api_version);
     let key_count: u64 = 60;
     let cf = match cur_api_version {
@@ -572,7 +572,7 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dest_api_version: ApiV
         "rz".to_owned().into_bytes(), // end
         cf,
         &storage_path,
-        dest_api_version,
+        dst_api_version,
     );
     let resps1 = block_on(rx.collect::<Vec<_>>());
     // Only leader can handle backup.
