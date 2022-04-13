@@ -612,12 +612,6 @@ fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
         must_get_equal(&cluster.get_engine(id), b"k2", b"v2");
     }
 
-    // Test transfer leader after a safe duration.
-    thread::sleep(cfg.raft_store.raft_reject_transfer_leader_duration.into());
-    assert_eq!(
-        cluster.leader_of_region(region_id).unwrap().get_id(),
-        leader_id
-    );
     cluster.transfer_leader(region_id, new_peer(3, 3));
     // Retry for more stability
     for _ in 0..20 {
