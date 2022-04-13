@@ -99,6 +99,11 @@ impl Runnable for Runner {
         match task {
             Task::CheckLeader { leaders, cb } => {
                 fail_point!(
+                    "before_check_leader_store_2",
+                    self.store_meta.lock().unwrap().store_id == Some(2),
+                    |_| {}
+                );
+                fail_point!(
                     "before_check_leader_store_3",
                     self.store_meta.lock().unwrap().store_id == Some(3),
                     |_| {}
