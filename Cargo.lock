@@ -3458,7 +3458,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.7.0"
-source = "git+https://github.com/mornyx/pprof-rs.git?branch=unwind#512ed4f00143e28233b99132cdff9bafd27c7c36"
+source = "git+https://github.com/YangKeao/pprof-rs.git?branch=frame-pointer#e7228d26f5f02a11c32b9e0ef83969559b5b9499"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -3475,7 +3475,6 @@ dependencies = [
  "symbolic-demangle",
  "tempfile",
  "thiserror",
- "unwind",
 ]
 
 [[package]]
@@ -6156,19 +6155,6 @@ name = "untrusted"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
-
-[[package]]
-name = "unwind"
-version = "0.0.1"
-source = "git+https://github.com/mornyx/unwind.git#c6916acb023cc21eeeda8a2084e5dd947edeb4e2"
-dependencies = [
- "byteorder",
- "cc",
- "lazy_static",
- "libc 0.2.119",
- "smallvec",
- "thiserror",
-]
 
 [[package]]
 name = "url"
