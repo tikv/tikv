@@ -30,7 +30,7 @@ pub use self::dispatcher::{
 };
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
-    Callback as RegionInfoCallback, RegionCollector, RegionInfo, RegionInfoAccessor,
+    Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
     RegionInfoProvider, SeekRegionCallback,
 };
 pub use self::split_check::{
