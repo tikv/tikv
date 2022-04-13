@@ -10,7 +10,6 @@ use raftstore::store::util::find_peer;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, mpsc};
 
-#[allow(clippy::mutex_atomic)]
 #[test]
 fn test_unsafe_recover_send_report() {
     let mut cluster = new_server_cluster(0, 3);
@@ -73,7 +72,6 @@ fn test_unsafe_recover_send_report() {
     fail::remove("on_handle_apply_store_1");
 }
 
-#[allow(clippy::mutex_atomic)]
 #[test]
 fn test_unsafe_recover_wait_for_snapshot_apply() {
     let mut cluster = new_server_cluster(0, 3);
