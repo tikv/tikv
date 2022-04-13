@@ -3115,7 +3115,7 @@ where
             return;
         }
 
-        let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
+        let pending_snapshot = self.is_applying_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
