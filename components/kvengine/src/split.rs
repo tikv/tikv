@@ -1,12 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::table::memtable::CFTable;
 use crate::*;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Buf;
 use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
 use slog_global::{info, warn};
-use std::iter::Iterator as StdIterator;
 use std::sync::atomic::Ordering::Release;
 use std::sync::Arc;
 
@@ -74,39 +74,45 @@ impl Engine {
             }
             new_shards.push(Arc::new(new_shard));
         }
-        let mem_tbls = old_shard.get_mem_tbls();
+        let old_data = old_shard.get_data();
         for new_shard in &new_shards {
-            new_shard.set_split_mem_tables(mem_tbls.tbls.as_ref());
-        }
-        let l0s = old_shard.get_l0_tbls();
-        for l0 in l0s.tbls.iter().rev() {
-            for new_shard in &new_shards {
-                if new_shard.overlap_table(l0.smallest(), l0.biggest()) {
-                    new_shard.atomic_add_l0_table(l0.clone());
+            let mut new_mem_tbls = vec![CFTable::new()];
+            for mem_tbl in &old_data.mem_tbls {
+                if mem_tbl.has_data_in_range(new_shard.start.chunk(), new_shard.end.chunk()) {
+                    new_mem_tbls.push(mem_tbl.new_split());
                 }
             }
-        }
-        for cf in 0..NUM_CFS {
-            let old_scf = old_shard.get_cf(cf);
-            let mut new_scfs = Vec::new();
-            new_scfs.resize_with(new_shards.len(), || ShardCFBuilder::new(cf));
-            for lh in old_scf.levels.as_ref() {
-                for tbl in lh.tables.iter() {
-                    for (idx, new_shard) in new_shards.iter().enumerate() {
+            let mut new_l0s = vec![];
+            for l0 in &old_data.l0_tbls {
+                if new_shard.overlap_table(l0.smallest(), l0.biggest()) {
+                    new_l0s.push(l0.clone());
+                }
+            }
+            let mut new_cfs = [ShardCF::new(0), ShardCF::new(1), ShardCF::new(2)];
+            for cf in 0..NUM_CFS {
+                let old_scf = old_data.get_cf(cf);
+                for lh in &old_scf.levels {
+                    let mut new_level_tbls = vec![];
+                    for tbl in lh.tables.as_slice() {
                         if new_shard.overlap_table(tbl.smallest(), tbl.biggest()) {
-                            let new_scf = &mut new_scfs[idx];
-                            new_scf.add_table(tbl.clone(), lh.level);
+                            new_level_tbls.push(tbl.clone());
                         }
                     }
+                    let new_level = LevelHandler::new(lh.level, new_level_tbls);
+                    new_cfs[cf].set_level(new_level);
                 }
             }
-            for i in 0..new_shards.len() {
-                new_shards[i].set_cf(cf, new_scfs[i].build());
-            }
+            let new_data = ShardData::new(
+                new_shard.start.clone(),
+                new_shard.end.clone(),
+                new_mem_tbls,
+                new_l0s,
+                new_cfs,
+            );
+            new_shard.set_data(new_data);
         }
         for shard in new_shards.drain(..) {
-            shard.refresh_estimated_size();
-            shard.refresh_compaction_priority();
+            shard.refresh_states();
             let id = shard.id;
             if id != old_shard.id {
                 match self.shards.entry(id) {

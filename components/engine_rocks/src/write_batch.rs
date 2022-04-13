@@ -329,7 +329,6 @@ mod tests {
             .tempdir()
             .unwrap();
         let opt = RawDBOptions::default();
-        opt.enable_multi_batch_write(true);
         opt.enable_unordered_write(false);
         opt.enable_pipelined_write(true);
         let engine = new_engine_opt(

@@ -102,6 +102,9 @@ impl CFTableCore {
     }
 
     pub fn has_data_in_range(&self, start: &[u8], end: &[u8]) -> bool {
+        if self.is_empty() {
+            return false;
+        }
         for cf in 0..NUM_CFS {
             let tbl = &self.tbls[cf];
             let mut iter = tbl.new_iterator(false);

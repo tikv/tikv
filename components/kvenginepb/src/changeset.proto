@@ -45,7 +45,6 @@ message Flush {
   L0Create l0Create = 1;
   Properties properties = 2;
   uint64 version = 3;
-  bool is_initial_flush = 4;
 }
 
 message Snapshot {

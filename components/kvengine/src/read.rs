@@ -2,11 +2,11 @@
 
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use bytes::{Buf, Bytes, BytesMut};
 
-use crate::shard::{L0Tables, MemTables};
 use crate::table::memtable::Hint;
 use crate::table::table;
 use crate::*;
@@ -42,14 +42,24 @@ pub struct AccessPath {
     pub ln: u8,
 }
 
+#[derive(Clone)]
 pub struct SnapAccess {
-    shard: Arc<Shard>,
-    managed_ts: u64,
-    write_sequence: u64,
-    mem_tbls: MemTables,
-    l0_tbls: L0Tables,
-    scfs: Vec<ShardCF>,
-    get_hint: Mutex<Hint>,
+    pub core: Arc<SnapAccessCore>,
+}
+
+impl SnapAccess {
+    pub fn new(shard: &Shard) -> Self {
+        let core = Arc::new(SnapAccessCore::new(shard));
+        Self { core }
+    }
+}
+
+impl Deref for SnapAccess {
+    type Target = SnapAccessCore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl Debug for SnapAccess {
@@ -57,29 +67,30 @@ impl Debug for SnapAccess {
         write!(
             f,
             "snap access {}:{}, seq: {}",
-            self.shard.id, self.shard.ver, self.write_sequence,
+            self.id, self.ver, self.write_sequence,
         )
     }
 }
 
-impl SnapAccess {
-    pub fn new(shard: &Arc<Shard>) -> Self {
-        let shard = shard.clone();
-        let mem_tbls = shard.get_mem_tbls();
-        let l0_tbls = shard.get_l0_tbls();
-        let mut scfs = Vec::with_capacity(NUM_CFS);
-        for cf in 0..NUM_CFS {
-            let scf = shard.get_cf(cf);
-            scfs.push(scf);
-        }
+pub struct SnapAccessCore {
+    id: u64,
+    ver: u64,
+    managed_ts: u64,
+    write_sequence: u64,
+    data: ShardData,
+    get_hint: Mutex<Hint>,
+}
+
+impl SnapAccessCore {
+    pub fn new(shard: &Shard) -> Self {
+        let data = shard.get_data();
         let write_sequence = shard.get_write_sequence();
         Self {
-            shard,
+            id: shard.id,
+            ver: shard.ver,
             write_sequence,
             managed_ts: 0,
-            mem_tbls,
-            l0_tbls,
-            scfs,
+            data,
             get_hint: Mutex::new(Hint::new()),
         }
     }
@@ -134,8 +145,8 @@ impl SnapAccess {
         path: &mut AccessPath,
     ) -> table::Value {
         let key_hash = farmhash::fingerprint64(key);
-        for i in 0..self.mem_tbls.tbls.len() {
-            let tbl = self.mem_tbls.tbls[i].get_cf(cf);
+        for i in 0..self.data.mem_tbls.len() {
+            let tbl = self.data.mem_tbls.as_slice()[i].get_cf(cf);
             let v = if i == 0 && cf == 0 {
                 // only use hint for the first mem-table and cf 0.
                 let mut hint = self.get_hint.lock().unwrap();
@@ -148,7 +159,7 @@ impl SnapAccess {
                 return v;
             }
         }
-        for l0 in self.l0_tbls.tbls.as_ref() {
+        for l0 in &self.data.l0_tbls {
             if let Some(tbl) = &l0.get_cf(cf) {
                 let v = tbl.get(key, version, key_hash);
                 path.l0 += 1;
@@ -157,8 +168,8 @@ impl SnapAccess {
                 }
             }
         }
-        let scf = &self.scfs.as_slice()[cf];
-        for lh in scf.levels.as_ref() {
+        let scf = self.data.get_cf(cf);
+        for lh in &scf.levels {
             let v = lh.get(key, version, key_hash);
             path.ln += 1;
             if v.is_valid() {
@@ -183,16 +194,16 @@ impl SnapAccess {
 
     fn new_table_iterator(&self, cf: usize, reversed: bool) -> Box<dyn table::Iterator> {
         let mut iters: Vec<Box<dyn table::Iterator>> = Vec::new();
-        for mem_tbl in self.mem_tbls.tbls.as_ref() {
+        for mem_tbl in &self.data.mem_tbls {
             iters.push(Box::new(mem_tbl.get_cf(cf).new_iterator(reversed)));
         }
-        for l0 in self.l0_tbls.tbls.as_ref() {
+        for l0 in &self.data.l0_tbls {
             if let Some(tbl) = &l0.get_cf(cf) {
                 iters.push(tbl.new_iterator(reversed));
             }
         }
-        let scf = &self.scfs.as_slice()[cf];
-        for lh in scf.levels.as_ref() {
+        let scf = self.data.get_cf(cf);
+        for lh in scf.levels.as_slice() {
             if lh.tables.len() == 0 {
                 continue;
             }
@@ -200,11 +211,7 @@ impl SnapAccess {
                 iters.push(lh.tables[0].new_iterator(reversed));
                 continue;
             }
-            iters.push(Box::new(ConcatIterator::new(
-                scf.clone(),
-                lh.level,
-                reversed,
-            )));
+            iters.push(Box::new(ConcatIterator::new(lh.clone(), reversed)));
         }
         table::new_merge_iterator(iters, reversed)
     }
@@ -214,45 +221,37 @@ impl SnapAccess {
     }
 
     pub fn get_start_key(&self) -> &[u8] {
-        self.shard.start.chunk()
+        self.data.start.chunk()
     }
 
     pub fn clone_start_key(&self) -> Bytes {
-        self.shard.start.clone()
+        self.data.start.clone()
     }
 
     pub fn get_end_key(&self) -> &[u8] {
-        self.shard.end.chunk()
+        self.data.end.chunk()
     }
 
     pub fn clone_end_key(&self) -> Bytes {
-        self.shard.end.clone()
+        self.data.end.clone()
     }
 
     pub fn get_id(&self) -> u64 {
-        self.shard.id
+        self.id
     }
 
     pub fn get_version(&self) -> u64 {
-        self.shard.ver
-    }
-
-    pub fn get_all_files(&self) -> Vec<u64> {
-        self.shard.get_all_files()
-    }
-
-    pub fn get_l0_files(&self) -> Vec<u64> {
-        self.shard.get_l0_files()
+        self.ver
     }
 
     pub(crate) fn may_contains_in_older_table(&self, key: &[u8], cf: usize) -> bool {
         let key_hash = farmhash::fingerprint64(key);
-        for tbl in &self.mem_tbls.tbls[1..] {
+        for tbl in &self.data.mem_tbls[1..] {
             if tbl.get_cf(cf).get(key, u64::MAX).is_valid() {
                 return true;
             }
         }
-        for l0 in self.l0_tbls.tbls.as_ref() {
+        for l0 in &self.data.l0_tbls {
             let l0_cf = l0.get_cf(cf);
             if l0_cf.is_none() {
                 continue;
@@ -261,7 +260,7 @@ impl SnapAccess {
                 return true;
             }
         }
-        for l in self.scfs[cf].levels.as_ref() {
+        for l in self.data.get_cf(cf).levels.as_slice() {
             if let Some(tbl) = l.get_table(key) {
                 if tbl.may_contains(key_hash) {
                     return true;
@@ -269,6 +268,10 @@ impl SnapAccess {
             }
         }
         false
+    }
+
+    pub fn get_all_files(&self) -> Vec<u64> {
+        self.data.get_all_files()
     }
 }
 

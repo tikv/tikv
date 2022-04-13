@@ -31,7 +31,7 @@ use crate::store::{
     PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
 };
 use crate::store::{util as _util, CasualMessage, Config, PeerMsg, SignificantMsg};
-use crate::store::{write_peer_state, ChangePeer, ExecResult, MsgApplyChangeSetResult, SnapState};
+use crate::store::{write_peer_state, ChangePeer, ExecResult, SnapState};
 use crate::{Error, Result};
 use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
@@ -196,6 +196,9 @@ impl<'a> PeerMsgHandler<'a> {
                 }
                 PeerMsg::Persisted(ready) => {
                     self.on_persisted(ready);
+                }
+                PeerMsg::PrepareChangeSetResult(res) => {
+                    self.on_prepared_change_set(res);
                 }
             }
         }
@@ -1270,10 +1273,10 @@ impl<'a> PeerMsgHandler<'a> {
         req
     }
 
-    fn on_apply_change_set_result(&mut self, msg: MsgApplyChangeSetResult) {
+    fn on_apply_change_set_result(&mut self, result: kvengine::Result<kvenginepb::ChangeSet>) {
         let tag = self.peer.tag();
-        if msg.result.is_err() {
-            let err = msg.result.unwrap_err();
+        if result.is_err() {
+            let err = result.unwrap_err();
             error!(
                 "region failed to apply change set";
                 "err" => ?err,
@@ -1284,7 +1287,7 @@ impl<'a> PeerMsgHandler<'a> {
             }
             return;
         }
-        let change = msg.result.unwrap();
+        let change = result.unwrap();
         if change.shard_ver != self.region().get_region_epoch().get_version() {
             error!("change set version not match change {:?}", &change; "region" => tag);
             return;
@@ -1339,6 +1342,27 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         self.peer.raft_group.on_persist_ready(ready.ready_number);
+    }
+
+    pub(crate) fn on_prepared_change_set(&mut self, res: kvengine::Result<kvengine::ChangeSet>) {
+        if res.is_err() {
+            // TODO(x): properly handle this error.
+            panic!(
+                "{} failed to prepare change set {:?}",
+                self.peer.tag(),
+                res.unwrap_err()
+            );
+        }
+        let cs = res.unwrap();
+        self.peer.prepared_change_sets.insert(cs.sequence, cs);
+        while let Some(front) = self.peer.scheduled_change_sets.pop_front() {
+            if let Some(cs) = self.peer.prepared_change_sets.remove(&front) {
+                self.ctx.apply_msgs.msgs.push(ApplyMsg::ApplyChangeSet(cs));
+            } else {
+                self.peer.scheduled_change_sets.push_front(front);
+                break;
+            }
+        }
     }
 }
 

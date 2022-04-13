@@ -1,17 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use file_system::{IOOp, IORateLimiter, IOType};
+use file_system::IORateLimiter;
 use fslock;
 use moka::sync::SegmentedCache;
 use slog_global::info;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
-use std::io::Write;
 use std::iter::Iterator;
 use std::ops::Deref;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -20,9 +19,10 @@ use std::thread;
 use std::time::Duration;
 use tikv_util::mpsc;
 
+use crate::apply::ChangeSet;
 use crate::meta::ShardMeta;
 use crate::table::memtable::CFTable;
-use crate::table::sstable::{BlockCacheKey, L0Table, SSTable};
+use crate::table::sstable::BlockCacheKey;
 use crate::*;
 
 #[derive(Clone)]
@@ -170,7 +170,7 @@ pub struct EngineCore {
     pub(crate) managed_safe_ts: AtomicU64,
     pub(crate) tmp_file_id: AtomicU64,
     pub(crate) rate_limiter: Arc<IORateLimiter>,
-    pub(crate) free_tx: mpsc::Sender<Arc<Vec<CFTable>>>,
+    pub(crate) free_tx: mpsc::Sender<CFTable>,
 }
 
 impl EngineCore {
@@ -189,45 +189,53 @@ impl EngineCore {
                 return Ok(shard);
             }
         }
-        let shard = Shard::new_for_loading(meta, self.opts.clone());
-        let dfs_opts = dfs::Options::new(shard.id, shard.ver);
-        let mut l0_tbls = Vec::new();
-        let mut scf_builders = Vec::new();
-        for cf in 0..NUM_CFS {
-            let scf_builder = ShardCFBuilder::new(cf);
-            scf_builders.push(scf_builder);
-        }
-        let mut ids = meta.all_files();
-        ids.retain(|id| {
-            let local_path = self.local_file_path(*id);
-            !local_path.exists()
-        });
-        self.pre_load_files_by_ids(meta.id, meta.ver, ids)?;
-        for (fid, fm) in &meta.files {
-            let file = self.fs.open(*fid, dfs_opts)?;
-            if fm.cf == -1 {
-                let l0_tbl = L0Table::new(file, Some(self.cache.clone()))?;
-                l0_tbls.push(l0_tbl);
-                continue;
-            }
-            let tbl = SSTable::new(file, Some(self.cache.clone()))?;
-            scf_builders[fm.cf as usize].add_table(tbl, fm.level as usize);
-        }
-        l0_tbls.sort_by(|a, b| b.version().cmp(&a.version()));
-        *shard.l0_tbls.write().unwrap() = L0Tables::new(l0_tbls);
-        for cf in (0..NUM_CFS).rev() {
-            shard.set_cf(cf, scf_builders[cf].build());
-        }
-        shard.refresh_estimated_size();
-        info!("load shard {}:{}", shard.id, shard.ver);
-        self.shards.insert(shard.id, Arc::new(shard));
+        info!("load shard {}:{}", meta.id, meta.ver);
+        let change_set = self.prepare_change_set(meta.to_change_set())?;
+        self.ingest(change_set, false)?;
         let shard = self.get_shard(meta.id);
         Ok(shard.unwrap())
     }
 
-    pub fn get_snap_access(&self, id: u64) -> Option<Arc<SnapAccess>> {
+    pub fn ingest(&self, cs: ChangeSet, active: bool) -> Result<()> {
+        let shard = Shard::new_for_ingest(&cs, self.opts.clone());
+        shard.set_active(active);
+        let (l0s, scfs) = self.create_snapshot_tables(cs.get_snapshot(), &cs);
+        let data = ShardData::new(
+            shard.start.clone(),
+            shard.end.clone(),
+            vec![CFTable::new()],
+            l0s,
+            scfs,
+        );
+        shard.set_data(data);
+        store_bool(&shard.initial_flushed, true);
+        shard.refresh_states();
+        match self.shards.entry(shard.id) {
+            Entry::Occupied(entry) => {
+                let old = entry.get();
+                let mut old_mem_tbls = old.get_data().mem_tbls.clone();
+                let old_total_seq = old.get_write_sequence() + old.get_meta_sequence();
+                let new_total_seq = shard.get_write_sequence() + shard.get_meta_sequence();
+                if new_total_seq > old_total_seq {
+                    entry.replace_entry(Arc::new(shard));
+                    for mem_tbl in old_mem_tbls.drain(..) {
+                        self.free_tx.send(mem_tbl).unwrap();
+                    }
+                } else {
+                    info!("ingest found shard already exists with higher sequence, skip insert");
+                    return Ok(());
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Arc::new(shard));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_snap_access(&self, id: u64) -> Option<SnapAccess> {
         if let Some(ptr) = self.shards.get(&id) {
-            return Some(Arc::new(SnapAccess::new(&ptr)));
+            return Some(ptr.new_snap_access());
         }
         None
     }
@@ -260,7 +268,8 @@ impl EngineCore {
             self.trigger_initial_flush(shard);
             return;
         }
-        if let Some(mem_tbl) = shard.get_last_read_only_mem_table() {
+        let data = shard.get_data();
+        if let Some(mem_tbl) = data.get_last_read_only_mem_table() {
             info!(
                 "shard {}:{} trigger flush mem-table ts {}, size {}",
                 shard.id,
@@ -285,7 +294,8 @@ impl EngineCore {
         let guard = shard.parent_snap.read().unwrap();
         let parent_snap = guard.as_ref().unwrap().clone();
         let mut mem_tbls = vec![];
-        for mem_tbl in &shard.get_mem_tbls().tbls.as_slice()[1..] {
+        let data = shard.get_data();
+        for mem_tbl in &data.mem_tbls.as_slice()[1..] {
             debug!(
                 "trigger initial flush check mem table version {}, size {}, parent base {} parent write {}",
                 mem_tbl.get_version(),
@@ -316,78 +326,6 @@ impl EngineCore {
             })
             .unwrap();
     }
-
-    pub(crate) fn pre_load_files_by_ids(
-        &self,
-        shard_id: u64,
-        shard_ver: u64,
-        ids: Vec<u64>,
-    ) -> Result<()> {
-        let length = ids.len();
-        let (result_tx, result_rx) = tikv_util::mpsc::bounded(length);
-        let runtime = self.fs.get_runtime();
-        for id in &ids {
-            let fs = self.fs.clone();
-            let opts = dfs::Options::new(shard_id, shard_ver);
-            let tx = result_tx.clone();
-            let id = *id;
-            runtime.spawn(async move {
-                let res = fs.read_file(id, opts).await;
-                tx.send(res.map(|data| (id, data))).unwrap();
-            });
-        }
-        let mut errors = vec![];
-        for _ in 0..length {
-            match result_rx.recv().unwrap() {
-                Ok((id, data)) => {
-                    if let Err(err) = self.write_local_file(id, data) {
-                        error!("write local file failed {:?}", &err);
-                        errors.push(err.into());
-                    }
-                }
-                Err(err) => {
-                    error!("prefetch failed {:?}", &err);
-                    errors.push(err);
-                }
-            }
-        }
-        if errors.len() > 0 {
-            return Err(errors.pop().unwrap().into());
-        }
-        Ok(())
-    }
-
-    fn write_local_file(&self, id: u64, data: Bytes) -> std::io::Result<()> {
-        let local_file_name = self.local_file_path(id);
-        let tmp_file_name = self.tmp_file_path(id);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .custom_flags(libc::O_DSYNC)
-            .open(&tmp_file_name)?;
-        let mut start_off = 0;
-        let write_batch_size = 256 * 1024;
-        while start_off < data.len() {
-            self.rate_limiter
-                .request(IOType::Compaction, IOOp::Write, write_batch_size);
-            let end_off = std::cmp::min(start_off + write_batch_size, data.len());
-            file.write(&data[start_off..end_off])?;
-            start_off = end_off;
-        }
-        std::fs::rename(&tmp_file_name, &local_file_name)
-    }
-
-    pub(crate) fn local_file_path(&self, file_id: u64) -> PathBuf {
-        self.opts.local_dir.join(new_filename(file_id))
-    }
-
-    fn tmp_file_path(&self, file_id: u64) -> PathBuf {
-        let tmp_id = self
-            .tmp_file_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.opts.local_dir.join(new_tmp_filename(file_id, tmp_id))
-    }
 }
 
 pub fn new_filename(file_id: u64) -> PathBuf {
@@ -398,11 +336,11 @@ pub fn new_tmp_filename(file_id: u64, tmp_id: u64) -> PathBuf {
     PathBuf::from(format!("{:016x}.{}.tmp", file_id, tmp_id))
 }
 
-fn free_mem(free_rx: mpsc::Receiver<Arc<Vec<CFTable>>>) {
+fn free_mem(free_rx: mpsc::Receiver<CFTable>) {
     loop {
         let mut tables = vec![];
-        let x = free_rx.recv().unwrap();
-        tables.push(x);
+        let tbl = free_rx.recv().unwrap();
+        tables.push(tbl);
         let cnt = free_rx.len();
         for _ in 0..cnt {
             tables.push(free_rx.recv().unwrap());

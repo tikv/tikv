@@ -1099,7 +1099,6 @@ pub struct Flush {
     pub l0_create: ::protobuf::SingularPtrField<L0Create>,
     pub properties: ::protobuf::SingularPtrField<Properties>,
     pub version: u64,
-    pub is_initial_flush: bool,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -1196,21 +1195,6 @@ impl Flush {
     pub fn set_version(&mut self, v: u64) {
         self.version = v;
     }
-
-    // bool is_initial_flush = 4;
-
-
-    pub fn get_is_initial_flush(&self) -> bool {
-        self.is_initial_flush
-    }
-    pub fn clear_is_initial_flush(&mut self) {
-        self.is_initial_flush = false;
-    }
-
-    // Param is passed by value, moved
-    pub fn set_is_initial_flush(&mut self, v: bool) {
-        self.is_initial_flush = v;
-    }
 }
 
 impl ::protobuf::Message for Flush {
@@ -1245,13 +1229,6 @@ impl ::protobuf::Message for Flush {
                     let tmp = is.read_uint64()?;
                     self.version = tmp;
                 },
-                4 => {
-                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
-                    }
-                    let tmp = is.read_bool()?;
-                    self.is_initial_flush = tmp;
-                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -1275,9 +1252,6 @@ impl ::protobuf::Message for Flush {
         if self.version != 0 {
             my_size += ::protobuf::rt::value_size(3, self.version, ::protobuf::wire_format::WireTypeVarint);
         }
-        if self.is_initial_flush != false {
-            my_size += 2;
-        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
@@ -1296,9 +1270,6 @@ impl ::protobuf::Message for Flush {
         }
         if self.version != 0 {
             os.write_uint64(3, self.version)?;
-        }
-        if self.is_initial_flush != false {
-            os.write_bool(4, self.is_initial_flush)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1357,11 +1328,6 @@ impl ::protobuf::Message for Flush {
                     |m: &Flush| { &m.version },
                     |m: &mut Flush| { &mut m.version },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
-                    "is_initial_flush",
-                    |m: &Flush| { &m.is_initial_flush },
-                    |m: &mut Flush| { &mut m.is_initial_flush },
-                ));
                 ::protobuf::reflect::MessageDescriptor::new::<Flush>(
                     "Flush",
                     fields,
@@ -1387,7 +1353,6 @@ impl ::protobuf::Clear for Flush {
         self.l0_create.clear();
         self.properties.clear();
         self.version = 0;
-        self.is_initial_flush = false;
         self.unknown_fields.clear();
     }
 }
@@ -1400,7 +1365,6 @@ impl ::protobuf::PbPrint for Flush {
         ::protobuf::PbPrint::fmt(&self.l0_create, "l0_create", buf);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", buf);
         ::protobuf::PbPrint::fmt(&self.version, "version", buf);
-        ::protobuf::PbPrint::fmt(&self.is_initial_flush, "is_initial_flush", buf);
         if old_len < buf.len() {
           buf.push(' ');
         }
@@ -1414,7 +1378,6 @@ impl ::std::fmt::Debug for Flush {
         ::protobuf::PbPrint::fmt(&self.l0_create, "l0_create", &mut s);
         ::protobuf::PbPrint::fmt(&self.properties, "properties", &mut s);
         ::protobuf::PbPrint::fmt(&self.version, "version", &mut s);
-        ::protobuf::PbPrint::fmt(&self.is_initial_flush, "is_initial_flush", &mut s);
         write!(f, "{}", s)
     }
 }
@@ -3004,26 +2967,25 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x02\x20\x01(\rB\0\x12-\n\x0ctableCreates\x18\x03\x20\x03(\x0b2\x15.engi\
     nepb.TableCreateB\0\x12\x14\n\ntopDeletes\x18\x04\x20\x03(\x04B\0\x12\
     \x17\n\rbottomDeletes\x18\x05\x20\x03(\x04B\0\x12\x14\n\nconflicted\x18\
-    \x06\x20\x01(\x08B\0:\0\"\x8c\x01\n\x05Flush\x12&\n\x08l0Create\x18\x01\
-    \x20\x01(\x0b2\x12.enginepb.L0CreateB\0\x12*\n\nproperties\x18\x02\x20\
-    \x01(\x0b2\x14.enginepb.PropertiesB\0\x12\x11\n\x07version\x18\x03\x20\
-    \x01(\x04B\0\x12\x1a\n\x10is_initial_flush\x18\x04\x20\x01(\x08B\0:\0\"\
-    \xe0\x01\n\x08Snapshot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\x12\r\
-    \n\x03end\x18\x02\x20\x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\x01(\
-    \x0b2\x14.enginepb.PropertiesB\0\x12'\n\tl0Creates\x18\x05\x20\x03(\x0b2\
-    \x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x06\x20\x03(\x0b2\
-    \x15.enginepb.TableCreateB\0\x12\x15\n\x0bbaseVersion\x18\x07\x20\x01(\
-    \x04B\0\x12\x17\n\rdata_sequence\x18\x08\x20\x01(\x04B\0:\0\"A\n\x08L0Cr\
-    eate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08smallest\x18\
-    \x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x03\x20\x01(\x0cB\0:\0\"c\
-    \n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\x05l\
-    evel\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\x12\
-    \x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x05\
-    \x20\x01(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\x0b\
-    2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\0:\
-    \0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\x0e\
-    \n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03(\
-    \x0cB\0:\0B\0b\x06proto3\
+    \x06\x20\x01(\x08B\0:\0\"p\n\x05Flush\x12&\n\x08l0Create\x18\x01\x20\x01\
+    (\x0b2\x12.enginepb.L0CreateB\0\x12*\n\nproperties\x18\x02\x20\x01(\x0b2\
+    \x14.enginepb.PropertiesB\0\x12\x11\n\x07version\x18\x03\x20\x01(\x04B\0\
+    :\0\"\xe0\x01\n\x08Snapshot\x12\x0f\n\x05start\x18\x01\x20\x01(\x0cB\0\
+    \x12\r\n\x03end\x18\x02\x20\x01(\x0cB\0\x12*\n\nproperties\x18\x03\x20\
+    \x01(\x0b2\x14.enginepb.PropertiesB\0\x12'\n\tl0Creates\x18\x05\x20\x03(\
+    \x0b2\x12.enginepb.L0CreateB\0\x12-\n\x0ctableCreates\x18\x06\x20\x03(\
+    \x0b2\x15.enginepb.TableCreateB\0\x12\x15\n\x0bbaseVersion\x18\x07\x20\
+    \x01(\x04B\0\x12\x17\n\rdata_sequence\x18\x08\x20\x01(\x04B\0:\0\"A\n\
+    \x08L0Create\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x12\n\x08smalle\
+    st\x18\x02\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\x03\x20\x01(\x0cB\0:\
+    \0\"c\n\x0bTableCreate\x12\x0c\n\x02ID\x18\x01\x20\x01(\x04B\0\x12\x0f\n\
+    \x05level\x18\x02\x20\x01(\rB\0\x12\x0c\n\x02CF\x18\x03\x20\x01(\x05B\0\
+    \x12\x12\n\x08smallest\x18\x04\x20\x01(\x0cB\0\x12\x11\n\x07biggest\x18\
+    \x05\x20\x01(\x0cB\0:\0\"D\n\x05Split\x12)\n\tnewShards\x18\x01\x20\x03(\
+    \x0b2\x14.enginepb.PropertiesB\0\x12\x0e\n\x04Keys\x18\x03\x20\x03(\x0cB\
+    \0:\0\"C\n\nProperties\x12\x11\n\x07shardID\x18\x01\x20\x01(\x04B\0\x12\
+    \x0e\n\x04keys\x18\x02\x20\x03(\tB\0\x12\x10\n\x06values\x18\x03\x20\x03\
+    (\x0cB\0:\0B\0b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

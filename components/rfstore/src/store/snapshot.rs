@@ -14,7 +14,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot {
-    pub snap: Arc<SnapAccess>,
+    pub snap: SnapAccess,
     // `None` means the snapshot does not care about max_ts
     pub max_ts_sync_status: Option<Arc<AtomicU64>>,
     pub term: Option<NonZeroU64>,
@@ -27,7 +27,7 @@ impl RegionSnapshot {
         RegionSnapshot::from_snapshot(snap)
     }
 
-    pub fn from_snapshot(snap: Arc<SnapAccess>) -> RegionSnapshot {
+    pub fn from_snapshot(snap: SnapAccess) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             max_ts_sync_status: None,

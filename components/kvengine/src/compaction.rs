@@ -330,7 +330,8 @@ impl Engine {
             }
             return Ok(());
         }
-        let scf = shard.get_cf(pri.cf as usize);
+        let data = shard.get_data();
+        let scf = data.get_cf(pri.cf as usize);
         let this_level = &scf.levels[pri.level - 1];
         let next_level = &scf.levels[pri.level];
         let mut cd = CompactDef::new(pri.cf as usize, pri.level);
@@ -383,15 +384,15 @@ impl Engine {
         &self,
         shard: &Shard,
     ) -> Result<Option<CompactionRequest>> {
-        let l0s = shard.get_l0_tbls();
-        if l0s.tbls.len() == 0 {
+        let data = shard.get_data();
+        if data.l0_tbls.len() == 0 {
             return Ok(None);
         }
         let mut req = self.new_compact_request(shard, -1, 0);
         let mut total_size = 0;
-        let mut smallest = l0s.tbls[0].smallest();
-        let mut biggest = l0s.tbls[0].biggest();
-        for l0 in l0s.tbls.as_ref() {
+        let mut smallest = data.l0_tbls[0].smallest();
+        let mut biggest = data.l0_tbls[0].biggest();
+        for l0 in &data.l0_tbls {
             if smallest > l0.smallest() {
                 smallest = l0.smallest();
             }
@@ -402,9 +403,9 @@ impl Engine {
             total_size += l0.size();
         }
         for cf in 0..NUM_CFS {
-            let lh = &shard.get_cf(cf).levels[0];
+            let lh = data.get_cf(cf).get_level(1);
             let mut bottoms = vec![];
-            for tbl in lh.tables.iter() {
+            for tbl in lh.tables.as_slice() {
                 if tbl.biggest() < smallest || tbl.smallest() > biggest {
                     info!(
                         "skip L1 table {} for L0 compaction, tbl smallest {:?}, tbl biggest {:?}, L0 smallest {:?}, L0 biggest {:?}",

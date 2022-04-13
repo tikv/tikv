@@ -2,47 +2,44 @@
 
 use crate::table::sstable::{SSTable, TableIterator};
 use crate::table::{search, Iterator, Value};
-use crate::{LevelHandler, ShardCF};
+use crate::LevelHandler;
 
 // ConcatIterator concatenates the sequences defined by several iterators.  (It only works with
 // TableIterators, probably just because it's faster to not be so generic.)
 pub(crate) struct ConcatIterator {
     idx: i32,
     iter: Option<Box<TableIterator>>,
-    scf: ShardCF,
-    level_idx: usize,
+    level: LevelHandler,
     reversed: bool,
 }
 
 #[allow(dead_code)]
 impl ConcatIterator {
-    pub(crate) fn new(scf: ShardCF, level: usize, reversed: bool) -> Self {
+    pub(crate) fn new(level: LevelHandler, reversed: bool) -> Self {
         ConcatIterator {
             idx: -1,
             iter: None,
-            scf,
-            level_idx: level - 1,
+            level,
             reversed,
         }
     }
 
     pub(crate) fn new_with_tables(tables: Vec<SSTable>, reversed: bool) -> Self {
-        let scf = ShardCF::new_with_levels(vec![LevelHandler { tables, level: 1 }]);
+        let level = LevelHandler::new(1, tables);
         ConcatIterator {
             idx: -1,
             iter: None,
-            scf,
-            level_idx: 0,
+            level,
             reversed,
         }
     }
 
     fn get_table(&self, idx: usize) -> &SSTable {
-        &self.scf.levels[self.level_idx].tables[idx]
+        &self.level.tables[idx]
     }
 
     fn num_tables(&self) -> usize {
-        self.scf.levels[self.level_idx].tables.len()
+        self.level.tables.len()
     }
 
     fn set_idx(&mut self, idx: i32) {

@@ -4,7 +4,6 @@ use crate::{dfs::InMemFS, *};
 use bytes::Buf;
 use file_system::IORateLimiter;
 use kvenginepb as pb;
-use kvenginepb::ChangeSet;
 use std::path::PathBuf;
 use std::{
     ops::Deref,
@@ -81,11 +80,11 @@ fn test_engine() {
 
 #[derive(Clone)]
 struct TestMetaChangeListener {
-    sender: mpsc::Sender<ChangeSet>,
+    sender: mpsc::Sender<pb::ChangeSet>,
 }
 
 impl MetaChangeListener for TestMetaChangeListener {
-    fn on_change_set(&self, cs: ChangeSet) {
+    fn on_change_set(&self, cs: pb::ChangeSet) {
         println!("on meta change listener");
         info!("on meta change listener");
         self.sender.send(cs).unwrap();

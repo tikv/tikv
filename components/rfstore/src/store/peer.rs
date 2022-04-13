@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::errors::*;
-use crate::store::RegionTask;
 use bitflags::bitflags;
 use collections::{HashMap, HashSet};
 use error_code::ErrorCodeExt;
@@ -441,6 +440,9 @@ pub(crate) struct Peer {
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker,
+
+    pub(crate) scheduled_change_sets: VecDeque<u64>,
+    pub(crate) prepared_change_sets: HashMap<u64, kvengine::ChangeSet>,
 }
 
 impl Peer {
@@ -509,6 +511,8 @@ impl Peer {
             max_ts_sync_status: Arc::new(Default::default()),
             cmd_epoch_checker: Default::default(),
             need_campaign: false,
+            scheduled_change_sets: Default::default(),
+            prepared_change_sets: Default::default(),
         };
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -1379,8 +1383,6 @@ impl Peer {
             );
         }
         if rejected {
-            let task = RegionTask::RejectChangeSet { change: cs };
-            ctx.global.region_scheduler.schedule(task).unwrap();
             return;
         }
         let mut parent_id = 0;
@@ -1394,6 +1396,7 @@ impl Peer {
         );
         ctx.raft_wb
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
+        self.schedule_prepare_change_set(ctx, cs);
     }
 
     pub(crate) fn preprocess_pending_splits(
@@ -1787,7 +1790,21 @@ impl Peer {
         let prev = meta.regions.insert(region.get_id(), region.clone());
         assert_eq!(prev, Some(prev_region));
         drop(meta);
+        self.schedule_prepare_change_set(ctx, apply_result.change_set);
         true
+    }
+
+    fn schedule_prepare_change_set(&mut self, ctx: &mut RaftContext, cs: kvenginepb::ChangeSet) {
+        let kv = ctx.global.engines.kv.clone();
+        let router = ctx.global.router.clone();
+        self.scheduled_change_sets.push_back(cs.sequence);
+        std::thread::spawn(move || {
+            let id = cs.shard_id;
+            let res = kv.prepare_change_set(cs);
+            if let Err(e) = router.send(id, PeerMsg::PrepareChangeSetResult(res)) {
+                error!("failed to send prepare change set result {:?}", e);
+            }
+        });
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {

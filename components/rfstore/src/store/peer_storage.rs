@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use super::keys::raft_state_key;
 use crate::store::{
     get_preprocess_cmd, region_state_key, Engines, RaftApplyState, RaftContext, RaftState,
-    RegionIDVer, RegionTask, KV_ENGINE_META_KEY, TERM_KEY,
+    RegionIDVer, KV_ENGINE_META_KEY, TERM_KEY,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
@@ -65,6 +65,7 @@ pub struct ApplySnapResult {
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
     pub destroyed_regions: Vec<metapb::Region>,
+    pub change_set: kvenginepb::ChangeSet,
 }
 
 #[derive(Default)]
@@ -374,12 +375,13 @@ impl PeerStorage {
             drop(store_meta);
             if !pending_split && !replaced_by_split {
                 let prev_region = self.region().clone();
-                self.apply_snapshot(ready.snapshot(), ctx).unwrap();
+                let change_set = self.apply_snapshot(ready.snapshot(), ctx).unwrap();
                 let region = self.region.clone();
                 res = Some(ApplySnapResult {
                     prev_region,
                     region,
                     destroyed_regions: vec![],
+                    change_set,
                 })
             }
         }
@@ -447,7 +449,11 @@ impl PeerStorage {
             .set_state(self.get_region_id(), &key, &self.raft_state.marshal());
     }
 
-    fn apply_snapshot(&mut self, snap: &eraftpb::Snapshot, ctx: &mut RaftContext) -> Result<()> {
+    fn apply_snapshot(
+        &mut self,
+        snap: &eraftpb::Snapshot,
+        ctx: &mut RaftContext,
+    ) -> Result<kvenginepb::ChangeSet> {
         info!("peer storage begin to apply snapshot"; "region" => self.tag());
         let (region, change_set) = decode_snap_data(snap.get_data())?;
         if region.get_id() != self.get_region_id() {
@@ -475,11 +481,8 @@ impl PeerStorage {
         );
         self.shard_meta = Some(kvengine::ShardMeta::new(&change_set));
         self.region = region;
-
-        let snap_task = RegionTask::ApplyChangeSet { change: change_set };
-        ctx.global.region_scheduler.schedule(snap_task).unwrap();
         self.snap_state = SnapState::Applying;
-        Ok(())
+        Ok(change_set)
     }
 
     fn append(&mut self, entries: Vec<eraftpb::Entry>, raft_wb: &mut rfengine::WriteBatch) {

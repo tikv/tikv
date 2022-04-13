@@ -9,7 +9,6 @@ use crate::store::{
     raft_state_key, region_state_key, Engines, EMPTY_KEY, KV_ENGINE_META_KEY, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM, STORE_IDENT_KEY, TERM_KEY,
 };
-use kvenginepb::{ChangeSet, Snapshot};
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use protobuf::{Message, RepeatedField};
@@ -75,29 +74,26 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let region_state_key = region_state_key(epoch.get_version(), epoch.get_conf_ver());
     raft_wb.set_state(region.get_id(), region_state_key.chunk(), val.as_slice());
     write_initial_raft_state(&mut raft_wb, region.get_id())?;
-    let ingest_tree = initial_ingest_tree(region.get_id(), epoch.get_version());
-    let cs_bin = ingest_tree.change_set.write_to_bytes().unwrap();
+    let change_set = initial_change_set(region.get_id(), epoch.get_version());
+    let cs_bin = change_set.write_to_bytes().unwrap();
     raft_wb.set_state(region.get_id(), KV_ENGINE_META_KEY, &cs_bin);
     engines.raft.write(raft_wb)?;
-    engines.kv.ingest(ingest_tree)?;
+    engines.kv.ingest(change_set, true)?;
     Ok(())
 }
 
-fn initial_ingest_tree(region_id: u64, shard_ver: u64) -> kvengine::IngestTree {
-    let mut change_set = ChangeSet::default();
+fn initial_change_set(region_id: u64, shard_ver: u64) -> kvengine::ChangeSet {
+    let mut change_set = kvenginepb::ChangeSet::default();
     change_set.set_shard_id(region_id);
     change_set.set_shard_ver(shard_ver);
     change_set.set_sequence(RAFT_INIT_LOG_INDEX);
-    let mut snap = Snapshot::default();
+    let mut snap = kvenginepb::Snapshot::default();
     snap.set_end(kvengine::GLOBAL_SHARD_END_KEY.to_vec());
     snap.set_data_sequence(RAFT_INIT_LOG_INDEX);
     let props = new_initial_properties(region_id);
     snap.set_properties(props);
     change_set.set_snapshot(snap);
-    kvengine::IngestTree {
-        change_set,
-        active: true,
-    }
+    kvengine::ChangeSet::new(change_set)
 }
 
 fn new_initial_properties(shard_id: u64) -> kvenginepb::Properties {

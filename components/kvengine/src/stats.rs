@@ -138,18 +138,17 @@ pub struct LevelStats {
 impl super::Shard {
     pub fn get_stats(&self) -> ShardStats {
         let mut total_size = 0;
-        let shard_mem_tbls = self.get_mem_tbls();
-        let mem_table_count = shard_mem_tbls.tbls.len();
+        let data = self.get_data();
+        let mem_table_count = data.mem_tbls.len();
         let mut mem_table_size = 0;
-        for mem_tbl in shard_mem_tbls.tbls.as_ref() {
+        for mem_tbl in data.mem_tbls.as_slice() {
             mem_table_size += mem_tbl.size() as u64;
         }
         total_size += mem_table_size;
         let mut partial_l0s = 0;
-        let shard_l0_tbls = self.get_l0_tbls();
-        let l0_table_count = shard_l0_tbls.tbls.len();
+        let l0_table_count = data.l0_tbls.len();
         let mut l0_table_size = 0;
-        for l0_tbl in shard_l0_tbls.tbls.as_ref() {
+        for l0_tbl in data.l0_tbls.as_slice() {
             if self.cover_full_table(l0_tbl.smallest(), l0_tbl.biggest()) {
                 l0_table_size += l0_tbl.size();
             } else {
@@ -161,14 +160,14 @@ impl super::Shard {
         let mut partial_tbls = 0;
         let mut cfs = vec![];
         for cf in 0..NUM_CFS {
-            let scf = self.get_cf(cf);
+            let scf = data.get_cf(cf);
             let mut cf_stat = CFStats { levels: vec![] };
-            for l in scf.levels.as_ref() {
+            for l in scf.levels.as_slice() {
                 let mut level_stats = LevelStats::default();
                 level_stats.level = l.level;
                 level_stats.num_tables = l.tables.len();
-                for t in &l.tables {
-                    if self.cover_full_table(t.smallest(), t.biggest()) {
+                for t in l.tables.as_slice() {
+                    if data.cover_full_table(t.smallest(), t.biggest()) {
                         level_stats.data_size += t.size();
                     } else {
                         level_stats.data_size += t.size() / 2;

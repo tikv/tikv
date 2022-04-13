@@ -3,16 +3,15 @@
 use crate::storage::mvcc::{Result, TxnCommitRecord};
 use bytes::Bytes;
 use rfstore::{UserMeta, EXTRA_CF, LOCK_CF, WRITE_CF};
-use std::sync::Arc;
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteType};
 
 pub struct CloudReader {
-    snapshot: Arc<kvengine::SnapAccess>,
+    snapshot: kvengine::SnapAccess,
     pub statistics: tikv_kv::Statistics,
 }
 
 impl CloudReader {
-    pub fn new(snapshot: Arc<kvengine::SnapAccess>) -> Self {
+    pub fn new(snapshot: kvengine::SnapAccess) -> Self {
         Self {
             snapshot,
             statistics: tikv_kv::Statistics::default(),

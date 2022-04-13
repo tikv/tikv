@@ -6,7 +6,6 @@ use std::fmt;
 use std::fmt::Debug;
 
 use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot};
-use kvenginepb::ChangeSet;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
@@ -29,7 +28,8 @@ pub enum PeerMsg {
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
-    ApplyChangeSetResult(MsgApplyChangeSetResult),
+    ApplyChangeSetResult(kvengine::Result<kvenginepb::ChangeSet>),
+    PrepareChangeSetResult(kvengine::Result<kvengine::ChangeSet>),
     Persisted(PersistReady),
 }
 
@@ -66,7 +66,8 @@ impl PeerMsg {
 pub(crate) enum ApplyMsg {
     Apply(MsgApply),
     Registration(MsgRegistration),
-    PendingSplit(ChangeSet),
+    PendingSplit(kvenginepb::ChangeSet),
+    ApplyChangeSet(kvengine::ChangeSet),
     UnsafeDestroy { region_id: u64 },
 }
 
@@ -143,11 +144,6 @@ impl MsgRegistration {
             region: peer.get_store().region().clone(),
         }
     }
-}
-
-#[derive(Debug)]
-pub struct MsgApplyChangeSetResult {
-    pub result: std::result::Result<kvenginepb::ChangeSet, String>,
 }
 
 #[derive(Debug)]

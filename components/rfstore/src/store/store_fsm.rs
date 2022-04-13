@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::config::VersionTrack;
 use tikv_util::mpsc::Receiver;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
+use tikv_util::worker::{LazyWorker, Scheduler};
 use tikv_util::{box_err, debug, error, info, warn, RingQueue};
 use time::Timespec;
 
@@ -34,8 +34,6 @@ const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 struct Workers {
     pd_worker: LazyWorker<PdTask>,
-    region_worker: Worker,
-    region_apply_worker: Worker,
     coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 
@@ -93,21 +91,8 @@ impl RaftBatchSystem {
 
         let mut workers = Workers {
             pd_worker,
-            region_worker: Worker::new("region-worker"),
-            region_apply_worker: Worker::new("region-apply-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
-
-        let region_apply_runner = RegionApplyRunner::new(engines.kv.clone(), self.router());
-        let region_apply_scheduler = workers
-            .region_apply_worker
-            .start("region-apply-worker", region_apply_runner);
-
-        let region_runner =
-            RegionRunner::new(engines.kv.clone(), self.router(), region_apply_scheduler);
-        let region_scheduler = workers
-            .region_worker
-            .start("snapshot-worker", region_runner);
         let pd_scheduler = workers.pd_worker.scheduler();
         let ctx = GlobalContext {
             cfg,
@@ -117,7 +102,6 @@ impl RaftBatchSystem {
             router: self.router.clone(),
             trans,
             pd_scheduler,
-            region_scheduler,
             coprocessor_host,
         };
 
@@ -190,7 +174,6 @@ impl RaftBatchSystem {
             let props = tikv_util::thread_group::current_properties();
             let mut aw = ApplyWorker::new(
                 self.ctx.as_ref().unwrap().engines.kv.clone(),
-                self.ctx.as_ref().unwrap().region_scheduler.clone(),
                 self.router.clone(),
                 apply_receiver,
             );
@@ -231,8 +214,6 @@ impl RaftBatchSystem {
         workers.pd_worker.stop();
         fail_point!("after_shutdown_apply");
         workers.coprocessor_host.shutdown();
-        workers.region_worker.stop();
-        workers.region_apply_worker.stop();
     }
 
     /// load_peers loads peers in this store. It scans the kv engine, loads all regions
@@ -392,7 +373,6 @@ pub(crate) struct GlobalContext {
     pub(crate) router: RaftRouter,
     pub(crate) trans: Box<dyn Transport>,
     pub(crate) pd_scheduler: Scheduler<PdTask>,
-    pub(crate) region_scheduler: Scheduler<RegionTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
 }
 

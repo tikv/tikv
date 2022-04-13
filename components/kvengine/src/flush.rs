@@ -6,7 +6,6 @@ use crate::table::{memtable, sstable};
 use crate::*;
 use bytes::BytesMut;
 use kvenginepb as pb;
-use kvenginepb::L0Create;
 use slog_global::info;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -209,7 +208,7 @@ impl Engine {
     pub(crate) fn persist_l0_table(
         &self,
         mut l0_builder: L0Builder,
-        tx: tikv_util::mpsc::Sender<Result<L0Create>>,
+        tx: tikv_util::mpsc::Sender<Result<pb::L0Create>>,
         shard_id: u64,
         shard_ver: u64,
     ) {

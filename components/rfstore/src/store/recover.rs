@@ -111,7 +111,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
             "recover region:{}, ver:{} from index {}",
             shard.id, shard.ver, applied_index
         );
-        let mut ctx = ApplyContext::new(engine.clone(), None, None);
+        let mut ctx = ApplyContext::new(engine.clone(), None);
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
         let (region_meta, commit_idx) = self.load_region_meta(shard.id, shard.ver)?;
@@ -122,7 +122,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
             .fetch_entries_to(shard.id, low_idx, high_idx, None, &mut entries)
             .map_err(|e| kvengine::Error::ErrOpen("entries unavailable.".to_string()))?;
 
-        let snap = Arc::new(kvengine::SnapAccess::new(shard));
+        let snap = shard.new_snap_access();
         let mut applier = Applier::new_for_recover(self.store_id, region_meta, snap, apply_state);
 
         for e in &entries {
@@ -149,7 +149,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
                         cs.sequence = e.get_index();
                         if !meta.is_duplicated_change_set(&mut cs) {
                             // We don't have a background region worker now, should do it synchronously.
-                            engine.pre_load_files(&cs)?;
+                            let cs = engine.prepare_change_set(cs)?;
                             engine.apply_change_set(cs)?;
                         }
                     } else {

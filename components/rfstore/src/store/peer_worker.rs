@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
 use tikv_util::time::{duration_to_sec, InstantExt};
-use tikv_util::worker::Scheduler;
 use tikv_util::{debug, error};
 
 #[derive(Clone)]
@@ -247,11 +246,10 @@ pub(crate) struct ApplyWorker {
 impl ApplyWorker {
     pub(crate) fn new(
         engine: kvengine::Engine,
-        region_sched: Scheduler<RegionTask>,
         router: RaftRouter,
         receiver: Receiver<ApplyBatch>,
     ) -> Self {
-        let ctx = ApplyContext::new(engine, Some(region_sched), Some(router));
+        let ctx = ApplyContext::new(engine, Some(router));
         Self { ctx, receiver }
     }
 

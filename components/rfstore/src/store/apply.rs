@@ -6,8 +6,8 @@ use crate::store::cmd_resp::{bind_term, err_resp};
 use crate::{mvcc, RaftRouter, UserMeta};
 use bytes::Buf;
 use fail::fail_point;
+use kvengine::ChangeSet;
 use kvengine::SnapAccess;
-use kvenginepb::ChangeSet;
 use kvproto::metapb;
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::raft_cmdpb::{
@@ -30,7 +30,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::vec::Drain;
 use tikv_util::time::Instant;
-use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, error, info, warn};
 use time::Timespec;
 use txn_types::LockType;
@@ -198,11 +197,11 @@ pub(crate) struct Applier {
 
     pub(crate) lock_cache: HashMap<Vec<u8>, Vec<u8>>,
 
-    pub(crate) snap: Option<Arc<SnapAccess>>,
+    pub(crate) snap: Option<SnapAccess>,
 
     pub(crate) metrics: ApplyMetrics,
 
-    pub(crate) pending_split: Option<ChangeSet>,
+    pub(crate) pending_split: Option<kvenginepb::ChangeSet>,
 }
 
 impl Applier {
@@ -237,7 +236,7 @@ impl Applier {
     pub(crate) fn new_for_recover(
         store_id: u64,
         region: metapb::Region,
-        snap: Arc<SnapAccess>,
+        snap: SnapAccess,
         apply_state: RaftApplyState,
     ) -> Self {
         let peer_idx = get_peer_idx_by_store_id(&region, store_id);
@@ -340,16 +339,18 @@ impl Applier {
         }
         // TODO: investigate why there is duplicated commit.
         let item = snap.get(mvcc::WRITE_CF, key, u64::MAX);
-        assert!(
-            item.user_meta_len() > 0,
-            "key {:?}, {}:{} snap_ver:{}, snap_write_sequence: {}, log_index:{}",
-            key,
-            region_id,
-            self.region.get_region_epoch().version,
-            snap.get_version(),
-            snap.get_write_sequence(),
-            log_index,
-        );
+        if item.user_meta_len() == 0 {
+            panic!(
+                "failed to get lock for key {:?}, {}:{} snap_ver:{}, snap_write_sequence: {}, snap_files: {:?}, log_index:{}",
+                key,
+                region_id,
+                self.region.get_region_epoch().version,
+                snap.get_version(),
+                snap.get_write_sequence(),
+                snap.get_all_files(),
+                log_index,
+            );
+        }
         let user_meta = mvcc::UserMeta::from_slice(item.user_meta());
         assert_eq!(user_meta.commit_ts, commit_ts);
         warn!(
@@ -475,15 +476,7 @@ impl Applier {
                 });
             }
             TYPE_ENGINE_META => {
-                let mut cs = cl.get_change_set().unwrap();
-                // Assign the raft log's index as the sequence number of the ChangeSet to ensure monotonic increase.
-                cs.sequence = ctx.exec_log_index;
-                let task = RegionTask::ApplyChangeSet { change: cs };
-                ctx.region_scheduler
-                    .as_ref()
-                    .unwrap()
-                    .schedule(task)
-                    .unwrap();
+                // Already handled by raft store thread.
             }
             TYPE_NEX_MEM_TABLE_SIZE => {
                 let mut cs = cl.get_change_set().unwrap();
@@ -1241,6 +1234,19 @@ impl Applier {
         }
     }
 
+    fn handle_apply_change_set(&mut self, ctx: &mut ApplyContext, cs: ChangeSet) {
+        let cs_pb = cs.change_set.clone();
+        let result = if cs.has_snapshot() {
+            ctx.engine.ingest(cs, false).map(|()| cs_pb)
+        } else {
+            ctx.engine.apply_change_set(cs).map(|()| cs_pb)
+        };
+        let router = ctx.router.as_ref().unwrap();
+        if let Err(e) = router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result)) {
+            error!("failed to send apply change set result {:?}", e);
+        }
+    }
+
     fn clear_all_commands_as_stale(&mut self) {
         for cmd in self.pending_cmds.normals.drain(..) {
             notify_stale_req(self.term, cmd.cb);
@@ -1303,6 +1309,9 @@ impl Applier {
             }
             ApplyMsg::PendingSplit(pending_split) => {
                 self.pending_split = Some(pending_split);
+            }
+            ApplyMsg::ApplyChangeSet(cs) => {
+                self.handle_apply_change_set(ctx, cs);
             }
         }
     }
@@ -1436,8 +1445,7 @@ pub(crate) const TERM_KEY: &'static str = "term";
 
 pub(crate) struct ApplyContext {
     pub(crate) engine: kvengine::Engine,
-    pub(crate) region_scheduler: Option<Scheduler<RegionTask>>, // None in recover mode.
-    pub(crate) router: Option<RaftRouter>,                      // None in recover mode.
+    pub(crate) router: Option<RaftRouter>, // None in recover mode.
     pub(crate) apply_task_res_list: Vec<ApplyResult>,
     pub(crate) exec_log_index: u64,
     pub(crate) exec_log_term: u64,
@@ -1447,14 +1455,9 @@ pub(crate) struct ApplyContext {
 }
 
 impl ApplyContext {
-    pub fn new(
-        engine: kvengine::Engine,
-        region_scheduler: Option<Scheduler<RegionTask>>,
-        router: Option<RaftRouter>,
-    ) -> Self {
+    pub fn new(engine: kvengine::Engine, router: Option<RaftRouter>) -> Self {
         Self {
             engine,
-            region_scheduler,
             router,
             apply_task_res_list: Default::default(),
             exec_log_index: Default::default(),

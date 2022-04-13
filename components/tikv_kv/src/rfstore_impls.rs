@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{CfName, IterOptions, ReadOptions};
-use std::sync::Arc;
 
 use crate::{
     self as kv, Error, ErrorInner,
@@ -57,7 +56,7 @@ impl Snapshot for rfstore::store::RegionSnapshot {
         DummySnapshotExt
     }
 
-    fn get_kvengine_snap(&self) -> Option<&Arc<SnapAccess>> {
+    fn get_kvengine_snap(&self) -> Option<&SnapAccess> {
         Some(&self.snap)
     }
 }

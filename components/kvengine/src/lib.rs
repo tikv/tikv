@@ -8,9 +8,9 @@ pub mod engine;
 pub mod engine_trait;
 mod error;
 pub mod flush;
-pub mod ingest;
 pub mod meta;
 pub mod options;
+pub mod prepare;
 pub mod read;
 pub mod remote;
 pub mod shard;
@@ -29,14 +29,15 @@ mod metrics;
 #[cfg(test)]
 mod tests;
 
+pub use apply::*;
 pub use compaction::*;
 use concat_iterator::ConcatIterator;
 pub use engine::*;
 pub use error::*;
 use flush::*;
-pub use ingest::*;
 pub use meta::*;
 pub use options::*;
+pub use prepare::*;
 pub use read::*;
 pub use shard::*;
 pub use split::*;

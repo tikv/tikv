@@ -97,13 +97,24 @@ impl WriteBatch {
 
 impl Engine {
     pub(crate) fn switch_mem_table(&self, shard: &Shard, version: u64) {
-        let mem_table = shard.get_writable_mem_table();
+        let data = shard.get_data();
+        let mem_table = data.get_writable_mem_table();
         if mem_table.is_empty() {
             return;
         }
-        let new_tbl = memtable::CFTable::new();
-        shard.atomic_add_mem_table(new_tbl);
         mem_table.set_version(version);
+        let new_tbl = memtable::CFTable::new();
+        let mut new_mem_tbls = Vec::with_capacity(data.mem_tbls.len() + 1);
+        new_mem_tbls.push(new_tbl);
+        new_mem_tbls.extend_from_slice(data.mem_tbls.as_slice());
+        let new_data = ShardData::new(
+            shard.start.clone(),
+            shard.end.clone(),
+            new_mem_tbls,
+            data.l0_tbls.clone(),
+            data.cfs.clone(),
+        );
+        shard.set_data(new_data);
         info!(
             "shard {}:{} set mem-table version {}, size {}",
             shard.id,
@@ -127,10 +138,11 @@ impl Engine {
 
     pub fn write(&self, wb: &mut WriteBatch) {
         let shard = self.get_shard(wb.shard_id).unwrap();
-        let snap = self.get_snap_access(wb.shard_id).unwrap();
+        let snap = shard.new_snap_access();
         let version = shard.base_version + wb.sequence;
         self.update_write_batch_version(wb, version);
-        let mem_tbl = shard.get_writable_mem_table();
+        let data = shard.get_data();
+        let mem_tbl = data.get_writable_mem_table();
         for cf in 0..NUM_CFS {
             mem_tbl.get_cf(cf).put_batch(wb.get_cf_mut(cf), &snap, cf);
         }

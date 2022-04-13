@@ -184,9 +184,6 @@ impl ShardMeta {
 
     fn apply_flush(&mut self, cs: &pb::ChangeSet) {
         let flush = cs.get_flush();
-        if flush.is_initial_flush {
-            self.parent = None;
-        }
         let props = flush.get_properties();
         for i in 0..props.get_keys().len() {
             let key = &props.get_keys()[i];

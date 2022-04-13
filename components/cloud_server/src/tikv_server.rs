@@ -58,7 +58,7 @@ use tikv::{
         config::Config as ServerConfig, lock_manager::LockManager, CPU_CORES_QUOTA_GAUGE,
         DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, mvcc::MvccConsistencyCheckObserver, Engine},
+    storage::{self, mvcc::MvccConsistencyCheckObserver},
 };
 use tikv_util::{
     check_environment_variables,

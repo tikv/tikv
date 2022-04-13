@@ -8,13 +8,12 @@ use kvengine::Item;
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops;
-use std::sync::Arc;
 use tikv_kv::{Snapshot, Statistics};
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value};
 
 pub struct CloudStore<S: Snapshot> {
     marker: PhantomData<S>,
-    snapshot: Arc<kvengine::SnapAccess>,
+    snapshot: kvengine::SnapAccess,
     start_ts: u64,
     bypass_locks: TsSet,
     stats: Statistics,
