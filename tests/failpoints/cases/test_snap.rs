@@ -329,6 +329,58 @@ fn test_destroy_peer_on_pending_snapshot_and_restart() {
     must_get_equal(&cluster.get_engine(3), b"k120", b"v1");
 }
 
+// This test is to repro the issue #11618.
+// Basically it aborts a snapshot and wait for an election done. (without fix, raft will panic)
+// The test step is make peer 3 partitioned with rest.
+// And then recover from partition and the leader will try to send a snapshot to peer3.
+// Abort the snapshot and then wait for a election happening, we expect raft will panic
+#[test]
+fn test_abort_snapshot_and_wait_election() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 25; // > lease 240ms
+    cluster.cfg.raft_store.hibernate_regions = false;
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 1003));
+
+    cluster.must_put(b"k1", b"v1");
+    let region = cluster.get_region(b"k1");
+    // Ensure peer 3 is initialized.
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let apply_snapshot_fp = "region_apply_snap_abort";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 0..20 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+    // Wait for leader send snapshot.
+    let (sx, rx) = mpsc::sync_channel::<bool>(10);
+    let recv_snapshot_filter = RegionPacketFilter::new(region.get_id(), 3)
+        .direction(Direction::Recv)
+        .msg_type(MessageType::MsgSnapshot)
+        .allow(1)
+        .set_msg_callback(Arc::new(move |_| {
+            sx.send(true).unwrap();
+        }));
+    cluster.add_recv_filter(CloneFilterFactory(recv_snapshot_filter));
+
+    cluster.clear_send_filters(); // allow snapshot to sent over to peer 3
+    rx.recv().unwrap(); // got the snapshot message
+    cluster.add_send_filter(IsolationFilterFactory::new(3)); // partition the peer 3 again
+    sleep_ms(500); // wait for election happen and expect raft will panic
+    cluster.clear_send_filters();
+    cluster.clear_recv_filters();
+}
+
 #[test]
 fn test_shutdown_when_snap_gc() {
     let mut cluster = new_node_cluster(0, 2);
