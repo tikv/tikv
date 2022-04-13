@@ -12,8 +12,8 @@ use std::vec::IntoIter;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -32,7 +32,7 @@ use txn_types::{Key, TimeStamp};
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
 use crate::storage::mvcc::{GcInfo, MvccReader, MvccTxn};
-use crate::storage::txn::Error as TxnError;
+use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::compaction_filter::{
@@ -358,7 +358,7 @@ where
                 .last()
                 .unwrap()
                 .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
+                .map_err(|e| TxnError::from(TxnErrorInner::Codec(e)))?;
             k.push(0);
             Key::from_raw(&k).into_encoded()
         };
