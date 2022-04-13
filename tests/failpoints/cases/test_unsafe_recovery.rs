@@ -1,28 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::iter::FromIterator;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::config::ReadableDuration;
-
-fn set_to_true_and_notify(cvar_pair: Arc<(Mutex<bool>, Condvar)>) {
-    let (lock, cvar) = &*cvar_pair;
-    let mut val = lock.lock().unwrap();
-    *val = true;
-    cvar.notify_all();
-}
-
-fn wait_until_true(cvar_pair: Arc<(Mutex<bool>, Condvar)>) {
-    let (lock, cvar) = &*cvar_pair;
-    let mut val = lock.lock().unwrap();
-    while !*val {
-        val = cvar.wait(val).unwrap();
-    }
-}
+use tikv_util::{config::ReadableDuration, mpsc};
 
 #[allow(clippy::mutex_atomic)]
 #[test]
@@ -43,19 +29,19 @@ fn test_unsafe_recover_send_report() {
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
     // Blocks the raft apply process on store 1 entirely .
-    let apply_triggered_pair = Arc::new((Mutex::new(false), Condvar::new()));
-    let apply_triggered_pair2 = Arc::clone(&apply_triggered_pair);
-    let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
-    let apply_released_pair2 = Arc::clone(&apply_released_pair);
+    let (apply_triggered_tx, apply_triggered_rx) = mpsc::bounded::<()>(1);
+    let (apply_released_tx, apply_released_rx) = mpsc::bounded::<()>(1);
     fail::cfg_callback("on_handle_apply_store_1", move || {
-        set_to_true_and_notify(apply_triggered_pair2.clone());
-        wait_until_true(apply_released_pair2.clone());
+        let _ = apply_triggered_tx.send(());
+        let _ = apply_released_rx.recv();
     })
     .unwrap();
 
     // Mannually makes an update, and wait for the apply to be triggered, to simulate "some entries are commited but not applied" scenario.
     cluster.put(b"random_key2", b"random_val2").unwrap();
-    wait_until_true(apply_triggered_pair);
+    apply_triggered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
 
     // Makes the group lose its quorum.
     cluster.stop_node(nodes[1]);
@@ -72,7 +58,7 @@ fn test_unsafe_recover_send_report() {
     }
 
     // Unblocks the apply process.
-    set_to_true_and_notify(apply_released_pair);
+    drop(apply_released_tx);
 
     // Store reports are sent once the entries are applied.
     let mut reported = false;
@@ -115,19 +101,19 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     cluster.stop_node(nodes[2]);
 
     // Blocks the raft snap apply process.
-    let apply_triggered_pair = Arc::new((Mutex::new(false), Condvar::new()));
-    let apply_triggered_pair2 = Arc::clone(&apply_triggered_pair);
-    let apply_released_pair = Arc::new((Mutex::new(false), Condvar::new()));
-    let apply_released_pair2 = Arc::clone(&apply_released_pair);
+    let (apply_triggered_tx, apply_triggered_rx) = mpsc::bounded::<()>(1);
+    let (apply_released_tx, apply_released_rx) = mpsc::bounded::<()>(1);
     fail::cfg_callback("region_apply_snap", move || {
-        set_to_true_and_notify(apply_triggered_pair2.clone());
-        wait_until_true(apply_released_pair2.clone());
+        let _ = apply_triggered_tx.send(());
+        let _ = apply_released_rx.recv();
     })
     .unwrap();
 
     cluster.run_node(nodes[1]).unwrap();
 
-    wait_until_true(apply_triggered_pair);
+    apply_triggered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
 
     // Triggers the unsafe recovery store reporting process.
     pd_client.must_set_require_report(true);
@@ -140,7 +126,7 @@ fn test_unsafe_recover_wait_for_snapshot_apply() {
     }
 
     // Unblocks the snap apply process.
-    set_to_true_and_notify(apply_released_pair);
+    drop(apply_released_tx);
 
     // Store reports are sent once the entries are applied.
     let mut reported = false;
