@@ -168,6 +168,39 @@ fn delete_kv(wb: &mut Option<<KvTestEngine as WriteBatchExt>::WriteBatch>, key: 
     wb.as_mut().unwrap().delete(key).unwrap();
 }
 
+/// Simulate kv puts on raft engine.
+fn put_raft_kv(wb: &mut Option<<RaftTestEngine as RaftEngine>::LogBatch>, key: u64) {
+    wb.as_mut()
+        .unwrap()
+        .append(key, vec![new_entry(key, key)])
+        .unwrap();
+}
+
+fn delete_raft_kv(
+    engine: &RaftTestEngine,
+    wb: &mut Option<<RaftTestEngine as RaftEngine>::LogBatch>,
+    key: u64,
+) {
+    engine
+        .clean(
+            key,
+            key,
+            &new_raft_state(key, key, key, key),
+            wb.as_mut().unwrap(),
+        )
+        .unwrap();
+}
+
+/// Returns whether the key exists.
+fn test_raft_kv(engine: &RaftTestEngine, key: u64) -> bool {
+    if let Some(entry) = engine.get_entry(key, key).unwrap() {
+        assert_eq!(entry, new_entry(key, key));
+        true
+    } else {
+        false
+    }
+}
+
 struct TestWorker {
     worker: Worker<KvTestEngine, RaftTestEngine, TestNotifier, TestTransport>,
     msg_rx: Receiver<RaftMessage>,
@@ -233,13 +266,17 @@ impl TestWriters {
 
 #[test]
 fn test_worker() {
+    let region_1 = 1;
+    let region_2 = 2;
+
     let path = Builder::new().prefix("async-io-worker").tempdir().unwrap();
     let engines = new_temp_engine(&path);
     let mut t = TestWorker::new(&Config::default(), &engines);
 
-    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
+    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
     init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
+    put_raft_kv(&mut task_1.raft_wb, 17);
     task_1.entries.append(&mut vec![
         new_entry(5, 5),
         new_entry(6, 5),
@@ -251,9 +288,10 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_1);
 
-    let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 15);
+    let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
     init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
+    put_raft_kv(&mut task_2.raft_wb, 27);
     task_2
         .entries
         .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
@@ -264,9 +302,11 @@ fn test_worker() {
 
     t.worker.batch.add_write_task(task_2);
 
-    let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 11);
+    let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
     init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
+    put_raft_kv(&mut task_3.raft_wb, 37);
+    delete_raft_kv(&engines.raft, &mut task_3.raft_wb, 17);
     task_3
         .entries
         .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
@@ -285,18 +325,22 @@ fn test_worker() {
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
 
-    must_have_same_notifies(vec![(1, (1, 11)), (2, (2, 15))], &t.notify_rx);
+    must_have_same_notifies(vec![(region_1, (1, 11)), (region_2, (2, 15))], &t.notify_rx);
+
+    assert_eq!(test_raft_kv(&engines.raft, 17), false);
+    assert_eq!(test_raft_kv(&engines.raft, 27), true);
+    assert_eq!(test_raft_kv(&engines.raft, 37), true);
 
     must_have_entries_and_state(
         &engines.raft,
         vec![
             (
-                1,
+                region_1,
                 vec![new_entry(5, 5), new_entry(6, 6), new_entry(7, 7)],
                 new_raft_state(7, 124, 6, 7),
             ),
             (
-                2,
+                region_2,
                 vec![new_entry(20, 15), new_entry(21, 15)],
                 new_raft_state(15, 234, 20, 21),
             ),
@@ -308,15 +352,19 @@ fn test_worker() {
 
 #[test]
 fn test_basic_flow() {
+    let region_1 = 1;
+    let region_2 = 2;
+
     let path = Builder::new().prefix("async-io-basic").tempdir().unwrap();
     let engines = new_temp_engine(&path);
     let mut cfg = Config::default();
     cfg.store_io_pool_size = 2;
     let mut t = TestWriters::new(&cfg, &engines);
 
-    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 10);
+    let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
     init_write_batch(&engines, &mut task_1);
     put_kv(&mut task_1.kv_wb, b"kv_k1", b"kv_v1");
+    put_raft_kv(&mut task_1.raft_wb, 17);
     task_1
         .entries
         .append(&mut vec![new_entry(5, 5), new_entry(6, 5), new_entry(7, 5)]);
@@ -330,6 +378,7 @@ fn test_basic_flow() {
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
     init_write_batch(&engines, &mut task_2);
     put_kv(&mut task_2.kv_wb, b"kv_k2", b"kv_v2");
+    put_raft_kv(&mut task_2.raft_wb, 27);
     task_2
         .entries
         .append(&mut vec![new_entry(50, 12), new_entry(51, 13)]);
@@ -340,10 +389,12 @@ fn test_basic_flow() {
 
     t.write_sender(1).send(WriteMsg::WriteTask(task_2)).unwrap();
 
-    let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(1, 1, 15);
+    let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
     init_write_batch(&engines, &mut task_3);
     put_kv(&mut task_3.kv_wb, b"kv_k3", b"kv_v3");
     delete_kv(&mut task_3.kv_wb, b"kv_k1");
+    put_raft_kv(&mut task_3.raft_wb, 37);
+    delete_raft_kv(&engines.raft, &mut task_3.raft_wb, 17);
     task_3.entries.append(&mut vec![new_entry(6, 6)]);
     task_3.cut_logs = Some((7, 8));
     task_3.raft_state = Some(new_raft_state(6, 345, 6, 6));
@@ -353,23 +404,27 @@ fn test_basic_flow() {
 
     t.write_sender(0).send(WriteMsg::WriteTask(task_3)).unwrap();
 
-    must_wait_same_notifies(vec![(1, (1, 15)), (2, (2, 20))], &t.notify_rx);
+    must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 
     let snapshot = engines.kv.snapshot();
     assert!(snapshot.get_value(b"kv_k1").unwrap().is_none());
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
 
+    assert_eq!(test_raft_kv(&engines.raft, 17), false);
+    assert_eq!(test_raft_kv(&engines.raft, 27), true);
+    assert_eq!(test_raft_kv(&engines.raft, 37), true);
+
     must_have_entries_and_state(
         &engines.raft,
         vec![
             (
-                1,
+                region_1,
                 vec![new_entry(5, 5), new_entry(6, 6)],
                 new_raft_state(6, 345, 6, 6),
             ),
             (
-                2,
+                region_2,
                 vec![new_entry(50, 12), new_entry(51, 13)],
                 new_raft_state(13, 567, 49, 51),
             ),

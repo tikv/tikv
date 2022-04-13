@@ -2866,6 +2866,14 @@ mod tests {
                 vec![new_entry(4, 6), new_entry(5, 6)],
                 vec![new_entry(4, 6), new_entry(5, 6)],
             ),
+            (
+                vec![new_entry(4, 6), new_entry(5, 6)],
+                vec![new_entry(4, 6), new_entry(5, 6)],
+            ),
+            (
+                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+                vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
+            ),
             // truncate the existing entries and append
             (vec![new_entry(4, 5)], vec![new_entry(4, 5)]),
             // direct append
@@ -3316,7 +3324,6 @@ mod tests {
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
         engines.raft.append(1, entries).unwrap();
-        raft_state.mut_hard_state().set_commit(12);
         engines.raft.put_raft_state(1, &raft_state).unwrap();
         s = build_storage().unwrap();
         let initial_state = s.initial_state().unwrap();
