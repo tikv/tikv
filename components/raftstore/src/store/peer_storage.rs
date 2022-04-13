@@ -2867,10 +2867,6 @@ mod tests {
                 vec![new_entry(4, 6), new_entry(5, 6)],
             ),
             (
-                vec![new_entry(4, 6), new_entry(5, 6)],
-                vec![new_entry(4, 6), new_entry(5, 6)],
-            ),
-            (
                 vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
                 vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 5)],
             ),
