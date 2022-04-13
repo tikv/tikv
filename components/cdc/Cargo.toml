@@ -104,5 +104,6 @@ required-features = ["failpoints"]
 
 [[bench]]
 name = "cdc_event"
+path = "benches/cdc_event.rs"
 harness = false
 required-features = ["protobuf-codec"]

@@ -4,6 +4,7 @@ use procfs::process::{MountInfo, Process};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::mem::MaybeUninit;
+use std::num::IntErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 // ## Differences between cgroup v1 and v2:
@@ -180,9 +181,8 @@ fn parse_mountinfos_v1(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
         for controller in CONTROLLERS {
             if cg_info.super_options.contains_key(*controller) {
                 let key = controller.to_string();
-                let value = (cg_info.root, cg_info.mount_point);
-                assert!(ret.insert(key, value).is_none());
-                break;
+                let value = (cg_info.root.clone(), cg_info.mount_point.clone());
+                ret.insert(key, value);
             }
         }
     }
@@ -248,7 +248,12 @@ fn parse_memory_max(line: &str) -> i64 {
     if line == "max" {
         return -1;
     }
-    line.parse().unwrap()
+    match line.parse::<i64>() {
+        Ok(x) => x,
+        Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow) => i64::MAX,
+        Err(e) if matches!(e.kind(), IntErrorKind::NegOverflow) => i64::MIN,
+        Err(e) => panic!("parse int: {}", e),
+    }
 }
 
 fn parse_cpu_cores(value: &str) -> HashSet<usize> {
@@ -324,6 +329,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cpuset_cpu_cpuacct() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&format!("{}/mountinfo", dir))
+            .unwrap();
+        f.write_all(b"30 26 0:27 / /sys/fs/cgroup/cpuset,cpu,cpuacct rw,nosuid,nodev,noexec,relatime shared:11 - cgroup cgroup rw,cpuset,cpu,cpuacct\n").unwrap();
+
+        let cgroups = parse_proc_cgroup_v1("3:cpuset,cpu,cpuacct:/\n");
+        let mount_points = {
+            let infos = Process::new_with_root(PathBuf::from(dir))
+                .and_then(|x| x.mountinfo())
+                .unwrap();
+            parse_mountinfos_v1(infos)
+        };
+
+        let cgroup_sys = CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2: false,
+        };
+        assert_eq!(cgroup_sys.cpu_quota(), None);
+        assert!(cgroup_sys.cpuset_cores().is_empty());
+    }
+
+    #[test]
     fn test_mountinfo_with_relative_path() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_str().unwrap();
@@ -380,8 +415,22 @@ mod tests {
 
     #[test]
     fn test_parse_memory_max() {
-        let contents = vec!["max", "-1", "9223372036854771712", "21474836480"];
-        let expects = vec![-1, -1, 9223372036854771712, 21474836480];
+        let contents = vec![
+            "max",
+            "-1",
+            "9223372036854771712",
+            "21474836480",
+            "18446744073709551610",
+            "-18446744073709551610",
+        ];
+        let expects = vec![
+            -1,
+            -1,
+            9223372036854771712,
+            21474836480,
+            9223372036854775807,
+            -9223372036854775808,
+        ];
         for (content, expect) in contents.into_iter().zip(expects) {
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);

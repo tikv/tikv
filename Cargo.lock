@@ -5334,7 +5334,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.2.2"
+version = "5.2.3"
 dependencies = [
  "anyhow",
  "async-std",
@@ -5761,8 +5761,7 @@ dependencies = [
 [[package]]
 name = "tokio-timer"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
+source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#e8ac149d93f4a9bf49ea569d8d313ee40c5eb448"
 dependencies = [
  "crossbeam-utils 0.7.2",
  "futures 0.1.31",
