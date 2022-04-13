@@ -1405,6 +1405,12 @@ where
     }
 
     #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        matches!(*self.snap_state.borrow(), SnapState::Applying(_))
+            || matches!(*self.snap_state.borrow(), SnapState::ApplyAborted)
+    }
+
+    #[inline]
     pub fn is_generating_snapshot(&self) -> bool {
         fail_point!("is_generating_snapshot", |_| { true });
         matches!(*self.snap_state.borrow(), SnapState::Generating { .. })
