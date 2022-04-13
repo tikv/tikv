@@ -80,14 +80,17 @@ impl CGroupSys {
     pub fn memory_limit_in_bytes(&self) -> i64 {
         let component = if self.is_v2 { "" } else { "memory" };
         if let Some(group) = self.cgroups.get(component) {
-            let (root, mount_point) = self.mount_points.get(component).unwrap();
-            let path = build_path(group, root, mount_point);
-            let path = if self.is_v2 {
-                format!("{}/memory.max", path.to_str().unwrap())
+            if let Some((root, mount_point)) = self.mount_points.get(component) {
+                let path = build_path(group, root, mount_point);
+                let path = if self.is_v2 {
+                    format!("{}/memory.max", path.to_str().unwrap())
+                } else {
+                    format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
+                };
+                return read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()));
             } else {
-                format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
-            };
-            return read_to_string(&path).map_or(-1, |x| parse_memory_max(x.trim()));
+                warn!("Cgroup memory controller found but not mounted.");
+            }
         }
         -1
     }
@@ -95,11 +98,14 @@ impl CGroupSys {
     pub fn cpuset_cores(&self) -> HashSet<usize> {
         let component = if self.is_v2 { "" } else { "cpuset" };
         if let Some(group) = self.cgroups.get(component) {
-            let (root, mount_point) = self.mount_points.get(component).unwrap();
-            let path = build_path(group, root, mount_point);
-            let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
-            return read_to_string(&path)
-                .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
+            if let Some((root, mount_point)) = self.mount_points.get(component) {
+                let path = build_path(group, root, mount_point);
+                let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
+                return read_to_string(&path)
+                    .map_or_else(|_| HashSet::new(), |x| parse_cpu_cores(x.trim()));
+            } else {
+                warn!("Cgroup cpuset controller found but not mounted.");
+            }
         }
         Default::default()
     }
@@ -108,20 +114,24 @@ impl CGroupSys {
     pub fn cpu_quota(&self) -> Option<f64> {
         let component = if self.is_v2 { "" } else { "cpu" };
         if let Some(group) = self.cgroups.get(component) {
-            let (root, mount_point) = self.mount_points.get(component).unwrap();
-            let path = build_path(group, root, mount_point);
-            if self.is_v2 {
-                let path = format!("{}/cpu.max", path.to_str().unwrap());
-                if let Ok(buffer) = read_to_string(&path) {
-                    return parse_cpu_quota_v2(buffer.trim());
+            if let Some((root, mount_point)) = self.mount_points.get(component) {
+                let path = build_path(group, root, mount_point);
+                if self.is_v2 {
+                    let path = format!("{}/cpu.max", path.to_str().unwrap());
+                    if let Ok(buffer) = read_to_string(&path) {
+                        return parse_cpu_quota_v2(buffer.trim());
+                    }
+                } else {
+                    let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
+                    let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
+                    if let (Ok(buffer1), Ok(buffer2)) =
+                        (read_to_string(&path1), read_to_string(&path2))
+                    {
+                        return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
+                    }
                 }
             } else {
-                let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
-                let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
-                if let (Ok(buffer1), Ok(buffer2)) = (read_to_string(&path1), read_to_string(&path2))
-                {
-                    return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
-                }
+                warn!("Cgroup cpu controller found but not mounted.");
             }
         }
         None
@@ -385,6 +395,35 @@ mod tests {
         };
 
         assert_eq!(cgroup_sys.memory_limit_in_bytes(), -1);
+    }
+
+    #[test]
+    fn test_cgroup_without_mountinfo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&format!("{}/mountinfo", dir))
+            .unwrap();
+        f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw\n").unwrap();
+
+        let cgroups = parse_proc_cgroup_v1("3:cpu:/\n");
+        let mount_points = {
+            let infos = Process::new_with_root(PathBuf::from(dir))
+                .and_then(|x| x.mountinfo())
+                .unwrap();
+            parse_mountinfos_v1(infos)
+        };
+        let cgroup_sys = CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2: false,
+        };
+
+        assert_eq!(cgroup_sys.cpu_quota(), None);
     }
 
     #[test]
