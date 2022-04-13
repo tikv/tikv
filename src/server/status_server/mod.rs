@@ -8,6 +8,7 @@ use self::profile::{
 };
 
 use std::error::Error as StdError;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,9 +21,12 @@ use std::time::{Duration, Instant};
 use async_stream::stream;
 use collections::HashMap;
 use engine_traits::KvEngine;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use futures::compat::{Compat01As03, Stream01CompatExt};
 use futures::future::{ok, poll_fn};
 use futures::prelude::*;
+use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
 use hyper::server::accept::Accept;
 use hyper::server::conn::{AddrIncoming, AddrStream};
 use hyper::server::Builder as HyperBuilder;
@@ -483,6 +487,41 @@ where
         }
     }
 
+    fn handle_get_metrics(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let mut metrics = dump().into_bytes();
+
+        // the following logic is port from prometheus's golang:
+        // https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
+        let encoding = req
+            .headers()
+            .get(ACCEPT_ENCODING)
+            .map(|enc| enc.to_str().unwrap_or_default())
+            .unwrap_or_default();
+        let gz_encoding = encoding
+            .split(",")
+            .map(|s| s.trim())
+            .any(|s| s == "gzip" || s.starts_with("gzip;"));
+        if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(
+                Vec::with_capacity(metrics.len() / 10),
+                Compression::default(),
+            );
+            encoder.write_all(&metrics).unwrap();
+            metrics = encoder.finish().unwrap();
+        }
+        let mut resp = Response::new(metrics.into());
+        if gz_encoding {
+            resp.headers_mut()
+            .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+        resp.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+        );
+        Ok(resp)
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -539,7 +578,7 @@ where
                         }
 
                         match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/metrics") => Self::handle_get_metrics(req),
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
@@ -846,9 +885,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bytes::Buf;
+    use flate2::read::GzDecoder;
     use futures::executor::block_on;
     use futures::future::ok;
     use futures::prelude::*;
+    use http::header::{HeaderValue, ACCEPT_ENCODING};
     use hyper::client::HttpConnector;
     use hyper::{Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
@@ -856,6 +898,7 @@ mod tests {
     use openssl::ssl::{SslConnector, SslMethod};
 
     use std::env;
+    use std::io::Read;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1293,6 +1336,61 @@ mod tests {
             resp.headers().get("Content-Type").unwrap(),
             &mime::IMAGE_SVG.to_string()
         );
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_metrics() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            std::env::temp_dir(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+
+        // test plain test
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/metrics")
+            .build()
+            .unwrap();
+
+        let client = Client::new();
+        let url_cloned = uri.clone();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.get(url_cloned).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        assert!(String::from_utf8(body_bytes.as_ref().to_owned()).is_ok());
+
+        // test gzip
+        let handle = status_server.thread_pool.spawn(async move {
+            let body = Body::default();
+            let mut req = Request::new(body);
+            req.headers_mut()
+                .insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+            *req.uri_mut() = uri;
+            let client = Client::new();
+            client.request(req).await.unwrap()
+        });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("Content-Encoding").unwrap(), "gzip");
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        let mut decoded_bytes = vec![];
+        GzDecoder::new(body_bytes.reader())
+            .read_to_end(&mut decoded_bytes)
+            .unwrap();
+        assert!(String::from_utf8(decoded_bytes).is_ok());
+
         status_server.stop();
     }
 
