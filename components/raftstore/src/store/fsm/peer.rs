@@ -3084,7 +3084,11 @@ where
             .peer
             .pending_merge_state
             .as_ref()
-            .map_or(true, |s| s.get_target().get_peers().contains(&target));
+            .map_or(true, |s| {
+                s.get_target().get_peers().iter().any(|p| {
+                    p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id()
+                })
+            });
         if !exists {
             panic!(
                 "{} unexpected merge result: {:?} {:?} {:?}",
