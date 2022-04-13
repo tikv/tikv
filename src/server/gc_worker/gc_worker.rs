@@ -664,7 +664,20 @@ where
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
-    Err(box_err!("failed to schedule gc task: {:?}", e))
+    let res = Err(box_err!("failed to schedule gc task: {:?}", e));
+    match e.into_inner() {
+        GcTask::Gc { callback, .. } | GcTask::UnsafeDestroyRange { callback, .. } => {
+            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
+        }
+        GcTask::PhysicalScanLock { callback, .. } => {
+            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
+        }
+        // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a callback.
+        GcTask::GcKeys { .. } | GcTask::OrphanVersions { .. } => {}
+        #[cfg(any(test, feature = "testexport"))]
+        GcTask::Validate(_) => {}
+    }
+    res
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
@@ -719,9 +732,6 @@ where
 
     config_manager: GcWorkerConfigManager,
 
-    /// How many requests are scheduled from outside and unfinished.
-    scheduled_tasks: Arc<AtomicUsize>,
-
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
@@ -748,7 +758,6 @@ where
             raft_store_router: self.raft_store_router.clone(),
             flow_info_sender: self.flow_info_sender.clone(),
             config_manager: self.config_manager.clone(),
-            scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
@@ -799,7 +808,6 @@ where
             raft_store_router,
             flow_info_sender: Some(flow_info_sender),
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
-            scheduled_tasks: Arc::new(AtomicUsize::new(0)),
             refs: Arc::new(AtomicUsize::new(1)),
             worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
@@ -884,37 +892,19 @@ where
         self.worker_scheduler.clone()
     }
 
-    /// Check whether GCWorker is busy. If busy, callback will be invoked with an error that
-    /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
-    /// callback as well as decrease the scheduled task counter.
-    fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
-        if self.scheduled_tasks.fetch_add(1, Ordering::SeqCst) >= GC_MAX_EXECUTING_TASKS {
-            self.scheduled_tasks.fetch_sub(1, Ordering::SeqCst);
-            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
-            return None;
-        }
-        let scheduled_tasks = Arc::clone(&self.scheduled_tasks);
-        Some(Box::new(move |r| {
-            scheduled_tasks.fetch_sub(1, Ordering::SeqCst);
-            callback(r);
-        }))
-    }
-
     /// Only for tests.
     pub fn gc(&self, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
-        self.check_is_busy(callback).map_or(Ok(()), |callback| {
-            let start_key = vec![];
-            let end_key = vec![];
-            self.worker_scheduler
-                .schedule(GcTask::Gc {
-                    region_id: 0,
-                    start_key,
-                    end_key,
-                    safe_point,
-                    callback,
-                })
-                .or_else(handle_gc_task_schedule_error)
-        })
+        let start_key = vec![];
+        let end_key = vec![];
+        self.worker_scheduler
+            .schedule(GcTask::Gc {
+                region_id: 0,
+                start_key,
+                end_key,
+                safe_point,
+                callback,
+            })
+            .or_else(handle_gc_task_schedule_error)
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range might span over
@@ -930,16 +920,20 @@ where
         callback: Callback<()>,
     ) -> Result<()> {
         GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
-        self.check_is_busy(callback).map_or(Ok(()), |callback| {
-            self.worker_scheduler
-                .schedule(GcTask::UnsafeDestroyRange {
-                    ctx,
-                    start_key,
-                    end_key,
-                    callback,
-                })
-                .or_else(handle_gc_task_schedule_error)
-        })
+
+        // Use schedule_force to allow unsafe_destroy_range to schedule even if
+        // the GC worker is full. This will help free up space in the case when
+        // the GC worker is busy with other tasks.
+        // Unsafe destroy range is in store level, so the number of them is
+        // quite small, so we don't need to worry about its memory usage.
+        self.worker_scheduler
+            .schedule_force(GcTask::UnsafeDestroyRange {
+                ctx,
+                start_key,
+                end_key,
+                callback,
+            })
+            .or_else(handle_gc_task_schedule_error)
     }
 
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
@@ -955,17 +949,16 @@ where
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
         GC_COMMAND_COUNTER_VEC_STATIC.physical_scan_lock.inc();
-        self.check_is_busy(callback).map_or(Ok(()), |callback| {
-            self.worker_scheduler
-                .schedule(GcTask::PhysicalScanLock {
-                    ctx,
-                    max_ts,
-                    start_key,
-                    limit,
-                    callback,
-                })
-                .or_else(handle_gc_task_schedule_error)
-        })
+
+        self.worker_scheduler
+            .schedule(GcTask::PhysicalScanLock {
+                ctx,
+                max_ts,
+                start_key,
+                limit,
+                callback,
+            })
+            .or_else(handle_gc_task_schedule_error)
     }
 
     pub fn start_collecting(
@@ -1551,5 +1544,79 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
+    }
+
+    #[test]
+    fn delete_range_when_worker_is_full() {
+        let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
+        must_commit(&engine, b"key", 10, 20);
+        let db = engine.kv_engine().as_inner().clone();
+        let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        db.flush_cf(cf, true).unwrap();
+
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let (tx, _rx) = mpsc::channel();
+
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcConfig::default(),
+            gate,
+        );
+
+        // Before starting gc_worker, fill the scheduler to full.
+        for _ in 0..GC_MAX_PENDING_TASKS {
+            assert!(
+                gc_worker
+                    .scheduler()
+                    .schedule(GcTask::Gc {
+                        region_id: 0,
+                        start_key: vec![],
+                        end_key: vec![],
+                        safe_point: TimeStamp::from(100),
+                        callback: Box::new(|_res| {})
+                    })
+                    .is_ok()
+            );
+        }
+        // Then, it will fail to schedule another gc command.
+        let (tx, rx) = mpsc::channel();
+        assert!(
+            gc_worker
+                .gc(
+                    TimeStamp::from(1),
+                    Box::new(move |res| {
+                        tx.send(res).unwrap();
+                    })
+                )
+                .is_err()
+        );
+        assert!(rx.recv().unwrap().is_err());
+
+        let (tx, rx) = mpsc::channel();
+        // When the gc_worker is full, scheduling an unsafe destroy range task should be
+        // still allowed.
+        assert!(
+            gc_worker
+                .unsafe_destroy_range(
+                    Context::default(),
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"z"),
+                    Box::new(move |res| {
+                        tx.send(res).unwrap();
+                    })
+                )
+                .is_ok()
+        );
+
+        gc_worker.start().unwrap();
+
+        // After the worker starts running, the destroy range task should run,
+        // and the key in the range will be deleted.
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_ok());
+        must_get_none(&engine, b"key", 30);
     }
 }
