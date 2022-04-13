@@ -1405,13 +1405,14 @@ where
     }
 
     /// Evict entries from the cache.
-    pub fn evict_cache(&mut self, half: bool) {
+    pub fn evict_cache(&mut self, _half: bool) {
         if !self.cache.cache.is_empty() {
             let cache = &mut self.cache;
-            let cache_len = cache.cache.len();
-            let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
-            let idx = cache.cache[drain_to].index;
-            let mem_size_change = cache.compact_to(idx + 1);
+            // let cache_len = cache.cache.len();
+            // let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
+            // let idx = cache.cache[drain_to].index;
+            // let mem_size_change = cache.compact_to(idx + 1);
+            let mem_size_change = cache.compact_to(self.apply_state.applied_index); // +1 ?
             RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }

@@ -224,6 +224,13 @@ pub struct Config {
     // * system=32G, memory_usage_limit=24G, evict=4.8G
     pub evict_cache_on_memory_ratio: f64,
 
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// When TiKV memory usage reaches `memory_usage_high_water`, we will try to reject the incoming
+    /// logappend entries, as well as to reclaim the leader entry cache that has been applied, if the
+    /// total log entry cache size exceeds `force_reclaim_leader_entry_cache_ratio` * total.
+    pub force_reclaim_leader_entry_cache_ratio: f64,
+
     pub cmd_batch: bool,
 
     /// When the count of concurrent ready exceeds this value, command will not be proposed
@@ -345,7 +352,8 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.0,
+            evict_cache_on_memory_ratio: 0.15,
+            force_reclaim_leader_entry_cache_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -603,9 +611,17 @@ impl Config {
             );
         }
 
-        if self.evict_cache_on_memory_ratio < 0.0 {
+        if self.evict_cache_on_memory_ratio < 0.0 || self.evict_cache_on_memory_ratio > 0.15 {
             return Err(box_err!(
-                "evict_cache_on_memory_ratio must be greater than 0"
+                "evict_cache_on_memory_ratio must be limited into 0.0-0.15 than 0"
+            ));
+        }
+
+        if self.force_reclaim_leader_entry_cache_ratio < 0.0
+            || self.force_reclaim_leader_entry_cache_ratio > 0.15
+        {
+            return Err(box_err!(
+                "force_reclaim_leader_entry_cache_ratio must be limited into 0.0-0.15"
             ));
         }
 
