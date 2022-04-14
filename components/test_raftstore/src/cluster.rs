@@ -12,7 +12,8 @@ use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{
-    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+    self, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
@@ -1118,6 +1119,28 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
     }
 
+    pub fn must_peer_state(&self, region_id: u64, store_id: u64, peer_state: PeerState) {
+        for _ in 0..100 {
+            let state = self
+                .get_engine(store_id)
+                .c()
+                .get_msg_cf::<RegionLocalState>(
+                    engine_traits::CF_RAFT,
+                    &keys::region_state_key(region_id),
+                )
+                .unwrap()
+                .unwrap();
+            if state.get_state() == peer_state {
+                return;
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, peer_state
+        );
+    }
+
     pub fn wait_last_index(
         &mut self,
         region_id: u64,
@@ -1220,6 +1243,15 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn add_recv_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            for filter in factory.generate(node_id) {
+                sim.add_recv_filter(node_id, filter);
+            }
+        }
+    }
+
     pub fn transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
         let epoch = self.get_region_epoch(region_id);
         let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
@@ -1268,6 +1300,13 @@ impl<T: Simulator> Cluster<T> {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {
             sim.clear_send_filters(node_id);
+        }
+    }
+
+    pub fn clear_recv_filters(&mut self) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            sim.clear_recv_filters(node_id);
         }
     }
 
