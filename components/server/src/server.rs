@@ -255,6 +255,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
             config.coprocessor.clone(),
+            state.clone(),
         ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 

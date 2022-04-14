@@ -254,6 +254,10 @@ where
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
+        if self.coprocessor.region_split_paused() {
+            debug!("skip split check because region split is paused"; "region_id" => region.get_id());
+            return;
+        }
         let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);

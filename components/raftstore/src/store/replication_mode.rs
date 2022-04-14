@@ -185,6 +185,13 @@ impl GlobalReplicationState {
             ReplicationMode::Majority => None,
         }
     }
+
+    pub fn region_split_paused(&self) -> bool {
+        match self.status.get_mode() {
+            ReplicationMode::DrAutoSync => self.status.get_dr_auto_sync().get_pause_region_split(),
+            ReplicationMode::Majority => false,
+        }
+    }
 }
 
 #[cfg(test)]

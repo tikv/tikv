@@ -4,6 +4,7 @@
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
+use std::sync::Mutex;
 
 use engine_traits::{CfName, KvEngine};
 use kvproto::metapb::Region;
@@ -15,6 +16,7 @@ use tikv_util::box_try;
 
 use super::*;
 use crate::store::CasualRouter;
+use crate::store::GlobalReplicationState;
 
 struct Entry<T> {
     priority: u32,
@@ -306,6 +308,7 @@ where
 {
     pub registry: Registry<E>,
     pub cfg: Config,
+    replication_state: Arc<Mutex<GlobalReplicationState>>,
 }
 
 impl<E: KvEngine> Default for CoprocessorHost<E>
@@ -316,6 +319,7 @@ where
         CoprocessorHost {
             registry: Default::default(),
             cfg: Default::default(),
+            replication_state: Default::default(),
         }
     }
 }
@@ -324,6 +328,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
     pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
         ch: C,
         cfg: Config,
+        replication_state: Arc<Mutex<GlobalReplicationState>>,
     ) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
@@ -339,7 +344,11 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        CoprocessorHost { registry, cfg }
+        CoprocessorHost {
+            registry,
+            cfg,
+            replication_state,
+        }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -535,6 +544,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         for step_ob in &self.registry.read_index_observers {
             step_ob.observer.inner().on_step(msg, role);
         }
+    }
+
+    pub fn region_split_paused(&self) -> bool {
+        self.replication_state.lock().unwrap().region_split_paused()
     }
 
     pub fn shutdown(&self) {
