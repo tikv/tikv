@@ -83,8 +83,8 @@ pub struct SnapAccessCore {
 
 impl SnapAccessCore {
     pub fn new(shard: &Shard) -> Self {
-        let data = shard.get_data();
         let write_sequence = shard.get_write_sequence();
+        let data = shard.get_data();
         Self {
             id: shard.id,
             ver: shard.ver,

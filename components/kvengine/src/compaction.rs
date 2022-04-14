@@ -53,14 +53,22 @@ impl CompactionClient {
         }
     }
 
-    async fn remote_compact(&self, req: CompactionRequest) -> Result<pb::Compaction> {
-        let body_str = serde_json::to_string(&req).unwrap();
+    async fn remote_compact(&self, comp_req: CompactionRequest) -> Result<pb::Compaction> {
+        let body_str = serde_json::to_string(&comp_req).unwrap();
         let req = hyper::Request::builder()
             .method(hyper::Method::POST)
             .uri(self.remote_url.clone())
             .header("content-type", "application/json")
             .body(hyper::Body::from(body_str))?;
+        info!(
+            "{}:{} send request to remote compactor",
+            comp_req.shard_id, comp_req.shard_ver
+        );
         let response = self.client.as_ref().unwrap().request(req).await?;
+        info!(
+            "{}:{} got response from remote compactor",
+            comp_req.shard_id, comp_req.shard_ver
+        );
         let success = response.status().is_success();
         let body = hyper::body::to_bytes(response.into_body()).await?;
         if !success {
@@ -386,6 +394,7 @@ impl Engine {
     ) -> Result<Option<CompactionRequest>> {
         let data = shard.get_data();
         if data.l0_tbls.len() == 0 {
+            info!("zero L0 tables");
             return Ok(None);
         }
         let mut req = self.new_compact_request(shard, -1, 0);
@@ -951,6 +960,7 @@ pub async fn handle_remote_compaction(
     let result = rx.await.unwrap();
     if result.is_err() {
         let err_str = format!("{:?}", result.unwrap_err());
+        error!("compaction failed {}", err_str);
         let body = hyper::Body::from(err_str);
         Ok(hyper::Response::builder().status(500).body(body).unwrap())
     } else {
@@ -969,6 +979,7 @@ fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::C
     comp.set_cf(req.cf as i32);
     comp.set_level(req.level as u32);
     if req.level == 0 {
+        info!("start compact L0 for {}:{}", req.shard_id, req.shard_ver);
         let tbls = compact_l0(&req, dfs.clone())?;
         comp.set_table_creates(RepeatedField::from_vec(tbls));
         let mut bot_dels = vec![];
@@ -979,6 +990,10 @@ fn local_compact(dfs: Arc<dyn dfs::DFS>, req: CompactionRequest) -> Result<pb::C
         info!("finish compact L0 for {}:{}", req.shard_id, req.shard_ver);
         return Ok(comp);
     }
+    info!(
+        "start compact L{} CF{} for {}:{}",
+        req.level, req.cf, req.shard_id, req.shard_ver
+    );
     let tbls = compact_tables(&req, dfs.clone())?;
     comp.set_table_creates(RepeatedField::from_vec(tbls));
     comp.set_bottom_deletes(req.bottoms.clone());
