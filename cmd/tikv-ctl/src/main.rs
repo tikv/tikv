@@ -48,12 +48,7 @@ use std::string::ToString;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{process, str, thread, u64};
-<<<<<<< HEAD
-use tikv::config::{ConfigController, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
-=======
-use structopt::StructOpt;
 use tikv::config::{ConfigController, TiKvConfig};
->>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv_util::{escape, run_and_wait_child_process, unescape};
 use txn_types::Key;
@@ -152,17 +147,12 @@ fn new_debug_executor(
         Box::new(debugger) as Box<dyn DebugExecutor>
     } else {
         let mut config = cfg.raft_engine.config();
-<<<<<<< HEAD
-        config.dir = canonicalize_sub_path(data_dir, &config.dir).unwrap();
-        let raft_db = RaftLogEngine::new(config);
-=======
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
         if !RaftLogEngine::exists(&config.dir) {
             error!("raft engine not exists: {}", config.dir);
             process::exit(-1);
         }
-        let raft_db = RaftLogEngine::new(config).unwrap();
->>>>>>> 78e7221e9... ctl: detect raft db correctly (#11395)
+        let raft_db = RaftLogEngine::new(config);
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }
