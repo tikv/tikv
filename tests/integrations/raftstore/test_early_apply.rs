@@ -1,20 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{RaftEngine, RaftEngineDebug};
+use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use std::time::*;
 use test_raftstore::*;
 
-fn delete_old_data<E: RaftEngine>(engine: &E, id: u64) {
+fn delete_old_data<E: RaftEngineDebug>(engine: &E, id: u64) {
     let mut deleter = engine.log_batch(0);
+    let mut last_index = 0;
     engine
-        .clean(
-            id,
-            0, /*first_index*/
-            &engine.get_raft_state(id).unwrap().unwrap(),
-            &mut deleter,
-        )
+        .scan_entries(id, |e| {
+            last_index = e.get_index();
+            Ok(true)
+        })
+        .unwrap();
+    let state = RaftLocalState {
+        last_index,
+        ..Default::default()
+    };
+    engine
+        .clean(id, 0 /*first_index*/, &state, &mut deleter)
         .unwrap();
     engine.consume(&mut deleter, true /*sync*/).unwrap();
 }
