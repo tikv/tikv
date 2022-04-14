@@ -9,7 +9,7 @@ publish = false
 doctest = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+default = ["test-engines-rocksdb"]
 
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"

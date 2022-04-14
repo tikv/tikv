@@ -89,7 +89,7 @@ endif
 
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
-ENABLE_FEATURES += test-engine-kv-rocksdb test-engine-raft-raft-engine
+ENABLE_FEATURES += test-engines-rocksdb
 else
 # Caller is responsible for setting up test engine features
 endif
