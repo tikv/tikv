@@ -20,12 +20,20 @@ use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use api_version::{APIV2, APIVersion, KeyMode};
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use api_version::api_v2::RAW_KEY_PREFIX;
 use engine_traits::raw_ttl::ttl_current_ts;
+use crate::storage::lock_manager::DummyLockManager;
+use std::{
+    sync::{
+        mpsc::{channel, Sender},
+    },
+};
+
 
 use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
@@ -183,7 +191,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        let gc_context_option = GC_CONTEXT.lock().unwrap();//初始化GC_CONTEXT=Mutex::new(None)
+        let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => { ctx},
             None => return std::ptr::null_mut(),
@@ -354,7 +362,7 @@ impl WriteCompactionFilter {
         // Valid MVCC records should begin with `DATA_PREFIX`.
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
-        self.mvcc_deletions.push(key);// key= user key
+        self.mvcc_deletions.push(key);
     }
 
     fn gc_mvcc_deletions(&mut self) {
@@ -634,6 +642,12 @@ impl RawCompactionFilter {
         }
     }
 
+    fn print(key: &[u8]){
+        for i in 0..key.len(){
+            info!("key_{}:{}",i,key[i]);
+        }
+    }
+
     fn do_filter(
         &mut self,
         _start_level: usize,
@@ -643,12 +657,28 @@ impl RawCompactionFilter {
         value_type: CompactionFilterValueType,
     ) -> Result<CompactionFilterDecision, String> {
 
-        let key_mode = APIV2::parse_key_mode(key);
+
+     //   let currentKey=&key[1..];
+        let currentKey=key;
+        let key_mode = APIV2::parse_key_mode(currentKey);
         if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
+            let is_mode=key_mode != KeyMode::Raw;
+            let is_value_type=value_type != CompactionFilterValueType::Value;
+            match key_mode {
+                KeyMode::Raw => {info!("KeyMode::Raw");}
+                KeyMode::Txn => {info!("KeyMode::Txn");}
+                KeyMode::TiDB => {info!("KeyMode::TiDB");}
+                KeyMode::Unknown => {info!("KeyMode::Unknown");}
+            }
+            match value_type {
+                CompactionFilterValueType::Value => {info!("CompactionFilterValueType::Value");}
+                CompactionFilterValueType::MergeOperand => {info!("CompactionFilterValueType::MergeOperand");}
+                CompactionFilterValueType::BlobIndex => {info!("CompactionFilterValueType::BlobIndex");}
+            }
             return Ok(CompactionFilterDecision::Keep);
         }
-
-        let (mvcc_key_prefix_vec, commit_ts_opt) = APIV2::decode_raw_key(&Key::from_encoded_slice(key), true).unwrap();
+        info!("API V2 do_filter");
+        let (mvcc_key_prefix_vec, commit_ts_opt) = APIV2::decode_raw_key(&Key::from_encoded_slice(currentKey), true).unwrap();
         let mvcc_key_prefix = mvcc_key_prefix_vec.as_slice();
         let commit_ts = commit_ts_opt.unwrap().into_inner();
         if commit_ts > self.safe_point {
@@ -678,7 +708,7 @@ impl RawCompactionFilter {
         if !self.mvcc_deletions.is_empty() {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
             let task = GcTask::RawGcKeys {
-                keys: mem::replace(&mut self.mvcc_deletions, empty),//gc_keys->gc_key->gc->gc.run
+                keys: mem::replace(&mut self.mvcc_deletions, empty),
                 safe_point: self.safe_point.into(),
             };
             self.schedule_gc_task(task, false);
@@ -895,6 +925,7 @@ pub mod test_utils {
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use crate::storage::lock_manager::DummyLockManager;
 
     /// Do a global GC with the given safe point.
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
@@ -1057,7 +1088,8 @@ pub mod test_utils {
 pub mod tests {
     use std::fmt::Debug;
     use std::{sync::mpsc::{channel, Sender}, thread};
-    use kvproto::kvrpcpb::Context;
+    //  use kvproto::kvrpcpb::Context;
+    use api_version::RawValue;
     use engine_rocks::util::get_cf_handle;
     use super::test_utils::*;
     use super::*;
@@ -1070,6 +1102,7 @@ pub mod tests {
     use test_util::init_log_for_test;
     use tikv_util::future::paired_future_callback;
     use crate::storage::{Callback, TestStorageBuilder};
+    use crate::storage::test_util::expect_ok_callback;
 
     #[test]
     fn test_is_compaction_filter_allowed() {
@@ -1160,7 +1193,7 @@ pub mod tests {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         cfg.writecf.dynamic_level_bytes = false;
-
+//.api_version(ApiVersion::V2)
         let engine = TestEngineBuilder::new().api_version(ApiVersion::V2).build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
@@ -1215,7 +1248,7 @@ pub mod tests {
 
     #[test]
     fn test_raw_call_gctask() {
-
+//.api_version(ApiVersion::V2)
         let engine = TestEngineBuilder::new().api_version(ApiVersion::V2).build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];

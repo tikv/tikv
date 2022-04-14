@@ -315,7 +315,7 @@ where
 
     fn gc_keys(
         &mut self,
-        keys: Vec<Key>,//@@@这里的keys是GcTask传过来的多个userkey
+        keys: Vec<Key>,
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
@@ -378,7 +378,7 @@ where
 
         let mut txn = Self::new_txn();
         let mut reader = if count <= 1 {
-            MvccReader::new(snapshot, None, false)  //@@@@ snapshot @@@@
+            MvccReader::new(snapshot, None, false)
         } else {
             // keys are closing to each other in one batch of gc keys, so do not use
             // prefix seek here to avoid too many seeks
