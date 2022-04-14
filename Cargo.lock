@@ -447,6 +447,7 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "etcd-client",
  "external_storage",
  "external_storage_export",

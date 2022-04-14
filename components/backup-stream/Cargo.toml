@@ -3,10 +3,6 @@ name = "backup-stream"
 version = "0.1.0"
 edition = "2018"
 
-[[bin]]
-name = "playground"
-path = "bin/playground.rs"
-
 [features]
 default = ["test-engines-rocksdb"]
 test-engines-rocksdb = [
@@ -56,6 +52,7 @@ online_config = { path = "../online_config" }
 resolved_ts = { path = "../resolved_ts"}
 pd_client = {path = "../pd_client"}
 concurrency_manager = { path = "../concurrency_manager"}
+error_code = {path = "../error_code"}
 
 [dev-dependencies]
 rand = "0.8.0"

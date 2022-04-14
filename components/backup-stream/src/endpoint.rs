@@ -208,6 +208,12 @@ where
     RT: RaftStoreRouter<E> + 'static,
     PDC: PdClient + 'static,
 {
+    fn on_fatal_error(&self, _task: String, _err: Box<Error>) {
+        // This is a stub.
+        // TODO: implement the feature of reporting fatal error to the meta storage,
+        //       and pause the task then.
+    }
+
     async fn starts_flush_ticks(router: Router) {
         loop {
             // wait 1min to trigger tick
@@ -664,6 +670,8 @@ pub enum Task {
     ModifyObserve(ObserveOp),
     /// Convert status of some task into `flushing` and do flush then.
     ForceFlush(String),
+    /// FatalError pauses the task and set the error.
+    FatalError(String, Box<Error>),
 }
 
 #[derive(Debug)]
@@ -701,6 +709,9 @@ impl fmt::Debug for Task {
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
             Self::ModifyObserve(op) => f.debug_tuple("ModifyObserve").field(op).finish(),
             Self::ForceFlush(arg0) => f.debug_tuple("ForceFlush").field(arg0).finish(),
+            Self::FatalError(task, err) => {
+                f.debug_tuple("FatalError").field(task).field(err).finish()
+            }
         }
     }
 }
@@ -729,6 +740,7 @@ where
             Task::Flush(task) => self.on_flush(task, self.store_id),
             Task::ModifyObserve(op) => self.on_modify_observe(op),
             Task::ForceFlush(task) => self.on_force_flush(task, self.store_id),
+            Task::FatalError(task, err) => self.on_fatal_error(task, err),
             _ => (),
         }
     }

@@ -1,18 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use error_code::ErrorCodeExt;
 use etcd_client::Error as EtcdError;
+use kvproto::errorpb::Error as StoreError;
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
-use slog_global::error;
 use std::error::Error as StdError;
 use std::fmt::Display;
 use std::io::Error as IoError;
 use std::result::Result as StdResult;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
+use tikv_util::error;
 use tikv_util::worker::ScheduleError;
 
 use crate::endpoint::Task;
-#[cfg(not(test))]
 use crate::metrics;
 
 #[derive(ThisError, Debug)]
@@ -33,11 +35,80 @@ pub enum Error {
     Sched(#[from] ScheduleError<Task>),
     #[error("PD client meet error: {0}")]
     Pd(#[from] PdError),
+    #[error("Error During requesting raftstore: {0:?}")]
+    RaftStore(StoreError),
+    #[error("{context}: {inner_error}")]
+    Contextual {
+        context: String,
+        inner_error: Box<Self>,
+    },
     #[error("Other Error: {0}")]
     Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
 }
 
+impl ErrorCodeExt for Error {
+    fn error_code(&self) -> error_code::ErrorCode {
+        use error_code::backup_stream::*;
+        match self {
+            Error::Etcd(_) => ETCD,
+            Error::Protobuf(_) => PROTO,
+            Error::NoSuchTask { .. } => NO_SUCH_TASK,
+            Error::MalformedMetadata(_) => MALFORMED_META,
+            Error::Io(_) => IO,
+            Error::Txn(_) => TXN,
+            Error::Sched(_) => SCHED,
+            Error::Pd(_) => PD,
+            Error::RaftStore(_) => RAFTSTORE,
+            Error::Contextual { inner_error, .. } => inner_error.error_code(),
+            Error::Other(_) => OTHER,
+        }
+    }
+}
+
+impl<'a> ErrorCodeExt for &'a Error {
+    fn error_code(&self) -> error_code::ErrorCode {
+        Error::error_code(*self)
+    }
+}
+
 pub type Result<T> = StdResult<T, Error>;
+
+impl From<StoreError> for Error {
+    fn from(e: StoreError) -> Self {
+        Self::RaftStore(e)
+    }
+}
+
+pub trait ContextualResultExt<T>
+where
+    Self: Sized,
+{
+    /// attache a context to the error.
+    fn context(self, context: impl ToString) -> Result<T>;
+
+    fn context_with(self, context: impl Fn() -> String) -> Result<T>;
+}
+
+impl<T, E> ContextualResultExt<T> for StdResult<T, E>
+where
+    E: Into<Error>,
+{
+    #[inline(always)]
+    fn context(self, context: impl ToString) -> Result<T> {
+        self.map_err(|err| Error::Contextual {
+            context: context.to_string(),
+            inner_error: Box::new(err.into()),
+        })
+    }
+
+    #[inline(always)]
+    fn context_with(self, context: impl Fn() -> String) -> Result<T> {
+        self.map_err(|err| Error::Contextual {
+            context: context(),
+            inner_error: Box::new(err.into()),
+        })
+    }
+}
 
 /// Like `errors.Annotate` in Go.
 /// Wrap an unknown error with [`Error::Other`].
@@ -53,33 +124,137 @@ macro_rules! annotate {
 
 impl Error {
     pub fn report(&self, context: impl Display) {
-        #[cfg(test)]
-        println!(
-            "backup stream meet error (context = {}, err = {})",
-            context, self
-        );
-        #[cfg(not(test))]
-        {
-            // TODO: adapt the error_code module, use `tikv_util::error!` to replace this.
-            error!("backup stream meet error"; "context" => %context, "err" => %self);
-            metrics::STREAM_ERROR
-                .with_label_values(&[self.kind()])
-                .inc()
-        }
+        error!(%self; "backup stream meet error"; "context" => %context,);
+        metrics::STREAM_ERROR
+            .with_label_values(&[self.kind()])
+            .inc()
     }
 
-    #[cfg(not(test))]
     fn kind(&self) -> &'static str {
-        match self {
-            Error::Etcd(_) => "etcd",
-            Error::Protobuf(_) => "protobuf",
-            Error::NoSuchTask { .. } => "no_such_task",
-            Error::MalformedMetadata(_) => "malformed_metadata",
-            Error::Io(_) => "io",
-            Error::Txn(_) => "transaction",
-            Error::Other(_) => "unknown",
-            Error::Sched(_) => "schedule",
-            Error::Pd(_) => "pd",
-        }
+        self.error_code().code
+    }
+}
+
+#[cfg(test)]
+mod test {
+    extern crate test;
+
+    use super::{ContextualResultExt, Error, Result};
+    use error_code::ErrorCodeExt;
+    use std::io::{self, ErrorKind};
+
+    #[test]
+    fn test_contextual_error() {
+        let err = Error::Io(io::Error::new(
+            ErrorKind::Other,
+            "the absence of error messages, is also a kind of error message",
+        ));
+        let result: Result<()> = Err(err);
+        let result = result.context(format_args!(
+            "a cat named {} cut off the power wire",
+            "neko"
+        ));
+
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "a cat named neko cut off the power wire: I/O Error: the absence of error messages, is also a kind of error message"
+        );
+
+        assert_eq!(err.error_code(), error_code::backup_stream::IO,);
+    }
+
+    // Bench: Pod at Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
+    //        With CPU Claim = 16 cores.
+
+    #[bench]
+    // 2,685 ns/iter (+/- 194)
+    fn contextual_add_format_strings_directly(b: &mut test::Bencher) {
+        b.iter(|| {
+            let err = Error::Io(io::Error::new(
+                ErrorKind::Other,
+                "basement, it is the fundamental basement.",
+            ));
+            let result: Result<()> = Err(err);
+            let lucky_number = rand::random::<u8>();
+            let result = result.context(format!("lucky: the number is {}", lucky_number));
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!(
+                    "lucky: the number is {}: I/O Error: basement, it is the fundamental basement.",
+                    lucky_number
+                )
+            )
+        })
+    }
+
+    #[bench]
+    // 1,922 ns/iter (+/- 273)
+    fn contextual_add_format_strings(b: &mut test::Bencher) {
+        b.iter(|| {
+            let err = Error::Io(io::Error::new(
+                ErrorKind::Other,
+                "basement, it is the fundamental basement.",
+            ));
+            let result: Result<()> = Err(err);
+            let lucky_number = rand::random::<u8>();
+            let result = result.context(format_args!("lucky: the number is {}", lucky_number));
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!(
+                    "lucky: the number is {}: I/O Error: basement, it is the fundamental basement.",
+                    lucky_number
+                )
+            )
+        })
+    }
+
+    #[bench]
+    // 1,988 ns/iter (+/- 89)
+    fn contextual_add_closure(b: &mut test::Bencher) {
+        b.iter(|| {
+            let err = Error::Io(io::Error::new(
+                ErrorKind::Other,
+                "basement, it is the fundamental basement.",
+            ));
+            let result: Result<()> = Err(err);
+            let lucky_number = rand::random::<u8>();
+            let result = result.context_with(|| format!("lucky: the number is {}", lucky_number));
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!(
+                    "lucky: the number is {}: I/O Error: basement, it is the fundamental basement.",
+                    lucky_number
+                )
+            )
+        })
+    }
+
+    #[bench]
+    // 773 ns/iter (+/- 8)
+    fn baseline(b: &mut test::Bencher) {
+        b.iter(|| {
+            let err = Error::Io(io::Error::new(
+                ErrorKind::Other,
+                "basement, it is the fundamental basement.",
+            ));
+            let result: Result<()> = Err(err);
+            let _lucky_number = rand::random::<u8>();
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "I/O Error: basement, it is the fundamental basement.".to_string(),
+            )
+        })
+    }
+
+    #[bench]
+    // 3 ns/iter (+/- 0)
+    fn contextual_ok(b: &mut test::Bencher) {
+        b.iter(|| {
+            let result: Result<()> = Ok(());
+            let lucky_number = rand::random::<u8>();
+            let result = result.context_with(|| format!("lucky: the number is {}", lucky_number));
+            assert!(result.is_ok());
+        })
     }
 }
