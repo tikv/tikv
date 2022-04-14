@@ -1550,7 +1550,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
-    
+
     pub fn gc_peer(
         &mut self,
         region_id: u64,
