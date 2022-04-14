@@ -1091,6 +1091,27 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer) {
+        let timer = Instant::now();
+        let mut state;
+        loop {
+            state = self.region_local_state(region_id, peer.get_store_id());
+            if state.get_state() == PeerState::Tombstone
+                && state.get_region().get_peers().contains(&peer)
+            {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{:?} is still not gc in region {} {:?}",
+            peer, region_id, state
+        );
+    }
+
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)

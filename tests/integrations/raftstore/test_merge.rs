@@ -1294,3 +1294,45 @@ fn test_stale_message_after_merge() {
     cluster.must_put(b"k4", b"v4");
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
+
+/// Check if merge is cleaned up if the merge target is destroyed several times before it's ever
+/// scheduled.
+#[test]
+fn test_node_merge_long_isolated() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    pd_client.must_remove_peer(left.get_id(), find_peer(&left, 3).unwrap().to_owned());
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 1004));
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    // Such stale message can be sent due to network error, consider the following example:
+    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send `RequestVote`
+    //    message to peer 1001, and fail due to network error, but this message is keep backoff-retry to send out
+    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004 on store 3, then the region is
+    //    merged into other region, the merge can success because peer 1002 can reach both peer 1001 and peer 1004
+    // 3. Network recover, so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
+    //
+    // the backoff-retry of a stale message is hard to simulated in test, so here just send this stale message directly
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(left.get_id());
+    raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());
+    raft_msg.set_to_peer(find_peer(&left, 1).unwrap().to_owned());
+    raft_msg.set_region_epoch(left.get_region_epoch().to_owned());
+    cluster.send_raft_msg(raft_msg).unwrap();
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
