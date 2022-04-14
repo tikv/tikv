@@ -40,9 +40,7 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
             Ok(true)
         })
         .unwrap();
-        if !entries.is_empty() {
-            batch.append(region_id, entries).unwrap();
-        }
+        batch.append(region_id, entries).unwrap();
         if let Some(state) = self.get_raft_state(region_id).unwrap() {
             batch.put_raft_state(region_id, &state).unwrap();
         }

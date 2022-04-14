@@ -179,6 +179,6 @@ mod tests {
             )
             .unwrap()
         );
-        assert!(raft_engine.dump_all_data(1).is_empty());
+        assert!(RaftLogBatch::is_empty(&raft_engine.dump_all_data(1)));
     }
 }
