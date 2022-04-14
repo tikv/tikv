@@ -1166,6 +1166,16 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn get_first_log(&self, region_id: u64, store_id: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+        let raft_engine = self.engines[&store_id].raft.clone();
+        let seek_key = keys::raft_log_key(region_id, 0);
+        let prefix = keys::raft_log_prefix(region_id);
+        match raft_engine.seek(&seek_key).unwrap() {
+            Some((k, v)) if k.starts_with(&prefix) => Some((k, v)),
+            _ => None,
+        }
+    }
+
     pub fn restore_kv_meta(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
         let (meta_start, meta_end) = (
             keys::region_meta_prefix(region_id),
