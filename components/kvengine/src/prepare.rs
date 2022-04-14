@@ -48,7 +48,7 @@ impl EngineCore {
             ids.insert(l0.id, true);
         }
         for ln in snap.get_table_creates() {
-            ids.insert(ln.id, true);
+            ids.insert(ln.id, false);
         }
     }
 
