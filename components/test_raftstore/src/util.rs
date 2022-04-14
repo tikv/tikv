@@ -308,8 +308,8 @@ pub fn sleep_ms(ms: u64) {
 }
 
 pub fn sleep_until_election_triggered(cfg: &Config) {
-    let election_timeout = cfg.raft_store.raft_base_tick_interval.as_millis()
-        * cfg.raft_store.raft_election_timeout_ticks as u64;
+    let election_timeout = cfg.raft_base_tick_interval.as_millis()
+        * cfg.raft_election_timeout_ticks as u64;
     sleep_ms(3u64 * election_timeout);
 }
 
