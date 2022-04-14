@@ -159,8 +159,7 @@ walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 resource_metering = { path = "components/resource_metering" }
 seahash = "4.1.0"
-# pprof = { git = "https://github.com/mornyx/pprof-rs.git", branch = "unwind", default-features = false, features = ["flamegraph", "protobuf-codec"] }
-pprof = { git = "https://github.com/YangKeao/pprof-rs.git", branch = "frame-pointer" , default-features = false, features = ["flamegraph", "frame-pointer", "protobuf-codec"] }
+pprof = { git = "https://github.com/mornyx/pprof-rs.git", branch = "unwind", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 
 [dev-dependencies]
 example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
