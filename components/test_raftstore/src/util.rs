@@ -307,6 +307,12 @@ pub fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
 }
 
+pub fn sleep_until_election_triggered(cfg: &Config) {
+    let election_timeout =
+        cfg.raft_base_tick_interval.as_millis() * cfg.raft_election_timeout_ticks as u64;
+    sleep_ms(3u64 * election_timeout);
+}
+
 pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }

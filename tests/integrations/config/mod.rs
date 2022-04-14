@@ -211,6 +211,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
+        raft_log_compact_sync_interval: ReadableDuration::secs(60),
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
