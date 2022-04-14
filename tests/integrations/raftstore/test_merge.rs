@@ -8,7 +8,8 @@ use std::time::*;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::CmdType;
-use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use raft::eraftpb::ConfChangeType;
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
@@ -1192,4 +1193,104 @@ fn test_sync_max_ts_after_region_merge() {
     wait_for_synced(&mut cluster);
     let new_max_ts = cm.max_ts();
     assert!(new_max_ts > max_ts);
+}
+
+/// If a follower is demoted by a snapshot, its meta will be changed. The case is to ensure
+/// asserts in code can tolerate the change.
+#[test]
+fn test_merge_snapshot_demote() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    cluster.must_split(&region, b"k2");
+
+    let r1 = pd_client.get_region(b"k1").unwrap();
+    let r2 = pd_client.get_region(b"k3").unwrap();
+
+    let r2_on_store1 = find_peer(&r2, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store1);
+
+    // So r2 on store 3 will lag behind.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r2.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    let last_index = cluster.raft_local_state(r2.get_id(), 1).get_last_index();
+    for i in 1..4 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    pd_client.must_merge(r1.get_id(), r2.get_id());
+    cluster.wait_log_truncated(r2.get_id(), 1, last_index + 1);
+
+    // Now demote r2 on store 3 to learner, so its meta will be changed.
+    let r2_on_store3 = find_peer(&r2, 3).unwrap().to_owned();
+    pd_client.must_joint_confchange(
+        r2.get_id(),
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
+            (
+                ConfChangeType::AddLearnerNode,
+                new_learner_peer(3, r2_on_store3.get_id()),
+            ),
+        ],
+    );
+
+    cluster.clear_send_filters();
+    // Now snapshot should be generated and merge on store 3 should be aborted.
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+#[test]
+fn test_stale_message_after_merge() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    pd_client.must_remove_peer(left.get_id(), find_peer(&left, 3).unwrap().to_owned());
+    pd_client.must_add_peer(left.get_id(), new_peer(3, 1004));
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    // Such stale message can be sent due to network error, consider the following example:
+    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send `RequestVote`
+    //    message to peer 1001, and fail due to network error, but this message is keep backoff-retry to send out
+    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004 on store 3, then the region is
+    //    merged into other region, the merge can success because peer 1002 can reach both peer 1001 and peer 1004
+    // 3. Network recover, so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
+    //
+    // the backoff-retry of a stale message is hard to simulated in test, so here just send this stale message directly
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(left.get_id());
+    raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());
+    raft_msg.set_to_peer(find_peer(&left, 1).unwrap().to_owned());
+    raft_msg.set_region_epoch(left.get_region_epoch().to_owned());
+    cluster.send_raft_msg(raft_msg).unwrap();
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }

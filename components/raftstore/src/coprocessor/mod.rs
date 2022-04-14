@@ -30,7 +30,7 @@ pub use self::dispatcher::{
 };
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{
-    Callback as RegionInfoCallback, RegionCollector, RegionInfo, RegionInfoAccessor,
+    Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
     RegionInfoProvider, SeekRegionCallback,
 };
 pub use self::split_check::{
@@ -344,7 +344,7 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    fn on_step(&self, _msg: &mut eraftpb::Message) {}
+    fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
 }
 
 #[cfg(test)]
