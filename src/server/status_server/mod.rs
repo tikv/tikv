@@ -498,7 +498,7 @@ where
             .map(|enc| enc.to_str().unwrap_or_default())
             .unwrap_or_default();
         let gz_encoding = encoding
-            .split(",")
+            .split(',')
             .map(|s| s.trim())
             .any(|s| s == "gzip" || s.starts_with("gzip;"));
         if gz_encoding {
