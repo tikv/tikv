@@ -851,6 +851,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 &ctx,
             )
         {
+            // Safety: `self.sched_pool` ensures a TLS engine exists.
+            unsafe {
+                with_tls_engine(|engine: &E| {
+                    // We skip writing the raftstore, but to improve CDC old value hit rate,
+                    // we should send the old values to the CDC scheduler.
+                    engine.schedule_txn_extra(to_be_write.extra);
+                })
+            }
             scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
             return;
         }

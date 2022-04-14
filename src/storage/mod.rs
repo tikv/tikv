@@ -81,7 +81,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 
-use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV2};
+use api_version::{match_template_api_version, APIVersion, KeyMode, RawValue, APIV1, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -96,6 +96,7 @@ use raftstore::store::{util::build_key_range, TxnExt};
 use raftstore::store::{ReadStats, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
+use std::marker::PhantomData;
 use std::{
     borrow::Cow,
     iter,
@@ -108,6 +109,8 @@ use tikv_kv::SnapshotExt;
 use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::{duration_to_ms, Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, OldValues, RawMutation, TimeStamp, TsSet, Value};
+
+use causal_ts;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -133,7 +136,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager> {
+pub struct Storage<E: Engine, L: LockManager, Api: APIVersion> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -157,9 +160,15 @@ pub struct Storage<E: Engine, L: LockManager> {
     api_version: ApiVersion,
 
     quota_limiter: Arc<QuotaLimiter>,
+
+    _phantom: PhantomData<Api>,
 }
 
-impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
+/// Storage for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type StorageApiV1<E, L> = Storage<E, L, APIV1>;
+
+impl<E: Engine, L: LockManager, Api: APIVersion> Clone for Storage<E, L, Api> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -178,11 +187,12 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             api_version: self.api_version,
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: Arc::clone(&self.quota_limiter),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
+impl<E: Engine, L: LockManager, Api: APIVersion> Drop for Storage<E, L, Api> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -214,7 +224,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager> Storage<E, L> {
+impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -229,6 +239,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
     ) -> Result<Self> {
+        assert_eq!(config.api_version(), Api::TAG, "Api version not match");
+
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
@@ -254,6 +266,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             api_version: config.api_version(),
             resource_tag_factory,
             quota_limiter,
+            _phantom: PhantomData,
         })
     }
 
@@ -393,6 +406,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// See the following for detail:
     ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
     ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+    // TODO: refactor to use `Api` parameter.
     fn check_api_version(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -452,6 +466,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
+    // TODO: refactor to use `Api` parameter.
     fn check_api_version_ranges(
         storage_api_version: ApiVersion,
         req_api_version: ApiVersion,
@@ -791,7 +806,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             match PointGetterBuilder::new(snapshot, start_ts)
                                 .fill_cache(fill_cache)
                                 .isolation_level(isolation_level)
-                                .multi(false)
                                 .bypass_locks(bypass_locks)
                                 .access_locks(access_locks)
                                 .build()
@@ -2600,23 +2614,36 @@ pub fn point_key_range(key: Key) -> KeyRange {
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder<E: Engine, L: LockManager> {
+pub struct TestStorageBuilder<E: Engine, L: LockManager, Api: APIVersion> {
     engine: E,
     config: Config,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
     resource_tag_factory: ResourceTagFactory,
+    _phantom: PhantomData<Api>,
 }
 
-impl TestStorageBuilder<RocksEngine, DummyLockManager> {
+/// TestStorageBuilder for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type TestStorageBuilderApiV1<E, L> = TestStorageBuilder<E, L, APIV1>;
+
+impl<Api: APIVersion> TestStorageBuilder<RocksEngine, DummyLockManager, Api> {
     /// Build `Storage<RocksEngine>`.
-    pub fn new(lock_mgr: DummyLockManager, api_version: ApiVersion) -> Self {
-        let engine = TestEngineBuilder::new()
-            .api_version(api_version)
+    pub fn new(lock_mgr: DummyLockManager) -> Self {
+        let mut engine = TestEngineBuilder::new()
+            .api_version(Api::TAG)
             .build()
             .unwrap();
-        Self::from_engine_and_lock_mgr(engine, lock_mgr, api_version)
+
+        // register causal observer for RawKV API V2
+        if let ApiVersion::V2 = Api::TAG {
+            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(engine.mut_coprocessor());
+        }
+
+        Self::from_engine_and_lock_mgr(engine, lock_mgr)
     }
 }
 
@@ -2738,10 +2765,10 @@ impl FlowStatsReporter for DummyReporter {
     fn report_write_stats(&self, _write_stats: WriteStats) {}
 }
 
-impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
-    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L, api_version: ApiVersion) -> Self {
+impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
+    pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let mut config = Config::default();
-        config.set_api_version(api_version);
+        config.set_api_version(Api::TAG);
         Self {
             engine,
             config,
@@ -2749,6 +2776,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             lock_mgr,
             resource_tag_factory: ResourceTagFactory::new_for_test(),
+            _phantom: PhantomData,
         }
     }
 
@@ -2788,7 +2816,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, L>> {
+    pub fn build(self) -> Result<Storage<E, L, Api>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -2812,7 +2840,7 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         )
     }
 
-    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L>> {
+    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, Api>> {
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -2965,8 +2993,8 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, Api: APIVersion>(
+        storage: &Storage<E, L, Api>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -3075,6 +3103,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use api_version::{APIV1, APIV1TTL, APIV2};
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{
@@ -3099,7 +3128,7 @@ mod tests {
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -3136,7 +3165,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3194,13 +3223,9 @@ mod tests {
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -3286,7 +3311,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3626,13 +3651,9 @@ mod tests {
             )
         }
         .unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .build()
+            .unwrap();
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
@@ -3859,7 +3880,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3934,7 +3955,7 @@ mod tests {
 
     #[test]
     fn test_batch_get_command() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4020,7 +4041,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4106,7 +4127,7 @@ mod tests {
             scheduler_pending_write_threshold: ReadableSize(1),
             ..Default::default()
         };
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .config(config)
             .build()
             .unwrap();
@@ -4149,7 +4170,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -4187,7 +4208,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_check_ttl() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4245,7 +4266,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4302,7 +4323,7 @@ mod tests {
             scheduler_worker_pool_size: 1,
             ..Default::default()
         };
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .config(config)
             .build()
             .unwrap();
@@ -4356,7 +4377,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4458,23 +4479,18 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        test_raw_delete_range_impl(ApiVersion::V1);
-        test_raw_delete_range_impl(ApiVersion::V1ttl);
-        test_raw_delete_range_impl(ApiVersion::V2);
+        test_raw_delete_range_impl::<APIV1>();
+        test_raw_delete_range_impl::<APIV1TTL>();
+        test_raw_delete_range_impl::<APIV2>();
     }
 
-    fn test_raw_delete_range_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_delete_range_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4576,23 +4592,18 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        test_raw_batch_put_impl(ApiVersion::V1);
-        test_raw_batch_put_impl(ApiVersion::V1ttl);
-        test_raw_batch_put_impl(ApiVersion::V2);
+        test_raw_batch_put_impl::<APIV1>();
+        test_raw_batch_put_impl::<APIV1TTL>();
+        test_raw_batch_put_impl::<APIV2>();
     }
 
-    fn test_raw_batch_put_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_batch_put_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4609,7 +4620,7 @@ mod tests {
             .into_iter()
             .map(|(key, value, _)| (key, value))
             .collect();
-        let ttls = if let ApiVersion::V1ttl | ApiVersion::V2 = api_version {
+        let ttls = if Api::IS_TTL_ENABLED {
             test_data
                 .clone()
                 .into_iter()
@@ -4641,23 +4652,18 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        test_raw_batch_get_impl(ApiVersion::V1);
-        test_raw_batch_get_impl(ApiVersion::V1ttl);
-        test_raw_batch_get_impl(ApiVersion::V2);
+        test_raw_batch_get_impl::<APIV1>();
+        test_raw_batch_get_impl::<APIV1TTL>();
+        test_raw_batch_get_impl::<APIV2>();
     }
 
-    fn test_raw_batch_get_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_batch_get_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4695,23 +4701,18 @@ mod tests {
 
     #[test]
     fn test_batch_raw_get() {
-        test_batch_raw_get_impl(ApiVersion::V1);
-        test_batch_raw_get_impl(ApiVersion::V1ttl);
-        test_batch_raw_get_impl(ApiVersion::V2);
+        test_batch_raw_get_impl::<APIV1>();
+        test_batch_raw_get_impl::<APIV1TTL>();
+        test_batch_raw_get_impl::<APIV2>();
     }
 
-    fn test_batch_raw_get_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_batch_raw_get_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4763,23 +4764,18 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        test_raw_batch_delete_impl(ApiVersion::V1);
-        test_raw_batch_delete_impl(ApiVersion::V1ttl);
-        test_raw_batch_delete_impl(ApiVersion::V2);
+        test_raw_batch_delete_impl::<APIV1>();
+        test_raw_batch_delete_impl::<APIV1TTL>();
+        test_raw_batch_delete_impl::<APIV2>();
     }
 
-    fn test_raw_batch_delete_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_batch_delete_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4864,29 +4860,24 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        test_raw_scan_impl(ApiVersion::V1);
-        test_raw_scan_impl(ApiVersion::V1ttl);
-        test_raw_scan_impl(ApiVersion::V2);
+        test_raw_scan_impl::<APIV1>();
+        test_raw_scan_impl::<APIV1TTL>();
+        test_raw_scan_impl::<APIV2>();
     }
 
-    fn test_raw_scan_impl(api_version: ApiVersion) {
-        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = api_version {
+    fn test_raw_scan_impl<Api: APIVersion>() {
+        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = Api::TAG {
             (Some(b"r\0z".to_vec()), Some(b"r\0\0".to_vec()))
         } else {
             (None, None)
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5181,8 +5172,9 @@ mod tests {
             (b"b".to_vec(), b"b3".to_vec()),
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
+        // TODO: refactor to use `Api` parameter.
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -5192,7 +5184,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -5202,7 +5194,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -5213,7 +5205,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -5223,7 +5215,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -5233,7 +5225,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -5243,7 +5235,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
 
@@ -5253,26 +5245,26 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
     }
 
     #[test]
     fn test_raw_batch_scan() {
-        test_raw_batch_scan_impl(ApiVersion::V1);
-        test_raw_batch_scan_impl(ApiVersion::V1ttl);
-        test_raw_batch_scan_impl(ApiVersion::V2);
+        test_raw_batch_scan_impl::<APIV1>();
+        test_raw_batch_scan_impl::<APIV1TTL>();
+        test_raw_batch_scan_impl::<APIV2>();
     }
 
-    fn test_raw_batch_scan_impl(api_version: ApiVersion) {
+    fn test_raw_batch_scan_impl<Api: APIVersion>() {
         let make_ranges = |delimiters: Vec<Vec<u8>>| -> Vec<KeyRange> {
             delimiters
                 .windows(2)
                 .map(|key_pair| {
                     let mut range = KeyRange::default();
                     range.set_start_key(key_pair[0].clone());
-                    if let ApiVersion::V2 = api_version {
+                    if let ApiVersion::V2 = Api::TAG {
                         range.set_end_key(key_pair[1].clone());
                     };
                     range
@@ -5280,17 +5272,12 @@ mod tests {
                 .collect()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5522,22 +5509,17 @@ mod tests {
 
     #[test]
     fn test_raw_get_key_ttl() {
-        test_raw_get_key_ttl_impl(ApiVersion::V1ttl);
-        test_raw_get_key_ttl_impl(ApiVersion::V2);
+        test_raw_get_key_ttl_impl::<APIV1TTL>();
+        test_raw_get_key_ttl_impl::<APIV2>();
     }
 
-    fn test_raw_get_key_ttl_impl(api_version: ApiVersion) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, api_version)
+    fn test_raw_get_key_ttl_impl<Api: APIVersion>() {
+        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        let req_api_version = if api_version == ApiVersion::V1ttl {
-            ApiVersion::V1
-        } else {
-            api_version
-        };
         let ctx = Context {
-            api_version: req_api_version,
+            api_version: Api::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5587,7 +5569,7 @@ mod tests {
 
     #[test]
     fn test_scan_lock() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5883,7 +5865,7 @@ mod tests {
     fn test_resolve_lock() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5994,7 +5976,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock_lite() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6102,7 +6084,7 @@ mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6188,7 +6170,7 @@ mod tests {
 
     #[test]
     fn test_check_txn_status() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -6395,7 +6377,7 @@ mod tests {
 
     #[test]
     fn test_check_secondary_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -6513,7 +6495,7 @@ mod tests {
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
@@ -6814,10 +6796,9 @@ mod tests {
     #[test]
     fn validate_wait_for_lock_msg() {
         let (msg_tx, msg_rx) = channel();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             TestEngineBuilder::new().build().unwrap(),
             ProxyLockMgr::new(msg_tx),
-            ApiVersion::V1,
         )
         .build()
         .unwrap();
@@ -6931,10 +6912,9 @@ mod tests {
         let (msg_tx, msg_rx) = channel();
         let mut lock_mgr = ProxyLockMgr::new(msg_tx);
         lock_mgr.set_has_waiter(true);
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             TestEngineBuilder::new().build().unwrap(),
             lock_mgr,
-            ApiVersion::V1,
         )
         .build()
         .unwrap();
@@ -7235,7 +7215,7 @@ mod tests {
 
     #[test]
     fn test_check_memory_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.get_concurrency_manager();
@@ -7334,7 +7314,7 @@ mod tests {
 
     #[test]
     fn test_read_access_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -7413,7 +7393,7 @@ mod tests {
 
     #[test]
     fn test_async_commit_prewrite() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -7503,13 +7483,10 @@ mod tests {
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-            engine.clone(),
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
+                .build()
+                .unwrap();
 
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
@@ -7674,11 +7651,8 @@ mod tests {
                     builder = builder.add_expected_write(expected_write)
                 }
                 let engine = builder.build();
-                let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(
-                    engine,
-                    DummyLockManager {},
-                    ApiVersion::V1,
-                );
+                let mut builder =
+                    TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager);
                 builder.config.enable_async_apply_prewrite = true;
                 if self.pipelined_pessimistic_lock {
                     builder
@@ -7818,7 +7792,7 @@ mod tests {
 
     #[test]
     fn test_resolve_commit_pessimistic_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -8152,7 +8126,8 @@ mod tests {
         for (i, (storage_api_version, req_api_version, cmd, keys, err)) in
             test_data.into_iter().enumerate()
         {
-            let res = Storage::<RocksEngine, DummyLockManager>::check_api_version(
+            // TODO: refactor to use `Api` parameter.
+            let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version(
                 storage_api_version,
                 req_api_version,
                 cmd,
@@ -8207,7 +8182,8 @@ mod tests {
                          cmd,
                          range: &[(Option<&[u8]>, Option<&[u8]>)],
                          err| {
-            let res = Storage::<RocksEngine, DummyLockManager>::check_api_version_ranges(
+            // TODO: refactor to use `Api` parameter.
+            let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version_ranges(
                 storage_api_version,
                 req_api_version,
                 cmd,
@@ -8372,7 +8348,7 @@ mod tests {
     #[test]
     fn test_write_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(true)
             .build_for_txn(txn_ext.clone())
@@ -8464,7 +8440,7 @@ mod tests {
     #[test]
     fn test_disable_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(false)
             .build_for_txn(txn_ext.clone())
@@ -8516,7 +8492,7 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
-        let storage = TestStorageBuilder::new(DummyLockManager, ApiVersion::V2)
+        let storage = TestStorageBuilder::<_, _, APIV2>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();

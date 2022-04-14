@@ -4,6 +4,7 @@
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -370,6 +371,22 @@ impl Worker {
         self.remote.spawn(async move {
             while let Some(Ok(_)) = interval.next().await {
                 func();
+            }
+        });
+    }
+
+    pub fn spawn_interval_async_task<F, Fut>(&self, interval: Duration, mut func: F)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+        F: FnMut() -> Fut + Send + 'static,
+    {
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        self.remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                let fut = func();
+                fut.await;
             }
         });
     }

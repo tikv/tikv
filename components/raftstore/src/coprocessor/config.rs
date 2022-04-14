@@ -49,6 +49,9 @@ pub struct Config {
     pub region_bucket_size: ReadableSize,
     // region size threshold for using approximate size instead of scan
     pub region_size_threshold_for_approximate: ReadableSize,
+    // ratio of region_bucket_size. (0, 0.5)
+    // The region_bucket_merge_size_ratio * region_bucket_size is threshold to merge with its left neighbor bucket
+    pub region_bucket_merge_size_ratio: f64,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -69,8 +72,9 @@ pub const SPLIT_KEYS: u64 = 960000;
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
-pub const DEFAULT_LARGE_REGION_SIZE_THRESHOLD: ReadableSize = ReadableSize::mb(500);
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(128);
+
+pub const DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO: f64 = 0.33;
 
 impl Default for Config {
     fn default() -> Config {
@@ -86,7 +90,8 @@ impl Default for Config {
             perf_level: PerfLevel::EnableCount,
             enable_region_bucket: false,
             region_bucket_size: DEFAULT_BUCKET_SIZE,
-            region_size_threshold_for_approximate: DEFAULT_LARGE_REGION_SIZE_THRESHOLD,
+            region_size_threshold_for_approximate: DEFAULT_BUCKET_SIZE * 4,
+            region_bucket_merge_size_ratio: DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO,
         }
     }
 }
@@ -107,22 +112,31 @@ impl Config {
                 self.region_split_keys
             ));
         }
-        if self.region_split_size.0 < self.region_bucket_size.0 {
-            return Err(box_err!(
-                "region split size {} must >= region bucket size {}",
-                self.region_split_size.0,
-                self.region_bucket_size.0
-            ));
-        }
-        if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
-            return Err(box_err!(
-                "large region threshold size {} must >= region bucket size {}",
-                self.region_size_threshold_for_approximate.0,
-                self.region_bucket_size.0
-            ));
-        }
-        if self.region_bucket_size.0 == 0 {
-            return Err(box_err!("region_bucket size cannot be 0."));
+        if self.enable_region_bucket {
+            if self.region_split_size.0 < self.region_bucket_size.0 {
+                return Err(box_err!(
+                    "region split size {} must >= region bucket size {}",
+                    self.region_split_size.0,
+                    self.region_bucket_size.0
+                ));
+            }
+            if self.region_size_threshold_for_approximate.0 < self.region_bucket_size.0 {
+                return Err(box_err!(
+                    "large region threshold size {} must >= region bucket size {}",
+                    self.region_size_threshold_for_approximate.0,
+                    self.region_bucket_size.0
+                ));
+            }
+            if self.region_bucket_size.0 == 0 {
+                return Err(box_err!("region_bucket size cannot be 0."));
+            }
+            if self.region_bucket_merge_size_ratio <= 0.0
+                || self.region_bucket_merge_size_ratio >= 0.5
+            {
+                return Err(box_err!(
+                    "region-bucket-merge-size-ratio should be 0 to 0.5 (not include both ends)."
+                ));
+            }
         }
         Ok(())
     }
@@ -166,5 +180,11 @@ mod tests {
         cfg.region_max_keys = 10;
         cfg.region_split_keys = 20;
         assert!(cfg.validate().is_err());
+
+        cfg = Config::default();
+        cfg.enable_region_bucket = false;
+        cfg.region_split_size = ReadableSize(20);
+        cfg.region_bucket_size = ReadableSize(30);
+        assert!(cfg.validate().is_ok());
     }
 }

@@ -212,6 +212,7 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
+    /// Disable this feature by set to 0, logic will be removed in other pr.
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
     /// increasing. For raftstore layer entries will be evicted from entry cache, if they
     /// utilize memory more than `evict_cache_on_memory_ratio` * total.
@@ -264,11 +265,16 @@ pub struct Config {
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
 
+    // Interval to report min resolved ts, if it is zero, it means disabled.
+    pub report_min_resolved_ts_interval: ReadableDuration,
+
     /// Interval to check whether to reactivate in-memory pessimistic lock after being disabled
     /// before transferring leader.
     pub reactive_memory_lock_tick_interval: ReadableDuration,
     /// Max tick count before reactivating in-memory pessimistic lock.
     pub reactive_memory_lock_timeout_tick: usize,
+    // Interval of scheduling a tick to report region buckets.
+    pub report_region_buckets_tick_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -339,7 +345,7 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.2,
+            evict_cache_on_memory_ratio: 0.0,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -355,8 +361,10 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
+            report_min_resolved_ts_interval: ReadableDuration::millis(0),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            report_region_buckets_tick_interval: ReadableDuration::secs(10),
         }
     }
 }

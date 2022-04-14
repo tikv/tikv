@@ -294,7 +294,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
 #[cfg(test)]
 pub mod tests {
     use super::super::tests::*;
-    use super::super::CfStatistics;
+    use super::super::{CfStatistics, TEST_ENGINE_CFS};
     use super::*;
     use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
