@@ -827,7 +827,7 @@ where
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
 
-        let region = self.region().clone();
+        let mut region = self.region().clone();
         info!(
             "begin to destroy";
             "region_id" => self.region_id,
@@ -837,11 +837,21 @@ where
         // Set Tombstone state explicitly
         let mut kv_wb = ctx.engines.kv.write_batch();
         let mut raft_wb = ctx.engines.raft.log_batch(1024);
+
         // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
         // the minimal index that may still have logs.
         let last_compacted_idx = self.last_compacted_idx;
         self.mut_store()
             .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
+
+        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+        // peer list are empty, so a removed peer will be created again.  Saving current peer
+        // into the peer list of region will fix this problem.
+        if !self.get_store().is_initialized() {
+            region.mut_peers().push(self.peer.clone());
+        }
+
         write_peer_state(
             &mut kv_wb,
             &region,

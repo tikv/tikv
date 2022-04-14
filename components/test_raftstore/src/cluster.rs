@@ -6,6 +6,7 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
+use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, PeerRole, RegionEpoch, StoreLabel};
@@ -1548,6 +1549,38 @@ impl<T: Simulator> Cluster<T> {
     // it's so common that we provide an API for it
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
+    }
+
+    pub fn gc_peer(
+        &mut self,
+        region_id: u64,
+        node_id: u64,
+        peer: metapb::Peer,
+    ) -> std::result::Result<(), TrySendError<RaftMessage>> {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+
+        let mut message = RaftMessage::default();
+        message.set_region_id(region_id);
+        message.set_from_peer(peer.clone());
+        message.set_to_peer(peer);
+        message.set_region_epoch(self.get_region_epoch(region_id));
+        message.set_is_tombstone(true);
+        router.send_raft_message(message)
+    }
+
+    pub fn must_gc_peer(&mut self, region_id: u64, node_id: u64, peer: metapb::Peer) {
+        for _ in 0..250 {
+            self.gc_peer(region_id, node_id, peer.clone()).unwrap();
+            if self.region_local_state(region_id, node_id).get_state() == PeerState::Tombstone {
+                return;
+            }
+            sleep_ms(20);
+        }
+
+        panic!(
+            "gc peer timeout: region id {}, node id {}, peer {:?}",
+            region_id, node_id, peer
+        );
     }
 }
 
