@@ -48,9 +48,12 @@ use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
 use crate::store::msg::RaftCommand;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
-use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::worker::{
+    HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
+};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    RAFT_INIT_LOG_INDEX,
 };
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
@@ -834,7 +837,11 @@ where
         // Set Tombstone state explicitly
         let mut kv_wb = ctx.engines.kv.write_batch();
         let mut raft_wb = ctx.engines.raft.log_batch(1024);
-        self.mut_store().clear_meta(&mut kv_wb, &mut raft_wb)?;
+        // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
+        // the minimal index that may still have logs.
+        let last_compacted_idx = self.last_compacted_idx;
+        self.mut_store()
+            .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
         write_peer_state(
             &mut kv_wb,
             &region,
@@ -1599,6 +1606,31 @@ where
             && !self.replication_sync
     }
 
+    pub fn schedule_raftlog_gc<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to: u64,
+    ) -> bool {
+        let task = RaftlogGcTask::gc(self.region_id, self.last_compacted_idx, to);
+        debug!(
+            "scheduling raft log gc task";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer_id(),
+            "task" => %task,
+        );
+        if let Err(e) = ctx.raftlog_gc_scheduler.schedule(task) {
+            error!(
+                "failed to schedule raft log gc task";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+                "err" => %e,
+            );
+            false
+        } else {
+            true
+        }
+    }
+
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -1810,6 +1842,15 @@ where
             self.raft_log_size_hint = 0;
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
+            let last_first_index = self.get_store().first_index();
+            if self.last_compacted_idx == 0 && last_first_index >= RAFT_INIT_LOG_INDEX {
+                // There may be stale logs in raft engine, so schedule a task to clean it
+                // up. This is a best effort, if TiKV is shutdown before the task is
+                // handled, there can still be stale logs not being deleted until next
+                // log gc command is executed. This will delete range [0, last_first_index).
+                self.schedule_raftlog_gc(ctx, last_first_index);
+                self.last_compacted_idx = last_first_index;
+            }
         }
 
         let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
