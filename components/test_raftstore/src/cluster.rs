@@ -1349,6 +1349,28 @@ impl<T: Simulator> Cluster<T> {
         .unwrap();
     }
 
+    pub fn enter_force_leader(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        failed_stores: HashSet<u64>,
+    ) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router
+            .significant_send(
+                region_id,
+                SignificantMsg::EnterForceLeaderState { failed_stores },
+            )
+            .unwrap();
+    }
+
+    pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        router
+            .significant_send(region_id, SignificantMsg::ExitForceLeaderState)
+            .unwrap();
+    }
+
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
