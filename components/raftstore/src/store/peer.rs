@@ -743,13 +743,31 @@ where
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
             // so the commit index may exceed the last index of the entires from CommitMergeRequest.
             // If that, no need to append
-            if self.raft_group.raft.raft_log.committed - log_idx > entries.len() as u64 {
+            if self.raft_group.raft.raft_log.committed - log_idx >= entries.len() as u64 {
                 return None;
             }
             entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
             log_idx = self.raft_group.raft.raft_log.committed;
         }
         let log_term = self.get_index_term(log_idx);
+
+        let last_log = entries.last().unwrap();
+        if last_log.term > self.term() {
+            // Hack: In normal flow, when leader sends the entries, it will use a term that's not less
+            // than the last log term. And follower will update its states correctly. For merge, we append
+            // the log without raft, so we have to take care of term explicitly to get correct metadata.
+            info!(
+                "become follower for new logs";
+                "new_log_term" => last_log.term,
+                "new_log_index" => last_log.index,
+                "term" => self.term(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            self.raft_group
+                .raft
+                .become_follower(last_log.term, INVALID_ID);
+        }
 
         self.raft_group
             .raft
@@ -829,7 +847,13 @@ where
             &mut kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge_state.clone(),
+            // Only persist the `merge_state` if the merge is known to be succeeded
+            // which is determined by the `keep_data` flag
+            if keep_data {
+                self.pending_merge_state.clone()
+            } else {
+                None
+            },
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
@@ -1038,6 +1062,13 @@ where
         self.get_store().is_applying_snapshot()
     }
 
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        self.get_store().is_handling_snapshot()
+    }
+
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
@@ -1115,7 +1146,8 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            ctx.coprocessor_host.on_step_read_index(&mut m);
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -2352,6 +2384,7 @@ where
             }
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
@@ -3117,9 +3150,8 @@ where
             return;
         }
 
-        #[allow(clippy::suspicious_operation_groupings)]
-        if self.is_applying_snapshot()
-            || self.has_pending_snapshot()
+        let pending_snapshot = self.is_applying_snapshot() || self.has_pending_snapshot();
+        if pending_snapshot
             || msg.get_from() != self.leader_id()
             // For followers whose disk is full.
             || !matches!(ctx.self_disk_usage, DiskUsage::Normal)
@@ -3129,6 +3161,8 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
+                "pending_snapshot" => pending_snapshot,
+                "disk_usage" => ?ctx.self_disk_usage,
             );
             return;
         }
