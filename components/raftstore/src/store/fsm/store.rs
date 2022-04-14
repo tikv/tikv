@@ -413,6 +413,9 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
+
+    /// need a radical way to reclaim leader peer cache?
+    pub need_reclaim_entry_cache: bool,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -703,6 +706,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.has_ready = false;
         self.poll_ctx.self_disk_usage = get_disk_status(self.poll_ctx.store.get_id());
+        // for no new entries leader.
+        self.poll_ctx.need_reclaim_entry_cache =
+            needs_evict_entry_cache(self.poll_ctx.cfg.evict_cache_on_memory_ratio);
         self.timer = TiInstant::now();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -1202,6 +1208,7 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
+            need_reclaim_entry_cache: false,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

@@ -1404,6 +1404,9 @@ where
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
+        if self.fsm.peer.is_leader() && self.ctx.need_reclaim_entry_cache {
+            self.register_entry_cache_evict_tick();
+        }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(r.state_role);
