@@ -1502,77 +1502,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn partition(&self, s1: Vec<u64>, s2: Vec<u64>) {
         self.add_send_filter(PartitionFilterFactory::new(s1, s2));
     }
-<<<<<<< HEAD
-=======
-
-    pub fn must_wait_for_leader_expire(&self, node_id: u64, region_id: u64) {
-        let timer = Instant::now_coarse();
-        while timer.saturating_elapsed() < Duration::from_secs(5) {
-            if self
-                .query_leader(node_id, region_id, Duration::from_secs(1))
-                .is_none()
-            {
-                return;
-            }
-            sleep_ms(100);
-        }
-        panic!(
-            "region {}'s replica in store {} still has a valid leader after 5 secs",
-            region_id, node_id
-        );
-    }
-
-    pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
-        let router = self.sim.rl().get_router(node_id).unwrap();
-        let mut try_cnt = 0;
-        loop {
-            if try_cnt % 50 == 0 {
-                // In case the message is ignored, re-send it every 50 tries.
-                router
-                    .force_send(
-                        region.get_id(),
-                        PeerMsg::UpdateRegionForUnsafeRecover(region.clone()),
-                    )
-                    .unwrap();
-            }
-            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
-                if current.get_start_key() == region.get_start_key()
-                    && current.get_end_key() == region.get_end_key()
-                {
-                    return;
-                }
-            }
-            if try_cnt > 500 {
-                panic!("region {:?} is not updated", region);
-            }
-            try_cnt += 1;
-            sleep_ms(20);
-        }
-    }
-
-    pub fn must_recreate_region_for_unsafe_recover(
-        &mut self,
-        node_id: u64,
-        region: &metapb::Region,
-    ) {
-        let router = self.sim.rl().get_router(node_id).unwrap();
-        let mut try_cnt = 0;
-        loop {
-            if try_cnt % 50 == 0 {
-                // In case the message is ignored, re-send it every 50 tries.
-                StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
-            }
-            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
-                return;
-            }
-            if try_cnt > 250 {
-                panic!("region {:?} is not created", region);
-            }
-            try_cnt += 1;
-            sleep_ms(20);
-        }
-    }
-
+    
     pub fn gc_peer(
         &mut self,
         region_id: u64,
@@ -1604,7 +1534,6 @@ impl<T: Simulator> Cluster<T> {
             region_id, node_id, peer
         );
     }
->>>>>>> a83b0f781... raftstore: destroy uninitialized peer can make it possible to recreate old peer (#11457)
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
