@@ -513,7 +513,7 @@ where
         let mut resp = Response::new(metrics.into());
         if gz_encoding {
             resp.headers_mut()
-            .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         }
         resp.headers_mut().insert(
             CONTENT_TYPE,
