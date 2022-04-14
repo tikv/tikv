@@ -244,11 +244,12 @@ impl SnapAccessCore {
         self.ver
     }
 
-    pub(crate) fn may_contains_in_older_table(&self, key: &[u8], cf: usize) -> bool {
+    pub(crate) fn contains_in_older_table(&self, key: &[u8], cf: usize) -> bool {
         let key_hash = farmhash::fingerprint64(key);
         for tbl in &self.data.mem_tbls[1..] {
-            if tbl.get_cf(cf).get(key, u64::MAX).is_valid() {
-                return true;
+            let val = tbl.get_cf(cf).get(key, u64::MAX);
+            if val.is_valid() {
+                return !val.is_deleted();
             }
         }
         for l0 in &self.data.l0_tbls {
@@ -256,14 +257,17 @@ impl SnapAccessCore {
             if l0_cf.is_none() {
                 continue;
             }
-            if l0_cf.as_ref().unwrap().may_contains(key_hash) {
-                return true;
+            let l0_cf = l0_cf.as_ref().unwrap();
+            let val = l0_cf.get(key, u64::MAX, key_hash);
+            if val.is_valid() {
+                return !val.is_deleted();
             }
         }
         for l in self.data.get_cf(cf).levels.as_slice() {
             if let Some(tbl) = l.get_table(key) {
-                if tbl.may_contains(key_hash) {
-                    return true;
+                let val = tbl.get(key, u64::MAX, key_hash);
+                if val.is_valid() {
+                    return !val.is_deleted();
                 }
             }
         }

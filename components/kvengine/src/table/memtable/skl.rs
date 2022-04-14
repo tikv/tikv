@@ -245,7 +245,7 @@ impl SkipListCore {
             let entry = &batch.entries[i];
             if is_deleted(entry.meta) {
                 let key = entry.key(&batch.buf);
-                if snap.may_contains_in_older_table(key, cf) {
+                if snap.contains_in_older_table(key, cf) {
                     self.put_with_hint(&batch.buf, entry, &mut hint);
                 } else {
                     self.delete_with_hint(key, &mut hint);
