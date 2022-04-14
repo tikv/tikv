@@ -1,14 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use engine_rocks::Compat;
 use engine_traits::{Peekable, RaftEngineReadOnly};
+use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftLocalState;
+use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 use tikv_util::time::Instant;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_one_node_leader_missing() {
@@ -129,6 +133,83 @@ fn test_stale_learner_restart() {
     fail::remove("on_handle_apply_1003");
     cluster.run_node(2).unwrap();
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+}
+
+/// Test if destroy a uninitialized peer through tombstone msg would allow a staled peer be created again.
+#[test]
+fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
+    // 4 stores cluster.
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.hibernate_regions = false;
+
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    // add peer (2,2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    let epoch = pd_client.get_region_epoch(r1);
+
+    // Conf version must change.
+    assert!(epoch.get_conf_ver() > 2);
+
+    // Transfer leader to peer (2, 2).
+    cluster.must_transfer_leader(r1, new_peer(2, 2));
+
+    // Isolate node 1
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+
+    cluster.must_put(format!("k{}", 2).as_bytes(), b"v1");
+
+    // Remove 3 and add 4
+    pd_client.must_add_peer(r1, new_learner_peer(4, 4));
+    pd_client.must_add_peer(r1, new_peer(4, 4));
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(format!("k{}", 3).as_bytes(), b"v1");
+
+    // Ensure 5 drops all snapshot
+    let (notify_tx, _notify_rx) = mpsc::channel();
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, Box::new(DropSnapshotFilter::new(notify_tx)));
+
+    // Add learner 5 on store 3
+    pd_client.must_add_peer(r1, new_learner_peer(3, 5));
+
+    cluster.must_put(format!("k{}", 4).as_bytes(), b"v1");
+
+    // Remove and destroy the uninitialized 5
+    let peer_5 = new_learner_peer(3, 5);
+    pd_client.must_remove_peer(r1, peer_5.clone());
+    cluster.must_gc_peer(r1, 3, peer_5);
+
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
+    must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
+
+    // Unisolate 1 and try wakeup 3
+    cluster.clear_send_filters();
+    cluster.sim.wl().clear_recv_filters(3);
+    cluster.partition(vec![1, 3], vec![2, 4]);
+
+    sleep_until_election_triggered(&cluster.cfg.raft_store);
+
+    let region = block_on(pd_client.get_region_by_id(r1)).unwrap();
+    must_region_cleared(&cluster.get_all_engines(3), &region.unwrap());
 }
 
 /// Logs scan are now moved to raftlog gc threads. The case is to test if logs
