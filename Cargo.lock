@@ -6160,7 +6160,7 @@ checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 [[package]]
 name = "unwind"
 version = "0.0.1"
-source = "git+https://github.com/mornyx/unwind.git#4c782b7fa1f9c0eab01684b3a8ff8cbc3eff9c32"
+source = "git+https://github.com/mornyx/unwind.git#7eecc34857d8c8573892629895f2e440156a2f56"
 dependencies = [
  "byteorder",
  "cc",
