@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::APIVersion;
 use coprocessor_plugin_api::*;
 use kvproto::kvrpcpb;
 use semver::VersionReq;
@@ -53,9 +54,9 @@ impl Endpoint {
     /// Each request is dispatched to the corresponding coprocessor plugin based on it's `copr_name`
     /// field. A plugin with a matching name must be loaded by TiKV, otherwise an error is returned.
     #[inline]
-    pub fn handle_request<E: Engine, L: LockManager>(
+    pub fn handle_request<E: Engine, L: LockManager, Api: APIVersion>(
         &self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, Api>,
         req: kvrpcpb::RawCoprocessorRequest,
     ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> {
         let mut response = kvrpcpb::RawCoprocessorResponse::default();
@@ -72,9 +73,9 @@ impl Endpoint {
     }
 
     #[inline]
-    fn handle_request_impl<E: Engine, L: LockManager>(
+    fn handle_request_impl<E: Engine, L: LockManager, Api: APIVersion>(
         &self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, Api>,
         mut req: kvrpcpb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
         let plugin_registry = self
