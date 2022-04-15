@@ -4340,7 +4340,7 @@ where
                 if !self.fsm.peer.is_leader() {
                     // The peer will keep tick some times after its state becomes
                     // GroupState::Idle, in which case its state shouldn't be changed.
-                    if !self.fsm.tick_registry[PeerTick::Raft as usize] {
+                    if !self.fsm.tick_registry.contains(PeerTicks::RAFT) {
                         // If leader is able to receive message but can't send out any,
                         // follower should be able to start an election.
                         self.fsm.reset_hibernate_state(GroupState::PreChaos);
