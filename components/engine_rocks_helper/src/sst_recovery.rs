@@ -8,7 +8,7 @@ use engine_rocks::raw::*;
 use raftstore::store::fsm::StoreMeta;
 use tikv_util::{self, set_panic_mark, worker::*};
 
-pub const CHECK_DURATION: Duration = Duration::from_secs(10);
+const CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct RecoveryRunner {
     db: Arc<DB>,
@@ -26,7 +26,7 @@ struct FileInfo {
     largestkey: Vec<u8>,
     overlap_region_ids: Vec<u64>,
     // Time to generate recovery task, be used to record whether the timeout
-    instant: Instant,
+    start_time: Instant,
 }
 
 impl Runnable for RecoveryRunner {
@@ -39,7 +39,7 @@ impl Runnable for RecoveryRunner {
 
 impl RunnableWithTimer for RecoveryRunner {
     fn get_interval(&self) -> Duration {
-        CHECK_DURATION
+        CHECK_INTERVAL
     }
 
     fn on_timeout(&mut self) {
@@ -70,7 +70,7 @@ impl RecoveryRunner {
                     smallestkey: live_files.get_smallestkey(i as i32).to_owned(),
                     largestkey: live_files.get_largestkey(i as i32).to_owned(),
                     overlap_region_ids: Vec::new(),
-                    instant: Instant::now(),
+                    start_time: Instant::now(),
                 };
 
                 // only support recovering data key for now.
@@ -99,12 +99,7 @@ impl RecoveryRunner {
 
     // `sst_path` has been processed and is still in a damaged state.
     fn exist_scheduling_regions(&self, sst_path: &str) -> bool {
-        for region in &self.damaged_files {
-            if region.name == sst_path {
-                return true;
-            }
-        }
-        false
+        self.damaged_files.iter().any(|f| f.name == sst_path)
     }
 
     // Periodically check for recorded damaged files。
@@ -112,7 +107,7 @@ impl RecoveryRunner {
     // Acquire meta lock.
     fn check_damaged_files(&mut self) {
         for index in 0..self.damaged_files.len() {
-            if self.damaged_files[index].instant.elapsed() > self.max_damage_duration {
+            if self.damaged_files[index].start_time.elapsed() > self.max_damage_duration {
                 let f = self.damaged_files.remove(index);
                 let fname = f.name.clone();
                 // file may be put into `damaged_files` again here, but when this happens,
@@ -145,14 +140,14 @@ impl RecoveryRunner {
         // Find overlapping region ids.
         // Condition:
         // end_key > file.smallestkey
-        // start_key < file.largestkey
+        // start_key <= file.largestkey
         let mut ids = vec![];
         for (_, id) in meta
             .region_ranges
             .range((Excluded(file.smallestkey.clone()), Unbounded::<Vec<u8>>))
         {
             let region = &meta.regions[id];
-            if keys::enc_start_key(region) < file.largestkey {
+            if keys::enc_start_key(region) <= file.largestkey {
                 ids.push(*id);
                 file.overlap_region_ids.push(*id);
                 overlap = true;
@@ -196,31 +191,33 @@ mod tests {
             .prefix("test_sst_recovery_runner")
             .tempdir()
             .unwrap();
-        let cf = "cf";
         let db = Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            raw_util::new_engine(path.path().to_str().unwrap(), None, &["cf"], None).unwrap(),
         );
 
-        db.put(b"z3", b"val").unwrap();
-        db.put(b"z8", b"val").unwrap();
+        db.put(b"z2", b"val").unwrap();
+        db.put(b"z7", b"val").unwrap();
+        // generate SST file range from z3 to z8
         db.compact_range(None, None);
 
         let files = db.get_live_files();
+        assert_eq!(files.get_smallestkey(0), b"z2");
+        assert_eq!(files.get_largestkey(0), b"z7");
 
-        // create r1 [z1, z3] r2 [z2, z4] r3 [z5, z5] r4 [z6, z9] r5 [z8 z10] for test.
+        // create r1 [z0, z2] r2 [z1, z3] r3 [z2, z4] r4 [z7, z8] r5 [z8 z9] to test.
         let mut region_ranges = BTreeMap::<Vec<u8>, u64>::new();
-        region_ranges.insert(b"z3".to_vec(), 1);
-        region_ranges.insert(b"z4".to_vec(), 2);
-        region_ranges.insert(b"z5".to_vec(), 3);
-        region_ranges.insert(b"z9".to_vec(), 4);
-        region_ranges.insert(b"z10".to_vec(), 5);
+        region_ranges.insert(b"z2".to_vec(), 1);
+        region_ranges.insert(b"z3".to_vec(), 2);
+        region_ranges.insert(b"z4".to_vec(), 3);
+        region_ranges.insert(b"z8".to_vec(), 4);
+        region_ranges.insert(b"z9".to_vec(), 5);
         let mut store_meta = StoreMeta::new(10);
         store_meta.region_ranges = region_ranges;
 
-        add_region_to_store_meta(&mut store_meta, 1, b"1".to_vec());
-        add_region_to_store_meta(&mut store_meta, 2, b"2".to_vec());
-        add_region_to_store_meta(&mut store_meta, 3, b"5".to_vec());
-        add_region_to_store_meta(&mut store_meta, 4, b"6".to_vec());
+        add_region_to_store_meta(&mut store_meta, 1, b"0".to_vec());
+        add_region_to_store_meta(&mut store_meta, 2, b"1".to_vec());
+        add_region_to_store_meta(&mut store_meta, 3, b"2".to_vec());
+        add_region_to_store_meta(&mut store_meta, 4, b"7".to_vec());
         add_region_to_store_meta(&mut store_meta, 5, b"8".to_vec());
 
         let meta = Arc::new(Mutex::new(store_meta));
