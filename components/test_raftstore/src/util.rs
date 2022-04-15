@@ -13,11 +13,8 @@ use encryption_export::{
 };
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
-use engine_rocks::{
-    get_env, CompactionListener, Compat, ErrorListener, RocksCompactionJobInfo, RocksEngine,
-    RocksSnapshot,
-};
-use engine_traits::{Engines, Iterable, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use engine_rocks::{get_env, Compat, RocksEngine, RocksSnapshot};
+use engine_traits::{Engines, Iterable, Peekable, TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
@@ -641,40 +638,6 @@ pub fn create_test_engine(
     let env = get_env(key_manager.clone(), limiter).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
-    let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
-    let kv_path_str = kv_path.to_str().unwrap();
-
-    let mut kv_db_opt = cfg.rocksdb.build_opt();
-    kv_db_opt.set_env(env.clone());
-
-    let sst_worker = LazyWorker::new("sst-recovery");
-
-    if let Some(router) = router {
-        let router = Mutex::new(router);
-        let compacted_handler = Box::new(move |event| {
-            router
-                .lock()
-                .unwrap()
-                .send_control(StoreMsg::CompactedEvent(event))
-                .unwrap();
-        });
-        kv_db_opt.add_event_listener(CompactionListener::new(
-            compacted_handler,
-            Some(dummpy_filter),
-        ));
-
-        let scheduler = sst_worker.scheduler();
-        kv_db_opt.add_event_listener(ErrorListener::new("kv", Some(scheduler)));
-    }
-
-    let kv_cfs_opt = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
-
-    let engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
-    );
-
     let raft_path = dir.path().join("raft");
     let raft_path_str = raft_path.to_str().unwrap();
 
@@ -686,9 +649,13 @@ pub fn create_test_engine(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );
 
+    let sst_worker = LazyWorker::new("sst-recovery");
+    let scheduler = sst_worker.scheduler();
+
     let mut raft_engine = RocksEngine::from_db(raft_engine);
     raft_engine.set_shared_block_cache(cache.is_some());
-    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+    let mut builder =
+        KvEngineFactoryBuilder::new(env, &cfg, dir.path()).sst_recovery_sender(Some(scheduler));
     if let Some(cache) = cache {
         builder = builder.block_cache(cache);
     }
@@ -698,7 +665,6 @@ pub fn create_test_engine(
     let factory = builder.build();
     let engine = factory.create_tablet().unwrap();
     let engines = Engines::new(engine, raft_engine);
-
     (engines, key_manager, dir, sst_worker)
 }
 

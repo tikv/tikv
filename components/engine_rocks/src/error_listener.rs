@@ -93,3 +93,13 @@ fn resolve_sst_filename_from_err(err: &str) -> Option<String> {
     let filename = matches.get(0).unwrap().as_str().to_owned();
     Some(filename)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_resolve_sst() {
+        let err = "Corruption: Sst file size mismatch: /qps/data/tikv-10014/db/000398.sst. Size recorded in manifest 6975, actual size 6959";
+        let filename = resolve_sst_filename_from_err(err).unwrap();
+        assert_eq!(filename, "");
+    }
+}

@@ -31,6 +31,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::raw::{Cache, Env};
 use engine_rocks::{from_rocks_compression_type, FlowInfo, RocksEngine};
+use engine_rocks_helper::sst_recovery::RecoveryRunner;
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -90,6 +91,7 @@ use tikv::{
         txn::flow_controller::FlowController, Engine,
     },
 };
+use tikv_util::worker::Scheduler;
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
@@ -1233,6 +1235,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             })
     }
 
+    fn init_sst_recovery_sender(&mut self) -> Option<Scheduler<String>> {
+        if !self.config.storage.max_background_error_hang_time.is_zero() {
+            let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
+            let scheduler = sst_worker.scheduler();
+            self.sst_worker = Some(sst_worker);
+            Some(scheduler)
+        } else {
+            None
+        }
+    }
+
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
         let server = self.servers.as_mut().unwrap();
         server
@@ -1399,6 +1412,7 @@ impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
             .compaction_filter_router(self.router.clone())
             .region_info_accessor(self.region_info_accessor.clone())
+            .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
