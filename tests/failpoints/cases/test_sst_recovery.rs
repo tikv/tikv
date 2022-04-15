@@ -30,7 +30,8 @@ fn test_sst_recovery_for_rocksdb() {
         let runner = RecoveryRunner::new(
             engine.clone(),
             cluster.store_metas.get(&id).unwrap().clone(),
-            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_millis(500),
         );
         assert!(cluster.sst_workers[offset].start_with_timer(runner));
     }
@@ -46,7 +47,7 @@ fn test_sst_recovery_for_rocksdb() {
     file_name.remove(0);
     compact_files_to_bottom(&engine, vec![file_name]).unwrap();
 
-    cluster.must_put_cf(CF_DEFAULT, b"2", b" ");
+    cluster.must_put_cf(CF_DEFAULT, b"3", b" ");
     cluster.flush_data();
 
     let files = engine.get_live_files();
@@ -80,11 +81,14 @@ fn test_sst_recovery_for_rocksdb() {
             .contains("Corruption")
     );
     // It will not automatically recover for the time being,
-    // just test that it will not panic within `max_damage_duration`.
-    cluster.must_put_cf(CF_DEFAULT, b"3", b" ");
+    // just test that it will not panic within `max_hang_duration`.
+    cluster.must_put_cf(CF_DEFAULT, b"5", b" ");
+    fail::cfg("sst_recovery_inject", "return(false)").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
     assert_eq!(cluster.must_get(b"1").unwrap(), b" ".to_vec());
-    // get "2" will panic
-    assert_eq!(cluster.must_get(b"3").unwrap(), b" ".to_vec());
+    // If the corrupted file is not deleted, panic here.
+    assert!(cluster.must_get(b"3").is_none());
+    assert_eq!(cluster.must_get(b"5").unwrap(), b" ".to_vec());
 }
 
 fn disturb_sst_file(path: &Path) {
@@ -96,8 +100,6 @@ fn disturb_sst_file(path: &Path) {
 
 fn compact_files_to_bottom(engine: &Arc<DB>, files: Vec<String>) -> Result<(), String> {
     let handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
-    let mut opt = CompactionOptions::new();
-    opt.set_max_subcompactions(1);
     // output_level should be from 0 to 6.
-    engine.compact_files_cf(handle, &opt, &files, 6)
+    engine.compact_files_cf(handle, &CompactionOptions::new(), &files, 1)
 }

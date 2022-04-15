@@ -31,7 +31,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::raw::{Cache, Env};
 use engine_rocks::{from_rocks_compression_type, FlowInfo, RocksEngine};
-use engine_rocks_helper::sst_recovery::RecoveryRunner;
+use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -592,6 +592,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 engines.engines.kv.get_sync_db(),
                 engines.store_meta.clone(),
                 self.config.storage.max_background_error_hang_time.into(),
+                DEFAULT_CHECK_INTERVAL,
             );
             sst_worker.start_with_timer(sst_runner);
         }

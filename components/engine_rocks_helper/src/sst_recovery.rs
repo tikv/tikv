@@ -5,17 +5,19 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use engine_rocks::raw::*;
+use fail::fail_point;
 use raftstore::store::fsm::StoreMeta;
 use tikv_util::{self, set_panic_mark, worker::*};
 
-const CHECK_INTERVAL: Duration = Duration::from_secs(10);
+pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct RecoveryRunner {
     db: Arc<DB>,
     store_meta: Arc<Mutex<StoreMeta>>,
     // Considering that files will not be too much, it is enough to use `Vec`.
     damaged_files: Vec<FileInfo>,
-    max_damage_duration: Duration,
+    max_hang_duration: Duration,
+    check_duration: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +41,7 @@ impl Runnable for RecoveryRunner {
 
 impl RunnableWithTimer for RecoveryRunner {
     fn get_interval(&self) -> Duration {
-        CHECK_INTERVAL
+        self.check_duration
     }
 
     fn on_timeout(&mut self) {
@@ -48,12 +50,18 @@ impl RunnableWithTimer for RecoveryRunner {
 }
 
 impl RecoveryRunner {
-    pub fn new(db: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, check_duration: Duration) -> Self {
+    pub fn new(
+        db: Arc<DB>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        max_hang_duration: Duration,
+        check_duration: Duration,
+    ) -> Self {
         RecoveryRunner {
             db,
             store_meta,
             damaged_files: vec![],
-            max_damage_duration: check_duration,
+            max_hang_duration,
+            check_duration,
         }
     }
 
@@ -108,16 +116,21 @@ impl RecoveryRunner {
     fn check_damaged_files(&mut self) {
         let mut new_damaged_files = self.damaged_files.clone();
         new_damaged_files.retain(|f| {
-            if f.start_time.elapsed() > self.max_damage_duration {
+            if f.start_time.elapsed() > self.max_hang_duration {
                 set_panic_mark_and_panic(
                     &f.name,
-                    &format!("recovery job exceeded {:?}", self.max_damage_duration),
+                    &format!("recovery job exceeded {:?}", self.max_hang_duration),
                 );
             }
             let need_retain = self.check_overlap_damaged_regions(f.clone());
             if !need_retain {
+                println!(
+                    "ready delete_file {} {:?} {:?} (this line must be deleted before merge PR)",
+                    f.name, &f.smallest_key, &f.largest_key
+                );
+                // set `include_end` to `true` to ensure that sst with the same start key and end key.
                 self.db
-                    .delete_files_in_range(&f.smallest_key, &f.largest_key, false)
+                    .delete_files_in_range(&f.smallest_key, &f.largest_key, true)
                     .unwrap();
             }
             need_retain
@@ -157,6 +170,9 @@ impl RecoveryRunner {
             }
             self.damaged_files.push(file);
         }
+        fail_point!("sst_recovery_inject", |t| -> bool {
+            t.unwrap().parse::<bool>().unwrap()
+        });
         overlap
     }
 }
@@ -211,7 +227,12 @@ mod tests {
         add_region_to_store_meta(&mut store_meta, 5, b"8".to_vec());
 
         let meta = Arc::new(Mutex::new(store_meta));
-        let runner = RecoveryRunner::new(db, meta.clone(), Duration::from_millis(100));
+        let runner = RecoveryRunner::new(
+            db,
+            meta.clone(),
+            Duration::from_millis(100),
+            Duration::from_millis(100),
+        );
         let mut worker = LazyWorker::new("abc");
         worker.start_with_timer(runner);
         let tx = worker.scheduler();
