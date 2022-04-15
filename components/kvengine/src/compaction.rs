@@ -325,6 +325,7 @@ impl Engine {
         let shard = self.get_shard_with_ver(pri.shard_id, pri.shard_ver)?;
         if !shard.is_active() {
             info!("avoid passive shard compaction");
+            store_bool(&shard.compacting, false);
             return Ok(());
         }
         if pri.cf == -1 {
@@ -394,6 +395,7 @@ impl Engine {
     ) -> Result<Option<CompactionRequest>> {
         let data = shard.get_data();
         if data.l0_tbls.len() == 0 {
+            store_bool(&shard.compacting, false);
             info!("zero L0 tables");
             return Ok(None);
         }
