@@ -171,8 +171,8 @@ impl TestSuiteBuilder {
             let cdc_ob = obs.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
-            let cfg = CdcConfig::default();
-            cfg.api_version = cluster.cfg.storage.api_version.clone();
+            let mut cfg = CdcConfig::default();
+            cfg.api_version = cluster.cfg.storage.api_version;
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,

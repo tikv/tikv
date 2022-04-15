@@ -1,11 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-//
-use api_version::{APIVersion, KeyMode, APIV2};
 use std::mem;
 use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use api_version::{APIVersion, KeyMode, APIV2};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use kvproto::cdcpb::{
@@ -116,7 +115,6 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
-
     kv_api: ChangeDataRequestKvApi,
 }
 
@@ -968,7 +966,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
 }
 
 fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
-    let (decoded_key, ts) = APIV2::decode_raw_key(&Key::from_encoded(key), true).unwrap();
+    let (decoded_key, ts) = APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
     let decoded_value = APIV2::decode_raw_value_owned(value).unwrap();
 
     row.start_ts = ts.unwrap().into_inner();

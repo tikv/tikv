@@ -223,7 +223,8 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id, req_kvapi);
+            let downstream =
+                Downstream::new(peer.clone(), region_epoch, req_id, conn_id, req_kvapi);
             let ret = scheduler
                 .schedule(Task::Register {
                     request,

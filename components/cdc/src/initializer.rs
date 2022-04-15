@@ -5,11 +5,12 @@ use std::sync::Arc;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
-    KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection, TablePropertiesExt,
-    UserCollectedProperties, CF_DEFAULT, CF_WRITE, IterOptions,
+    IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection,
+    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE,
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
+use kvproto::cdcpb::ChangeDataRequestKvApi;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use raftstore::coprocessor::ObserveID;
@@ -17,9 +18,9 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
-use tikv::storage::kv::{PerfStatisticsInstant, Snapshot, Iterator};
+use tikv::storage::kv::{Iterator, PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
-use tikv::storage::raw::raw_mvcc::{RawMvccSnapshot, RawMvccIterator};
+use tikv::storage::raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv::storage::Statistics;
 use tikv_kv::PerfStatisticsDelta;
@@ -30,8 +31,6 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
-use kvproto::cdcpb::ChangeDataRequestKvApi;
-
 
 use crate::channel::CdcEvent;
 use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
@@ -56,9 +55,9 @@ pub(crate) enum KvEntry {
     RawKvEntry(KvPair),
 }
 
-pub(crate) enum ScannerIter<S: Snapshot> {
-    Scanner(DeltaScanner<S>),
-    Iter(RawMvccIterator<<S as Snapshot>::Iter>),
+pub(crate) enum Scanner<S: Snapshot> {
+    TxnKvScanner(DeltaScanner<S>),
+    RawKvScanner(RawMvccIterator<<S as Snapshot>::Iter>),
 }
 
 pub(crate) struct Initializer<E> {
@@ -182,7 +181,6 @@ impl<E: KvEngine> Initializer<E> {
         }
     }
 
-
     pub(crate) async fn async_incremental_scan<S: Snapshot + 'static>(
         &mut self,
         snap: S,
@@ -232,28 +230,24 @@ impl<E: KvEngine> Initializer<E> {
             Err(box_err!("scan canceled"))
         };
 
-        let mut scanner_iter: Option<ScannerIter<S>>;
-        if kv_api == ChangeDataRequestKvApi::TiDb {
-            let scanner = ScannerBuilder::new(snap, TimeStamp::max())
+        let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
+            let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
                 .range(None, None)
                 .hint_min_ts(hint_min_ts)
                 .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
                 .unwrap();
 
-            scanner_iter = Some(ScannerIter::Scanner(scanner));
+            Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
             iter_opt.set_lower_bound(b"r", 1);
             iter_opt.set_upper_bound(b"s", 1);
-            let mut iter = RawMvccSnapshot::from_snapshot(snap)
-                .iter(iter_opt)
-                .unwrap();
+            let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
 
             iter.seek_to_first().unwrap();
-            scanner_iter = Some(ScannerIter::Iter(iter));
-        }
-
+            Scanner::RawKvScanner(iter)
+        };
 
         let mut done = false;
         while !done {
@@ -264,7 +258,7 @@ impl<E: KvEngine> Initializer<E> {
             }
             let cursors = old_value_cursors.as_mut();
             let resolver = resolver.as_mut();
-            let entries = self.scan_batch(&mut scanner_iter, cursors, resolver).await?;
+            let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
@@ -297,7 +291,7 @@ impl<E: KvEngine> Initializer<E> {
     // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
-        scanner_iter: &mut Option<ScannerIter<S>>,
+        scanner: &mut Scanner<S>,
         mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         entries: &mut Vec<Option<KvEntry>>,
     ) -> Result<ScanStat> {
@@ -324,32 +318,28 @@ impl<E: KvEngine> Initializer<E> {
         let mut stats = Statistics::default();
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
-            if let Some(scanner_iter) = scanner_iter {
-                match scanner_iter {
-                    ScannerIter::Scanner(scanner) => {
-                        match scanner.next_entry()? {
-                            Some(mut entry) => {
-                                read_old_value(entry.old_value(), &mut stats)?;
-                                total_bytes += entry.size();
-                                entries.push(Some(KvEntry::TxnEntry(entry)));
-                            }
-                            None => {
-                                entries.push(None);
-                                break;
-                            }
-                        }
+            match scanner {
+                Scanner::TxnKvScanner(scanner) => match scanner.next_entry()? {
+                    Some(mut entry) => {
+                        read_old_value(entry.old_value(), &mut stats)?;
+                        total_bytes += entry.size();
+                        entries.push(Some(KvEntry::TxnEntry(entry)));
                     }
-                    ScannerIter::Iter(iter) => {
-                        if iter.valid().unwrap() {
-                            let key = iter.key().to_vec();
-                            let value = iter.value().to_vec();
-                            total_bytes += key.len() + value.len();
-                            entries.push(Some(KvEntry::RawKvEntry((key, value))));
-                            iter.next().unwrap();
-                        } else {
-                            entries.push(None);
-                            break;
-                        }
+                    None => {
+                        entries.push(None);
+                        break;
+                    }
+                },
+                Scanner::RawKvScanner(iter) => {
+                    if iter.valid().unwrap() {
+                        let key = iter.key().to_vec();
+                        let value = iter.value().to_vec();
+                        total_bytes += key.len() + value.len();
+                        entries.push(Some(KvEntry::RawKvEntry((key, value))));
+                        iter.next().unwrap();
+                    } else {
+                        entries.push(None);
+                        break;
                     }
                 }
             }
@@ -371,7 +361,7 @@ impl<E: KvEngine> Initializer<E> {
 
     async fn scan_batch<S: Snapshot>(
         &self,
-        scanner_iter: &mut Option<ScannerIter<S>>,
+        scanner: &mut Scanner<S>,
         old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<KvEntry>>> {
@@ -380,7 +370,7 @@ impl<E: KvEngine> Initializer<E> {
             emit,
             disk_read,
             perf_delta,
-        } = self.do_scan(scanner_iter, old_value_cursors, &mut entries)?;
+        } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
 
         CDC_SCAN_BYTES.inc_by(emit as _);
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
@@ -402,7 +392,9 @@ impl<E: KvEngine> Initializer<E> {
                         let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                         let lock = Lock::parse(value)?;
                         match lock.lock_type {
-                            LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key, None),
+                            LockType::Put | LockType::Delete => {
+                                resolver.track_lock(lock.ts, key, None)
+                            }
                             _ => (),
                         };
                     }
@@ -662,8 +654,12 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
-        let (mut worker, pool, mut initializer, rx, mut drain) =
-            mock_initializer(total_bytes, buffer, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiDb);
+        let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
+            total_bytes,
+            buffer,
+            Some(engine.kv_engine()),
+            ChangeDataRequestKvApi::TiDb,
+        );
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -750,8 +746,12 @@ mod tests {
         let check_handling_old_value_seek_write = || {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
-                let (mut worker, pool, mut initializer, _rx, mut drain) =
-                    mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()), ChangeDataRequestKvApi::TiDb);
+                let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
+                    usize::MAX,
+                    1000,
+                    Some(engine.kv_engine()),
+                    ChangeDataRequestKvApi::TiDb,
+                );
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
 
@@ -844,7 +844,8 @@ mod tests {
 
     #[test]
     fn test_initializer_initialize() {
-        let kv_api_set:[ChangeDataRequestKvApi;2] = [ChangeDataRequestKvApi::TiDb, ChangeDataRequestKvApi::RawKv];
+        let kv_api_set: [ChangeDataRequestKvApi; 2] =
+            [ChangeDataRequestKvApi::TiDb, ChangeDataRequestKvApi::RawKv];
 
         for kv_api in kv_api_set {
             let total_bytes = 1;
