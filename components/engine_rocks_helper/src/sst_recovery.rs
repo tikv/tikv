@@ -22,8 +22,8 @@ pub struct RecoveryRunner {
 struct FileInfo {
     // Corrupted file name. example: /000033.sst
     name: String,
-    smallestkey: Vec<u8>,
-    largestkey: Vec<u8>,
+    smallest_key: Vec<u8>,
+    largest_key: Vec<u8>,
     overlap_region_ids: Vec<u64>,
     // Time to generate recovery task, be used to record whether the timeout
     start_time: Instant,
@@ -67,22 +67,22 @@ impl RecoveryRunner {
             if path == live_files.get_name(i as i32) {
                 let f = FileInfo {
                     name: live_files.get_name(i as i32),
-                    smallestkey: live_files.get_smallestkey(i as i32).to_owned(),
-                    largestkey: live_files.get_largestkey(i as i32).to_owned(),
+                    smallest_key: live_files.get_smallestkey(i as i32).to_owned(),
+                    largest_key: live_files.get_largestkey(i as i32).to_owned(),
                     overlap_region_ids: Vec::new(),
                     start_time: Instant::now(),
                 };
 
                 // only support recovering data key for now.
-                if !keys::validate_data_key(&f.smallestkey)
-                    || (!keys::validate_data_key(&f.largestkey)
-                        && f.largestkey.as_slice() != keys::DATA_MAX_KEY)
+                if !keys::validate_data_key(&f.smallest_key)
+                    || (!keys::validate_data_key(&f.largest_key)
+                        && f.largest_key.as_slice() != keys::DATA_MAX_KEY)
                 {
                     set_panic_mark_and_panic(
                         path,
                         &format!(
-                            "key range mismatch, small key:{:?}, large key:{:?}",
-                            &f.smallestkey, &f.largestkey
+                            "key range mismatch, smallest key:{:?}, largest key:{:?}",
+                            &f.smallest_key, &f.largest_key
                         ),
                     );
                 }
@@ -106,20 +106,23 @@ impl RecoveryRunner {
     //
     // Acquire meta lock.
     fn check_damaged_files(&mut self) {
-        for index in 0..self.damaged_files.len() {
-            if self.damaged_files[index].start_time.elapsed() > self.max_damage_duration {
-                let f = self.damaged_files.remove(index);
-                let fname = f.name.clone();
-                // file may be put into `damaged_files` again here, but when this happens,
-                // panic will be triggered, so it doesn’t matter.
-                if self.check_overlap_damaged_regions(f) {
-                    set_panic_mark_and_panic(
-                        &fname,
-                        &format!("recovery job exceeded {:?}", self.max_damage_duration),
-                    );
-                }
+        let mut new_damaged_files = self.damaged_files.clone();
+        new_damaged_files.retain(|f| {
+            if f.start_time.elapsed() > self.max_damage_duration {
+                set_panic_mark_and_panic(
+                    &f.name,
+                    &format!("recovery job exceeded {:?}", self.max_damage_duration),
+                );
             }
-        }
+            let need_retain = self.check_overlap_damaged_regions(f.clone());
+            if !need_retain {
+                self.db
+                    .delete_files_in_range(&f.smallest_key, &f.largest_key, false)
+                    .unwrap();
+            }
+            need_retain
+        });
+        self.damaged_files = new_damaged_files;
     }
 
     // Check whether the StoreMeta contains the region range, if it contains,
@@ -127,15 +130,7 @@ impl RecoveryRunner {
     //
     // Acquire meta lock.
     fn check_overlap_damaged_regions(&mut self, mut file: FileInfo) -> bool {
-        let mut meta = match self.store_meta.lock() {
-            Ok(meta) => meta,
-            Err(e) => {
-                set_panic_mark_and_panic(&file.name, &format!("{}", e));
-                return false;
-            }
-        };
-
-        let mut overlap = false;
+        let mut meta = self.store_meta.lock().unwrap();
 
         // Find overlapping region ids.
         // Condition:
@@ -144,26 +139,21 @@ impl RecoveryRunner {
         let mut ids = vec![];
         for (_, id) in meta
             .region_ranges
-            .range((Excluded(file.smallestkey.clone()), Unbounded::<Vec<u8>>))
+            .range((Excluded(file.smallest_key.clone()), Unbounded::<Vec<u8>>))
         {
             let region = &meta.regions[id];
-            if keys::enc_start_key(region) <= file.largestkey {
+            if keys::enc_start_key(region) <= file.largest_key {
                 ids.push(*id);
-                file.overlap_region_ids.push(*id);
-                overlap = true;
             }
         }
 
-        if !overlap {
-            // TODO: User trigger to delete sst file here. `delete_file` only allow
-            // delete files in the last level, consider `delete_files_in_range`.
-            for id in ids {
-                meta.damaged_regions_id.remove(&id);
-            }
-        } else if !self.exist_scheduling_regions(&file.name) {
-            // This sst file was detected for the first time.
+        let overlap = !ids.is_empty();
+        if overlap && !self.exist_scheduling_regions(&file.name) {
+            // This sst file was detected for the first time so store meta and
+            // file context should be updated.
             for id in ids {
                 meta.damaged_regions_id.insert(id);
+                file.overlap_region_ids.push(id);
             }
             self.damaged_files.push(file);
         }

@@ -91,7 +91,6 @@ use tikv::{
         txn::flow_controller::FlowController, Engine,
     },
 };
-use tikv_util::worker::Scheduler;
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
@@ -100,7 +99,7 @@ use tikv_util::{
     sys::{disk, register_memory_usage_high_water, SysQuota},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
-    worker::{Builder as WorkerBuilder, LazyWorker, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder;
 
