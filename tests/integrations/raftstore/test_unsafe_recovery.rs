@@ -347,13 +347,18 @@ fn test_force_leader_trigger_snapshot() {
     cluster.clear_send_filters();
 
     // wait election timeout
-    std::thread::sleep(Duration::from_millis(
+    sleep_ms(
         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 2,
-    ));
+            * 5,
+    );
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
 
+    sleep_ms(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 3,
+    );
     let cmd = new_change_peer_request(
         ConfChangeType::RemoveNode,
         find_peer(&region, 3).unwrap().clone(),
@@ -362,7 +367,7 @@ fn test_force_leader_trigger_snapshot() {
     // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
     assert!(
         cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
+            .call_command_on_leader(req, Duration::from_millis(1000))
             .unwrap()
             .get_header()
             .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
