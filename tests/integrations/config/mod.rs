@@ -162,6 +162,7 @@ fn test_serde_custom_tikv_config() {
         raft_max_size_per_msg: ReadableSize::mb(12),
         raft_max_inflight_msgs: 123,
         raft_entry_max_size: ReadableSize::mb(12),
+        raft_log_compact_sync_interval: ReadableDuration::secs(12),
         raft_log_gc_tick_interval: ReadableDuration::secs(12),
         raft_log_gc_threshold: 12,
         raft_log_gc_count_limit: 12,

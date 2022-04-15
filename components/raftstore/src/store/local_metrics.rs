@@ -375,6 +375,45 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+
+#[derive(Clone)]
+pub struct RaftLogGcSkippedMetrics {
+    pub reserve_log: u64,
+    pub threshold_limit: u64,
+    pub compact_idx_too_small: u64,
+}
+
+impl Default for RaftLogGcSkippedMetrics {
+    fn default() -> RaftLogGcSkippedMetrics {
+        RaftLogGcSkippedMetrics {
+            reserve_log: 0,
+            threshold_limit: 0,
+            compact_idx_too_small: 0,
+        }
+    }
+}
+
+impl RaftLogGcSkippedMetrics {
+    fn flush(&mut self) {
+        if self.reserve_log > 0 {
+            RAFT_LOG_GC_SKIPPED.reserve_log.inc_by(self.reserve_log);
+            self.reserve_log = 0;
+        }
+        if self.threshold_limit > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .threshold_limit
+                .inc_by(self.threshold_limit);
+            self.threshold_limit = 0;
+        }
+        if self.compact_idx_too_small > 0 {
+            RAFT_LOG_GC_SKIPPED
+                .compact_idx_too_small
+                .inc_by(self.compact_idx_too_small);
+            self.compact_idx_too_small = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -392,6 +431,7 @@ pub struct RaftMetrics {
     pub write_block_wait: LocalHistogram,
     pub waterfall_metrics: bool,
     pub batch_wait: LocalHistogram,
+    pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
 impl RaftMetrics {
@@ -413,6 +453,7 @@ impl RaftMetrics {
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
             batch_wait: STORE_BATCH_WAIT_DURATION_HISTOGRAM.local(),
+            raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
     /// Flushs all metrics
@@ -428,6 +469,7 @@ impl RaftMetrics {
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.write_block_wait.flush();
+        self.raft_log_gc_skipped.flush();
         if self.waterfall_metrics {
             self.batch_wait.flush();
         }
