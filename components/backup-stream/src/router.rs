@@ -1241,7 +1241,10 @@ mod tests {
     ) {
         router
             .register_task(
-                StreamTask { info: stream_task },
+                StreamTask {
+                    info: stream_task,
+                    is_paused: false,
+                },
                 vec![(
                     utils::wrap_key(make_table_key(table_id, b"")),
                     utils::wrap_key(make_table_key(table_id + 1, b"")),
@@ -1434,7 +1437,13 @@ mod tests {
         stream_task.set_storage(create_noop_storage_backend());
 
         router
-            .register_task(StreamTask { info: stream_task }, vec![])
+            .register_task(
+                StreamTask {
+                    info: stream_task,
+                    is_paused: false,
+                },
+                vec![],
+            )
             .await
             .unwrap();
         let task = router.get_task_info("nothing").await.unwrap();

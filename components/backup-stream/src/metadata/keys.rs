@@ -110,6 +110,14 @@ impl MetaKey {
         Self(format!("{}{}/{}/", PREFIX, PATH_NEXT_BACKUP_TS, name).into_bytes())
     }
 
+    pub fn pause_prefix_len() -> usize {
+        Self::pause_prefix().0.len()
+    }
+
+    pub fn pause_prefix() -> Self {
+        Self(format!("{}{}/", PREFIX, PATH_PAUSE).into_bytes())
+    }
+
     /// The key for pausing some task.
     pub fn pause_of(name: &str) -> Self {
         Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
@@ -142,4 +150,10 @@ impl MetaKey {
 /// extract the task name from the task info path.
 pub fn extract_name_from_info(full_path: &str) -> Option<&str> {
     full_path.strip_prefix(TASKS_PREFIX)
+}
+
+/// extrace the task name from the pause info path.
+pub fn extrace_name_from_pause(full_path: &str) -> Option<&str> {
+    let pause_prefix = String::from_utf8(MetaKey::pause_prefix().0).ok()?;
+    full_path.strip_prefix(&pause_prefix)
 }

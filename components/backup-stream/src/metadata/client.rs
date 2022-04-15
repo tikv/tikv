@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
 use super::{
-    keys::{KeyValue, MetaKey},
+    keys::{self, KeyValue, MetaKey},
     store::{
         GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot, Subscription, WithRevision,
     },
@@ -28,6 +28,7 @@ pub struct MetadataClient<Store> {
 #[derive(Default, Clone)]
 pub struct StreamTask {
     pub info: StreamBackupTaskInfo,
+    pub is_paused: bool,
 }
 
 impl Debug for StreamTask {
@@ -43,15 +44,19 @@ impl Debug for StreamTask {
 
 #[derive(Debug)]
 pub enum MetadataEvent {
-    AddTask { task: String },
+    AddTask { task: StreamTask },
     RemoveTask { task: String },
+    PauseTask { task: String },
+    ResumeTask { task: String },
     Error { err: Error },
 }
 
 impl PartialEq for MetadataEvent {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::AddTask { task: l_task }, Self::AddTask { task: r_task }) => l_task == r_task,
+            (Self::AddTask { task: l_task }, Self::AddTask { task: r_task }) => {
+                l_task.info.get_name() == r_task.info.get_name()
+            }
             (Self::RemoveTask { task: l_task }, Self::RemoveTask { task: r_task }) => {
                 l_task == r_task
             }
@@ -63,16 +68,52 @@ impl PartialEq for MetadataEvent {
 impl MetadataEvent {
     fn from_watch_event(event: &KvEvent) -> Option<MetadataEvent> {
         // Maybe report an error when the kv isn't present?
-        let key_str = std::str::from_utf8(event.pair.key()).ok()?;
-        let task_name = super::keys::extract_name_from_info(key_str)?;
         Some(match event.kind {
-            KvEventType::Put => MetadataEvent::AddTask {
+            KvEventType::Put => {
+                let stream_task = StreamTask {
+                    info: protobuf::parse_from_bytes::<StreamBackupTaskInfo>(event.pair.value())
+                        .ok()?,
+                    is_paused: false,
+                };
+
+                MetadataEvent::AddTask { task: stream_task }
+            }
+            KvEventType::Delete => {
+                let key_str = std::str::from_utf8(event.pair.key()).ok()?;
+                let task_name = keys::extract_name_from_info(key_str)?;
+
+                MetadataEvent::RemoveTask {
+                    task: task_name.to_owned(),
+                }
+            }
+        })
+    }
+
+    fn from_watch_pause_event(event: &KvEvent) -> Option<MetadataEvent> {
+        let key_str = std::str::from_utf8(event.pair.key()).ok()?;
+        let task_name = keys::extrace_name_from_pause(key_str)?;
+        Some(match event.kind {
+            KvEventType::Put => MetadataEvent::PauseTask {
                 task: task_name.to_owned(),
             },
-            KvEventType::Delete => MetadataEvent::RemoveTask {
+            KvEventType::Delete => MetadataEvent::ResumeTask {
                 task: task_name.to_owned(),
             },
         })
+    }
+
+    fn metadata_event_metrics(&self) {
+        let tag = match self {
+            MetadataEvent::AddTask { .. } => &["task_add"],
+            MetadataEvent::RemoveTask { .. } => &["task_remove"],
+            MetadataEvent::PauseTask { .. } => &["task_pause"],
+            MetadataEvent::ResumeTask { .. } => &["task_resume"],
+            MetadataEvent::Error { .. } => &["error"],
+        };
+
+        super::metrics::METADATA_EVENT_RECEIVED
+            .with_label_values(tag)
+            .inc();
     }
 }
 
@@ -84,6 +125,27 @@ impl<Store: MetaStore> MetadataClient<Store> {
             meta_store: store,
             store_id,
         }
+    }
+
+    /// check whether the task is paused.
+    pub async fn check_task_paused(&self, name: &str) -> Result<bool> {
+        let snap = self.meta_store.snapshot().await?;
+        let kvs = snap.get(Keys::Key(MetaKey::pause_of(name))).await?;
+        Ok(!kvs.is_empty())
+    }
+
+    pub async fn get_tasks_pause_status(&self) -> Result<HashMap<Vec<u8>, bool>> {
+        let snap = self.meta_store.snapshot().await?;
+        let kvs = snap.get(Keys::Prefix(MetaKey::pause_prefix())).await?;
+        let mut pause_hash = HashMap::new();
+        let prefix_len = MetaKey::pause_prefix_len();
+
+        for kv in kvs {
+            let task_name = kv.key()[prefix_len..].to_vec();
+            pause_hash.insert(task_name, true);
+        }
+
+        Ok(pause_hash)
     }
 
     /// query the named task from the meta store.
@@ -103,8 +165,10 @@ impl<Store: MetaStore> MetadataClient<Store> {
                 task_name: name.to_owned(),
             });
         }
-        let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(&items[0].1)?;
-        Ok(StreamTask { info })
+        let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(&items[0].value())?;
+        let is_paused = self.check_task_paused(name).await?;
+
+        Ok(StreamTask { info, is_paused })
     }
 
     /// fetch all tasks from the meta store.
@@ -115,10 +179,13 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         let snap = self.meta_store.snapshot().await?;
         let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
+        let pause_hash = self.get_tasks_pause_status().await?;
+
         let mut tasks = Vec::with_capacity(kvs.len());
         for kv in kvs {
             tasks.push(StreamTask {
-                info: protobuf::parse_from_bytes(&kv.1)?,
+                info: protobuf::parse_from_bytes(&kv.value())?,
+                is_paused: pause_hash.contains_key(kv.key()),
             });
         }
         Ok(WithRevision {
@@ -143,24 +210,32 @@ impl<Store: MetaStore> MetadataClient<Store> {
                         Ok(event) => MetadataEvent::from_watch_event(&event),
                     })
                     .map(|event| {
-                        match event {
-                            MetadataEvent::AddTask { .. } => {
-                                super::metrics::METADATA_EVENT_RECEIVED
-                                    .with_label_values(&["task_add"])
-                                    .inc()
-                            }
-                            MetadataEvent::RemoveTask { .. } => {
-                                super::metrics::METADATA_EVENT_RECEIVED
-                                    .with_label_values(&["task_remove"])
-                                    .inc()
-                            }
-                            MetadataEvent::Error { .. } => super::metrics::METADATA_EVENT_RECEIVED
-                                .with_label_values(&["error"])
-                                .inc(),
-                        }
+                        event.metadata_event_metrics();
                         event
                     }),
             ),
+            cancel: watcher.cancel,
+        })
+    }
+
+    pub async fn events_from_pause(&self, revision: i64) -> Result<Subscription<MetadataEvent>> {
+        let watcher = self
+            .meta_store
+            .watch(Keys::Prefix(MetaKey::pause_prefix()), revision + 1)
+            .await?;
+        let stream = watcher
+            .stream
+            .filter_map(|item| match item {
+                Ok(kv_event) => MetadataEvent::from_watch_pause_event(&kv_event),
+                Err(err) => Some(MetadataEvent::Error { err }),
+            })
+            .map(|event| {
+                event.metadata_event_metrics();
+                event
+            });
+
+        Ok(Subscription {
+            stream: Box::pin(stream),
             cancel: watcher.cancel,
         })
     }

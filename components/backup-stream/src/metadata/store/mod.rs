@@ -95,6 +95,7 @@ pub struct GetResponse {
 #[async_trait]
 pub trait Snapshot: Send + Sync + 'static {
     async fn get_extra(&self, keys: Keys, extra: GetExtra) -> Result<GetResponse>;
+
     fn revision(&self) -> i64;
 
     async fn get(&self, keys: Keys) -> Result<Vec<KeyValue>> {
