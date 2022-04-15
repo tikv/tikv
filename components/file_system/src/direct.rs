@@ -26,7 +26,7 @@ impl DirectWriter {
         }
     }
 
-    pub fn write_to_file(&mut self, buf: &[u8], filename: PathBuf) -> io::Result<()> {
+    pub fn write_to_file(&mut self, buf: &[u8], filename: &PathBuf) -> io::Result<()> {
         let file = open_direct_file(filename, false)?;
         let origin_buf_len = buf.len();
         let mut cursor = 0usize;
@@ -50,7 +50,7 @@ impl DirectWriter {
     }
 }
 
-pub fn open_direct_file(filename: PathBuf, sync: bool) -> io::Result<File> {
+pub fn open_direct_file(filename: &PathBuf, sync: bool) -> io::Result<File> {
     let mut flag = o_direct_flag();
     if sync {
         flag |= libc::O_DSYNC;

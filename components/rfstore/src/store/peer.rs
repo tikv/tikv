@@ -1798,9 +1798,10 @@ impl Peer {
         let kv = ctx.global.engines.kv.clone();
         let router = ctx.global.router.clone();
         self.scheduled_change_sets.push_back(cs.sequence);
+        let is_leader = self.is_leader();
         std::thread::spawn(move || {
             let id = cs.shard_id;
-            let res = kv.prepare_change_set(cs);
+            let res = kv.prepare_change_set(cs, !is_leader);
             if let Err(e) = router.send(id, PeerMsg::PrepareChangeSetResult(res)) {
                 error!("failed to send prepare change set result {:?}", e);
             }

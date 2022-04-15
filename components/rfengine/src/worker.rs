@@ -102,7 +102,7 @@ impl Worker {
         let crc32 = crc32fast::hash(&self.buf);
         self.buf.put_u32_le(crc32);
         let filename = states_file_name(&self.dir, epoch_id);
-        self.writer.write_to_file(&self.buf, filename)?;
+        self.writer.write_to_file(&self.buf, &filename)?;
         info!("write state file for epoch {}", epoch_id);
         if epoch_id == 1 {
             return Ok(());
@@ -165,7 +165,7 @@ impl Worker {
         region_batch.encode_to(&mut self.buf);
         let checksum = crc32fast::hash(&self.buf);
         self.buf.put_u32_le(checksum);
-        self.writer.write_to_file(&self.buf, filename)?;
+        self.writer.write_to_file(&self.buf, &filename)?;
         self.epoches[epoch_idx]
             .raft_log_files
             .lock()

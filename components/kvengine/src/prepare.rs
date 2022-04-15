@@ -4,15 +4,18 @@ use crate::apply::ChangeSet;
 use crate::table::sstable::{L0Table, SSTable};
 use crate::EngineCore;
 use crate::*;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use file_system::{IOOp, IOType};
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 impl EngineCore {
-    pub fn prepare_change_set(&self, cs: kvenginepb::ChangeSet) -> Result<ChangeSet> {
+    pub fn prepare_change_set(
+        &self,
+        cs: kvenginepb::ChangeSet,
+        use_direct_io: bool,
+    ) -> Result<ChangeSet> {
         let mut ids = HashMap::new();
         let mut cs = ChangeSet::new(cs);
         if cs.has_flush() {
@@ -35,7 +38,7 @@ impl EngineCore {
         if cs.has_initial_flush() {
             self.collect_snap_ids(cs.get_initial_flush(), &mut ids);
         }
-        self.load_tables_by_ids(cs.shard_id, cs.shard_ver, ids, &mut cs)?;
+        self.load_tables_by_ids(cs.shard_id, cs.shard_ver, ids, &mut cs, use_direct_io)?;
         Ok(cs)
     }
 
@@ -58,6 +61,7 @@ impl EngineCore {
         shard_ver: u64,
         ids: HashMap<u64, bool>,
         cs: &mut ChangeSet,
+        use_direct_io: bool,
     ) -> Result<()> {
         let (result_tx, result_rx) = tikv_util::mpsc::bounded(ids.len());
         let runtime = self.fs.get_runtime();
@@ -81,7 +85,7 @@ impl EngineCore {
         for _ in 0..msg_count {
             match result_rx.recv().unwrap() {
                 Ok((id, data)) => {
-                    if let Err(err) = self.write_local_file(id, data) {
+                    if let Err(err) = self.write_local_file(id, data, use_direct_io) {
                         error!("write local file failed {:?}", &err);
                         errors.push(err.into());
                     }
@@ -109,23 +113,25 @@ impl EngineCore {
         Ok(())
     }
 
-    fn write_local_file(&self, id: u64, data: Bytes) -> std::io::Result<()> {
+    fn write_local_file(&self, id: u64, data: Bytes, use_direct_io: bool) -> std::io::Result<()> {
         let local_file_name = self.local_file_path(id);
         let tmp_file_name = self.tmp_file_path(id);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .custom_flags(libc::O_DSYNC)
-            .open(&tmp_file_name)?;
-        let mut start_off = 0;
-        let write_batch_size = 256 * 1024;
-        while start_off < data.len() {
-            self.rate_limiter
-                .request(IOType::Compaction, IOOp::Write, write_batch_size);
-            let end_off = std::cmp::min(start_off + write_batch_size, data.len());
-            file.write(&data[start_off..end_off])?;
-            start_off = end_off;
+        if use_direct_io {
+            let mut writer =
+                file_system::DirectWriter::new(self.rate_limiter.clone(), IOType::Compaction);
+            writer.write_to_file(data.chunk(), &tmp_file_name)?;
+        } else {
+            let mut file = std::fs::File::create(&tmp_file_name)?;
+            let mut start_off = 0;
+            let write_batch_size = 256 * 1024;
+            while start_off < data.len() {
+                self.rate_limiter
+                    .request(IOType::Compaction, IOOp::Write, write_batch_size);
+                let end_off = std::cmp::min(start_off + write_batch_size, data.len());
+                file.write(&data[start_off..end_off])?;
+                file.sync_data()?;
+                start_off = end_off;
+            }
         }
         std::fs::rename(&tmp_file_name, &local_file_name)
     }

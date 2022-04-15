@@ -190,7 +190,7 @@ impl EngineCore {
             }
         }
         info!("load shard {}:{}", meta.id, meta.ver);
-        let change_set = self.prepare_change_set(meta.to_change_set())?;
+        let change_set = self.prepare_change_set(meta.to_change_set(), false)?;
         self.ingest(change_set, false)?;
         let shard = self.get_shard(meta.id);
         Ok(shard.unwrap())
