@@ -6,50 +6,57 @@ use std::sync::mpsc::Sender;
 
 use thiserror::Error;
 
-use engine_traits::{Engines, KvEngine, RaftEngine};
+use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGCTask};
 use file_system::{IOType, WithIOType};
-use tikv_util::time::Duration;
+use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tikv_util::{box_try, debug, error, warn};
 
-use crate::store::{CasualMessage, CasualRouter};
+use crate::store::worker::metrics::*;
 
-const MAX_GC_REGION_BATCH: usize = 128;
-const COMPACT_LOG_INTERVAL: Duration = Duration::from_secs(60);
+const MAX_GC_REGION_BATCH: usize = 512;
+const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
 
-pub enum Task {
-    Gc {
-        region_id: u64,
-        start_idx: u64,
-        end_idx: u64,
-    },
-    Purge,
+pub struct Task {
+    region_id: u64,
+    start_idx: u64,
+    end_idx: u64,
+    flush: bool,
+    cb: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl Task {
     pub fn gc(region_id: u64, start: u64, end: u64) -> Self {
-        Task::Gc {
+        Task {
             region_id,
             start_idx: start,
             end_idx: end,
+            flush: false,
+            cb: None,
         }
+    }
+
+    pub fn flush(mut self) -> Self {
+        self.flush = true;
+        self
+    }
+
+    pub fn when_done(mut self, callback: impl FnOnce() + Send + 'static) -> Self {
+        self.cb = Some(Box::new(callback));
+        self
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Task::Gc {
-                region_id,
-                start_idx,
-                end_idx,
-            } => write!(
-                f,
-                "GC Raft Logs [region: {}, from: {}, to: {}]",
-                region_id, start_idx, end_idx
-            ),
-            Task::Purge => write!(f, "Purge Expired Files",),
-        }
+        write!(
+            f,
+            "GC Raft Logs [region: {}, from: {}, to: {}, has_cb: {}]",
+            self.region_id,
+            self.start_idx,
+            self.end_idx,
+            self.cb.is_some()
+        )
     }
 }
 
@@ -59,31 +66,29 @@ enum Error {
     Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
-pub struct Runner<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> {
-    ch: R,
+pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     tasks: Vec<Task>,
     engines: Engines<EK, ER>,
     gc_entries: Option<Sender<usize>>,
+    compact_sync_interval: Duration,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
-    pub fn new(ch: R, engines: Engines<EK, ER>) -> Runner<EK, ER, R> {
+impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
+    pub fn new(engines: Engines<EK, ER>, compact_log_interval: Duration) -> Runner<EK, ER> {
         Runner {
-            ch,
             engines,
             tasks: vec![],
             gc_entries: None,
+            compact_sync_interval: compact_log_interval,
         }
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(
-        &mut self,
-        region_id: u64,
-        start_idx: u64,
-        end_idx: u64,
-    ) -> Result<usize, Error> {
-        let deleted = box_try!(self.engines.raft.gc(region_id, start_idx, end_idx));
+    fn gc_raft_log(&mut self, regions: Vec<RaftLogGCTask>) -> Result<usize, Error> {
+        fail::fail_point!("worker_gc_raft_log", |s| {
+            Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
+        });
+        let deleted = box_try!(self.engines.raft.batch_gc(regions));
         Ok(deleted)
     }
 
@@ -94,62 +99,77 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
     }
 
     fn flush(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
+        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
         let tasks = std::mem::take(&mut self.tasks);
+        let mut groups = Vec::with_capacity(tasks.len());
+        let mut cbs = Vec::new();
         for t in tasks {
-            match t {
-                Task::Gc {
-                    region_id,
-                    start_idx,
-                    end_idx,
-                } => {
-                    debug!("gc raft log"; "region_id" => region_id, "end_index" => end_idx);
-                    match self.gc_raft_log(region_id, start_idx, end_idx) {
-                        Err(e) => {
-                            error!("failed to gc"; "region_id" => region_id, "err" => %e);
-                            self.report_collected(0);
-                        }
-                        Ok(n) => {
-                            debug!("gc log entries"; "region_id" => region_id, "entry_count" => n);
-                            self.report_collected(n);
-                        }
-                    }
-                }
-                Task::Purge => {
-                    let regions = match self.engines.raft.purge_expired_files() {
-                        Ok(regions) => regions,
-                        Err(e) => {
-                            warn!("purge expired files"; "err" => %e);
-                            return;
-                        }
-                    };
-                    for region_id in regions {
-                        let _ = self.ch.send(region_id, CasualMessage::ForceCompactRaftLogs);
-                    }
-                }
+            debug!("gc raft log"; "region_id" => t.region_id, "start_index" => t.start_idx, "end_index" => t.end_idx);
+            if let Some(cb) = t.cb {
+                cbs.push(cb);
             }
+            if t.start_idx == t.end_idx {
+                // It's only for flush.
+                continue;
+            }
+            if t.start_idx == 0 {
+                RAFT_LOG_GC_SEEK_OPERATIONS.inc();
+            } else if t.end_idx > t.start_idx + MAX_REGION_NORMAL_GC_LOG_NUMBER {
+                warn!(
+                    "gc raft log with a large range";
+                    "region_id" => t.region_id,
+                    "start_index" => t.start_idx,
+                    "end_index" => t.end_idx,
+                );
+            }
+            groups.push(RaftLogGCTask {
+                raft_group_id: t.region_id,
+                from: t.start_idx,
+                to: t.end_idx,
+            });
+        }
+        let start = Instant::now();
+        match self.gc_raft_log(groups) {
+            Err(e) => {
+                error!("failed to gc"; "err" => %e);
+                self.report_collected(0);
+                RAFT_LOG_GC_FAILED.inc();
+            }
+            Ok(n) => {
+                debug!("gc log entries";  "entry_count" => n);
+                self.report_collected(n);
+                RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
+            }
+        }
+        RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+        for cb in cbs {
+            cb()
         }
     }
 }
 
-impl<EK, ER, R> Runnable for Runner<EK, ER, R>
+impl<EK, ER> Runnable for Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK>,
 {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
+        let flush_now = task.flush;
         self.tasks.push(task);
-        if self.tasks.len() < MAX_GC_REGION_BATCH {
-            return;
+        if flush_now || self.tasks.len() >= MAX_GC_REGION_BATCH {
+            self.flush()
         }
-        self.flush();
     }
 
     fn shutdown(&mut self) {
@@ -157,18 +177,17 @@ where
     }
 }
 
-impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
+impl<EK, ER> RunnableWithTimer for Runner<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    R: CasualRouter<EK>,
 {
     fn on_timeout(&mut self) {
         self.flush();
     }
 
     fn get_interval(&self) -> Duration {
-        COMPACT_LOG_INTERVAL
+        self.compact_sync_interval
     }
 }
 
@@ -193,12 +212,11 @@ mod tests {
         let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();
-        let (r, _) = mpsc::sync_channel(1);
         let mut runner = Runner {
             gc_entries: Some(tx),
             engines,
-            ch: r,
             tasks: vec![],
+            compact_sync_interval: Duration::from_secs(5),
         };
 
         // generate raft logs
