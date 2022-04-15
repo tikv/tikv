@@ -849,21 +849,17 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
         let mut dur = self.timer.saturating_elapsed();
 
-        if !latency_inspect.is_empty() {
-            for inspector in &mut latency_inspect {
-                inspector.record_store_process(dur);
-            }
+        for inspector in &mut latency_inspect {
+            inspector.record_store_process(dur);
         }
         let write_begin = TiInstant::now();
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
             if self.poll_ctx.has_ready {
                 write_worker.write_to_db(false);
 
-                if !latency_inspect.is_empty() {
-                    for mut inspector in latency_inspect {
-                        inspector.record_store_write(write_begin.saturating_elapsed());
-                        inspector.finish();
-                    }
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(write_begin.saturating_elapsed());
+                    inspector.finish();
                 }
 
                 for peer in peers.iter_mut().flatten() {
