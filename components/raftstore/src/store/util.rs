@@ -780,10 +780,6 @@ impl<
     }
 }
 
-pub fn integration_on_half_fail_quorum_fn(voters: usize) -> usize {
-    (voters + 1) / 2 + 1
-}
-
 #[derive(PartialEq, Eq, Debug)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
@@ -1932,16 +1928,6 @@ mod tests {
                 check_region_epoch(&req, &region, false).unwrap_err();
                 check_region_epoch(&req, &region, true).unwrap_err();
             }
-        }
-    }
-
-    #[test]
-    fn test_integration_on_half_fail_quorum_fn() {
-        let voters = vec![1, 2, 3, 4, 5, 6, 7];
-        let quorum = vec![2, 2, 3, 3, 4, 4, 5];
-        for (voter_count, expected_quorum) in voters.into_iter().zip(quorum) {
-            let quorum = super::integration_on_half_fail_quorum_fn(voter_count);
-            assert_eq!(quorum, expected_quorum);
         }
     }
 

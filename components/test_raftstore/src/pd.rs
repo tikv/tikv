@@ -1294,6 +1294,7 @@ impl TestPdClient {
         self.cluster.wl().check_merge_target_integrity = false;
     }
 
+    /// The next generated TSO will be `ts + 1`. See `get_tso()` and `batch_get_tso()`.
     pub fn set_tso(&self, ts: TimeStamp) {
         let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
         if old > ts.into_inner() {
@@ -1469,11 +1470,6 @@ impl PdClient for TestPdClient {
     {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
-        {
-            if let Err(e) = self.cluster.try_write() {
-                println!("try write {:?}", e);
-            }
-        }
         let mut cluster = self.cluster.wl();
         let store = cluster
             .stores
@@ -1654,7 +1650,7 @@ impl PdClient for TestPdClient {
         Ok(resp)
     }
 
-    fn get_tso(&self) -> PdFuture<TimeStamp> {
+    fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
         fail_point!("test_raftstore_get_tso", |t| {
             let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
             Box::pin(async move {
@@ -1673,8 +1669,8 @@ impl PdClient for TestPdClient {
                 )),
             )));
         }
-        let tso = self.tso.fetch_add(1, Ordering::SeqCst);
-        Box::pin(ok(TimeStamp::new(tso)))
+        let tso = self.tso.fetch_add(count as u64, Ordering::SeqCst);
+        Box::pin(ok(TimeStamp::new(tso + count as u64)))
     }
 
     fn feature_gate(&self) -> &FeatureGate {

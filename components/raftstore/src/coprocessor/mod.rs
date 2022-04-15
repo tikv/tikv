@@ -38,7 +38,7 @@ pub use self::split_check::{
     HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
     TableCheckObserver,
 };
-pub use crate::store::KeyEntry;
+pub use crate::store::{Bucket, KeyEntry};
 
 /// Coprocessor is used to provide a convenient way to inject code to
 /// KV processing.
@@ -175,6 +175,7 @@ pub enum RegionChangeEvent {
     Create,
     Update,
     Destroy,
+    UpdateBuckets(usize),
 }
 
 pub trait RegionChangeObserver: Coprocessor {

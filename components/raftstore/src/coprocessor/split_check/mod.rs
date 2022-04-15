@@ -11,7 +11,7 @@ use tikv_util::box_try;
 
 use super::config::Config;
 use super::error::Result;
-use super::{KeyEntry, ObserverContext, SplitChecker};
+use super::{Bucket, KeyEntry, ObserverContext, SplitChecker};
 
 pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
 pub use self::keys::{get_region_approximate_keys, KeysCheckObserver};
@@ -89,7 +89,7 @@ impl<'a, E> Host<'a, E> {
         &mut self,
         region: &Region,
         engine: &Kv,
-    ) -> Result<Vec<Vec<u8>>> {
+    ) -> Result<Bucket> {
         let region_size = get_region_approximate_size(engine, region, 0)?;
         const MIN_BUCKET_COUNT_PER_REGION: u64 = 2;
         if region_size >= self.cfg.region_bucket_size.0 * MIN_BUCKET_COUNT_PER_REGION {
@@ -99,9 +99,20 @@ impl<'a, E> Host<'a, E> {
                 region_size / self.cfg.region_bucket_size.0,
                 CheckPolicy::Approximate,
             );
-            return bucket_checker.approximate_split_keys(region, engine);
+            return bucket_checker
+                .approximate_split_keys(region, engine)
+                .map(|keys| Bucket {
+                    keys: keys
+                        .into_iter()
+                        .map(|k| ::keys::origin_key(&k).to_vec())
+                        .collect(),
+                    size: region_size,
+                });
         }
-        Ok(vec![])
+        Ok(Bucket {
+            keys: vec![],
+            size: region_size,
+        })
     }
 
     #[inline]

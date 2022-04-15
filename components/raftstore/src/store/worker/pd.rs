@@ -1423,6 +1423,7 @@ where
                             region_epoch: epoch,
                             policy: split_region.get_policy(),
                             source: "pd",
+                            cb: Callback::None,
                         }
                     };
                     if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {

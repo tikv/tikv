@@ -571,6 +571,7 @@ impl RegionChangeObserver for RoleChangeNotifier {
                         self.scheduler.change_role(Role::Follower);
                     }
                 }
+                RegionChangeEvent::UpdateBuckets(_) => {}
             }
         }
     }
