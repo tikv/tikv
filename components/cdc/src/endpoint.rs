@@ -1736,7 +1736,6 @@ mod tests {
             start_1_3.saturating_elapsed()
         );
 
-
         initializer
             .downstream_state
             .store(DownstreamState::Initializing);
@@ -1750,7 +1749,6 @@ mod tests {
             "{:?}",
             start_1_6.saturating_elapsed()
         );
-
 
         initializer
             .downstream_state
