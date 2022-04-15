@@ -72,6 +72,18 @@ use crate::store::{
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
+#[derive(Clone, Copy, Debug)]
+pub struct DelayDestroy {
+    merged_by_target: bool,
+    reason: DelayReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DelayReason {
+    UnFlushLogGc,
+    Shutdown,
+}
+
 /// Limits the maximum number of regions returned by error.
 ///
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
@@ -133,6 +145,12 @@ where
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
 
     trace: PeerMemoryTrace,
+    /// Destroy is delayed because of some unpersisted readies in Peer.
+    /// Should call `destroy_peer` again after persisting all readies.
+    delayed_destroy: Option<DelayDestroy>,
+    /// Before actually destroying a peer, ensure all log gc tasks are finished, so we
+    /// can start destroying without seeking.
+    logs_gc_flushed: bool,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -240,6 +258,8 @@ where
                     cfg.raft_entry_max_size.0 as f64,
                 ),
                 trace: PeerMemoryTrace::default(),
+                delayed_destroy: None,
+                logs_gc_flushed: false,
             }),
         ))
     }
@@ -284,6 +304,8 @@ where
                     cfg.raft_entry_max_size.0 as f64,
                 ),
                 trace: PeerMemoryTrace::default(),
+                delayed_destroy: None,
+                logs_gc_flushed: false,
             }),
         ))
     }
@@ -857,7 +879,10 @@ where
                     }
                 }
             } else if key.term <= compacted_term
-                && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
+                && (key.idx < compacted_idx
+                    || key.idx == compacted_idx
+                        && !is_applying_snap
+                        && !self.fsm.peer.pending_remove)
             {
                 info!(
                     "deleting applied snap file";
@@ -981,6 +1006,9 @@ where
             SignificantMsg::LeaderCallback(cb) => {
                 self.on_leader_callback(cb);
             }
+            SignificantMsg::RaftLogGcFlushed => {
+                self.on_raft_log_gc_flushed();
+            }
         }
     }
 
@@ -1039,6 +1067,7 @@ where
                 self.register_split_region_check_tick();
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
+                self.register_raft_gc_log_tick();
             }
         }
     }
@@ -1185,7 +1214,7 @@ where
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
-        if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
+        if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             // need to check if snapshot is applied.
             self.fsm.has_ready = true;
             self.fsm.missing_ticks = 0;
@@ -1229,9 +1258,12 @@ where
                 self.fsm.missing_ticks = 0;
             }
         }
+
+        // Tick the raft peer and update some states which can be changed in `tick`.
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
         }
+        self.fsm.peer.post_raft_group_tick();
 
         self.fsm.peer.mut_store().flush_cache_metrics();
 
@@ -1363,6 +1395,11 @@ where
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
+            fail_point!(
+                "memtrace_raft_messages_overflow_check_peer_recv",
+                MEMTRACE_RAFT_MESSAGES.sum() < heap_size,
+                |_| {}
+            );
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
@@ -2065,13 +2102,109 @@ where
             false
         } else {
             // Destroy the peer fsm directly
-            self.destroy_peer(false);
-            true
+            self.destroy_peer(false)
         }
     }
 
-    fn destroy_peer(&mut self, merged_by_target: bool) {
+    /// Check if destroy can be executed immediately. If it can't, the reason is returned.
+    fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
+        if self.fsm.logs_gc_flushed {
+            return None;
+        }
+
+        let start_index = self.fsm.peer.last_compacted_idx;
+        let mut end_index = start_index;
+        if end_index == 0 {
+            // Technically, all logs between first index and last index should be accessible
+            // before being destroyed.
+            end_index = self.fsm.peer.get_store().first_index();
+            self.fsm.peer.last_compacted_idx = end_index;
+        }
+        let region_id = self.region_id();
+        let peer_id = self.fsm.peer.peer_id();
+        let mb = match self.ctx.router.mailbox(region_id) {
+            Some(mb) => mb,
+            None => {
+                if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                    // It's shutting down, nothing we can do.
+                    return Some(DelayReason::Shutdown);
+                }
+                panic!("{} failed to get mailbox", self.fsm.peer.tag);
+            }
+        };
+        let task = RaftlogGcTask::gc(
+            self.fsm.peer.get_store().get_region_id(),
+            start_index,
+            end_index,
+        )
+        .flush()
+        .when_done(move || {
+            if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
+            {
+                if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                    return;
+                }
+                panic!(
+                    "[region {}] {} failed to respond flush message {:?}",
+                    region_id, peer_id, e
+                );
+            }
+        });
+        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
+            if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
+                // It's shutting down, nothing we can do.
+                return Some(DelayReason::Shutdown);
+            }
+            panic!(
+                "{} failed to schedule raft log task {:?}",
+                self.fsm.peer.tag, e
+            );
+        }
+        // We need to delete all logs entries to avoid introducing race between
+        // new peers and old peers. Flushing gc logs allow last_compact_index be
+        // used directly without seeking.
+        Some(DelayReason::UnFlushLogGc)
+    }
+
+    fn on_raft_log_gc_flushed(&mut self) {
+        self.fsm.logs_gc_flushed = true;
+        let delay = match self.fsm.delayed_destroy {
+            Some(delay) => delay,
+            None => panic!("{} a delayed destroy should not recover", self.fsm.peer.tag),
+        };
+        self.destroy_peer(delay.merged_by_target);
+    }
+
+    fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         fail_point!("destroy_peer");
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+
+        if let Some(reason) = self.maybe_delay_destroy() {
+            if self
+                .fsm
+                .delayed_destroy
+                .map_or(false, |delay| delay.reason == reason)
+            {
+                panic!(
+                    "{} destroy peer twice with same delay reason, original {:?}, now {}",
+                    self.fsm.peer.tag, self.fsm.delayed_destroy, merged_by_target
+                );
+            }
+            self.fsm.delayed_destroy = Some(DelayDestroy {
+                merged_by_target,
+                reason,
+            });
+            info!(
+                "delays destroy";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+                "reason" => ?reason,
+            );
+            return false;
+        }
+
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -2200,6 +2333,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        true
     }
 
     // Update some region infos
@@ -2365,21 +2499,9 @@ where
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
-        let task = RaftlogGcTask::gc(
-            self.fsm.peer.get_store().get_region_id(),
-            self.fsm.peer.last_compacted_idx,
-            compact_to,
-        );
+        self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().compact_to(compact_to);
-        if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
-            error!(
-                "failed to schedule compact task";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
     }
 
     fn on_ready_split_region(
@@ -2522,6 +2644,8 @@ where
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
+            new_peer.peer.last_compacted_idx =
+                new_peer.apply_state().get_truncated_state().get_index() + 1;
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 
@@ -2596,10 +2720,8 @@ where
             .kv
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
-            if util::is_epoch_stale(
-                target_region.get_region_epoch(),
-                target_state.get_region().get_region_epoch(),
-            ) {
+            let state_epoch = target_state.get_region().get_region_epoch();
+            if util::is_epoch_stale(target_region.get_region_epoch(), state_epoch) {
                 return Ok(true);
             }
             // The local target region epoch is staler than target region's.
@@ -2624,6 +2746,10 @@ where
                         );
                     }
                     cmp::Ordering::Greater => {
+                        if state_epoch.get_version() == 0 && state_epoch.get_conf_ver() == 0 {
+                            // There is a new peer and it's destroyed without being initialised.
+                            return Ok(true);
+                        }
                         // The local target peer id is greater than the one in target region, but its epoch
                         // is staler than target_region's. That is contradictory.
                         panic!("{} local target peer id {} is greater than the one in target region {}, but its epoch is staler, local target region {:?},
@@ -3076,7 +3202,11 @@ where
             .peer
             .pending_merge_state
             .as_ref()
-            .map_or(true, |s| s.get_target().get_peers().contains(&target));
+            .map_or(true, |s| {
+                s.get_target().get_peers().iter().any(|p| {
+                    p.get_store_id() == target.get_store_id() && p.get_id() <= target.get_id()
+                })
+            });
         if !exists {
             panic!(
                 "{} unexpected merge result: {:?} {:?} {:?}",
@@ -3133,7 +3263,7 @@ where
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
-                // `merge_by_target` is true because this region's range already belongs to
+                // `merged_by_target` is true because this region's range already belongs to
                 // its target region so we must not clear data otherwise its target region's
                 // data will corrupt.
                 self.destroy_peer(true);
@@ -3606,19 +3736,17 @@ where
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self, force_compact: bool) {
+        if !self.fsm.peer.is_leader() {
+            // `compact_cache_to` is called when apply, there is no need to call `compact_to` here,
+            // snapshot generating has already been cancelled when the role becomes follower.
+            return;
+        }
         if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
         debug_assert!(!self.fsm.stopped);
-
-        // The most simple case: compact log and cache to applied index directly.
-        let applied_idx = self.fsm.peer.get_store().applied_index();
-        if !self.fsm.peer.is_leader() {
-            self.fsm.peer.mut_store().compact_to(applied_idx + 1);
-            return;
-        }
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -3641,6 +3769,7 @@ where
         //              first_index                         replicated_index
         // `alive_cache_idx` is the smallest `replicated_index` of healthy up nodes.
         // `alive_cache_idx` is only used to gc cache.
+        let applied_idx = self.fsm.peer.get_store().applied_index();
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
@@ -3695,10 +3824,12 @@ where
             // |------------- entries needs to be compacted ----------|
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
+            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log += 1;
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
+            self.ctx.raft_metrics.raft_log_gc_skipped.threshold_limit += 1;
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
@@ -3711,6 +3842,10 @@ where
         compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .compact_idx_too_small += 1;
             return;
         }
         total_gc_logs += compact_idx - first_idx;
