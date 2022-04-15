@@ -57,6 +57,7 @@ pub use crate::mvcc_properties::*;
 pub mod perf_context;
 pub use crate::perf_context::*;
 mod perf_context_impl;
+pub use crate::perf_context_impl::{DEFAULT_READ_PERF_FLAGS, DEFAULT_WRITE_PERF_FLAGS};
 mod perf_context_metrics;
 
 mod engine_iterator;

@@ -413,7 +413,7 @@ mod tests {
     use crate::server::TestRaftStoreRouter;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::TestStorageBuilderApiV1;
-    use engine_rocks::{PerfLevel, RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::store::transport::Transport;

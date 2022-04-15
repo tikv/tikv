@@ -227,7 +227,6 @@ region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
 consistency-check-method = "raw"
-perf-level = 5
 enable-region-bucket = true 
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"

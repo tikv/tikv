@@ -49,7 +49,7 @@ macro_rules! observe_perf_context_type {
 
 lazy_static! {
     /// Default perf flags for a write operation.
-    static ref DEFAULT_WRITE_PERF_FLAGS: PerfFlags = PerfFlag::WriteWalTime
+    pub static ref DEFAULT_WRITE_PERF_FLAGS: PerfFlags = PerfFlag::WriteWalTime
         | PerfFlag::WritePreAndPostProcessTime
         | PerfFlag::WriteMemtableTime
         | PerfFlag::WriteThreadWaitNanos
@@ -57,6 +57,39 @@ lazy_static! {
         | PerfFlag::WriteSchedulingFlushesCompactionsTime
         | PerfFlag::DbConditionWaitNanos
         | PerfFlag::WriteDelayTime;
+
+    /// Default perf flags for read operations.
+    pub static ref DEFAULT_READ_PERF_FLAGS: PerfFlags = PerfFlag::BlockCacheHitCount
+        | PerfFlag::BlockReadCount
+        | PerfFlag::BlockReadByte
+        | PerfFlag::BlockReadTime
+        | PerfFlag::BlockCacheIndexHitCount
+        | PerfFlag::IndexBlockReadCount
+        | PerfFlag::BlockCacheFilterHitCount
+        | PerfFlag::FilterBlockReadCount
+        | PerfFlag::CompressionDictBlockReadCount
+        | PerfFlag::GetReadBytes
+        | PerfFlag::InternalKeySkippedCount
+        | PerfFlag::InternalDeleteSkippedCount
+        | PerfFlag::InternalRecentSkippedCount
+        | PerfFlag::GetSnapshotTime
+        | PerfFlag::GetFromMemtableCount
+        | PerfFlag::SeekOnMemtableCount
+        | PerfFlag::NextOnMemtableCount
+        | PerfFlag::PrevOnMemtableCount
+        | PerfFlag::SeekChildSeekCount
+        | PerfFlag::DbMutexLockNanos
+        | PerfFlag::DbConditionWaitNanos
+        | PerfFlag::BloomMemtableHitCount
+        | PerfFlag::BloomMemtableMissCount
+        | PerfFlag::BloomSstHitCount
+        | PerfFlag::BloomSstMissCount
+        | PerfFlag::UserKeyReturnCount
+        | PerfFlag::BlockCacheMissCount
+        | PerfFlag::BloomFilterFullPositive
+        | PerfFlag::BloomFilterUseful
+        | PerfFlag::BloomFilterFullTruePositive
+        | PerfFlag::BytesRead;
 }
 
 pub struct PerfContextStatistics {

@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{set_perf_flags, set_perf_level, PerfFlag, PerfFlags};
+use engine_rocks::{set_perf_flags, set_perf_level, DEFAULT_READ_PERF_FLAGS};
 use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::ScanDetailV2;
 use pd_client::BucketMeta;
@@ -37,20 +37,6 @@ enum TrackerState {
 
     /// The tracker has finished all tracking and there will be no future operations.
     Tracked,
-}
-
-lazy_static! {
-    /// Default perf flags for read operations.
-    static ref DEFAULT_COPR_READ_PERF_FLAGS: PerfFlags = PerfFlag::BlockCacheHitCount
-        | PerfFlag::BlockReadCount
-        | PerfFlag::BlockReadByte
-        | PerfFlag::BlockReadTime
-        | PerfFlag::InternalKeySkippedCount
-        | PerfFlag::InternalDeleteSkippedCount
-        | PerfFlag::GetSnapshotTime
-        | PerfFlag::DbMutexLockNanos
-        | PerfFlag::DbConditionWaitNanos
-        | PerfFlag::BlockCacheMissCount;
 }
 
 /// Track coprocessor requests to update statistics and provide slow logs.
@@ -208,7 +194,7 @@ impl Tracker {
 
     fn apply_perf_settings(&self) {
         if self.req_ctx.perf_level == PerfLevel::Uninitialized {
-            set_perf_flags(&*DEFAULT_COPR_READ_PERF_FLAGS);
+            set_perf_flags(&*DEFAULT_READ_PERF_FLAGS);
         } else {
             set_perf_level(self.req_ctx.perf_level);
         }
