@@ -1268,16 +1268,16 @@ where
             }
             // wait two rounds of election timeout to trigger check quorum to step down the leader
             Some(
-                self.ctx.cfg.raft_election_timeout_ticks * 2
-                    - self.fsm.peer.raft_group.raft.election_elapsed
+                (self.ctx.cfg.raft_election_timeout_ticks * 2)
+                    .saturating_sub(self.fsm.peer.raft_group.raft.election_elapsed)
                     + 1,
             )
+        // When election timeout is triggered, leader_id is set to INVALID_ID.
+        // But learner(not promotable) is a exception here as it wouldn't tick
+        // election.
         } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
-            // When election timeout is triggered, leader_id is set to INVALID_ID.
-            // But learner(not promotable) is a exception here as it wouldn't tick
-            // election.
             if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
                 warn!(
                     "reject pre force leader due to leader lease may not expired";
@@ -1288,8 +1288,10 @@ where
             }
             // wait one round of election timeout to make sure leader_id is invalid
             Some(
-                self.ctx.cfg.raft_election_timeout_ticks
-                    - self.fsm.peer.raft_group.raft.election_elapsed
+                self.ctx
+                    .cfg
+                    .raft_election_timeout_ticks
+                    .saturating_sub(self.fsm.peer.raft_group.raft.election_elapsed)
                     + 1,
             )
         } else {
@@ -1478,7 +1480,7 @@ where
             ticks,
         }) = &mut self.fsm.peer.force_leader
         {
-            *ticks -= 1;
+            *ticks = (*ticks).saturating_sub(1);
             if *ticks == 0 {
                 let s = mem::take(failed_stores);
                 self.on_enter_pre_force_leader(s);
