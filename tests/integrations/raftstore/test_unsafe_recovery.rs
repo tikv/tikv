@@ -300,8 +300,8 @@ fn test_force_leader_for_learner() {
     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
 }
 
-// Test the case that three of five nodes fail and force leader on one a
-// hibernated previous leader.
+// Test the case that three of five nodes fail and force leader on a hibernated
+// previous leader.
 #[test]
 fn test_force_leader_on_hibernated_leader() {
     let mut cluster = new_node_cluster(0, 5);

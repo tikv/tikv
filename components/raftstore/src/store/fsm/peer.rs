@@ -1521,10 +1521,6 @@ where
         }) = &mut self.fsm.peer.force_leader
         {
             *ticks -= 1;
-            debug!(
-                "sub tick";
-                "ticks" => *ticks,
-            );
             if *ticks == 0 {
                 let s = mem::take(failed_stores);
                 self.on_enter_pre_force_leader(s);
@@ -1900,12 +1896,6 @@ where
             }
         }
 
-        debug!(
-            "tick raft group";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed,
-        );
         // Tick the raft peer and update some states which can be changed in `tick`.
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
