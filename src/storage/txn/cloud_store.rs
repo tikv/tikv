@@ -270,6 +270,7 @@ impl super::Scanner for CloudStoreScanner {
                 let key = Key::from_raw(iter_key);
                 return Ok(Some((key, val.to_vec())));
             }
+            self.stats.write.next_tombstone += 1;
             // Skip delete record.
             self.iter.next();
             continue;

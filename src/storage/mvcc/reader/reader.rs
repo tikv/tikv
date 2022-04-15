@@ -126,7 +126,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
                 .cloud_reader
                 .as_mut()
                 .unwrap()
-                .get_old_value(prev_write);
+                .get_old_value(key, ts, prev_write);
         }
         self.reader
             .get_old_value(key, ts, prev_write_loaded, prev_write)

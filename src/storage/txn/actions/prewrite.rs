@@ -314,6 +314,10 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<Write>> {
+        if reader.cloud_reader.is_some() {
+            let cloud_reader = reader.cloud_reader.as_mut().unwrap();
+            return cloud_reader.get_newer(&self.key, self.txn_props.start_ts);
+        }
         match reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
                 // Abort on writes after our start timestamp ...

@@ -17,6 +17,7 @@ use crate::table::is_deleted;
 use crate::SnapAccess;
 use std::cmp::Ordering::*;
 use std::iter::Iterator as StdIterator;
+use std::sync::atomic::Ordering;
 
 pub const MAX_HEIGHT: usize = 14;
 const HEIGHT_INCREASE: u32 = u32::MAX / 4;
@@ -188,6 +189,7 @@ pub struct SkipListCore {
     head: ArenaAddr,
     arena: Arc<Arena>,
     rnd_x: AtomicU32,
+    data_max_ts: AtomicU64,
     hint: Mutex<Hint>,
 }
 
@@ -201,6 +203,7 @@ impl SkipListCore {
             head: head_node.addr,
             arena: a,
             rnd_x: AtomicU32::new(RAND_SEED),
+            data_max_ts: AtomicU64::new(0),
             hint: Mutex::new(Hint::new()),
         }
     }
@@ -241,6 +244,8 @@ impl SkipListCore {
 
     pub fn put_batch(&self, batch: &mut WriteBatch, snap: &SnapAccess, cf: usize) {
         let mut hint = self.hint.lock().unwrap();
+        let data_max_ts = self.data_max_ts.load(Ordering::Acquire);
+        let mut batch_max_ts = 0;
         for i in 0..batch.entries.len() {
             let entry = &batch.entries[i];
             if is_deleted(entry.meta) {
@@ -251,8 +256,14 @@ impl SkipListCore {
                     self.delete_with_hint(key, &mut hint);
                 }
             } else {
+                if batch_max_ts < entry.version {
+                    batch_max_ts = entry.version;
+                }
                 self.put_with_hint(&batch.buf, entry, &mut hint);
             }
+        }
+        if batch_max_ts > data_max_ts {
+            self.data_max_ts.store(batch_max_ts, Ordering::Release);
         }
     }
 
@@ -606,6 +617,17 @@ impl SkipListCore {
         let v = self.arena.get_val(value_off);
         if version >= v.version {
             return v;
+        }
+        Value::new()
+    }
+
+    pub fn get_newer(&self, key: &[u8], version: u64) -> Value {
+        if self.data_max_ts.load(Ordering::Acquire) < version {
+            return Value::new();
+        }
+        let val = self.get(key, u64::MAX);
+        if val.version >= version {
+            return val;
         }
         Value::new()
     }

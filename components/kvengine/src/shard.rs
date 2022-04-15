@@ -526,10 +526,7 @@ impl LevelHandlerBuilder {
     fn build(&mut self, level: usize) -> LevelHandler {
         let mut tables = self.tables.take().unwrap();
         tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
-        LevelHandler {
-            tables: Arc::new(tables),
-            level,
-        }
+        LevelHandler::new(level, tables)
     }
 
     fn add_table(&mut self, tbl: SSTable) {
@@ -583,13 +580,21 @@ impl ShardCF {
 pub struct LevelHandler {
     pub(crate) tables: Arc<Vec<SSTable>>,
     pub(crate) level: usize,
+    pub(crate) max_ts: u64,
 }
 
 impl LevelHandler {
     pub fn new(level: usize, tables: Vec<SSTable>) -> Self {
+        let mut max_ts = 0;
+        for tbl in &tables {
+            if max_ts < tbl.max_ts {
+                max_ts = tbl.max_ts;
+            }
+        }
         Self {
             tables: Arc::new(tables),
             level,
+            max_ts,
         }
     }
 
@@ -662,6 +667,16 @@ impl LevelHandler {
                 );
             }
         }
+    }
+
+    pub(crate) fn get_newer(&self, key: &[u8], version: u64, key_hash: u64) -> table::Value {
+        if self.max_ts < version {
+            return table::Value::new();
+        }
+        if let Some(tbl) = self.get_table(key) {
+            return tbl.get_newer(key, version, key_hash);
+        }
+        table::Value::new()
     }
 }
 

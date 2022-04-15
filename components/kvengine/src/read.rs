@@ -277,6 +277,39 @@ impl SnapAccessCore {
     pub fn get_all_files(&self) -> Vec<u64> {
         self.data.get_all_files()
     }
+
+    pub fn get_newer(&self, cf: usize, key: &[u8], version: u64) -> Item {
+        let mut item = Item::new();
+        item.val = self.get_newer_val(cf, key, version);
+        item
+    }
+
+    fn get_newer_val(&self, cf: usize, key: &[u8], version: u64) -> table::Value {
+        let key_hash = farmhash::fingerprint64(key);
+        for i in 0..self.data.mem_tbls.len() {
+            let tbl = self.data.mem_tbls.as_slice()[i].get_cf(cf);
+            let v = tbl.get_newer(key, version);
+            if v.is_valid() {
+                return v;
+            }
+        }
+        for l0 in &self.data.l0_tbls {
+            if let Some(tbl) = &l0.get_cf(cf) {
+                let v = tbl.get_newer(key, version, key_hash);
+                if v.is_valid() {
+                    return v;
+                }
+            }
+        }
+        let scf = self.data.get_cf(cf);
+        for lh in &scf.levels {
+            let v = lh.get_newer(key, version, key_hash);
+            if v.is_valid() {
+                return v;
+            }
+        }
+        return table::Value::new();
+    }
 }
 
 pub struct Iterator {

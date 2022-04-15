@@ -13,6 +13,8 @@ use xorf::BinaryFuse8;
 pub const CRC32_IEEE: u8 = 1;
 pub const PROP_KEY_SMALLEST: &str = "smallest";
 pub const PROP_KEY_BIGGEST: &str = "biggest";
+pub const PROP_KEY_MAX_TS: &str = "max_ts";
+pub const PROP_KEY_TOMBSTONES: &str = "tombstones";
 pub const EXTRA_END: u8 = 255;
 pub const EXTRA_FILTER: u8 = 1;
 pub const EXTRA_FILTER_TYPE_BINARY_FUSE_8: u8 = 1;
@@ -111,6 +113,8 @@ pub struct Builder {
     key_hashes: Vec<u64>,
     smallest: Vec<u8>,
     biggest: Vec<u8>,
+    max_ts: u64,
+    tombstones: usize,
 }
 
 impl Builder {
@@ -131,6 +135,8 @@ impl Builder {
         self.key_hashes.truncate(0);
         self.smallest.truncate(0);
         self.biggest.truncate(0);
+        self.max_ts = 0;
+        self.tombstones = 0;
     }
 
     fn add_property(buf: &mut BytesMut, key: &[u8], val: &[u8]) {
@@ -158,6 +164,12 @@ impl Builder {
             if self.smallest.len() == 0 {
                 self.smallest.extend_from_slice(key);
             }
+            if self.max_ts < val.version {
+                self.max_ts = val.version;
+            }
+        }
+        if val.value_len() == 0 {
+            self.tombstones += 1;
         }
     }
 
@@ -218,6 +230,8 @@ impl Builder {
         buf.put_u32_le(0);
         Builder::add_property(buf, PROP_KEY_SMALLEST.as_bytes(), self.smallest.as_slice());
         Builder::add_property(buf, PROP_KEY_BIGGEST.as_bytes(), self.biggest.as_slice());
+        Builder::add_property(buf, PROP_KEY_MAX_TS.as_bytes(), &self.max_ts.to_le_bytes());
+        Builder::add_property(buf, PROP_KEY_TOMBSTONES.as_bytes(), &self.tombstones.to_le_bytes());
         if self.checksum_tp == CRC32_IEEE {
             let checksum = crc32fast::hash(&buf[(origin_len + 4)..]);
             LittleEndian::write_u32(&mut buf[origin_len..], checksum);

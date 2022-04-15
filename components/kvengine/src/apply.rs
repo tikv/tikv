@@ -6,7 +6,6 @@ use crate::*;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
-use std::sync::Arc;
 
 pub struct ChangeSet {
     pub change_set: kvenginepb::ChangeSet,
@@ -214,10 +213,7 @@ impl EngineCore {
             }
             new_level_tables.sort_by(|a, b| a.smallest().cmp(b.smallest()));
         }
-        let new_level = LevelHandler {
-            level,
-            tables: Arc::new(new_level_tables),
-        };
+        let new_level = LevelHandler::new(level, new_level_tables);
         new_level.check_order(cf, shard.id, shard.ver);
         new_level
     }

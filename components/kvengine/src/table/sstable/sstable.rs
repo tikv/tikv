@@ -102,6 +102,17 @@ impl SSTable {
             _ => true,
         }
     }
+
+    pub fn get_newer(&self, key: &[u8], version: u64, key_hash: u64) -> table::Value {
+        if self.max_ts < version {
+            return table::Value::new();
+        }
+        let val = self.get(key, u64::MAX, key_hash);
+        if val.version >= version {
+            return val;
+        }
+        table::Value::new()
+    }
 }
 
 pub struct SSTableCore {
@@ -111,6 +122,8 @@ pub struct SSTableCore {
     footer: Footer,
     smallest_buf: Bytes,
     biggest_buf: Bytes,
+    pub max_ts: u64,
+    pub tombstones: usize,
     pub idx: Index,
     pub old_idx: Index,
 }
@@ -148,6 +161,8 @@ impl SSTableCore {
         prop_slice = &prop_slice[4..];
         let mut smallest_buf = Bytes::new();
         let mut biggest_buf = Bytes::new();
+        let mut max_ts = 0;
+        let mut tombstones = 0;
         while prop_slice.len() > 0 {
             let (key, val, remain) = parse_prop_data(prop_slice);
             prop_slice = remain;
@@ -155,6 +170,10 @@ impl SSTableCore {
                 smallest_buf = Bytes::copy_from_slice(val);
             } else if key == PROP_KEY_BIGGEST.as_bytes() {
                 biggest_buf = Bytes::copy_from_slice(val);
+            } else if key == PROP_KEY_MAX_TS.as_bytes() {
+                max_ts = LittleEndian::read_u64(val);
+            } else if key == PROP_KEY_TOMBSTONES.as_bytes() {
+                tombstones = LittleEndian::read_u64(val) as usize;
             }
         }
         Ok(Self {
@@ -164,6 +183,8 @@ impl SSTableCore {
             footer,
             smallest_buf,
             biggest_buf,
+            max_ts,
+            tombstones,
             idx,
             old_idx,
         })
@@ -192,7 +213,10 @@ impl SSTableCore {
         let cache = self.cache.as_ref().unwrap();
         let cache_key = BlockCacheKey::new(addr.origin_fid, addr.origin_off);
         cache
-            .try_get_with(cache_key, || self.read_block_from_file(addr, length, buf))
+            .try_get_with(cache_key, || {
+                crate::metrics::ENGINE_CACHE_MISS.inc_by(1);
+                self.read_block_from_file(addr, length, buf)
+            })
             .map_err(|err| err.as_ref().clone())
     }
 
@@ -262,6 +286,17 @@ impl SSTableCore {
 
     pub fn size(&self) -> u64 {
         return self.file.size();
+    }
+
+    pub fn index_size(&self) -> u64 {
+        return self.idx.bin.len() as u64;
+    }
+
+    pub fn filter_size(&self) -> u64 {
+        match &self.idx.filter {
+            Some(filter) => filter.len() as u64,
+            None => 0,
+        }
     }
 
     pub fn smallest(&self) -> &[u8] {

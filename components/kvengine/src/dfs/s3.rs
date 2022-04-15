@@ -4,6 +4,7 @@ use crate::dfs::{new_filename, File, Options, DFS};
 use async_trait::async_trait;
 use bytes::Bytes;
 use rusoto_core::{Region, RusotoError};
+use rusoto_s3::util::{AddressingStyle, S3Config};
 use rusoto_s3::S3;
 use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -79,7 +80,10 @@ impl S3FSCore {
             name: region,
             endpoint: end_point,
         };
-        let s3c = rusoto_s3::S3Client::new_with(http_client, credential, region);
+        let mut s3c = rusoto_s3::S3Client::new_with(http_client, credential, region);
+        s3c.set_config(S3Config {
+            addressing_style: AddressingStyle::Path,
+        });
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -100,7 +104,7 @@ impl S3FSCore {
     }
 
     fn file_key(&self, file_id: u64) -> String {
-        format!("{:08x}/{:016x}.t1", self.tenant_id, file_id)
+        format!("{:08x}/{:016x}.sst", self.tenant_id, file_id)
     }
 
     fn is_err_retryable<T>(&self, rustoto_err: &RusotoError<T>) -> bool {
@@ -139,13 +143,12 @@ impl DFS for S3FS {
     }
 
     async fn read_file(&self, file_id: u64, _opts: Options) -> crate::dfs::Result<Bytes> {
-        let key = self.file_key(file_id);
         let mut retry_cnt = 0;
         let start_time = Instant::now_coarse();
         loop {
             let mut req = rusoto_s3::GetObjectRequest::default();
             req.bucket = self.bucket.clone();
-            req.key = format!("{}/{}", &self.bucket, &key);
+            req.key = self.file_key(file_id);
             let result = self.s3c.get_object(req).await;
             if result.is_ok() {
                 let output = result.unwrap();
@@ -187,13 +190,12 @@ impl DFS for S3FS {
     }
 
     async fn create(&self, file_id: u64, data: Bytes, _opts: Options) -> crate::dfs::Result<()> {
-        let key = self.file_key(file_id);
         let mut retry_cnt = 0;
         let start_time = Instant::now();
         let data_len = data.len();
         loop {
             let mut req = rusoto_s3::PutObjectRequest::default();
-            req.key = format!("{}/{}", &self.bucket, &key);
+            req.key = self.file_key(file_id);
             req.bucket = self.bucket.clone();
             req.content_length = Some(data_len as i64);
             let data = data.clone();
@@ -233,10 +235,9 @@ impl DFS for S3FS {
     async fn remove(&self, file_id: u64, _opts: Options) {
         let mut retry_cnt = 0;
         loop {
-            let key = self.file_key(file_id);
             let bucket = self.bucket.clone();
             let mut req = rusoto_s3::PutObjectTaggingRequest::default();
-            req.key = format!("{}/{}", &bucket, &key);
+            req.key = self.file_key(file_id);
             req.bucket = bucket;
             req.tagging = rusoto_s3::Tagging {
                 tag_set: vec![rusoto_s3::Tag {
