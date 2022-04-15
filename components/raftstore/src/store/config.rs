@@ -60,7 +60,9 @@ pub struct Config {
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
 
-    // Interval to gc unnecessary raft log (ms).
+    // Interval to compact unnecessary raft log.
+    pub raft_log_compact_sync_interval: ReadableDuration,
+    // Interval to gc unnecessary raft log.
     pub raft_log_gc_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
@@ -177,9 +179,6 @@ pub struct Config {
     pub dev_assert: bool,
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
-    // Only for tests in v5.0.0.
-    #[serde(skip)]
-    pub raft_log_compact_sync_interval: ReadableDuration,
 
     #[serde(with = "engine_config::perf_level_serde")]
     #[online_config(skip)]
@@ -243,7 +242,8 @@ impl Default for Config {
             raft_max_size_per_msg: ReadableSize::mb(1),
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
-            raft_log_gc_tick_interval: ReadableDuration::secs(10),
+            raft_log_compact_sync_interval: ReadableDuration::secs(2),
+            raft_log_gc_tick_interval: ReadableDuration::secs(3),
             raft_log_gc_threshold: 50,
             // Assume the average size of entries is 1k.
             raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
@@ -292,7 +292,6 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
-            raft_log_compact_sync_interval: ReadableDuration::secs(60),
             perf_level: PerfLevel::EnableTime,
             evict_cache_on_memory_ratio: 0.2,
             cmd_batch: true,
@@ -366,7 +365,6 @@ impl Config {
                 self.raft_log_gc_threshold
             ));
         }
-
         if self.raft_log_gc_size_limit.0 == 0 {
             return Err(box_err!("raft log gc size limit should large than 0."));
         }
@@ -530,6 +528,9 @@ impl Config {
             .with_label_values(&["raft_entry_max_size"])
             .set(self.raft_entry_max_size.0 as f64);
 
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_log_compact_sync_interval"])
+            .set(self.raft_log_compact_sync_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_log_gc_tick_interval"])
             .set(self.raft_log_gc_tick_interval.as_secs() as f64);

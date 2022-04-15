@@ -6,13 +6,16 @@ use std::sync::mpsc::Sender;
 
 use thiserror::Error;
 
-use engine_traits::{Engines, KvEngine, RaftEngine};
+use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGCTask};
 use file_system::{IOType, WithIOType};
-use tikv_util::time::Duration;
+use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
-use tikv_util::{box_try, debug, error};
+use tikv_util::{box_try, debug, error, warn};
 
-const MAX_GC_REGION_BATCH: usize = 128;
+use crate::store::worker::metrics::*;
+
+const MAX_GC_REGION_BATCH: usize = 512;
+const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
 
 pub struct Task {
     region_id: u64,
@@ -81,20 +84,11 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(
-        &mut self,
-        region_id: u64,
-        start_idx: u64,
-        end_idx: u64,
-    ) -> Result<usize, Error> {
-        if start_idx == end_idx {
-            // Flush only.
-            return Ok(0);
-        }
+    fn gc_raft_log(&mut self, regions: Vec<RaftLogGCTask>) -> Result<usize, Error> {
         fail::fail_point!("worker_gc_raft_log", |s| {
             Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
         });
-        let deleted = box_try!(self.engines.raft.gc(region_id, start_idx, end_idx));
+        let deleted = box_try!(self.engines.raft.batch_gc(regions));
         Ok(deleted)
     }
 
@@ -105,26 +99,59 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     fn flush(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
         });
+        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
         let tasks = std::mem::take(&mut self.tasks);
+        let mut groups = Vec::with_capacity(tasks.len());
+        let mut cbs = Vec::new();
         for t in tasks {
-            debug!("gc raft log"; "region_id" => t.region_id, "end_index" => t.end_idx);
-            match self.gc_raft_log(t.region_id, t.start_idx, t.end_idx) {
-                Err(e) => {
-                    error!("failed to gc"; "region_id" => t.region_id, "err" => %e);
-                    self.report_collected(0);
-                }
-                Ok(n) => {
-                    debug!("gc log entries"; "region_id" => t.region_id, "entry_count" => n);
-                    self.report_collected(n);
-                }
-            }
+            debug!("gc raft log"; "region_id" => t.region_id, "start_index" => t.start_idx, "end_index" => t.end_idx);
             if let Some(cb) = t.cb {
-                cb();
+                cbs.push(cb);
             }
+            if t.start_idx == t.end_idx {
+                // It's only for flush.
+                continue;
+            }
+            if t.start_idx == 0 {
+                RAFT_LOG_GC_SEEK_OPERATIONS.inc();
+            } else if t.end_idx > t.start_idx + MAX_REGION_NORMAL_GC_LOG_NUMBER {
+                warn!(
+                    "gc raft log with a large range";
+                    "region_id" => t.region_id,
+                    "start_index" => t.start_idx,
+                    "end_index" => t.end_idx,
+                );
+            }
+            groups.push(RaftLogGCTask {
+                raft_group_id: t.region_id,
+                from: t.start_idx,
+                to: t.end_idx,
+            });
+        }
+        let start = Instant::now();
+        match self.gc_raft_log(groups) {
+            Err(e) => {
+                error!("failed to gc"; "err" => %e);
+                self.report_collected(0);
+                RAFT_LOG_GC_FAILED.inc();
+            }
+            Ok(n) => {
+                debug!("gc log entries";  "entry_count" => n);
+                self.report_collected(n);
+                RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM.observe(n as f64);
+            }
+        }
+        RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+        for cb in cbs {
+            cb()
         }
     }
 }

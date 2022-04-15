@@ -140,6 +140,7 @@ raft-max-election-timeout-ticks = 20
 raft-max-size-per-msg = "12MB"
 raft-max-inflight-msgs = 123
 raft-entry-max-size = "12MB"
+raft-log-compact-sync-interval = "12s"
 raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
 raft-log-gc-count-limit = 12
