@@ -2826,22 +2826,23 @@ impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
         self
     }
 
+    /*
     fn register_causal_observer(&mut self) {
         if let (ApiVersion::V2, Some(coprocessor)) = (Api::TAG, self.engine.mut_coprocessor()) {
             let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(coprocessor);
         }
-    }
+    }*/
 
     /// Build a `Storage<E>`.
-    pub fn build(mut self) -> Result<Storage<E, L, Api>> {
+    pub fn build(self) -> Result<Storage<E, L, Api>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
         // invoke here, as there are two entries to create `TestStorageBuilder` (`new` & `from_engine_and_lock_mgr`)
-        self.register_causal_observer();
+        // self.register_causal_observer();
 
         Storage::from_engine(
             self.engine,

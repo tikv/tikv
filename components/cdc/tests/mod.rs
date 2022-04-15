@@ -181,6 +181,7 @@ impl TestSuiteBuilder {
                 raft_router,
                 cluster.engines[id].kv.clone(),
                 cdc_ob,
+                None,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
                 env,

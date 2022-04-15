@@ -716,6 +716,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Register causal observer for RawKV API V2
+        let mut causal_ob_opt = None;
         if let ApiVersion::V2 = Api::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 self.pd_client.clone(),
@@ -730,6 +731,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            causal_ob_opt = Some(causal_ob);
         }
 
         // Register cdc.
@@ -924,6 +926,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.router.clone(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             cdc_ob,
+            causal_ob_opt,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
             server.env(),

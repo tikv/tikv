@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 use std::usize;
 
 use api_version::{match_template_api_version, APIVersion};
-use causal_ts::Config as CausalTsConfig;
+// use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::get_env;
@@ -65,6 +65,13 @@ use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
+
+// Renew on every 100ms, to adjust batch size rapidly enough.
+pub(crate) const TSO_BATCH_RENEW_INTERVAL_DEFAULT: u64 = 100;
+// Batch size on every renew interval.
+// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
+// Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
+pub const TSO_BATCH_MIN_SIZE_DEFAULT: u32 = 100;
 
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 
@@ -2380,6 +2387,43 @@ impl CdcConfig {
             );
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct CausalTsConfig {
+    /// The renew interval of BatchTsoProvider.
+    ///
+    /// Default is 100ms, to adjust batch size rapidly enough.
+    pub renew_interval: ReadableDuration,
+    /// The minimal renew batch size of BatchTsoProvider.
+    ///
+    /// Default is 100.
+    /// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
+    /// Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
+    pub renew_batch_min_size: u32,
+}
+
+impl CausalTsConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.renew_interval.is_zero() {
+            return Err("causal-ts.renew_interval can't be zero".into());
+        }
+        if self.renew_batch_min_size == 0 {
+            return Err("causal-ts.renew_batch_init_size should be greater than 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for CausalTsConfig {
+    fn default() -> Self {
+        Self {
+            renew_interval: ReadableDuration::millis(TSO_BATCH_RENEW_INTERVAL_DEFAULT),
+            renew_batch_min_size: TSO_BATCH_MIN_SIZE_DEFAULT,
+        }
     }
 }
 

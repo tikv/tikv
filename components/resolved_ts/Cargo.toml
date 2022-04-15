@@ -42,6 +42,7 @@ txn_types = { path = "../txn_types", default-features = false }
 security = { path = "../security", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+api_version = { path = "../api_version" }
 
 [dev-dependencies]
 engine_rocks = { path = "../engine_rocks", default-features = false }

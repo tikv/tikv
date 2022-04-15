@@ -642,6 +642,7 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "collections",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -653,6 +654,7 @@ dependencies = [
  "prometheus",
  "raft",
  "raftstore",
+ "resolved_ts",
  "serde",
  "serde_derive",
  "slog",
@@ -679,6 +681,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "bitflags",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "criterion",
@@ -4093,6 +4096,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -5578,7 +5582,6 @@ dependencies = [
  "batch-system",
  "byteorder",
  "case_macros",
- "causal_ts",
  "chrono",
  "codec",
  "collections",

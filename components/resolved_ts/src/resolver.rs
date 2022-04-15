@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::{APIVersion, KeyMode, APIV2};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use std::cmp;
@@ -122,6 +123,33 @@ impl Resolver {
             if locked_keys.is_empty() {
                 self.lock_ts_heap.remove(&start_ts);
             }
+        }
+    }
+
+    pub fn untrack_locks_before(&mut self, ts: TimeStamp) {
+        let mut need_remove_ts = Vec::new();
+        let mut need_remove_key = Vec::new();
+
+        for iter in self.lock_ts_heap.iter_mut().filter(|t| *t.0 < ts) {
+            iter.1.retain(|key| {
+                if APIV2::parse_key_mode(key.as_ref()) != KeyMode::Raw {
+                    return true;
+                }
+                need_remove_key.push(key.clone());
+                return false;
+            });
+
+            if iter.1.is_empty() {
+                need_remove_ts.push((*iter.0).clone());
+            }
+        }
+
+        for start_ts in need_remove_ts {
+            self.lock_ts_heap.remove(&start_ts);
+        }
+
+        for key in need_remove_key {
+            self.locks_by_key.remove(key.as_ref());
         }
     }
 

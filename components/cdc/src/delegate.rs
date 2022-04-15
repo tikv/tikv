@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-//
 use api_version::{APIVersion, KeyMode, APIV2};
 use std::mem;
 use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
@@ -229,13 +228,15 @@ pub struct Delegate {
 
     // None if the delegate is not initialized.
     region: Option<Region>,
-    pub resolver: Option<Resolver>,
-
+    pub resolver: Option<Arc<RwLock<Resolver>>>,
     // Downstreams after the delegate has been resolved.
     resolved_downstreams: Vec<Downstream>,
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
+
+    txnkv_downstream_count: i32,
+    rawkv_downstream_count: i32,
 }
 
 impl Delegate {
@@ -250,6 +251,8 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
+            txnkv_downstream_count: 0,
+            rawkv_downstream_count: 0,
         }
     }
 
@@ -260,8 +263,21 @@ impl Delegate {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
         }
+        if downstream.kv_api == ChangeDataRequestKvApi::RawKv {
+            self.rawkv_downstream_count += 1;
+        } else {
+            self.txnkv_downstream_count += 1;
+        }
         self.add_downstream(downstream);
         Ok(())
+    }
+
+    pub fn has_txnkv_downstream(&self) -> bool {
+        self.txnkv_downstream_count != 0
+    }
+
+    pub fn has_rawkv_downstream(&self) -> bool {
+        self.rawkv_downstream_count != 0
     }
 
     pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
@@ -297,6 +313,11 @@ impl Delegate {
                 }
             }
             d.state.store(DownstreamState::Stopped);
+            if d.kv_api == ChangeDataRequestKvApi::RawKv {
+                self.rawkv_downstream_count -= 1;
+            } else {
+                self.txnkv_downstream_count -= 1;
+            }
         }
         self.downstreams().is_empty()
     }
@@ -366,7 +387,7 @@ impl Delegate {
     /// Install a resolver. Return downstreams which fail because of the region's internal changes.
     pub fn on_region_ready(
         &mut self,
-        mut resolver: Resolver,
+        resolver: Arc<RwLock<Resolver>>,
         region: Region,
     ) -> Vec<(&Downstream, Error)> {
         assert!(
@@ -379,14 +400,15 @@ impl Delegate {
         let mut pending = self.pending.take().unwrap();
         self.region = Some(region);
         info!("cdc region is ready"; "region_id" => self.region_id);
+        self.resolver = Some(resolver.clone());
 
+        let mut resolver = resolver.write().unwrap();
         for lock in mem::take(&mut pending.locks) {
             match lock {
                 PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
             }
         }
-        self.resolver = Some(resolver);
 
         self.resolved_downstreams = mem::take(&mut pending.downstreams);
         let mut failed_downstreams = Vec::new();
@@ -406,8 +428,13 @@ impl Delegate {
             return None;
         }
         debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
-        let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = resolver.resolve(min_ts);
+        let resolved_ts = self
+            .resolver
+            .as_mut()
+            .unwrap()
+            .write()
+            .unwrap()
+            .resolve(min_ts);
         debug!("cdc resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
@@ -578,6 +605,7 @@ impl Delegate {
             Ok(())
         };
 
+        let mut rawkv_max_ts: u64 = 0;
         let mut txn_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         let mut raw_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
@@ -589,6 +617,7 @@ impl Delegate {
                         &mut txn_rows,
                         &mut raw_rows,
                         &mut read_old_value,
+                        &mut rawkv_max_ts,
                     )?;
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
@@ -608,8 +637,13 @@ impl Delegate {
 
         if !raw_rows.is_empty() {
             self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+            if let Some(resolver) = &self.resolver {
+                resolver
+                    .write()
+                    .unwrap()
+                    .untrack_locks_before(rawkv_max_ts.into());
+            }
         }
-
         Ok(())
     }
 
@@ -658,10 +692,10 @@ impl Delegate {
         txn_rows: &mut HashMap<Vec<u8>, EventRow>,
         raw_rows: &mut HashMap<Vec<u8>, EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        rawkv_max_ts: &mut u64,
     ) -> Result<()> {
-        let key_mode = APIV2::parse_key_mode(put.get_key());
-        if key_mode == KeyMode::Raw {
-            self.sink_raw_put(put, raw_rows)
+        if APIV2::parse_key_mode(put.get_key()) == KeyMode::Raw {
+            self.sink_raw_put(put, raw_rows, rawkv_max_ts)
         } else {
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
         }
@@ -671,9 +705,14 @@ impl Delegate {
         &mut self,
         mut put: PutRequest,
         rows: &mut HashMap<Vec<u8>, EventRow>,
+        rawkv_max_ts: &mut u64,
     ) -> Result<()> {
         let mut row = EventRow::default();
         decode_rawkv(put.take_key(), put.take_value(), &mut row);
+
+        if row.commit_ts > *rawkv_max_ts {
+            *rawkv_max_ts = row.commit_ts;
+        }
 
         match rows.get_mut(&row.key) {
             Some(row_with_value) => {
@@ -716,7 +755,7 @@ impl Delegate {
                 };
                 // validate commit_ts must be greater than the current resolved_ts
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    let resolved_ts = resolver.resolved_ts();
+                    let resolved_ts = resolver.read().unwrap().resolved_ts();
                     assert!(
                         commit_ts > resolved_ts,
                         "commit_ts: {:?}, resolved_ts: {:?}",
@@ -756,9 +795,11 @@ impl Delegate {
                 // In order to compute resolved ts,
                 // we must track inflight txns.
                 match self.resolver {
-                    Some(ref mut resolver) => {
-                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)
-                    }
+                    Some(ref mut resolver) => resolver.write().unwrap().track_lock(
+                        row.start_ts.into(),
+                        row.key.clone(),
+                        None,
+                    ),
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
                         let pending = self.pending.as_mut().unwrap();
@@ -790,7 +831,9 @@ impl Delegate {
             "lock" => {
                 let raw_key = Key::from_encoded(delete.take_key()).into_raw().unwrap();
                 match self.resolver {
-                    Some(ref mut resolver) => resolver.untrack_lock(&raw_key, None),
+                    Some(ref mut resolver) => {
+                        resolver.write().unwrap().untrack_lock(&raw_key, None)
+                    }
                     None => {
                         assert!(self.pending.is_some(), "region resolver not ready");
                         let key_len = raw_key.len();
