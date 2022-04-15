@@ -1293,30 +1293,64 @@ where
                 // already is a force leader, do nothing
                 return;
             }
+            Some(ForceLeaderState::WaitTicks { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
             None => {}
         }
 
-        if self.fsm.peer.is_leader() {
-            warn!(
-                "reject pre force leader due to already being leader";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return;
-        }
-
-        // When election timeout is triggered, leader_id is set to INVALID_ID.
-        // But learner(not promotable) is a exception here as it wouldn't tick
-        // election.
-        if self.fsm.peer.raft_group.raft.promotable()
-            && self.fsm.hibernate_state.group_state() != GroupState::Idle
+        let ticks = if self.fsm.peer.is_leader() {
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
+                warn!(
+                    "reject pre force leader due to already being leader";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait two rounds of election timeout to trigger check quorum to step down the leader
+            Some(
+                self.ctx.cfg.raft_election_timeout_ticks * 2
+                    - self.fsm.peer.raft_group.raft.election_elapsed
+                    + 1,
+            )
+        } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
-            warn!(
-                "reject pre force leader due to leader lease may not expired";
+            // When election timeout is triggered, leader_id is set to INVALID_ID.
+            // But learner(not promotable) is a exception here as it wouldn't tick
+            // election.
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
+                warn!(
+                    "reject pre force leader due to leader lease may not expired";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait one round of election timeout to make sure leader_id is invalid
+            Some(
+                self.ctx.cfg.raft_election_timeout_ticks
+                    - self.fsm.peer.raft_group.raft.election_elapsed
+                    + 1,
+            )
+        } else {
+            None
+        };
+
+        if let Some(ticks) = ticks {
+            info!(
+                "enter wait ticks";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "ticks" => ticks,
             );
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitTicks {
+                failed_stores,
+                ticks,
+            });
+            self.reset_raft_tick(GroupState::Ordered);
+            self.fsm.has_ready = true;
             return;
         }
 
@@ -1481,6 +1515,23 @@ where
 
     #[inline]
     fn check_force_leader(&mut self) {
+        if let Some(ForceLeaderState::WaitTicks {
+            failed_stores,
+            ticks,
+        }) = &mut self.fsm.peer.force_leader
+        {
+            *ticks -= 1;
+            debug!(
+                "sub tick";
+                "ticks" => *ticks,
+            );
+            if *ticks == 0 {
+                let s = mem::take(failed_stores);
+                self.on_enter_pre_force_leader(s);
+            }
+            return;
+        };
+
         let failed_stores = match &self.fsm.peer.force_leader {
             None => return,
             Some(ForceLeaderState::ForceLeader { .. }) => {
@@ -1490,6 +1541,7 @@ where
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
         if self.fsm.peer.raft_group.raft.election_elapsed + 1
@@ -1848,6 +1900,12 @@ where
             }
         }
 
+        debug!(
+            "tick raft group";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "election_elapsed" => self.fsm.peer.raft_group.raft.election_elapsed,
+        );
         // Tick the raft peer and update some states which can be changed in `tick`.
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;

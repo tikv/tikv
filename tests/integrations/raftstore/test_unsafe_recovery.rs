@@ -300,12 +300,12 @@ fn test_force_leader_for_learner() {
     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
 }
 
-// Test the case that three of five nodes fail and force leader on one of the
-// rest nodes.
+// Test the case that three of five nodes fail and force leader on one a
+// hibernated previous leader.
 #[test]
 fn test_force_leader_on_hibernated_leader() {
-    test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
+    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -328,12 +328,6 @@ fn test_force_leader_on_hibernated_leader() {
     cluster.stop_node(4);
     cluster.stop_node(5);
 
-    // wait check quorum fail
-    std::thread::sleep(Duration::from_millis(
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 3,
-    ));
     cluster.enter_force_leader(region.get_id(), 1, HashSet::from_iter(vec![3, 4, 5]));
     // remove the peers on failed nodes
     cluster
