@@ -84,10 +84,10 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
 }
 
 impl<E: KvEngine> RoleObserver for Observer<E> {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // Stop to advance resolved ts after peer steps down to follower or candidate.
         // Do not need to check observe id because we expect all role change events are scheduled in order.
-        if role != StateRole::Leader {
+        if role_change.state != StateRole::Leader {
             if let Err(e) = self.scheduler.schedule(Task::DeRegisterRegion {
                 region_id: ctx.region().id,
             }) {
