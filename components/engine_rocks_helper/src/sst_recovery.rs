@@ -230,14 +230,14 @@ mod tests {
         let runner = RecoveryRunner::new(
             db,
             meta.clone(),
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_millis(100),
         );
         let mut worker = LazyWorker::new("abc");
         worker.start_with_timer(runner);
         let tx = worker.scheduler();
         tx.schedule(files.get_name(0)).unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         assert_eq!(meta.lock().unwrap().damaged_regions_id.len(), 3);
         assert!(meta.lock().unwrap().damaged_regions_id.get(&2).is_some());
