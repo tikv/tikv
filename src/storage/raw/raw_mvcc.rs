@@ -247,7 +247,7 @@ mod tests {
     use api_version::{APIVersion, RawValue, APIV2};
     use engine_traits::raw_ttl::ttl_to_expire_ts;
     use engine_traits::CF_DEFAULT;
-    use kvproto::kvrpcpb::{ApiVersion, Context};
+    use kvproto::kvrpcpb::Context;
     use std::fmt::Debug;
     use std::iter::Iterator as StdIterator;
     use std::sync::mpsc::{channel, Sender};
@@ -262,16 +262,11 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
-        let engine = TestEngineBuilder::new() // Use `TestEngine` to be independent to `Storage`.
-            .api_version(ApiVersion::V2)
-            .build()
-            .unwrap();
-
+        // Use `Engine` to be independent to `Storage`.
+        // Do not set "api version" to use `Engine` as a raw RocksDB.
+        let engine = TestEngineBuilder::new().build().unwrap();
         let (tx, rx) = channel();
-        let ctx = Context {
-            api_version: ApiVersion::V2,
-            ..Default::default()
-        };
+        let ctx = Context::default();
 
         // TODO: Consider another way other than hard coding, to generate keys' prefix of test data.
         let test_data = vec![

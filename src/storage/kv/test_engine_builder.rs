@@ -61,6 +61,17 @@ impl TestEngineBuilder {
         self
     }
 
+    /// Register causal observer for RawKV API V2.
+    // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction filter) & CausalObserver.
+    // Consider decoupling them.
+    fn register_causal_observer(engine: &mut RocksEngine) {
+        let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        engine.register_observer(|host| {
+            causal_ob.register_to(host);
+        });
+    }
+
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -105,14 +116,20 @@ impl TestEngineBuilder {
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(
+        let mut engine = RocksEngine::new(
             &path,
             &cfs,
             Some(cfs_opts),
             cache.is_some(),
             self.io_rate_limiter,
             None, /* CFOptions */
-        )
+        )?;
+
+        if let ApiVersion::V2 = api_version {
+            Self::register_causal_observer(&mut engine);
+        }
+
+        Ok(engine)
     }
 }
 
