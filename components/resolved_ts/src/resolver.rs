@@ -130,7 +130,7 @@ impl Resolver {
         let mut need_remove_ts = Vec::new();
         let mut need_remove_key = Vec::new();
 
-        for iter in self.lock_ts_heap.iter_mut().filter(|t| *t.0 < ts) {
+        for iter in self.lock_ts_heap.iter_mut().filter(|t| *t.0 <= ts) {
             iter.1.retain(|key| {
                 if APIV2::parse_key_mode(key.as_ref()) != KeyMode::Raw {
                     return true;
@@ -211,6 +211,8 @@ mod tests {
         Lock(u64, Key),
         // key
         Unlock(Key),
+        // ts,
+        UnlockBefore(u64),
         // min_ts, expect
         Resolve(u64, u64),
     }
@@ -264,6 +266,14 @@ mod tests {
                 Event::Unlock(Key::from_raw(b"b")),
                 Event::Unlock(Key::from_raw(b"a")),
             ],
+            vec![
+                Event::Lock(1, Key::from_raw(b"a")),
+                Event::Lock(1, Key::from_raw(b"b")),
+                Event::Lock(2, Key::from_raw(b"c")),
+                Event::Lock(3, Key::from_raw(b"d")),
+                Event::UnlockBefore(2),
+                Event::Resolve(3, 3),
+            ],
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
@@ -274,6 +284,7 @@ mod tests {
                         resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
+                    Event::UnlockBefore(ts) => resolver.untrack_locks_before(ts.into()),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
