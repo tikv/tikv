@@ -1071,7 +1071,7 @@ mod tests {
         let mut delegate = Delegate::new(region_id, Default::default());
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
-        let resolver = Resolver::new(region_id);
+        let resolver = Arc::new(RwLock::new(Resolver::new(region_id)));
         assert!(delegate.on_region_ready(resolver, region).is_empty());
 
         let rx_wrap = Cell::new(Some(rx));
@@ -1213,7 +1213,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
         {
-            let failures = delegate.on_region_ready(Resolver::new(1), region);
+            let failures =
+                delegate.on_region_ready(Arc::new(RwLock::new(Resolver::new(1))), region);
             assert_eq!(failures.len(), 1);
             let id = failures[0].0.id;
             delegate.unsubscribe(id, None);

@@ -1332,13 +1332,14 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use causal_ts::tests::TestProvider;
 
     use super::*;
     use crate::{channel, recv_timeout};
 
     struct TestEndpointSuite {
         // The order must ensure `endpoint` be dropped before other fields.
-        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine>,
+        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine, TestProvider>,
         raft_router: MockRaftStoreRouter,
         task_rx: ReceiverWrapper<Task>,
         raft_rxs: HashMap<u64, tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>>>,
@@ -1378,7 +1379,7 @@ mod tests {
     }
 
     impl Deref for TestEndpointSuite {
-        type Target = Endpoint<MockRaftStoreRouter, RocksEngine>;
+        type Target = Endpoint<MockRaftStoreRouter, RocksEngine, TestProvider>;
         fn deref(&self) -> &Self::Target {
             &self.endpoint
         }
@@ -1390,7 +1391,7 @@ mod tests {
         }
     }
 
-    fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>) -> TestEndpointSuite {
+    fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>, causal_ob: Option<CausalObserver<TestProvider>>) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let ep = Endpoint::new(
@@ -1406,7 +1407,7 @@ mod tests {
                     .kv_engine()
             }),
             CdcObserver::new(task_sched),
-            None,
+            causal_ob,
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -1425,7 +1426,7 @@ mod tests {
     #[test]
     fn test_change_endpoint_cfg() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, None);
         let ep = &mut suite.endpoint;
 
         // Modify min_ts_interval and hibernate_regions_compatible.
@@ -1550,7 +1551,7 @@ mod tests {
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, None);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
@@ -1590,7 +1591,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, None);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1740,7 +1741,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, None);
         suite.add_region(1, 100);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -1875,7 +1876,7 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, None);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1994,31 +1995,42 @@ mod tests {
 
     #[test]
     fn test_broadcast_resolved_ts() {
-        let cfg = CdcConfig {
+        let mut cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        cfg.api_version = 2;
+        let mut suite = mock_endpoint(&cfg, None, None);
 
-        // Open two connections a and b, registers region 1, 2 to conn a and
-        // region 3 to conn b.
+        // Open five connections a, b, c, d, e, 
+        // registers region 1, 2 to conn a,
+        // region 3, 4 to conn b, region 5 to conn c, region 6 to d,
+        // region 7, 8 to conn e,
         let mut conn_rxs = vec![];
         let quota = channel::MemoryQuota::new(usize::MAX);
-        for region_ids in vec![vec![1, 2], vec![3]] {
+        let cdc_reqs = vec![
+            vec![(1, ChangeDataRequestKvApi::TiDb), (2, ChangeDataRequestKvApi::TiDb)],
+            vec![(3, ChangeDataRequestKvApi::RawKv), (4, ChangeDataRequestKvApi::RawKv)],
+            vec![(5, ChangeDataRequestKvApi::TiDb)],
+            vec![(6, ChangeDataRequestKvApi::RawKv)],
+            vec![(7, ChangeDataRequestKvApi::TiDb), (8, ChangeDataRequestKvApi::RawKv)],
+        ];
+
+        for cdc_req in cdc_reqs {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());
             let conn_id = conn.get_id();
             suite.run(Task::OpenConn { conn });
 
-            for region_id in region_ids {
+            for (region_id, kv_api) in cdc_req {
                 suite.add_region(region_id, 100);
                 let mut req_header = Header::default();
                 req_header.set_cluster_id(0);
                 let mut req = ChangeDataRequest::default();
                 req.set_region_id(region_id);
                 let region_epoch = req.get_region_epoch().clone();
-                let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, ChangeDataRequestKvApi::TiDb);
+                let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, kv_api);
                 downstream.get_state().store(DownstreamState::Normal);
                 suite.run(Task::Register {
                     request: req.clone(),
@@ -2051,7 +2063,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1],
             txnkv_min_ts: TimeStamp::from(1),
-            rawkv_min_ts: TimeStamp::from(1),
+            rawkv_min_ts: TimeStamp::from(0),
         });
         // conn a must receive a resolved ts that only contains region 1.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
@@ -2065,7 +2077,7 @@ mod tests {
         suite.run(Task::MinTS {
             regions: vec![1, 2],
             txnkv_min_ts: TimeStamp::from(2),
-            rawkv_min_ts: TimeStamp::from(2),
+            rawkv_min_ts: TimeStamp::from(0),
         });
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
@@ -2077,24 +2089,44 @@ mod tests {
         .unwrap_err();
 
         suite.run(Task::MinTS {
-            regions: vec![1, 2, 3],
+            regions: vec![1, 2, 3, 4],
             txnkv_min_ts: TimeStamp::from(3),
-            rawkv_min_ts: TimeStamp::from(3),
+            rawkv_min_ts: TimeStamp::from(4),
         });
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
-        // conn b must receive a resolved ts that contains region 3.
-        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
+        // conn b must receive a resolved ts that contains region 3, 4.
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![4, 3], 4);
 
         suite.run(Task::MinTS {
             regions: vec![1, 3],
             txnkv_min_ts: TimeStamp::from(4),
-            rawkv_min_ts: TimeStamp::from(4),
+            rawkv_min_ts: TimeStamp::from(5),
         });
         // conn a must receive a resolved ts that only contains region 1.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
         // conn b must receive a resolved ts that contains region 3.
-        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 4);
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 5);
+
+        suite.run(Task::MinTS {
+            regions: vec![5, 6],
+            txnkv_min_ts: TimeStamp::from(5),
+            rawkv_min_ts: TimeStamp::from(6),
+        });
+        // conn c must receive a resolved ts that only contains region 5.
+        assert_batch_resolved_ts(conn_rxs.get_mut(2).unwrap(), vec![5], 5);
+        // conn d must receive a resolved ts that contains region 6.
+        assert_batch_resolved_ts(conn_rxs.get_mut(3).unwrap(), vec![6], 6);
+
+        suite.run(Task::MinTS {
+            regions: vec![7, 8],
+            txnkv_min_ts: TimeStamp::from(7),
+            rawkv_min_ts: TimeStamp::from(8),
+        });
+        // conn e must receive a resolved ts that only contains region 7.
+        assert_batch_resolved_ts(conn_rxs.get_mut(4).unwrap(), vec![7], 7);
+        // conn e must receive a resolved ts that contains region 8.
+        assert_batch_resolved_ts(conn_rxs.get_mut(4).unwrap(), vec![8], 8);
     }
 
     // Suppose there are two Conn that capture the same region,
@@ -2105,7 +2137,7 @@ mod tests {
     // too, because epoch not match.
     #[test]
     fn test_deregister_conn_then_delegate() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, None);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
