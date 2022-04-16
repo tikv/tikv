@@ -3359,7 +3359,7 @@ mod tests {
         let entries = (14..=20)
             .map(|index| new_entry(index, RAFT_INIT_LOG_TERM))
             .collect();
-        engines.raft.gc(1, 0, u64::MAX).unwrap();
+        engines.raft.gc(1, 0, 20).unwrap();
         engines.raft.append(1, entries).unwrap();
         raft_state.mut_hard_state().set_commit(14);
         s = build_storage().unwrap();
@@ -3384,7 +3384,7 @@ mod tests {
         assert!(build_storage().is_err());
 
         // last index < recorded_commit_index is invalid.
-        engines.raft.gc(1, 0, u64::MAX).unwrap();
+        engines.raft.gc(1, 0, 20).unwrap();
         raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
         raft_state.set_last_index(13);
         engines
