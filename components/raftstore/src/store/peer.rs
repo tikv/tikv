@@ -54,7 +54,7 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
-use crate::store::msg::RaftCommand;
+use crate::store::msg::{RaftCommand, StoreMsg};
 use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
@@ -461,6 +461,18 @@ pub enum ForceLeaderState {
     ForceLeader { failed_stores: HashSet<u64> },
 }
 
+pub enum UnsafeRecoveryState {
+    // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
+    // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
+    // new entry or a snapshot, if the target index is met, the caller substract 1 from the task
+    // counter, whoever executes the last task is responsible for triggering the reporting logic by
+    // sending a store heartbeat message to store fsm.
+    WaitApply {
+        target_index: u64,
+        task_counter: Arc<AtomicUsize>,
+    },
+}
+
 #[derive(Getters)]
 pub struct Peer<EK, ER>
 where
@@ -634,6 +646,7 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
+    pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -762,6 +775,7 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
+            unsafe_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2010,6 +2024,11 @@ where
                         self.term(),
                         self.raft_group.store().region(),
                     );
+
+                    if self.unsafe_recovery_state.is_some() {
+                        debug!("unsafe recovery finishes applying a snapshot");
+                        self.unsafe_recovery_maybe_finish_wait_apply(ctx, /*force=*/ false);
+                    }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -4473,6 +4492,37 @@ where
                     "peer_id" => self.peer_id(),
                     "err" => %e,
                 );
+            }
+        }
+    }
+
+    pub fn unsafe_recovery_maybe_finish_wait_apply<T: Transport>(
+        &mut self,
+        ctx: &PollContext<EK, ER, T>,
+        force: bool,
+    ) {
+        if let Some(unsafe_recovery_state) = &self.unsafe_recovery_state {
+            let UnsafeRecoveryState::WaitApply {
+                target_index,
+                task_counter,
+            } = unsafe_recovery_state;
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                info!(
+                    "unsafe recovery finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                    "counter" =>  task_counter.load(Ordering::SeqCst)
+                );
+                if task_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    if let Err(e) = ctx.router.send_control(StoreMsg::UnsafeRecoveryReport) {
+                        error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
+                    }
+                }
+                // Reset the state if the wait is finished.
+                self.unsafe_recovery_state = None;
             }
         }
     }
