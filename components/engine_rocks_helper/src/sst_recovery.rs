@@ -122,18 +122,7 @@ impl RecoveryRunner {
                     &format!("recovery job exceeded {:?}", self.max_hang_duration),
                 );
             }
-            let need_retain = self.check_overlap_damaged_regions(f.clone());
-            if !need_retain {
-                println!(
-                    "ready delete_file {} {:?} {:?} (this line must be deleted before merge PR)",
-                    f.name, &f.smallest_key, &f.largest_key
-                );
-                // set `include_end` to `true` to ensure that sst with the same start key and end key.
-                self.db
-                    .delete_files_in_range(&f.smallest_key, &f.largest_key, true)
-                    .unwrap();
-            }
-            need_retain
+            self.check_overlap_damaged_regions(f.clone())
         });
         self.damaged_files = new_damaged_files;
     }
@@ -160,19 +149,32 @@ impl RecoveryRunner {
             }
         }
 
-        let overlap = !ids.is_empty();
+        let should_overlap = || {
+            fail_point!("sst_recovery_should_overlap", |t| -> Option<bool> {
+                Some(t.unwrap().parse::<bool>().unwrap())
+            });
+            None
+        };
+        let overlap = should_overlap().unwrap_or_else(|| !ids.is_empty());
+
+        // This sst file was detected before and should be deleted.
+        if !overlap && self.exist_scheduling_regions(&file.name) {
+            // set `include_end` to `true` otherwise the file with the same largest key will be skipped.
+            self.db
+                .delete_files_in_range(&file.smallest_key, &file.largest_key, true)
+                .unwrap();
+            if self.db.get(&file.smallest_key).unwrap().is_some() {
+                set_panic_mark_and_panic(&file.name, "Failed to delete the corrupted sst file");
+            }
+        }
+        // This sst file was detected for the first time.
         if overlap && !self.exist_scheduling_regions(&file.name) {
-            // This sst file was detected for the first time so store meta and
-            // file context should be updated.
             for id in ids {
                 meta.damaged_regions_id.insert(id);
                 file.overlap_region_ids.push(id);
             }
             self.damaged_files.push(file);
         }
-        fail_point!("sst_recovery_inject", |t| -> bool {
-            t.unwrap().parse::<bool>().unwrap()
-        });
         overlap
     }
 }

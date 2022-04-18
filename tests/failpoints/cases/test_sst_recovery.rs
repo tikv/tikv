@@ -83,7 +83,7 @@ fn test_sst_recovery_for_rocksdb() {
     // It will not automatically recover for the time being,
     // just test that it will not panic within `max_hang_duration`.
     cluster.must_put_cf(CF_DEFAULT, b"5", b" ");
-    fail::cfg("sst_recovery_inject", "return(false)").unwrap();
+    fail::cfg("sst_recovery_should_overlap", "return(false)").unwrap();
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(cluster.must_get(b"1").unwrap(), b" ".to_vec());
     // If the corrupted file is not deleted, panic here.
