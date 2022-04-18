@@ -591,7 +591,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             let sst_runner = RecoveryRunner::new(
                 engines.engines.kv.get_sync_db(),
                 engines.store_meta.clone(),
-                self.config.storage.max_background_error_hang_time.into(),
+                self.config.storage.background_error_recovery_window.into(),
                 DEFAULT_CHECK_INTERVAL,
             );
             sst_worker.start_with_timer(sst_runner);
@@ -1236,7 +1236,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_sst_recovery_sender(&mut self) -> Option<Scheduler<String>> {
-        if !self.config.storage.max_background_error_hang_time.is_zero() {
+        if !self
+            .config
+            .storage
+            .background_error_recovery_window
+            .is_zero()
+        {
             let sst_worker = Box::new(LazyWorker::new("sst-recovery"));
             let scheduler = sst_worker.scheduler();
             self.sst_worker = Some(sst_worker);

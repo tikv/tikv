@@ -18,14 +18,17 @@ const NO_SPACE_ERROR: &str = "IO error: No space left on device";
 
 pub struct RocksEventListener {
     db_name: String,
-    sst_recovery_tx: Option<Scheduler<String>>,
+    sst_recovery_scheduler: Option<Scheduler<String>>,
 }
 
 impl RocksEventListener {
-    pub fn new(db_name: &str, sst_recovery_tx: Option<Scheduler<String>>) -> RocksEventListener {
+    pub fn new(
+        db_name: &str,
+        sst_recovery_scheduler: Option<Scheduler<String>>,
+    ) -> RocksEventListener {
         RocksEventListener {
             db_name: db_name.to_owned(),
-            sst_recovery_tx,
+            sst_recovery_scheduler,
         }
     }
 }
@@ -122,7 +125,7 @@ impl rocksdb::EventListener for RocksEventListener {
             };
 
             if err.starts_with("Corruption") || err.starts_with("IO error") {
-                if let Some(scheduler) = self.sst_recovery_tx.as_ref() {
+                if let Some(scheduler) = self.sst_recovery_scheduler.as_ref() {
                     if let Some(path) = resolve_sst_filename_from_err(&err) {
                         warn!(
                             "detected rocksdb background error";
