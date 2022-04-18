@@ -4,6 +4,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::metric::TIKV_ROCKSDB_DAMAGED_FILES;
 use engine_rocks::raw::*;
 use fail::fail_point;
 use raftstore::store::fsm::StoreMeta;
@@ -26,7 +27,6 @@ struct FileInfo {
     name: String,
     smallest_key: Vec<u8>,
     largest_key: Vec<u8>,
-    overlap_region_ids: Vec<u64>,
     // Time to generate recovery task, be used to record whether the timeout
     start_time: Instant,
 }
@@ -77,7 +77,6 @@ impl RecoveryRunner {
                     name: live_files.get_name(i as i32),
                     smallest_key: live_files.get_smallestkey(i as i32).to_owned(),
                     largest_key: live_files.get_largestkey(i as i32).to_owned(),
-                    overlap_region_ids: Vec::new(),
                     start_time: Instant::now(),
                 };
 
@@ -86,7 +85,7 @@ impl RecoveryRunner {
                     || (!keys::validate_data_key(&f.largest_key)
                         && f.largest_key.as_slice() != keys::DATA_MAX_KEY)
                 {
-                    set_panic_mark_and_panic(
+                    self.set_panic_mark_and_panic(
                         path,
                         &format!(
                             "key range mismatch, smallest key:{:?}, largest key:{:?}",
@@ -96,9 +95,7 @@ impl RecoveryRunner {
                 }
 
                 // lock the store_meta and check if the range exist.
-                if !self.check_overlap_damaged_regions(f) {
-                    set_panic_mark_and_panic(path, "Can't find overlap regions");
-                }
+                let _ = self.check_overlap_damaged_regions(f);
 
                 return;
             }
@@ -117,13 +114,14 @@ impl RecoveryRunner {
         let mut new_damaged_files = self.damaged_files.clone();
         new_damaged_files.retain(|f| {
             if f.start_time.elapsed() > self.max_hang_duration {
-                set_panic_mark_and_panic(
+                self.set_panic_mark_and_panic(
                     &f.name,
                     &format!("recovery job exceeded {:?}", self.max_hang_duration),
                 );
             }
             self.check_overlap_damaged_regions(f.clone())
         });
+        TIKV_ROCKSDB_DAMAGED_FILES.set(new_damaged_files.len() as i64);
         self.damaged_files = new_damaged_files;
     }
 
@@ -131,7 +129,7 @@ impl RecoveryRunner {
     // recorded fault region ids to report to PD and add file info into `damaged_files`.
     //
     // Acquire meta lock.
-    fn check_overlap_damaged_regions(&mut self, mut file: FileInfo) -> bool {
+    fn check_overlap_damaged_regions(&mut self, file: FileInfo) -> bool {
         let mut meta = self.store_meta.lock().unwrap();
 
         // Find overlapping region ids.
@@ -155,33 +153,41 @@ impl RecoveryRunner {
             });
             None
         };
-        let overlap = should_overlap().unwrap_or_else(|| !ids.is_empty());
+        let overlap = should_overlap().unwrap_or(!ids.is_empty());
 
-        // This sst file was detected before and should be deleted.
-        if !overlap && self.exist_scheduling_regions(&file.name) {
+        if overlap {
+            // damaged file context should be updated.
+            for id in ids {
+                meta.damaged_regions_id.insert(id);
+            }
+            if !self.exist_scheduling_regions(&file.name) {
+                self.damaged_files.push(file);
+                TIKV_ROCKSDB_DAMAGED_FILES.inc();
+            }
+        } else {
+            // The sst file can be deleted safely.
             // set `include_end` to `true` otherwise the file with the same largest key will be skipped.
             self.db
                 .delete_files_in_range(&file.smallest_key, &file.largest_key, true)
                 .unwrap();
             if self.db.get(&file.smallest_key).unwrap().is_some() {
-                set_panic_mark_and_panic(&file.name, "Failed to delete the corrupted sst file");
+                self.set_panic_mark_and_panic(
+                    &file.name,
+                    "Failed to delete the corrupted sst file",
+                );
             }
         }
-        // This sst file was detected for the first time.
-        if overlap && !self.exist_scheduling_regions(&file.name) {
-            for id in ids {
-                meta.damaged_regions_id.insert(id);
-                file.overlap_region_ids.push(id);
-            }
-            self.damaged_files.push(file);
-        }
+
         overlap
     }
-}
 
-fn set_panic_mark_and_panic(sst: &str, err: &str) {
-    set_panic_mark();
-    panic!("Failed to recover sst file: {}, error: {}", sst, err);
+    fn set_panic_mark_and_panic(&self, sst: &str, err: &str) {
+        set_panic_mark();
+        panic!(
+            "Failed to recover sst file: {}, error: {}, damaged_files:{:?}",
+            sst, err, self.damaged_files
+        );
+    }
 }
 
 #[cfg(test)]
