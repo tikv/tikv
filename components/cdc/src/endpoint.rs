@@ -928,6 +928,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 return;
             }
         };
+        if !downstream.get_state().load().ready_for_advancing_ts() {
+            return;
+        }
         let resolved_ts_event = Event {
             region_id,
             event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
