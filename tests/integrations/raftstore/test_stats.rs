@@ -616,7 +616,7 @@ fn test_query_num<Api: APIVersion>(query: Box<Query>, is_raw_kv: bool) {
 }
 
 fn test_raw_delete_query<Api: APIVersion>() {
-    let k = b"r\0key".to_vec();
+    let k = b"r_key".to_vec();
     let store_id = 1;
 
     {
@@ -646,7 +646,7 @@ fn test_raw_delete_query<Api: APIVersion>() {
 }
 
 fn test_txn_delete_query<Api: APIVersion>() {
-    let k = b"t\0key".to_vec();
+    let k = b"t_key".to_vec();
     let store_id = 1;
 
     {
