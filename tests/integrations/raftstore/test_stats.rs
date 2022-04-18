@@ -605,10 +605,10 @@ fn test_query_num<Api: APIVersion>(query: Box<Query>, is_raw_kv: bool) {
     cluster.must_get(&k);
     let store_id = 1;
     if is_raw_kv {
-        k = b"r\0key".to_vec();
+        k = b"r_key".to_vec(); // "r" is key prefix of RawKV.
         raw_put::<Api>(&cluster, &client, &ctx, store_id, k.clone());
     } else {
-        k = b"x\0key".to_vec();
+        k = b"x_key".to_vec(); // "x" is key prefix of TxnKV.
         put(&cluster, &client, &ctx, store_id, k.clone());
     }
     let region_id = cluster.get_region_id(&k);
