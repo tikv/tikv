@@ -623,6 +623,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
+                StoreMsg::UnsafeRecoveryReport => self.store_heartbeat_pd(true),
                 StoreMsg::CreatePeer(region) => self.on_create_peer(region),
             }
         }
@@ -2154,7 +2155,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
-    fn store_heartbeat_pd(&mut self) {
+    fn store_heartbeat_pd(&mut self, send_detailed_report: bool) {
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
@@ -2232,7 +2233,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let task = PdTask::StoreHeartbeat {
             stats,
             store_info,
-            send_detailed_report: false,
+            send_detailed_report,
             dr_autosync_status: self
                 .ctx
                 .global_replication_state
@@ -2249,7 +2250,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_pd_store_heartbeat_tick(&mut self) {
-        self.store_heartbeat_pd();
+        self.store_heartbeat_pd(false);
         self.register_pd_store_heartbeat_tick();
     }
 
