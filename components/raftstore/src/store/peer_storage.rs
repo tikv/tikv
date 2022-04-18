@@ -120,6 +120,7 @@ struct EntryCache {
     // It should be equal to `RaftLog::persisted`.
     persisted: u64,
     cache: VecDeque<Entry>,
+    // will remove this later.
     trace: VecDeque<CachedEntries>,
     hit: Cell<u64>,
     miss: Cell<u64>,
@@ -1404,15 +1405,11 @@ where
         }
     }
 
-    /// Evict entries from the cache.
-    pub fn evict_cache(&mut self, _half: bool) {
+    /// Evict applied entries to save more memory.
+    pub fn evict_cache(&mut self) {
         if !self.cache.cache.is_empty() {
             let cache = &mut self.cache;
-            // let cache_len = cache.cache.len();
-            // let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
-            // let idx = cache.cache[drain_to].index;
-            // let mem_size_change = cache.compact_to(idx + 1);
-            let mem_size_change = cache.compact_to(self.apply_state.applied_index); // +1 ?
+            let mem_size_change = cache.compact_to(self.apply_state.applied_index + 1);
             RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }

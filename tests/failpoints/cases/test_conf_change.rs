@@ -159,7 +159,7 @@ fn test_tick_after_destroy() {
     let engine_3 = cluster.get_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
 
-    let tick_fp = "on_raft_log_gc_tick_1";
+    let tick_fp = "on_raft_gc_log_tick_1";
     fail::cfg(tick_fp, "return").unwrap();
     let poll_fp = "pause_on_peer_destroy_res";
     fail::cfg(poll_fp, "pause").unwrap();

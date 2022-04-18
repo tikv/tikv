@@ -2397,8 +2397,7 @@ where
             self.mut_store()
                 .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
-                // Compact all cached entries instead of half evict.
-                self.mut_store().evict_cache(false);
+                self.mut_store().evict_cache();
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));

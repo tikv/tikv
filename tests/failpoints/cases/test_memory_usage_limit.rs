@@ -41,8 +41,8 @@ fn test_evict_entry_cache() {
             .msg_type(MessageType::MsgAppend),
     ));
 
-    // Forbid store 1 to clean entry cache.
-    fail::cfg("on_raft_gc_log_tick_1", "pause").unwrap();
+    // Forbid peer 1 to clean entry cache.
+    fail::cfg("on_raft_gc_log_tick_1", "return").unwrap();
     fail::cfg("on_entry_cache_evict_tick", "return").unwrap();
 
     let value = vec![b'x'; 1024];
