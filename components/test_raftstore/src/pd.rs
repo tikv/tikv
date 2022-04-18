@@ -1470,11 +1470,6 @@ impl PdClient for TestPdClient {
     {
         let cluster1 = Arc::clone(&self.cluster);
         let timer = self.timer.clone();
-        {
-            if let Err(e) = self.cluster.try_write() {
-                println!("try write {:?}", e);
-            }
-        }
         let mut cluster = self.cluster.wl();
         let store = cluster
             .stores
