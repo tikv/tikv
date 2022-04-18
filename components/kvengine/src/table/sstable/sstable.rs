@@ -123,7 +123,7 @@ pub struct SSTableCore {
     smallest_buf: Bytes,
     biggest_buf: Bytes,
     pub max_ts: u64,
-    pub tombstones: usize,
+    pub tombs: u32,
     pub idx: Index,
     pub old_idx: Index,
 }
@@ -146,12 +146,12 @@ impl SSTableCore {
             return Err(table::Error::InvalidMagicNumber);
         }
         let idx_data = file.read(start_off + footer.index_offset as u64, footer.index_len())?;
-        let idx = Index::new(idx_data.clone(), footer.checksum_type)?;
+        let mut idx = Index::new(idx_data, footer.checksum_type)?;
         let old_idx_data = file.read(
             start_off + footer.old_index_offset as u64,
             footer.old_index_len(),
         )?;
-        let old_idx = Index::new(old_idx_data.clone(), footer.checksum_type)?;
+        let old_idx = Index::new(old_idx_data, footer.checksum_type)?;
         let props_data = file.read(
             start_off + footer.properties_offset as u64,
             footer.properties_len(size as usize),
@@ -162,7 +162,7 @@ impl SSTableCore {
         let mut smallest_buf = Bytes::new();
         let mut biggest_buf = Bytes::new();
         let mut max_ts = 0;
-        let mut tombstones = 0;
+        let mut tombs = 0;
         while prop_slice.len() > 0 {
             let (key, val, remain) = parse_prop_data(prop_slice);
             prop_slice = remain;
@@ -172,8 +172,17 @@ impl SSTableCore {
                 biggest_buf = Bytes::copy_from_slice(val);
             } else if key == PROP_KEY_MAX_TS.as_bytes() {
                 max_ts = LittleEndian::read_u64(val);
-            } else if key == PROP_KEY_TOMBSTONES.as_bytes() {
-                tombstones = LittleEndian::read_u64(val) as usize;
+            } else if key == PROP_KEY_TOMBS.as_bytes() {
+                tombs = LittleEndian::read_u32(val);
+            } else if key == PROP_KEY_FUSE8.as_bytes() {
+                match bincode::deserialize::<BinaryFuse8>(val) {
+                    Ok(binary_fuse) => {
+                        idx.set_filter(Arc::new(binary_fuse));
+                    }
+                    Err(err) => {
+                        warn!("failed to deserialize BinaryFuse8 {:?}", err);
+                    }
+                }
             }
         }
         Ok(Self {
@@ -184,7 +193,7 @@ impl SSTableCore {
             smallest_buf,
             biggest_buf,
             max_ts,
-            tombstones,
+            tombs,
             idx,
             old_idx,
         })
@@ -355,35 +364,18 @@ impl Index {
         let block_key_len = LittleEndian::read_u32(&data[offset..]) as usize;
         offset += 4;
         let block_keys = bin.slice(offset..offset + block_key_len);
-        offset += block_key_len;
-        let mut filter = None;
-        while data[offset] != EXTRA_END {
-            let extra_type = data[offset];
-            let extra_sub_type = data[offset + 1];
-            offset += 2;
-            let extra_len = LittleEndian::read_u32(&data[offset..]) as usize;
-            offset += 4;
-            let extra_data = &data[offset..offset + extra_len];
-            offset += extra_len;
-            if extra_type == EXTRA_FILTER && extra_sub_type == EXTRA_FILTER_TYPE_BINARY_FUSE_8 {
-                match bincode::deserialize::<BinaryFuse8>(extra_data) {
-                    Ok(binary_fuse) => {
-                        filter = Some(Arc::new(binary_fuse));
-                    }
-                    Err(err) => {
-                        warn!("failed to deserialize BinaryFuse8 {:?}", err);
-                    }
-                }
-            }
-        }
         Ok(Self {
             bin,
             common_prefix,
             block_key_offs,
             block_addrs,
             block_keys,
-            filter,
+            filter: None,
         })
+    }
+
+    fn set_filter(&mut self, filter: Arc<BinaryFuse8>) {
+        self.filter = Some(filter)
     }
 
     pub fn num_blocks(&self) -> usize {

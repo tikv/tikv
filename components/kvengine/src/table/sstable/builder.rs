@@ -14,10 +14,8 @@ pub const CRC32_IEEE: u8 = 1;
 pub const PROP_KEY_SMALLEST: &str = "smallest";
 pub const PROP_KEY_BIGGEST: &str = "biggest";
 pub const PROP_KEY_MAX_TS: &str = "max_ts";
-pub const PROP_KEY_TOMBSTONES: &str = "tombstones";
-pub const EXTRA_END: u8 = 255;
-pub const EXTRA_FILTER: u8 = 1;
-pub const EXTRA_FILTER_TYPE_BINARY_FUSE_8: u8 = 1;
+pub const PROP_KEY_TOMBS: &str = "tombs";
+pub const PROP_KEY_FUSE8: &str = "fuse8";
 pub const NO_COMPRESSION: u8 = 0;
 pub const LZ4_COMPRESSION: u8 = 1;
 pub const ZSTD_COMPRESSION: u8 = 2;
@@ -114,7 +112,7 @@ pub struct Builder {
     smallest: Vec<u8>,
     biggest: Vec<u8>,
     max_ts: u64,
-    tombstones: usize,
+    tombs: u32,
 }
 
 impl Builder {
@@ -136,7 +134,7 @@ impl Builder {
         self.smallest.truncate(0);
         self.biggest.truncate(0);
         self.max_ts = 0;
-        self.tombstones = 0;
+        self.tombs = 0;
     }
 
     fn add_property(buf: &mut BytesMut, key: &[u8], val: &[u8]) {
@@ -169,7 +167,7 @@ impl Builder {
             }
         }
         if val.value_len() == 0 {
-            self.tombstones += 1;
+            self.tombs += 1;
         }
     }
 
@@ -198,11 +196,11 @@ impl Builder {
         let old_data_section_size = self.old_builder.buf.len() as u32;
 
         self.block_builder
-            .build_index(base_off, self.checksum_tp, &self.key_hashes);
+            .build_index(base_off, self.checksum_tp);
         data_buf.extend_from_slice(self.block_builder.buf.as_slice());
         let index_section_size = self.block_builder.buf.len() as u32;
         self.old_builder
-            .build_index(base_off + data_section_size, self.checksum_tp, &[]);
+            .build_index(base_off + data_section_size, self.checksum_tp);
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_index_section_size = self.old_builder.buf.len() as u32;
 
@@ -231,7 +229,13 @@ impl Builder {
         Builder::add_property(buf, PROP_KEY_SMALLEST.as_bytes(), self.smallest.as_slice());
         Builder::add_property(buf, PROP_KEY_BIGGEST.as_bytes(), self.biggest.as_slice());
         Builder::add_property(buf, PROP_KEY_MAX_TS.as_bytes(), &self.max_ts.to_le_bytes());
-        Builder::add_property(buf, PROP_KEY_TOMBSTONES.as_bytes(), &self.tombstones.to_le_bytes());
+        Builder::add_property(buf, PROP_KEY_TOMBS.as_bytes(), &self.tombs.to_le_bytes());
+        if let Ok(filter) = BinaryFuse8::try_from(&self.key_hashes) {
+            let bin = bincode::serialize(&filter).unwrap();
+            Builder::add_property(buf, PROP_KEY_FUSE8.as_bytes(), &bin);
+        } else {
+            warn!("failed to build binary fuse 8 filter");
+        }
         if self.checksum_tp == CRC32_IEEE {
             let checksum = crc32fast::hash(&buf[(origin_len + 4)..]);
             LittleEndian::write_u32(&mut buf[origin_len..], checksum);
@@ -437,7 +441,7 @@ impl BlockBuilder {
         self.block_addrs.truncate(0);
     }
 
-    fn build_index(&mut self, base_off: u32, checksum_tp: u8, key_hashes: &[u64]) {
+    fn build_index(&mut self, base_off: u32, checksum_tp: u8) {
         self.buf.truncate(0);
         let num_blocks = self.block_addrs.len();
         // checksum place holder.
@@ -470,25 +474,9 @@ impl BlockBuilder {
             let block_key = self.block_keys.get_entry(i);
             self.buf.extend_from_slice(&block_key[common_prefix_len..]);
         }
-        if key_hashes.len() > 0 {
-            self.build_filter(key_hashes);
-        }
-        self.buf.push(EXTRA_END);
         if checksum_tp == CRC32_IEEE {
             let slice = self.buf.as_mut_slice();
             LittleEndian::write_u32(slice, crc32fast::hash(&slice[4..]))
-        }
-    }
-
-    fn build_filter(&mut self, key_hashes: &[u64]) {
-        if let Ok(filter) = BinaryFuse8::try_from(key_hashes) {
-            let bin = bincode::serialize(&filter).unwrap();
-            self.buf.push(EXTRA_FILTER);
-            self.buf.push(EXTRA_FILTER_TYPE_BINARY_FUSE_8);
-            self.buf.put_u32_le(bin.len() as u32);
-            self.buf.extend_from_slice(&bin);
-        } else {
-            warn!("failed to build binary fuse 8 filter");
         }
     }
 

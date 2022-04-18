@@ -113,7 +113,7 @@ pub struct ShardStats {
     pub cfs: Vec<CFStats>,
     pub tbl_index_size: u64,
     pub tbl_filter_size: u64,
-    pub tombstones: usize,
+    pub tombs: usize,
     pub base_version: u64,
     pub max_mem_table_size: u64,
     pub meta_sequence: u64,
@@ -142,7 +142,7 @@ pub struct LevelStats {
     pub data_size: u64,
     pub index_size: u64,
     pub filter_size: u64,
-    pub tombstones: usize,
+    pub tombs: usize,
 }
 
 impl super::Shard {
@@ -150,7 +150,7 @@ impl super::Shard {
         let mut total_size = 0;
         let mut tbl_index_size = 0;
         let mut tbl_filter_size = 0;
-        let mut tombstones = 0;
+        let mut tombs = 0;
         let data = self.get_data();
         let mem_table_count = data.mem_tbls.len();
         let mut mem_table_size = 0;
@@ -172,7 +172,7 @@ impl super::Shard {
                 if let Some(cf_tbl) = l0_tbl.get_cf(cf) {
                     tbl_index_size += cf_tbl.index_size();
                     tbl_filter_size += cf_tbl.filter_size();
-                    tombstones += cf_tbl.tombstones;
+                    tombs += cf_tbl.tombs as usize;
                 }
             }
         }
@@ -191,19 +191,19 @@ impl super::Shard {
                         level_stats.data_size += t.size();
                         level_stats.index_size += t.index_size();
                         level_stats.filter_size += t.filter_size();
-                        level_stats.tombstones += t.tombstones;
+                        level_stats.tombs += t.tombs as usize;
                     } else {
                         level_stats.data_size += t.size() / 2;
                         level_stats.index_size += t.index_size() / 2;
                         level_stats.filter_size += t.filter_size() / 2;
-                        level_stats.tombstones += t.tombstones / 2;
+                        level_stats.tombs += t.tombs as usize / 2;
                         partial_tbls += 1;
                     }
                 }
                 total_size += level_stats.data_size;
                 tbl_index_size += level_stats.index_size;
                 tbl_filter_size += level_stats.filter_size;
-                tombstones += level_stats.tombstones;
+                tombs += level_stats.tombs;
                 cf_stat.levels.push(level_stats);
             }
             cfs.push(cf_stat);
@@ -232,7 +232,7 @@ impl super::Shard {
             total_size,
             tbl_index_size,
             tbl_filter_size,
-            tombstones,
+            tombs: tombs,
             partial_l0s,
             partial_tbls,
             compaction_cf,
