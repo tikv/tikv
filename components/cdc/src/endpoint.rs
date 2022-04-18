@@ -929,6 +929,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             }
         };
         if !downstream.get_state().load().ready_for_advancing_ts() {
+            // Only send resolved timestamp if the downstream is ready.
             return;
         }
         let resolved_ts_event = Event {
