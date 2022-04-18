@@ -352,7 +352,7 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.15,
+            evict_cache_on_memory_ratio: 0.1,
             force_reclaim_leader_entry_cache_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
