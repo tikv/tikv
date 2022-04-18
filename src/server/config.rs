@@ -321,7 +321,7 @@ impl Config {
             (
                 "grpc-memory-pool-quota",
                 self.grpc_memory_pool_quota.0 as usize,
-            )
+            ),
         ];
         for (label, value) in non_zero_entries {
             if value == 0 {
@@ -393,8 +393,16 @@ unsafe impl Send for ServerConfigManager {}
 unsafe impl Sync for ServerConfigManager {}
 
 impl ServerConfigManager {
-    pub fn new(tx: Scheduler<SnapTask>, config: Arc<VersionTrack<Config>>, grpc_mem_quota: ResourceQuota) -> ServerConfigManager {
-        ServerConfigManager { tx, config, grpc_mem_quota }
+    pub fn new(
+        tx: Scheduler<SnapTask>,
+        config: Arc<VersionTrack<Config>>,
+        grpc_mem_quota: ResourceQuota,
+    ) -> ServerConfigManager {
+        ServerConfigManager {
+            tx,
+            config,
+            grpc_mem_quota,
+        }
     }
 }
 
@@ -407,7 +415,9 @@ impl ConfigManager for ServerConfigManager {
                 let mem_quota: ReadableSize = value.clone().into();
                 // the resize is done inplace indeed, but grpc-rs's api need self, so we just
                 // clone it here, but this no extra side effect here.
-                self.grpc_mem_quota.clone().resize_memory(mem_quota.0 as usize);
+                self.grpc_mem_quota
+                    .clone()
+                    .resize_memory(mem_quota.0 as usize);
             }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
