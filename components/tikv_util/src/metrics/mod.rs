@@ -34,18 +34,23 @@ mod metrics_reader;
 
 use kvproto::pdpb;
 use std::collections::HashMap;
+use std::io::Write;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
 pub fn dump() -> String {
     let mut buffer = vec![];
+    dump_to(&mut buffer);
+    String::from_utf8(buffer).unwrap()
+}
+
+pub fn dump_to(w: &mut impl Write) {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     for mf in metric_families {
-        if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+        if let Err(e) = encoder.encode(&[mf], w) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
     }
-    String::from_utf8(buffer).unwrap()
 }
 
 make_auto_flush_static_metric! {

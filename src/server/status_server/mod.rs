@@ -8,7 +8,6 @@ use self::profile::{
 };
 
 use std::error::Error as StdError;
-use std::io::Write;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -36,12 +35,13 @@ use online_config::OnlineConfig;
 use openssl::ssl::{Ssl, SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use pin_project::pin_project;
+use prometheus::TEXT_FORMAT;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
 use tikv_util::logger::set_log_level;
-use tikv_util::metrics::dump;
+use tikv_util::metrics::{dump, dump_to};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::runtime::{Builder, Handle, Runtime};
@@ -488,8 +488,6 @@ where
     }
 
     fn handle_get_metrics(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let mut metrics = dump().into_bytes();
-
         // the following logic is port from prometheus's golang:
         // https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
         let encoding = req
@@ -501,24 +499,21 @@ where
             .split(',')
             .map(|s| s.trim())
             .any(|s| s == "gzip" || s.starts_with("gzip;"));
-        if gz_encoding {
+        let metrics = if gz_encoding {
             // gzip can reduce the body size to less than 1/10.
-            let mut encoder = GzEncoder::new(
-                Vec::with_capacity(metrics.len() / 10),
-                Compression::default(),
-            );
-            encoder.write_all(&metrics).unwrap();
-            metrics = encoder.finish().unwrap();
-        }
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder);
+            encoder.finish().unwrap()
+        } else {
+            dump().into_bytes()
+        };
         let mut resp = Response::new(metrics.into());
         if gz_encoding {
             resp.headers_mut()
                 .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         }
-        resp.headers_mut().insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-        );
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
         Ok(resp)
     }
 
