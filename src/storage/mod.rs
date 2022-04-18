@@ -1708,8 +1708,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
-                        .map(|k| Api::encode_raw_key_owned(k, None))
                         .map(|k| {
+                            let k = Api::encode_raw_key_owned(k, None);
                             let mut s = Statistics::default();
                             let v = store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
                             tls_collect_read_flow(
@@ -1875,6 +1875,14 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         Ok(())
     }
 
+    fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>) -> Modify {
+        let key = Api::encode_raw_key_owned(key, None);
+        match Api::TAG {
+            ApiVersion::V2 => Modify::Put(cf, key, APIV2::ENCODED_LOGICAL_DELETE.to_vec()),
+            _ => Modify::Delete(cf, key),
+        }
+    }
+
     /// Delete a raw key from the storage.
     /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_delete(
@@ -1893,24 +1901,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
-        let m = match self.api_version {
-            ApiVersion::V2 => {
-                let raw_value = RawValue {
-                    user_value: vec![],
-                    expire_ts: None,
-                    is_delete: true,
-                };
-                Modify::Put(
-                    Self::rawkv_cf(&cf, self.api_version)?,
-                    APIV2::encode_raw_key_owned(key, None),
-                    APIV2::encode_raw_value_owned(raw_value),
-                )
-            }
-            _ => Modify::Delete(
-                Self::rawkv_cf(&cf, self.api_version)?,
-                Key::from_encoded(key),
-            ),
-        };
+        let m = Self::raw_delete_request_to_modify(Self::rawkv_cf(&cf, self.api_version)?, key);
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
@@ -1961,28 +1952,6 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         Ok(())
     }
 
-    fn raw_batch_delete_requests_to_modifies(cf: CfName, keys: Vec<Vec<u8>>) -> Vec<Modify> {
-        keys.into_iter()
-            .map(|k| match Api::TAG {
-                ApiVersion::V1 | ApiVersion::V1ttl => {
-                    Modify::Delete(cf, Api::encode_raw_key_owned(k, None))
-                }
-                ApiVersion::V2 => {
-                    let raw_value = RawValue {
-                        user_value: vec![],
-                        expire_ts: None,
-                        is_delete: true,
-                    };
-                    Modify::Put(
-                        cf,
-                        Api::encode_raw_key_owned(k, None),
-                        Api::encode_raw_value_owned(raw_value),
-                    )
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
     /// Delete some raw keys in a batch.
     /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_batch_delete(
@@ -2002,7 +1971,10 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
-        let modifies = Self::raw_batch_delete_requests_to_modifies(cf, keys);
+        let modifies = keys
+            .into_iter()
+            .map(|k| Self::raw_delete_request_to_modify(cf, k))
+            .collect();
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
@@ -2450,7 +2422,10 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let modifies = Self::raw_batch_delete_requests_to_modifies(cf, keys);
+        let modifies = keys
+            .into_iter()
+            .map(|k| Self::raw_delete_request_to_modify(cf, k))
+            .collect();
         let cmd = RawAtomicStore::new(cf, modifies, ctx);
         self.sched_txn_command(cmd, callback)
     }

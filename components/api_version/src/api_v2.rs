@@ -176,6 +176,8 @@ impl APIV2 {
         debug_assert!(is_valid_ts(ts));
         encoded_bytes.encode_u64_desc(ts.into_inner()).unwrap();
     }
+
+    pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
 #[inline]
@@ -209,7 +211,7 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
 
 #[cfg(test)]
 mod tests {
-    use crate::{APIVersion, APIV2};
+    use crate::{APIVersion, RawValue, APIV2};
     use txn_types::{Key, TimeStamp};
 
     #[test]
@@ -305,6 +307,23 @@ mod tests {
                 });
                 assert!(r.is_err(), "case {}: {:?}", idx, r);
             }
+        }
+    }
+
+    #[test]
+    fn test_encoded_logical_delete() {
+        {
+            let v = RawValue {
+                user_value: vec![],
+                expire_ts: None,
+                is_delete: true,
+            };
+            let encoded = APIV2::encode_raw_value_owned(v);
+            assert_eq!(encoded, APIV2::ENCODED_LOGICAL_DELETE);
+        }
+        {
+            let v = APIV2::decode_raw_value(&APIV2::ENCODED_LOGICAL_DELETE).unwrap();
+            assert!(v.is_delete);
         }
     }
 }
