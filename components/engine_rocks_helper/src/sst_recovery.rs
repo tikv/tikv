@@ -165,6 +165,7 @@ impl RecoveryRunner {
                 TIKV_ROCKSDB_DAMAGED_FILES.inc();
             }
         } else {
+            fail_point!("sst_recovery_before_delete_files");
             // The sst file can be deleted safely.
             // set `include_end` to `true` otherwise the file with the same largest key will be skipped.
             self.db
