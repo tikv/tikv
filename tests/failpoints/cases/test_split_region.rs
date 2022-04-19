@@ -9,7 +9,7 @@ use engine_traits::CF_WRITE;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest};
 use kvproto::metapb::Region;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{PeerState, RaftMessage};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -392,6 +392,190 @@ fn test_split_not_to_split_existing_tombstone_region() {
     pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
 
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+}
+
+// TiKV uses memory lock to control the order between spliting and creating
+// new peer. This case test if tikv skip split if the peer is destroyed after
+// memory lock check but before state check.
+#[test]
+fn test_split_not_to_split_existing_tombstone_region_after_mem_check() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    let r1 = cluster.run_conf_change();
+
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    assert_eq!(r1, 1);
+    let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
+    fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
+    let before_check_snapshot_1000_2_fp = "before_check_snapshot_1000_2";
+    fail::cfg(before_check_snapshot_1000_2_fp, "pause").unwrap();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k22", b"v22");
+
+    must_get_none(&cluster.get_engine(2), b"k1");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
+    pd_client.must_remove_peer(left.get_id(), left_peer_2);
+
+    // Make sure it finish mem check before destorying.
+    let (tx0, rx0) = crossbeam::channel::bounded(0);
+    let (tx1, rx1) = crossbeam::channel::bounded(0);
+    let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
+    fail::cfg_callback(on_handle_apply_split_2_fp, move || {
+        let _ = tx0.send(());
+        let _ = rx1.recv();
+    })
+    .unwrap();
+
+    // So region 1 will start apply snapshot and split.
+    fail::remove(before_check_snapshot_1_2_fp);
+
+    // Wait for split mem check
+    rx0.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let (tx3, rx3) = crossbeam::channel::bounded(0);
+    fail::cfg_callback("raft_store_finish_destroy_peer", move || {
+        let _ = tx3.send(());
+    })
+    .unwrap();
+
+    // Resum region 1000 processing and wait till it's destroyed.
+    fail::remove(before_check_snapshot_1000_2_fp);
+    rx3.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    // If left_peer_2 can be created, dropping all msg to make it exist.
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    // Also don't send check stale msg to PD
+    let peer_check_stale_state_fp = "peer_check_stale_state";
+    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
+
+    // Resume split.
+    fail::remove(on_handle_apply_split_2_fp);
+    let _ = tx1.send(());
+
+    // If value of `k22` is equal to `v22`, the previous split log must be applied.
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+
+    // If left_peer_2 is created, `must_get_none` will fail.
+    must_get_none(&cluster.get_engine(2), b"k1");
+}
+
+// TiKV uses memory lock to control the order between spliting and creating
+// new peer. This case test if tikv will be able to replace uninitialized peer
+// if the peer is destroyed after the state check.
+#[test]
+fn test_split_should_split_existing_same_uninitialied_peer_after_state_check() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    let r1 = cluster.run_conf_change();
+
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    assert_eq!(r1, 1);
+    let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
+    fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
+    let before_check_snapshot_1000_2_fp = "before_check_snapshot_1000_2";
+    fail::cfg(before_check_snapshot_1000_2_fp, "pause").unwrap();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k22", b"v22");
+
+    must_get_none(&cluster.get_engine(2), b"k1");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
+    pd_client.must_remove_peer(left.get_id(), left_peer_2);
+
+    // Make sure it finish mem check before destorying.
+    let (tx0, rx0) = crossbeam::channel::bounded(0);
+    let (tx1, rx1) = crossbeam::channel::bounded(0);
+    let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
+    fail::cfg_callback(on_handle_apply_split_2_fp, move || {
+        let _ = tx0.send(());
+        let _ = rx1.recv();
+    })
+    .unwrap();
+
+    // So region 1 will start apply snapshot and split.
+    fail::remove(before_check_snapshot_1_2_fp);
+
+    // Wait for split mem check
+    rx0.recv_timeout(Duration::from_secs(3)).unwrap();
+    let (tx2, rx2) = crossbeam::channel::bounded(0);
+    let (tx3, rx3) = crossbeam::channel::bounded(0);
+    let on_handle_post_apply_2_fp = "raft_store_apply_post_write_db";
+    fail::cfg_callback(on_handle_post_apply_2_fp, move || {
+        let _ = tx2.send(());
+        let _ = rx3.recv();
+    })
+    .unwrap();
+
+    // So region 1 will start apply snapshot and split.
+    fail::remove(on_handle_apply_split_2_fp);
+    tx1.send(()).unwrap();
+
+    // Make sure the state is persisted.
+    rx2.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    let (tx4, rx4) = crossbeam::channel::bounded(0);
+    fail::cfg_callback("raft_store_finish_destroy_peer", move || {
+        let _ = tx4.send(());
+    })
+    .unwrap();
+
+    // Resume region 1000 processing and wait till it's destroyed.
+    fail::remove(before_check_snapshot_1000_2_fp);
+    rx4.recv_timeout(Duration::from_secs(3)).unwrap();
+
+    // If left_peer_2 can be created, dropping all msg to make it exist.
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    // Also don't send check stale msg to PD
+    let peer_check_stale_state_fp = "peer_check_stale_state";
+    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
+
+    // Resume apply.
+    fail::remove("raft_store_finish_destroy_peer");
+    fail::remove(on_handle_post_apply_2_fp);
+    let _ = tx3.send(());
+
+    // If value of `k22` is equal to `v22`, the previous split log must be applied.
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
+    // If left_peer_2 is created, `must_get_none` will fail.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    // Its state should not be tombstone.
+    let region_state = cluster.region_local_state(1000, 2);
+    assert_ne!(region_state.get_state(), PeerState::Tombstone);
 }
 
 // Test if a peer can be created from splitting when another uninitialied peer with the same

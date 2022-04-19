@@ -515,6 +515,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            fail_point!("raft_store_apply_post_write_db");
             self.perf_context.report_metrics();
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
@@ -2297,6 +2298,12 @@ where
             }
         }
 
+        fail_point!(
+            "on_handle_apply_split_2_after_mem_check",
+            self.id() == 2,
+            |_| unimplemented!()
+        );
+
         // region_id -> peer_id
         let mut already_exist_regions = Vec::new();
         for (region_id, new_split_peer) in new_split_regions.iter_mut() {
@@ -2310,9 +2317,13 @@ where
                     if replace_regions.get(region_id).is_some() {
                         // This peer must be the first one on local store. So if this peer is created on the other side,
                         // it means no `RegionLocalState` in kv engine.
-                        panic!(
-                            "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
-                            self.tag, region_id, new_split_peer.peer_id, state
+                        info!(
+                            "failed to replace region because state exists";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "split_region_id" => region_id,
+                            "split_peer_id" => new_split_peer.peer_id,
+                            "local_state" => ?state,
                         );
                     }
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
