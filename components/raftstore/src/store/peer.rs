@@ -1017,7 +1017,7 @@ where
             if self.get_store().is_initialized() {
                 assert_eq!(pending.get(&region.get_id()), None);
                 (None, true)
-            } else  if let Some(status) = pending.get(&region.get_id()) {
+            } else if let Some(status) = pending.get(&region.get_id()) {
                 if *status == (self.peer.get_id(), false) {
                     pending.remove(&region.get_id());
                     // Hold the lock to avoid apply worker applies split.
@@ -1029,6 +1029,8 @@ where
                     // Peer id can't be different as router should exist all the time, their is no
                     // chance for store to insert a different peer id. And apply worker should skip
                     // split when meeting a different id.
+                    let status = *status;
+                    // Avoid panic with lock.
                     drop(pending);
                     panic!("{} unexpected pending states {:?}", self.tag, status);
                 }

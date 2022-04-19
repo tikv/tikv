@@ -398,7 +398,7 @@ fn test_split_not_to_split_existing_tombstone_region() {
 // new peer. This case test if tikv skip split if the peer is destroyed after
 // memory lock check but before state check.
 #[test]
-fn test_split_not_to_split_existing_tombstone_region_after_mem_check() {
+fn test_not_to_split_tombstone_region_after_mem_check() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -435,12 +435,11 @@ fn test_split_not_to_split_existing_tombstone_region_after_mem_check() {
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
 
     // Make sure it finish mem check before destorying.
-    let (tx0, rx0) = crossbeam::channel::bounded(0);
-    let (tx1, rx1) = crossbeam::channel::bounded(0);
+    let (mem_check_tx, mem_check_rx) = crossbeam::channel::bounded(0);
     let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
     fail::cfg_callback(on_handle_apply_split_2_fp, move || {
-        let _ = tx0.send(());
-        let _ = rx1.recv();
+        let _ = mem_check_tx.send(());
+        let _ = mem_check_tx.send(());
     })
     .unwrap();
 
@@ -448,17 +447,17 @@ fn test_split_not_to_split_existing_tombstone_region_after_mem_check() {
     fail::remove(before_check_snapshot_1_2_fp);
 
     // Wait for split mem check
-    rx0.recv_timeout(Duration::from_secs(3)).unwrap();
+    mem_check_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
-    let (tx3, rx3) = crossbeam::channel::bounded(0);
+    let (destroy_tx, destroy_rx) = crossbeam::channel::bounded(0);
     fail::cfg_callback("raft_store_finish_destroy_peer", move || {
-        let _ = tx3.send(());
+        let _ = destroy_tx.send(());
     })
     .unwrap();
 
     // Resum region 1000 processing and wait till it's destroyed.
     fail::remove(before_check_snapshot_1000_2_fp);
-    rx3.recv_timeout(Duration::from_secs(3)).unwrap();
+    destroy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     // If left_peer_2 can be created, dropping all msg to make it exist.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
@@ -468,7 +467,7 @@ fn test_split_not_to_split_existing_tombstone_region_after_mem_check() {
 
     // Resume split.
     fail::remove(on_handle_apply_split_2_fp);
-    let _ = tx1.send(());
+    mem_check_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     // If value of `k22` is equal to `v22`, the previous split log must be applied.
     must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
@@ -481,7 +480,7 @@ fn test_split_not_to_split_existing_tombstone_region_after_mem_check() {
 // new peer. This case test if tikv will be able to replace uninitialized peer
 // if the peer is destroyed after the state check.
 #[test]
-fn test_split_should_split_existing_same_uninitialied_peer_after_state_check() {
+fn test_should_split_same_uninitialied_peer_after_state_check() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -518,12 +517,11 @@ fn test_split_should_split_existing_same_uninitialied_peer_after_state_check() {
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
 
     // Make sure it finish mem check before destorying.
-    let (tx0, rx0) = crossbeam::channel::bounded(0);
-    let (tx1, rx1) = crossbeam::channel::bounded(0);
+    let (mem_check_tx, mem_check_rx) = crossbeam::channel::bounded(0);
     let on_handle_apply_split_2_fp = "on_handle_apply_split_2_after_mem_check";
     fail::cfg_callback(on_handle_apply_split_2_fp, move || {
-        let _ = tx0.send(());
-        let _ = rx1.recv();
+        let _ = mem_check_tx.send(());
+        let _ = mem_check_tx.send(());
     })
     .unwrap();
 
@@ -531,32 +529,33 @@ fn test_split_should_split_existing_same_uninitialied_peer_after_state_check() {
     fail::remove(before_check_snapshot_1_2_fp);
 
     // Wait for split mem check
-    rx0.recv_timeout(Duration::from_secs(3)).unwrap();
-    let (tx2, rx2) = crossbeam::channel::bounded(0);
-    let (tx3, rx3) = crossbeam::channel::bounded(0);
+    mem_check_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let (apply_finish_tx, apply_finish_rx) = crossbeam::channel::bounded(0);
     let on_handle_post_apply_2_fp = "raft_store_apply_post_write_db";
     fail::cfg_callback(on_handle_post_apply_2_fp, move || {
-        let _ = tx2.send(());
-        let _ = rx3.recv();
+        let _ = apply_finish_tx.send(());
+        let _ = apply_finish_tx.send(());
     })
     .unwrap();
 
-    // So region 1 will start apply snapshot and split.
+    // Resume split in region 1.
     fail::remove(on_handle_apply_split_2_fp);
-    tx1.send(()).unwrap();
+    mem_check_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     // Make sure the state is persisted.
-    rx2.recv_timeout(Duration::from_secs(3)).unwrap();
+    apply_finish_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
 
-    let (tx4, rx4) = crossbeam::channel::bounded(0);
+    let (destroy_tx, destroy_rx) = crossbeam::channel::bounded(0);
     fail::cfg_callback("raft_store_finish_destroy_peer", move || {
-        let _ = tx4.send(());
+        let _ = destroy_tx.send(());
     })
     .unwrap();
 
     // Resume region 1000 processing and wait till it's destroyed.
     fail::remove(before_check_snapshot_1000_2_fp);
-    rx4.recv_timeout(Duration::from_secs(3)).unwrap();
+    destroy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     // If left_peer_2 can be created, dropping all msg to make it exist.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
@@ -567,15 +566,20 @@ fn test_split_should_split_existing_same_uninitialied_peer_after_state_check() {
     // Resume apply.
     fail::remove("raft_store_finish_destroy_peer");
     fail::remove(on_handle_post_apply_2_fp);
-    let _ = tx3.send(());
+    apply_finish_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
 
     // If value of `k22` is equal to `v22`, the previous split log must be applied.
     must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
-    // If left_peer_2 is created, `must_get_none` will fail.
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     // Its state should not be tombstone.
     let region_state = cluster.region_local_state(1000, 2);
     assert_ne!(region_state.get_state(), PeerState::Tombstone);
+
+    cluster.clear_send_filters();
+    // The stale peer should be destroy in the end.
+    must_get_none(&cluster.get_engine(2), b"k1");
 }
 
 // Test if a peer can be created from splitting when another uninitialied peer with the same
