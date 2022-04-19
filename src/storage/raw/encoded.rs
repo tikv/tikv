@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::{Iterator, Result, Snapshot, TTL_TOMBSTONE};
+use crate::storage::kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE};
 use crate::storage::Statistics;
 
 use api_version::APIVersion;
@@ -12,13 +12,13 @@ use std::marker::PhantomData;
 use txn_types::{Key, Value};
 
 #[derive(Clone)]
-pub struct RawEncodeSnapshot<S: Snapshot, API: APIVersion> {
+pub struct RawEncodeSnapshot<S: Snapshot, Api: APIVersion> {
     snap: S,
     current_ts: u64,
-    _phantom: PhantomData<API>,
+    _phantom: PhantomData<Api>,
 }
 
-impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
+impl<S: Snapshot, Api: APIVersion> RawEncodeSnapshot<S, Api> {
     pub fn from_snapshot(snap: S) -> Self {
         RawEncodeSnapshot {
             snap,
@@ -28,20 +28,13 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
     }
 
     fn map_value(&self, value: Result<Option<Value>>) -> Result<Option<Value>> {
-        match value? {
-            Some(v) => {
-                let raw_value = API::decode_raw_value_owned(v)?;
-                if raw_value
-                    .expire_ts
-                    .map(|expire_ts| expire_ts <= self.current_ts)
-                    .unwrap_or(false)
-                {
-                    return Ok(None);
-                }
-                Ok(Some(raw_value.user_value))
+        if let Some(v) = value? {
+            let raw_value = Api::decode_raw_value_owned(v)?;
+            if raw_value.is_valid(self.current_ts) {
+                return Ok(Some(raw_value.user_value));
             }
-            None => Ok(None),
         }
+        Ok(None)
     }
 
     pub fn get_key_ttl_cf(
@@ -54,7 +47,7 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
         if let Some(v) = self.snap.get_cf(cf, key)? {
             stats.data.flow_stats.read_bytes += v.len();
-            let raw_value = API::decode_raw_value_owned(v)?;
+            let raw_value = Api::decode_raw_value_owned(v)?;
             return match raw_value.expire_ts {
                 Some(expire_ts) if expire_ts <= self.current_ts => Ok(None),
                 Some(expire_ts) => Ok(Some(expire_ts - self.current_ts)),
@@ -65,8 +58,8 @@ impl<S: Snapshot, API: APIVersion> RawEncodeSnapshot<S, API> {
     }
 }
 
-impl<S: Snapshot, API: APIVersion> Snapshot for RawEncodeSnapshot<S, API> {
-    type Iter = RawEncodeIterator<S::Iter, API>;
+impl<S: Snapshot, Api: APIVersion> Snapshot for RawEncodeSnapshot<S, Api> {
+    type Iter = RawEncodeIterator<S::Iter, Api>;
     type Ext<'a>
     where
         S: 'a,
@@ -113,19 +106,19 @@ impl<S: Snapshot, API: APIVersion> Snapshot for RawEncodeSnapshot<S, API> {
     }
 }
 
-pub struct RawEncodeIterator<I: Iterator, API: APIVersion> {
+pub struct RawEncodeIterator<I: Iterator, Api: APIVersion> {
     inner: I,
     current_ts: u64,
-    skip_ttl: usize,
-    _phantom: PhantomData<API>,
+    skip_invalid: usize,
+    _phantom: PhantomData<Api>,
 }
 
-impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
+impl<I: Iterator, Api: APIVersion> RawEncodeIterator<I, Api> {
     fn new(inner: I, current_ts: u64) -> Self {
         RawEncodeIterator {
             inner,
             current_ts,
-            skip_ttl: 0,
+            skip_invalid: 0,
             _phantom: PhantomData,
         }
     }
@@ -137,13 +130,9 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
             }
 
             if *res.as_ref().unwrap() {
-                let raw_value = API::decode_raw_value(self.inner.value())?;
-                if raw_value
-                    .expire_ts
-                    .map(|expire_ts| expire_ts <= self.current_ts)
-                    .unwrap_or(false)
-                {
-                    self.skip_ttl += 1;
+                let raw_value = Api::decode_raw_value(self.inner.value())?;
+                if !raw_value.is_valid(self.current_ts) {
+                    self.skip_invalid += 1;
                     res = if forward {
                         self.inner.next()
                     } else {
@@ -158,15 +147,15 @@ impl<I: Iterator, API: APIVersion> RawEncodeIterator<I, API> {
     }
 }
 
-impl<I: Iterator, API: APIVersion> Drop for RawEncodeIterator<I, API> {
+impl<I: Iterator, Api: APIVersion> Drop for RawEncodeIterator<I, Api> {
     fn drop(&mut self) {
-        TTL_TOMBSTONE.with(|m| {
-            *m.borrow_mut() += self.skip_ttl;
+        RAW_VALUE_TOMBSTONE.with(|m| {
+            *m.borrow_mut() += self.skip_invalid;
         });
     }
 }
 
-impl<I: Iterator, API: APIVersion> Iterator for RawEncodeIterator<I, API> {
+impl<I: Iterator, Api: APIVersion> Iterator for RawEncodeIterator<I, Api> {
     fn next(&mut self) -> Result<bool> {
         let res = self.inner.next();
         self.find_valid_value(res, true)
@@ -210,7 +199,7 @@ impl<I: Iterator, API: APIVersion> Iterator for RawEncodeIterator<I, API> {
     }
 
     fn value(&self) -> &[u8] {
-        API::decode_raw_value(self.inner.value())
+        Api::decode_raw_value(self.inner.value())
             .unwrap()
             .user_value
     }
