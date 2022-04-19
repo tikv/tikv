@@ -195,8 +195,7 @@ impl Builder {
         data_buf.extend_from_slice(self.old_builder.buf.as_slice());
         let old_data_section_size = self.old_builder.buf.len() as u32;
 
-        self.block_builder
-            .build_index(base_off, self.checksum_tp);
+        self.block_builder.build_index(base_off, self.checksum_tp);
         data_buf.extend_from_slice(self.block_builder.buf.as_slice());
         let index_section_size = self.block_builder.buf.len() as u32;
         self.old_builder

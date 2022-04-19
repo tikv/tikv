@@ -236,16 +236,15 @@ impl DFS for S3FS {
         let mut retry_cnt = 0;
         loop {
             let bucket = self.bucket.clone();
-            let mut req = rusoto_s3::PutObjectTaggingRequest::default();
-            req.key = self.file_key(file_id);
+            let key = self.file_key(file_id);
+            let mut req = rusoto_s3::CopyObjectRequest::default();
+            req.copy_source = format!("{}/{}", &bucket, &key);
+            req.key = key;
             req.bucket = bucket;
-            req.tagging = rusoto_s3::Tagging {
-                tag_set: vec![rusoto_s3::Tag {
-                    key: "deleted".to_string(),
-                    value: "ture".to_string(),
-                }],
-            };
-            if let Err(err) = self.s3c.put_object_tagging(req).await {
+            req.tagging = Some("deleted=true".into());
+            req.tagging_directive = Some("REPLACE".into());
+            req.metadata_directive = Some("REPLACE".into());
+            if let Err(err) = self.s3c.copy_object(req).await {
                 if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
                     let retry_sleep = 2u64.pow(retry_cnt as u32) * 100;

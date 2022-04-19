@@ -232,7 +232,7 @@ impl super::Shard {
             total_size,
             tbl_index_size,
             tbl_filter_size,
-            tombs: tombs,
+            tombs,
             partial_l0s,
             partial_tbls,
             compaction_cf,
