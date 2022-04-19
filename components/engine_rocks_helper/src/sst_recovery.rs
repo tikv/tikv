@@ -112,6 +112,10 @@ impl RecoveryRunner {
     //
     // Acquire meta lock.
     fn check_damaged_files(&mut self) {
+        if self.damaged_files.is_empty() {
+            return;
+        }
+
         let mut new_damaged_files = self.damaged_files.clone();
         new_damaged_files.retain(|f| {
             if f.start_time.elapsed() > self.max_hang_duration {
