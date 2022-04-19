@@ -853,7 +853,7 @@ mod tests {
         )
         .err()
         .unwrap();
-        assert_eq!(2, statistic.write.seek);
+        assert_eq!(3, statistic.write.seek);
         match e {
             Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => (),
             _ => panic!("error type not match"),
@@ -866,7 +866,7 @@ mod tests {
             102,
         )
         .unwrap();
-        assert_eq!(2, statistic.write.seek);
+        assert_eq!(3, statistic.write.seek);
         let e = prewrite(
             &engine,
             &mut statistic,
