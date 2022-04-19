@@ -51,7 +51,7 @@ fn test_destroy_local_reader() {
     pd_client.must_remove_peer(r1, new_peer(1, 1));
 
     // Make sure region 1 is removed from store 1.
-    cluster.wait_tombstone(r1, new_peer(1, 1), false);
+    cluster.wait_destroy_and_clean(r1, new_peer(1, 1));
 
     let region = block_on(pd_client.get_region_by_id(r1)).unwrap().unwrap();
 

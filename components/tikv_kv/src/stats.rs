@@ -19,6 +19,7 @@ const STAT_NEXT_TOMBSTONE: &str = "next_tombstone";
 const STAT_PREV_TOMBSTONE: &str = "prev_tombstone";
 const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
+/// Statistics of raw value tombstone by RawKV TTL expired or logical deleted.
 const STAT_RAW_VALUE_TOMBSTONE: &str = "raw_value_tombstone";
 
 thread_local! {

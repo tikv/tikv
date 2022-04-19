@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::dispatch_api_version;
+use api_version::match_template_api_version;
 use api_version::{APIVersion, KeyMode, RawValue};
 use engine_traits::raw_ttl::ttl_to_expire_ts;
 use kvproto::import_sstpb::*;
@@ -203,40 +204,47 @@ impl<E: KvEngine> RawSSTWriter<E> {
     pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let start = Instant::now_coarse();
 
-        dispatch_api_version!(self.api_version, {
-            let expire_ts = if batch.get_ttl() == 0 {
-                None
-            } else if API::IS_TTL_ENABLED {
-                ttl_to_expire_ts(batch.get_ttl())
-            } else {
-                return Err(crate::Error::TTLNotEnabled);
-            };
+        match_template_api_version!(
+            API,
+            match self.api_version {
+                ApiVersion::API => {
+                    let expire_ts = if batch.get_ttl() == 0 {
+                        None
+                    } else if API::IS_TTL_ENABLED {
+                        ttl_to_expire_ts(batch.get_ttl())
+                    } else {
+                        return Err(crate::Error::TTLNotEnabled);
+                    };
 
-            for m in batch.take_pairs().into_iter() {
-                if API::parse_key_mode(m.get_key()) != KeyMode::Raw {
-                    return Err(Error::InvalidKeyMode {
-                        storage_api_version: self.api_version,
-                        writer: SstWriterType::Raw,
-                        key: log_wrappers::hex_encode_upper(m.get_key()),
-                    });
-                }
-                match m.get_op() {
-                    PairOp::Put => {
+                    for m in batch.take_pairs().into_iter() {
+                        if API::parse_key_mode(m.get_key()) != KeyMode::Raw {
+                            return Err(Error::InvalidKeyMode {
+                                storage_api_version: self.api_version,
+                                writer: SstWriterType::Raw,
+                                key: log_wrappers::hex_encode_upper(m.get_key()),
+                            });
+                        }
                         let key =
                             API::encode_raw_key(m.get_key(), Some(TimeStamp::new(batch.get_ts())));
-                        let value = RawValue {
-                            user_value: m.get_value(),
-                            expire_ts,
-                            is_delete: false,
-                        };
-                        self.put(key.as_encoded(), &API::encode_raw_value(value), PairOp::Put)?;
+                        match m.get_op() {
+                            PairOp::Put => {
+                                let value = RawValue {
+                                    user_value: m.get_value(),
+                                    expire_ts,
+                                    is_delete: false,
+                                };
+                                self.put(
+                                    key.as_encoded(),
+                                    &API::encode_raw_value(value),
+                                    PairOp::Put,
+                                )?;
+                            }
+                            PairOp::Delete => self.put(key.as_encoded(), &[], PairOp::Delete)?,
+                        }
                     }
-                    PairOp::Delete => {
-                        self.put(m.get_key(), &[], PairOp::Delete)?;
-                    }
-                };
+                }
             }
-        });
+        );
 
         IMPORT_LOCAL_WRITE_CHUNK_DURATION_VEC
             .with_label_values(&["raw"])
@@ -274,10 +282,10 @@ impl<E: KvEngine> RawSSTWriter<E> {
 
 #[cfg(test)]
 mod tests {
+    use api_version::APIV2;
     use engine_traits::DATA_CFS;
     use test_sst_importer::*;
     use uuid::Uuid;
-    use api_version::APIV2;
 
     use super::*;
     use crate::{Config, SSTImporter};
@@ -347,8 +355,16 @@ mod tests {
         let mut batch = RawWriteBatch::default();
         batch.set_ts(0);
         let mut pairs = vec![];
-        let key1: &[u8] = if api_version == ApiVersion::V2 { b"rk1" } else { b"k1" };
-        let key2: &[u8] = if api_version == ApiVersion::V2 { b"rk2" } else { b"k2" };
+        let key1: &[u8] = if api_version == ApiVersion::V2 {
+            b"rk1"
+        } else {
+            b"k1"
+        };
+        let key2: &[u8] = if api_version == ApiVersion::V2 {
+            b"rk2"
+        } else {
+            b"k2"
+        };
 
         dispatch_api_version!(api_version, {
             // put value

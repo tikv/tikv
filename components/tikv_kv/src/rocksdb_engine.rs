@@ -151,10 +151,6 @@ impl RocksEngine {
         let core = self.core.lock().unwrap();
         core.worker.stop();
     }
-
-    pub fn mut_coprocessor(&mut self) -> &mut CoprocessorHost<BaseRocksEngine> {
-        &mut self.coprocessor
-    }
 }
 
 impl Display for RocksEngine {
@@ -253,6 +249,10 @@ impl Engine for RocksEngine {
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
+    }
+
+    fn mut_coprocessor(&mut self) -> Option<&mut CoprocessorHost<BaseRocksEngine>> {
+        Some(&mut self.coprocessor)
     }
 }
 

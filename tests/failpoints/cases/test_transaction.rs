@@ -3,7 +3,7 @@
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{
-    self as pb, ApiVersion, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+    self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
 };
 use kvproto::tikvpb::TikvClient;
 use raftstore::store::util::new_peer;
@@ -20,7 +20,7 @@ use tikv::storage::txn::tests::{
     must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
 };
 use tikv::storage::{
-    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilder,
+    self, lock_manager::DummyLockManager, Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
@@ -54,13 +54,9 @@ fn test_txn_failpoints() {
 #[test]
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let (prewrite_tx, prewrite_rx) = channel();
     // sleep a while between getting max ts and store the lock in memory
@@ -105,13 +101,9 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 #[test]
 fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
@@ -150,13 +142,9 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
 #[test]
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     fail::cfg("before-storage-check-memory-locks", "sleep(500)").unwrap();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"k"), 100.into());
@@ -200,13 +188,10 @@ macro_rules! lock_release_test {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-                engine,
-                DummyLockManager {},
-                ApiVersion::V1,
-            )
-            .build()
-            .unwrap();
+            let storage =
+                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+                    .build()
+                    .unwrap();
 
             let key = Key::from_raw(b"k");
             let cm = storage.get_concurrency_manager();
@@ -280,13 +265,9 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let cm = storage.get_concurrency_manager();
 
     fail::cfg("after_prewrite_one_key", "sleep(500)").unwrap();
@@ -339,13 +320,9 @@ fn test_max_commit_ts_error() {
 #[test]
 fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
     let cm = storage.get_concurrency_manager();
 
     let (prewrite_tx, prewrite_rx) = channel();

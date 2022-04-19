@@ -57,6 +57,7 @@ pub use self::stats::{
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
+use raftstore::coprocessor::CoprocessorHost;
 use tikv_util::time::ThreadReadId;
 
 pub const SEEK_BOUND: u64 = 8;
@@ -339,6 +340,12 @@ pub trait Engine: Send + Clone + 'static {
     // Some engines have a `TxnExtraScheduler`. This method is to send the extra
     // to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    // Some engines have a coprocessor. This method is to obtain it.
+    // By now only `RocksEngine` has the coprocessor, used for `CausalObserver` of RawKV API V2.
+    fn mut_coprocessor(&mut self) -> Option<&mut CoprocessorHost<Self::Local>> {
+        None
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in time.
