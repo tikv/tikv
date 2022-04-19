@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Debug;
 
-use crate::store::{ApplyMetrics, ExecResult, Proposal, RegionSnapshot};
+use crate::store::{ApplyMetrics, ChangePeer, ExecResult, Proposal, RegionSnapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
@@ -75,8 +75,13 @@ pub enum StoreMsg {
     Tick,
     Start { store: metapb::Store },
     StoreUnreachable { store_id: u64 },
-    RaftMessage(rspb::RaftMessage),
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
+    RaftMessage(kvproto::raft_serverpb::RaftMessage),
+    SplitRegion(Vec<metapb::Region>),
+    ChangePeer(ChangePeer),
+    DestroyPeer(u64),
+    SnapshotReady(u64),
+    PendingNewRegions(Vec<u64>),
 }
 
 #[derive(Debug)]
@@ -270,14 +275,7 @@ impl fmt::Debug for Callback {
 /// groups to update some important internal status.
 #[derive(Debug)]
 pub enum SignificantMsg {
-    StoreUnreachable {
-        store_id: u64,
-    },
-    /// Reports `to_peer_id` is unreachable.
-    Unreachable {
-        region_id: u64,
-        to_peer_id: u64,
-    },
+    StoreUnreachable { store_id: u64 },
 }
 
 /// Message that will be sent to a peer.

@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::{cmp, mem, u64, usize};
 
-use crate::store::{Callback, Config};
+use crate::store::Callback;
 use crate::Result;
 use raftstore::store::metrics::*;
 
@@ -113,13 +113,13 @@ impl ReadIndexQueue {
     /// 1. more than an election timeout elapsed from the last request push;
     /// 2. more than an election timeout elapsed from the last retry;
     /// 3. there are still unresolved requests in the queue.
-    pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
+    pub fn check_needs_retry(&mut self, raft_election_timeout_ticks: usize) -> bool {
         if self.reads.len() == self.ready_cnt {
             return false;
         }
 
         if self.retry_countdown == usize::MAX {
-            self.retry_countdown = cfg.raft_election_timeout_ticks - 1;
+            self.retry_countdown = raft_election_timeout_ticks - 1;
             return false;
         }
 
@@ -128,7 +128,7 @@ impl ReadIndexQueue {
             return false;
         }
 
-        self.retry_countdown = cfg.raft_election_timeout_ticks;
+        self.retry_countdown = raft_election_timeout_ticks;
         true
     }
 

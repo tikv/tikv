@@ -1,13 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::store::{
     cf_name_to_num, cmd_resp, util, Callback, Peer, PeerMsg, RaftCommand, ReadResponse,
-    RegionSnapshot, RequestInspector, RequestPolicy, StoreMeta,
+    RegionSnapshot, RequestInspector, RequestPolicy,
 };
 use crate::{Error, RaftRouter, Result};
 use fail::fail_point;
@@ -141,6 +140,7 @@ pub trait ReadExecutor {
 pub struct ReadDelegate {
     pub region: Arc<metapb::Region>,
     pub peer_id: u64,
+    pub store_id: u64,
     pub term: u64,
     pub applied_index_term: u64,
     pub leader_lease: Option<RemoteLease>,
@@ -159,9 +159,11 @@ impl ReadDelegate {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
+        let store_id = peer.peer.get_store_id();
         ReadDelegate {
             region: Arc::new(region),
             peer_id,
+            store_id,
             term: peer.term(),
             applied_index_term: peer.get_store().applied_index_term(),
             leader_lease: None,
@@ -215,8 +217,7 @@ impl ReadDelegate {
 }
 
 pub struct LocalReader {
-    store_id: Cell<Option<u64>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_readers: Arc<dashmap::DashMap<u64, ReadDelegate>>,
     kv_engine: kvengine::Engine,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
@@ -240,14 +241,13 @@ impl ReadExecutor for LocalReader {
 impl LocalReader {
     pub fn new(
         kv_engine: kvengine::Engine,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_readers: Arc<dashmap::DashMap<u64, ReadDelegate>>,
         router: RaftRouter,
     ) -> Self {
         LocalReader {
-            store_meta,
+            store_readers,
             kv_engine,
             router,
-            store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
@@ -257,24 +257,7 @@ impl LocalReader {
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
-        let result = self.router.send(region_id, PeerMsg::RaftCommand(cmd));
-        if result.is_ok() {
-            return;
-        }
-        if let crate::Error::SendPeerMsgError(mut msg) = result.err().unwrap() {
-            let callback = msg.take_callback();
-            self.metrics.rejected_by_no_region += 1;
-            err.set_message(format!("region {} is missing", region_id));
-            err.mut_region_not_found().set_region_id(region_id);
-            let mut resp = RaftCmdResponse::default();
-            resp.mut_header().set_error(err);
-            let read_resp = ReadResponse {
-                response: resp,
-                snapshot: None,
-                txn_extra_op: TxnExtraOp::Noop,
-            };
-            callback.invoke_read(read_resp);
-        }
+        self.router.send(region_id, PeerMsg::RaftCommand(cmd));
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
@@ -289,15 +272,12 @@ impl LocalReader {
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
-
-                let (meta_len, meta_reader) = {
-                    let meta = self.store_meta.lock().unwrap();
-                    (
-                        meta.readers.len(),
-                        meta.readers.get(&region_id).cloned().map(Arc::new),
-                    )
+                let meta_len = self.store_readers.len();
+                let meta_reader = if let Some(reader) = self.store_readers.get(&region_id) {
+                    Some(Arc::new(reader.value().clone()))
+                } else {
+                    None
                 };
-
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
                 self.delegates.resize(meta_len);
@@ -316,19 +296,6 @@ impl LocalReader {
         &mut self,
         req: &RaftCmdRequest,
     ) -> Result<Option<(Arc<ReadDelegate>, RequestPolicy)>> {
-        // Check store id.
-        if self.store_id.get().is_none() {
-            let store_id = self.store_meta.lock().unwrap().store_id;
-            self.store_id.set(store_id);
-        }
-        let store_id = self.store_id.get().unwrap();
-
-        if let Err(e) = util::check_store_id(req, store_id) {
-            self.metrics.rejected_by_store_id_mismatch += 1;
-            debug!("rejected by store id not match"; "err" => %e);
-            return Err(e);
-        }
-
         // Check region id.
         let region_id = req.get_header().get_region_id();
         let delegate = match self.get_delegate(region_id) {
@@ -339,6 +306,12 @@ impl LocalReader {
                 return Ok(None);
             }
         };
+
+        if let Err(e) = util::check_store_id(req, delegate.store_id) {
+            self.metrics.rejected_by_store_id_mismatch += 1;
+            debug!("rejected by store id not match"; "err" => %e);
+            return Err(e);
+        }
 
         fail_point!("localreader_on_find_delegate");
 
@@ -447,10 +420,9 @@ impl LocalReader {
 impl Clone for LocalReader {
     fn clone(&self) -> Self {
         LocalReader {
-            store_meta: self.store_meta.clone(),
+            store_readers: self.store_readers.clone(),
             kv_engine: self.kv_engine.clone(),
             router: self.router.clone(),
-            store_id: self.store_id.clone(),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }

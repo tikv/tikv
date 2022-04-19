@@ -67,12 +67,6 @@ pub(crate) fn notify_req_region_removed(region_id: u64, cb: Callback) {
     cb.invoke_with_response(resp);
 }
 
-pub(crate) struct ProposalMeta {
-    pub(crate) index: u64,
-    pub(crate) term: u64,
-    pub(crate) renew_lease_time: Instant,
-}
-
 #[derive(Default)]
 pub(crate) struct ProposalQueue {
     queue: VecDeque<Proposal>,
@@ -1053,70 +1047,13 @@ impl Peer {
                 }
                 _ => {}
             }
-            self.on_leader_changed(ctx, ss.leader_id, self.term());
             // TODO: it may possible that only the `leader_id` change and the role
             // didn't change
             ctx.global
                 .coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
-        } else if ready.must_sync() {
-            match ready.hs() {
-                Some(hs) if hs.get_term() != self.get_store().hard_state_term() => {
-                    self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
-                }
-                _ => (),
-            }
         }
-    }
-
-    /// Correctness depends on the order between calling this function and notifying other peers
-    /// the new commit index.
-    /// It is due to the interaction between lease and split/merge.(details are decribed below)
-    ///
-    /// Note that in addition to the hearbeat/append msg, the read index response also can notify
-    /// other peers the new commit index. There are three place where TiKV handles read index resquest.
-    /// The first place is in raft-rs, so it's like hearbeat/append msg, call this function and
-    /// then send the response. The second place is in `Step`, we should use the commit index
-    /// of `PeerStorage` which is the greatest commit index that can be observed outside.
-    /// The third place is in `read_index`, handle it like the second one.
-    fn on_leader_commit_idx_changed(&mut self, pre_commit_index: u64, commit_index: u64) {
-        if commit_index <= pre_commit_index || !self.is_leader() {
-            return;
-        }
-
-        // The admin cmds in `CmdEpochChecker` are proposed by the current leader so we can
-        // use it to get the split/prepare-merge cmds which was committed just now.
-
-        // BatchSplit and Split cmd are mutually exclusive because they both change epoch's
-        // version so only one of them can be proposed and the other one will be rejected
-        // by `CmdEpochChecker`.
-        let last_split_idx = self
-            .cmd_epoch_checker
-            .last_cmd_index(AdminCmdType::BatchSplit);
-        if let Some(idx) = last_split_idx {
-            if idx > pre_commit_index && idx <= commit_index {
-                // We don't need to suspect its lease because peers of new region that
-                // in other store do not start election before theirs election timeout
-                // which is longer than the max leader lease.
-                // It's safe to read local within its current lease, however, it's not
-                // safe to renew its lease.
-                self.last_committed_split_idx = idx;
-            }
-        }
-    }
-
-    fn on_leader_changed(&mut self, ctx: &mut RaftContext, leader_id: u64, term: u64) {
-        debug!(
-            "insert leader info to meta";
-            "region_id" => self.region_id,
-            "leader_id" => leader_id,
-            "term" => term,
-            "peer_id" => self.peer_id(),
-        );
-
-        let mut meta = ctx.global.store_meta.lock().unwrap();
-        meta.leaders.insert(self.region_id, (term, leader_id));
     }
 
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
@@ -1182,7 +1119,11 @@ impl Peer {
         send_msg
     }
 
-    pub(crate) fn handle_raft_ready(&mut self, ctx: &mut RaftContext) {
+    pub(crate) fn handle_raft_ready(
+        &mut self,
+        ctx: &mut RaftContext,
+        mut store_meta: Option<&mut StoreMeta>,
+    ) {
         if self.get_store().is_applying_snapshot() {
             // If we continue to handle all the messages, it may cause too many messages because
             // leader will send all the remaining messages to this follower, which can lead
@@ -1194,6 +1135,12 @@ impl Peer {
         }
         if self.has_pending_snapshot() {
             if !self.ready_to_handle_pending_snapshot() {
+                return;
+            }
+            if store_meta.is_none() {
+                ctx.global
+                    .router
+                    .send_store(StoreMsg::SnapshotReady(self.region_id));
                 return;
             }
         }
@@ -1216,7 +1163,10 @@ impl Peer {
 
         let new_role = ready.ss().map(|ss| ss.raft_state);
         self.handle_raft_committed_entries(ctx, ready.take_committed_entries(), new_role);
-        if let Some(snap_res) = self.mut_store().handle_raft_ready(ctx, &mut ready) {
+        if let Some(snap_res) = self
+            .mut_store()
+            .handle_raft_ready(ctx, &mut ready, &mut store_meta)
+        {
             // The peer may change from learner to voter after snapshot persisted.
             let peer = self
                 .region()
@@ -1235,7 +1185,7 @@ impl Peer {
                 );
                 self.peer = peer;
             };
-            if !self.update_store_meta_for_snap(ctx, snap_res) {
+            if !self.update_store_meta_for_snap(ctx, snap_res, store_meta.unwrap()) {
                 return;
             }
             self.activate(&mut ctx.apply_msgs);
@@ -1385,10 +1335,6 @@ impl Peer {
         if rejected {
             return;
         }
-        let mut parent_id = 0;
-        if let Some(parent) = &shard_meta.parent {
-            parent_id = parent.id;
-        }
         shard_meta.apply_change_set(&cs);
         info!(
             "shard meta apply change set {:?}", &cs;
@@ -1472,9 +1418,8 @@ impl Peer {
                     .on_applied_current_term(StateRole::Leader, self.region());
             }
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            let mut meta = ctx.global.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
+            let mut reader = ctx.global.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader.value_mut(), progress);
         }
     }
 
@@ -1575,28 +1520,9 @@ impl Peer {
     }
 
     fn send_read_command(&self, ctx: &mut RaftContext, read_cmd: RaftCommand) {
-        let mut err = errorpb::Error::default();
-        let read_cb = match ctx
-            .global
+        ctx.global
             .router
-            .send(self.region_id, PeerMsg::RaftCommand(read_cmd))
-        {
-            Ok(()) => return,
-            Err(Error::RegionNotFound(region_id, msg)) => {
-                err.set_message(format!("region {} is missing", region_id));
-                err.mut_region_not_found().set_region_id(region_id);
-                msg.unwrap().take_callback()
-            }
-            _ => unreachable!(),
-        };
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        let read_resp = ReadResponse {
-            response: resp,
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        };
-        read_cb.invoke_read(read_resp);
+            .send(self.region_id, PeerMsg::RaftCommand(read_cmd));
     }
 
     fn apply_reads(&mut self, ctx: &mut RaftContext, ready: &Ready) {
@@ -1718,15 +1644,14 @@ impl Peer {
                 .maybe_new_remote_lease(term)
                 .map(ReadProgress::leader_lease)
         };
-        if let Some(progress) = progress {
-            let mut meta = ctx.global.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
-        }
-        if let Some(progress) = read_progress {
-            let mut meta = ctx.global.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
+        if progress.is_some() || read_progress.is_some() {
+            let mut reader = ctx.global.readers.get_mut(&self.region_id).unwrap();
+            if progress.is_some() {
+                self.maybe_update_read_progress(reader.value_mut(), progress.unwrap());
+            }
+            if read_progress.is_some() {
+                self.maybe_update_read_progress(reader.value_mut(), read_progress.unwrap());
+            }
         }
     }
 
@@ -1734,6 +1659,7 @@ impl Peer {
         &mut self,
         ctx: &mut RaftContext,
         apply_result: ApplySnapResult,
+        meta: &mut StoreMeta,
     ) -> bool {
         let prev_region = apply_result.prev_region;
         let region = apply_result.region;
@@ -1745,8 +1671,6 @@ impl Peer {
         );
 
         // TODO(x) update commit group
-
-        let mut meta = ctx.global.store_meta.lock().unwrap();
 
         if meta.pending_new_regions.contains_key(&self.region_id) {
             // The region is about to be created by split, do not update store meta.
@@ -1789,7 +1713,6 @@ impl Peer {
         }
         let prev = meta.regions.insert(region.get_id(), region.clone());
         assert_eq!(prev, Some(prev_region));
-        drop(meta);
         self.schedule_prepare_change_set(ctx, apply_result.change_set);
         true
     }
@@ -1802,9 +1725,7 @@ impl Peer {
         std::thread::spawn(move || {
             let id = cs.shard_id;
             let res = kv.prepare_change_set(cs, !is_leader);
-            if let Err(e) = router.send(id, PeerMsg::PrepareChangeSetResult(res)) {
-                error!("failed to send prepare change set result {:?}", e);
-            }
+            router.send(id, PeerMsg::PrepareChangeSetResult(res));
         });
     }
 
@@ -1819,22 +1740,6 @@ impl Peer {
             "progress" => ?progress,
         );
         reader.update(progress);
-    }
-
-    pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
-        if self.region().get_peers().len() <= 1 {
-            // The peer campaigned when it was created, no need to do it again.
-            return false;
-        }
-
-        if !parent_is_leader {
-            return false;
-        }
-
-        // If last peer is the leader of the region before split, it's intuitional for
-        // it to become the leader of new split region.
-        let _ = self.raft_group.campaign();
-        true
     }
 
     /// Propose a request.
@@ -2168,15 +2073,13 @@ impl Peer {
         Ok(())
     }
 
-    pub fn has_unresolved_reads(&self) -> bool {
-        self.pending_reads.has_unresolved()
-    }
-
     /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
     /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
-    pub fn retry_pending_reads(&mut self, cfg: &Config) {
+    pub fn retry_pending_reads(&mut self, raft_election_timeout_ticks: usize) {
         if self.is_leader()
-            || !self.pending_reads.check_needs_retry(cfg)
+            || !self
+                .pending_reads
+                .check_needs_retry(raft_election_timeout_ticks)
             || self.pre_read_index().is_err()
         {
             return;

@@ -727,9 +727,7 @@ where
                             source: "pd",
                         }
                     };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                        error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
-                    }
+                    router.send(region_id, PeerMsg::CasualMessage(msg));
                 } else if resp.has_merge() {
                     // TODO(x) handle merge.
                 } else {
@@ -1063,21 +1061,6 @@ fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
     req
 }
 
-fn new_split_region_request(
-    split_key: Vec<u8>,
-    new_region_id: u64,
-    peer_ids: Vec<u64>,
-    right_derive: bool,
-) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::Split);
-    req.mut_split().set_split_key(split_key);
-    req.mut_split().set_new_region_id(new_region_id);
-    req.mut_split().set_new_peer_ids(peer_ids);
-    req.mut_split().set_right_derive(right_derive);
-    req
-}
-
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
     ids: Vec<pdpb::SplitId>,
@@ -1105,14 +1088,6 @@ fn new_transfer_leader_request(peer: metapb::Peer) -> AdminRequest {
     req
 }
 
-fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::PrepareMerge);
-    req.mut_prepare_merge()
-        .set_target(merge.get_target().to_owned());
-    req
-}
-
 fn send_admin_request(
     router: &RaftRouter,
     region_id: u64,
@@ -1130,12 +1105,7 @@ fn send_admin_request(
 
     req.set_admin_request(request);
 
-    if let Err(e) = router.send_command(req, callback) {
-        error!(
-            "send request failed";
-            "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
-        );
-    }
+    router.send_command(req, callback);
 }
 
 /// Sends a raft message to destroy the specified stale Peer
@@ -1151,13 +1121,7 @@ fn send_destroy_peer_message(
     message.set_to_peer(peer);
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
-    if let Err(e) = router.send_raft_msg(message) {
-        error!(
-            "send gc peer request failed";
-            "region_id" => local_region.get_id(),
-            "err" => ?e
-        )
-    }
+    router.send_raft_msg(message);
 }
 
 fn collect_report_read_peer_stats(

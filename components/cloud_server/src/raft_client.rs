@@ -252,7 +252,7 @@ where
     R: RaftStoreRouter,
 {
     let to_peer = msg.get_to_peer();
-    let _ = router.report_unreachable(to_peer.store_id);
+    router.report_unreachable(msg.region_id, to_peer.store_id);
 }
 
 fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {

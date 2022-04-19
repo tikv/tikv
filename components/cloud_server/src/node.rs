@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -148,15 +148,12 @@ where
         engines: Engines,
         trans: Box<dyn Transport>,
         pd_worker: LazyWorker<PdTask>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        mut store_meta: StoreMeta,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         let store_id = self.id();
-        {
-            let mut meta = store_meta.lock().unwrap();
-            meta.store_id = Some(store_id);
-        }
+        store_meta.store_id = Some(store_id);
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
             info!("trying to bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
@@ -172,7 +169,6 @@ where
         self.load_all_stores(status);
 
         self.start_store(
-            store_id,
             engines,
             trans,
             pd_worker,
@@ -345,14 +341,14 @@ where
     #[allow(clippy::too_many_arguments)]
     fn start_store(
         &mut self,
-        store_id: u64,
         engines: Engines,
         trans: Box<dyn Transport>,
         pd_worker: LazyWorker<PdTask>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: StoreMeta,
         coprocessor_host: CoprocessorHost<kvengine::Engine>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
+        let store_id = store_meta.store_id.unwrap();
         info!("start raft store thread"; "store_id" => store_id);
 
         if self.has_started {

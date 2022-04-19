@@ -1242,9 +1242,7 @@ impl Applier {
             ctx.engine.apply_change_set(cs).map(|()| cs_pb)
         };
         let router = ctx.router.as_ref().unwrap();
-        if let Err(e) = router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result)) {
-            error!("failed to send apply change set result {:?}", e);
-        }
+        router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result));
     }
 
     fn clear_all_commands_as_stale(&mut self) {
@@ -1446,7 +1444,6 @@ pub(crate) const TERM_KEY: &'static str = "term";
 pub(crate) struct ApplyContext {
     pub(crate) engine: kvengine::Engine,
     pub(crate) router: Option<RaftRouter>, // None in recover mode.
-    pub(crate) apply_task_res_list: Vec<ApplyResult>,
     pub(crate) exec_log_index: u64,
     pub(crate) exec_log_term: u64,
     pub(crate) wb: KVWriteBatch,
@@ -1459,7 +1456,6 @@ impl ApplyContext {
         Self {
             engine,
             router,
-            apply_task_res_list: Default::default(),
             exec_log_index: Default::default(),
             exec_log_term: Default::default(),
             wb: KVWriteBatch::new(),

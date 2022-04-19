@@ -3,14 +3,16 @@
 use super::*;
 use crate::RaftRouter;
 use crossbeam::channel::RecvTimeoutError;
+use kvproto::errorpb;
+use kvproto::raft_cmdpb::RaftCmdResponse;
 use raftstore::store::metrics::{
     STORE_WRITE_RAFTDB_DURATION_HISTOGRAM, STORE_WRITE_SEND_DURATION_HISTOGRAM,
     STORE_WRITE_TRIGGER_SIZE_HISTOGRAM,
 };
 use raftstore::store::util;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::mem;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tikv_util::mpsc::{Receiver, Sender};
@@ -21,7 +23,6 @@ use tikv_util::{debug, error};
 pub(crate) struct PeerStates {
     pub(crate) applier: Arc<Mutex<Applier>>,
     pub(crate) peer_fsm: Arc<Mutex<PeerFsm>>,
-    pub(crate) closed: Arc<AtomicBool>,
 }
 
 impl PeerStates {
@@ -29,7 +30,6 @@ impl PeerStates {
         Self {
             applier: Arc::new(Mutex::new(applier)),
             peer_fsm: Arc::new(Mutex::new(peer_fsm)),
-            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -49,30 +49,10 @@ impl Inboxes {
             inboxes: HashMap::new(),
         }
     }
-
-    fn get_inbox(&mut self, router: &RaftRouter, region_id: u64) -> &mut PeerInbox {
-        self.init_inbox(router, region_id);
-        self.inboxes.get_mut(&region_id).unwrap()
-    }
-
-    fn init_inbox(&mut self, router: &RaftRouter, region_id: u64) {
-        if self.inboxes.get_mut(&region_id).is_none() {
-            let peer_state = router.peers.get(&region_id).unwrap();
-            let inbox = PeerInbox {
-                peer: peer_state.clone(),
-                msgs: vec![],
-            };
-            self.inboxes.insert(region_id, inbox);
-        }
-    }
-
-    fn append_msg(&mut self, router: &RaftRouter, region_id: u64, msg: PeerMsg) {
-        self.get_inbox(router, region_id).msgs.push(msg)
-    }
 }
 
 pub(crate) struct RaftWorker {
-    ctx: RaftContext,
+    ctx: StoreContext,
     receiver: Receiver<(u64, PeerMsg)>,
     router: RaftRouter,
     apply_senders: Vec<Sender<ApplyBatch>>,
@@ -80,6 +60,7 @@ pub(crate) struct RaftWorker {
     sync_io_worker: Option<IOWorker>,
     last_tick: Instant,
     tick_millis: u64,
+    store_fsm: StoreFSM,
 }
 
 const MAX_BATCH_COUNT: usize = 1024;
@@ -87,13 +68,14 @@ const MAX_BATCH_SIZE: usize = 1 * 1024 * 1024;
 
 impl RaftWorker {
     pub(crate) fn new(
-        ctx: GlobalContext,
+        ctx: StoreContext,
         receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
         io_sender: Sender<IOTask>,
         sync_io_worker: Option<IOWorker>,
+        store_fsm: StoreFSM,
     ) -> (Self, Vec<Receiver<ApplyBatch>>) {
-        let apply_pool_size = ctx.cfg.value().apply_pool_size;
+        let apply_pool_size = ctx.cfg.apply_pool_size;
         let mut apply_senders = Vec::with_capacity(apply_pool_size);
         let mut apply_receivers = Vec::with_capacity(apply_pool_size);
         for _ in 0..apply_pool_size {
@@ -101,8 +83,7 @@ impl RaftWorker {
             apply_senders.push(sender);
             apply_receivers.push(receiver);
         }
-        let tick_millis = ctx.cfg.value().raft_base_tick_interval.as_millis();
-        let ctx = RaftContext::new(ctx);
+        let tick_millis = ctx.cfg.raft_base_tick_interval.as_millis();
         (
             Self {
                 ctx,
@@ -113,6 +94,7 @@ impl RaftWorker {
                 sync_io_worker,
                 last_tick: Instant::now(),
                 tick_millis,
+                store_fsm,
             },
             apply_receivers,
         )
@@ -122,6 +104,7 @@ impl RaftWorker {
         let mut inboxes = Inboxes::new();
         loop {
             let loop_start: tikv_util::time::Instant;
+            self.handle_store_msg();
             match self.receive_msgs(&mut inboxes) {
                 Ok(start_time) => {
                     loop_start = start_time;
@@ -144,6 +127,25 @@ impl RaftWorker {
         }
     }
 
+    fn handle_store_msg(&mut self) {
+        while let Ok(msg) = self.store_fsm.receiver.try_recv() {
+            let mut store_handler = StoreMsgHandler::new(&mut self.store_fsm, &mut self.ctx);
+            if let Some(apply_region) = store_handler.handle_msg(msg) {
+                let peer = self.ctx.peers.get(&apply_region).unwrap().clone();
+                let peer_fsm = peer.peer_fsm.lock().unwrap();
+                let applier = peer.applier.clone();
+                self.maybe_send_apply(&applier, &peer_fsm);
+            }
+        }
+        if self.store_fsm.last_tick.saturating_elapsed().as_millis() as u64
+            > self.store_fsm.tick_millis
+        {
+            let mut store_handler = StoreMsgHandler::new(&mut self.store_fsm, &mut self.ctx);
+            store_handler.handle_msg(StoreMsg::Tick);
+            self.store_fsm.last_tick = Instant::now();
+        }
+    }
+
     /// return true means channel is disconnected, return outer loop.
     fn receive_msgs(
         &mut self,
@@ -159,17 +161,16 @@ impl RaftWorker {
         });
         let res = self.receiver.recv_timeout(Duration::from_millis(10));
         let receive_time = tikv_util::time::Instant::now();
-        let router = &self.router;
         match res {
             Ok((region_id, msg)) => {
                 let mut batch_size = msg.size();
                 let mut batch_cnt = 1;
-                inboxes.append_msg(router, region_id, msg);
+                self.append_msg(inboxes, region_id, msg);
                 loop {
                     if let Ok((region_id, msg)) = self.receiver.try_recv() {
                         batch_size += msg.size();
                         batch_cnt += 1;
-                        inboxes.append_msg(router, region_id, msg);
+                        self.append_msg(inboxes, region_id, msg);
                         if batch_cnt > MAX_BATCH_COUNT || batch_size > MAX_BATCH_SIZE {
                             break;
                         }
@@ -183,13 +184,59 @@ impl RaftWorker {
         }
         if self.last_tick.saturating_elapsed().as_millis() as u64 > self.tick_millis {
             self.last_tick = Instant::now();
-            let peers = self.router.peers.clone();
-            for x in peers.iter() {
-                let region_id = *x.key();
-                inboxes.append_msg(router, region_id, PeerMsg::Tick);
+            for (region_id, peer) in self.ctx.peers.iter() {
+                match inboxes.inboxes.entry(*region_id) {
+                    Entry::Occupied(mut entry) => {
+                        entry.get_mut().msgs.push(PeerMsg::Tick);
+                    }
+                    Entry::Vacant(mut entry) => {
+                        entry.insert(PeerInbox {
+                            peer: peer.clone(),
+                            msgs: vec![PeerMsg::Tick],
+                        });
+                    }
+                }
             }
         }
         return Ok(receive_time);
+    }
+
+    fn append_msg(&mut self, inboxes: &mut Inboxes, region_id: u64, msg: PeerMsg) {
+        if let Some(inbox) = inboxes.inboxes.get_mut(&region_id) {
+            inbox.msgs.push(msg);
+            return;
+        }
+        if let Some(peer) = self.ctx.peers.get(&region_id) {
+            inboxes.inboxes.insert(
+                region_id,
+                PeerInbox {
+                    peer: peer.clone(),
+                    msgs: vec![msg],
+                },
+            );
+            return;
+        }
+        match msg {
+            PeerMsg::RaftMessage(msg) => {
+                self.router.send_store(StoreMsg::RaftMessage(msg));
+            }
+            PeerMsg::RaftCommand(cmd) => {
+                let mut resp = RaftCmdResponse::default();
+                let mut err = errorpb::Error::default();
+                err.set_message(format!("region {} is missing", region_id));
+                resp.mut_header().set_error(err);
+                cmd.callback.invoke_with_response(resp);
+            }
+            PeerMsg::Tick => {}
+            PeerMsg::Start => {}
+            PeerMsg::ApplyResult(_) => {}
+            PeerMsg::CasualMessage(_) => {}
+            PeerMsg::SignificantMsg(_) => {}
+            PeerMsg::GenerateEngineChangeSet(_) => {}
+            PeerMsg::ApplyChangeSetResult(_) => {}
+            PeerMsg::PrepareChangeSetResult(_) => {}
+            PeerMsg::Persisted(_) => {}
+        }
     }
 
     fn process_inbox(&mut self, inbox: &mut PeerInbox) {
@@ -201,7 +248,7 @@ impl RaftWorker {
             return;
         }
         PeerMsgHandler::new(&mut peer_fsm, &mut self.ctx).handle_msgs(&mut inbox.msgs);
-        peer_fsm.peer.handle_raft_ready(&mut self.ctx);
+        peer_fsm.peer.handle_raft_ready(&mut self.ctx, None);
         self.maybe_send_apply(&inbox.peer.applier, &peer_fsm);
     }
 
@@ -281,42 +328,6 @@ impl ApplyWorker {
     }
 }
 
-pub(crate) struct StoreWorker {
-    handler: StoreMsgHandler,
-    last_tick: Instant,
-    tick_millis: u64,
-}
-
-impl StoreWorker {
-    pub(crate) fn new(store_fsm: StoreFSM, ctx: GlobalContext) -> Self {
-        let tick_millis = ctx.cfg.value().raft_base_tick_interval.as_millis();
-        let handler = StoreMsgHandler::new(store_fsm, ctx);
-        Self {
-            handler,
-            last_tick: Instant::now(),
-            tick_millis,
-        }
-    }
-
-    pub(crate) fn run(&mut self) {
-        loop {
-            let res = self
-                .handler
-                .get_receiver()
-                .recv_timeout(Duration::from_millis(10));
-            match res {
-                Ok(msg) => self.handler.handle_msg(msg),
-                Err(RecvTimeoutError::Disconnected) => return,
-                Err(RecvTimeoutError::Timeout) => {}
-            }
-            if self.last_tick.saturating_elapsed().as_millis() as u64 > self.tick_millis {
-                self.handler.handle_msg(StoreMsg::Tick);
-                self.last_tick = Instant::now();
-            }
-        }
-    }
-}
-
 pub(crate) struct IOWorker {
     engine: rfengine::RFEngine,
     receiver: Receiver<IOTask>,
@@ -377,10 +388,7 @@ impl IOWorker {
                 }
             }
             let region_id = ready.region_id;
-            let msg = PeerMsg::Persisted(ready);
-            if let Err(err) = self.router.send(region_id, msg) {
-                error!("failed to send persisted message {:?}", err);
-            }
+            self.router.send(region_id, PeerMsg::Persisted(ready));
         }
         if self.trans.need_flush() {
             self.trans.flush();

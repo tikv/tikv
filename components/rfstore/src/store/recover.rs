@@ -57,6 +57,10 @@ impl RecoverHandler {
                     region = Some(state.take_region());
                     Err(rfengine::Error::EOF)
                 });
+        if res.is_err() {
+            let err_msg = format!("{:?}", res.unwrap_err());
+            return Err(kvengine::Error::ErrOpen(err_msg));
+        }
         if let Some(region) = region {
             let raft_state_key = raft_state_key(region.get_region_epoch().get_version());
             let val = self

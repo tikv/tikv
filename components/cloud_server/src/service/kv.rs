@@ -15,14 +15,13 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
-use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use rfstore::router::RaftStoreRouter;
 use rfstore::store::{Callback, CasualMessage};
-use rfstore::{DiscardReason, Error as RaftStoreError};
+use rfstore::Error as RaftStoreError;
 use tikv::coprocessor::Endpoint;
 use tikv::coprocessor_v2;
 use tikv::server::load_statistics::ThreadLoad;
@@ -360,8 +359,8 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
                         my_store_id: store_id,
                     }))
                 } else {
-                    let ret = ch.send_raft_msg(msg).map_err(Error::from);
-                    future::ready(ret)
+                    ch.send_raft_msg(msg);
+                    future::ready(Ok(()))
                 }
             });
             let status = match res.await {
@@ -401,9 +400,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
                             my_store_id: store_id,
                         }));
                     }
-                    if let Err(e) = ch.send_raft_msg(msg) {
-                        return future::err(Error::from(e));
-                    }
+                    ch.send_raft_msg(msg);
                 }
                 future::ok(())
             });
@@ -449,20 +446,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
             source: ctx.peer().into(),
         };
 
-        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = SplitRegionResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
+        self.ch.send_casual_msg(region_id, req);
 
         let task = async move {
             let mut res = f.await?;
@@ -544,20 +528,7 @@ impl<T: RaftStoreRouter + 'static, L: LockManager> Tikv for Service<T, L> {
 
         // We must deal with all requests which acquire read-quorum in raftstore-thread,
         // so just send it as an command.
-        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = ReadIndexResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
+        self.ch.send_command(cmd, Callback::Read(cb));
 
         let task = async move {
             let mut res = f.await?;
@@ -1501,20 +1472,6 @@ impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchResp
         v.measures.push(e.measure);
         None
     }
-}
-
-fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {
-    if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
-        // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
-        let mut region_error = RegionError::default();
-        let region_not_found = RegionNotFound {
-            region_id,
-            ..Default::default()
-        };
-        region_error.set_region_not_found(region_not_found);
-        return region_error;
-    }
-    e.into()
 }
 
 #[cfg(test)]

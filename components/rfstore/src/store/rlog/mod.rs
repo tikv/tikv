@@ -266,5 +266,5 @@ fn test_run() {
     let logger = slog::Logger::root(drain, slog::o!());
     slog_global::set_global(logger);
 
-    warn!("abc {}", 2; "next" => 2);
+    slog_global::warn!("abc {}", 2; "next" => 2);
 }

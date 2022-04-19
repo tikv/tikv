@@ -253,9 +253,9 @@ impl RaftKv {
             committed_cb,
         );
         if let Some(deadline) = batch.deadline {
-            self.router.send_command_with_deadline(cmd, cb, deadline)?;
+            self.router.send_command_with_deadline(cmd, cb, deadline);
         } else {
-            self.router.send_command(cmd, cb)?;
+            self.router.send_command(cmd, cb);
         }
         Ok(())
     }

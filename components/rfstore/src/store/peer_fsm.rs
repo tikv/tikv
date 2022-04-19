@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use bytes::Bytes;
 use fail::fail_point;
 use kvengine::ShardMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -10,32 +9,28 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::raft_serverpb::RaftMessage;
 use raft;
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::MessageType;
 use raft_proto::eraftpb;
 use rand::{thread_rng, Rng};
-use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::time::Instant;
 use std::{cmp, u64};
 use tikv_util::{box_err, debug, error, info, trace, warn};
 
 use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::msg::Callback;
 use crate::store::peer::Peer;
-use crate::store::{notify_req_region_removed, CustomBuilder, PdTask, PersistReady};
-use crate::store::{
-    raw_end_key, ApplyMsg, Engines, MsgApplyResult, RaftContext, ReadDelegate, Ticker,
-    PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_SPLIT_CHECK,
-};
+use crate::store::{notify_req_region_removed, CustomBuilder, PdTask, PersistReady, StoreMsg};
 use crate::store::{util as _util, CasualMessage, Config, PeerMsg, SignificantMsg};
-use crate::store::{write_peer_state, ChangePeer, ExecResult, SnapState};
+use crate::store::{
+    ApplyMsg, Engines, MsgApplyResult, RaftContext, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT,
+    PEER_TICK_SPLIT_CHECK,
+};
+use crate::store::{ExecResult, SnapState};
 use crate::{Error, Result};
-use raftstore::coprocessor::RegionChangeEvent;
 use raftstore::store::util;
-use raftstore::store::util::is_region_initialized;
 use tikv_util::time::duration_to_sec;
 use txn_types::{Key, WriteBatchFlags};
 
@@ -254,11 +249,6 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
         match msg {
-            SignificantMsg::Unreachable { to_peer_id, .. } => {
-                if self.fsm.peer.is_leader() {
-                    self.fsm.peer.raft_group.report_unreachable(to_peer_id);
-                }
-            }
             SignificantMsg::StoreUnreachable { store_id } => {
                 if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
                 {
@@ -298,6 +288,8 @@ impl<'a> PeerMsgHandler<'a> {
             // need to check if snapshot is applied.
             return;
         }
+        let raft_election_timeout_ticks = self.ctx.cfg.raft_election_timeout_ticks;
+        self.peer.retry_pending_reads(raft_election_timeout_ticks);
         self.fsm.peer.raft_group.tick();
         self.fsm.peer.mut_store().flush_cache_metrics();
         if self.peer.need_campaign {
@@ -392,7 +384,6 @@ impl<'a> PeerMsgHandler<'a> {
         let is_snapshot = msg.get_message().has_snapshot();
         let regions_to_destroy = self.check_snapshot(&msg)?;
 
-        let from_peer_id = msg.get_from_peer().get_id();
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
@@ -554,358 +545,29 @@ impl<'a> PeerMsgHandler<'a> {
         // TODO(x)
     }
 
-    fn destroy_peer(&mut self, keep_data: bool) {
-        fail_point!("destroy_peer");
-        info!(
-            "starts destroy";
-            "region_id" => self.fsm.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-        );
-        let region_id = self.region_id();
-        // We can't destroy a peer which is applying snapshot.
-        assert!(!self.fsm.peer.is_applying_snapshot());
-
-        // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = true;
-        if let Some(parent_id) = self.peer.mut_store().parent_id() {
-            self.ctx
-                .global
-                .engines
-                .raft
-                .remove_dependent(parent_id, self.region_id());
-        }
-
-        let mut meta = self.ctx.global.store_meta.lock().unwrap();
-
-        // Destroy read delegates.
-        meta.readers.remove(&region_id);
-
-        // Trigger region change observer
-        self.ctx.global.coprocessor_host.on_region_changed(
-            self.fsm.peer.region(),
-            RegionChangeEvent::Destroy,
-            self.fsm.peer.get_role(),
-        );
-        let task = PdTask::DestroyPeer { region_id };
-        if let Err(e) = self.ctx.global.pd_scheduler.schedule(task) {
-            error!(
-                "failed to notify pd";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
-        let is_initialized = self.fsm.peer.is_initialized();
-        if let Err(e) = self.fsm.peer.destroy(&mut self.ctx.raft_wb) {
-            // If not panic here, the peer will be recreated in the next restart,
-            // then it will be gc again. But if some overlap region is created
-            // before restarting, the gc action will delete the overlap region's
-            // data too.
-            panic!("{} destroy err {:?}", self.fsm.peer.tag(), e);
-        }
-        // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
-        // So in here, it's necessary to held the StoreMeta lock when closing the router.
-        self.ctx.global.router.close(region_id);
-        self.fsm.stop();
-
-        if is_initialized
-            && !keep_data
-            && meta
-                .region_ranges
-                .remove(&raw_end_key(self.fsm.peer.region()))
-                .is_none()
-        {
-            panic!("{} meta corruption detected", self.fsm.peer.tag());
-        }
-        if meta.regions.remove(&region_id).is_none() && !keep_data {
-            panic!("{} meta corruption detected", self.fsm.peer.tag())
-        }
-        meta.leaders.remove(&region_id);
-        self.ctx.global.engines.kv.remove_shard(region_id);
-    }
-
-    // Update some region infos
-    fn update_region(&mut self, mut region: metapb::Region) {
-        {
-            let mut meta = self.ctx.global.store_meta.lock().unwrap();
-            meta.set_region(
-                &self.ctx.global.coprocessor_host,
-                region.clone(),
-                &mut self.fsm.peer,
-            );
-        }
-        write_peer_state(&mut self.ctx.raft_wb, &region);
-        for peer in region.take_peers().into_iter() {
-            if self.fsm.peer.peer_id() == peer.get_id() {
-                self.fsm.peer.peer = peer.clone();
-            }
-            self.fsm.peer.insert_peer_cache(peer);
-        }
-    }
-
-    fn on_ready_change_peer(&mut self, cp: ChangePeer) {
-        if cp.index == raft::INVALID_INDEX {
-            // Apply failed, skip.
-            return;
-        }
-
-        if cp.index >= self.fsm.peer.raft_group.raft.raft_log.first_index() {
-            match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
-                Ok(_) => {}
-                // PD could dispatch redundant conf changes.
-                Err(raft::Error::NotExists { .. }) | Err(raft::Error::Exists { .. }) => {}
-                _ => unreachable!(),
-            }
-        } else {
-            // Please take a look at test case test_redundant_conf_change_by_snapshot.
-        }
-
-        self.update_region(cp.region);
-
-        fail_point!("change_peer_after_update_region");
-
-        let now = Instant::now();
-        let (mut remove_self, mut need_ping) = (false, false);
-        for mut change in cp.changes {
-            let (change_type, peer) = (change.get_change_type(), change.take_peer());
-            let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
-            match change_type {
-                ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                    // Add this peer to peer_heartbeats.
-                    self.fsm.peer.peer_heartbeats.insert(peer_id, now);
-                    if self.fsm.peer.is_leader() {
-                        need_ping = true;
-                        self.fsm.peer.peers_start_pending_time.push((peer_id, now));
-                    }
-                }
-                ConfChangeType::RemoveNode => {
-                    // Remove this peer from cache.
-                    self.fsm.peer.peer_heartbeats.remove(&peer_id);
-                    if self.fsm.peer.is_leader() {
-                        self.fsm
-                            .peer
-                            .peers_start_pending_time
-                            .retain(|&(p, _)| p != peer_id);
-                    }
-                    self.fsm.peer.remove_peer_from_cache(peer_id);
-                    // We only care remove itself now.
-                    if self.store_id() == store_id {
-                        if self.fsm.peer.peer_id() == peer_id {
-                            remove_self = true;
-                        } else {
-                            panic!(
-                                "{} trying to remove unknown peer {:?}",
-                                self.fsm.peer.tag(),
-                                peer
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // In pattern matching above, if the peer is the leader,
-        // it will push the change peer into `peers_start_pending_time`
-        // without checking if it is duplicated. We move `heartbeat_pd` here
-        // to utilize `collect_pending_peers` in `heartbeat_pd` to avoid
-        // adding the redundant peer.
-        if self.fsm.peer.is_leader() {
-            // Notify pd immediately.
-            info!(
-                "notify pd with change peer region";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "region" => ?self.fsm.peer.region(),
-            );
-            self.fsm.peer.heartbeat_pd(&self.ctx);
-
-            // Remove or demote leader will cause this raft group unavailable
-            // until new leader elected, but we can't revert this operation
-            // because its result is already persisted in apply worker
-            // TODO: should we transfer leader here?
-            let demote_self = util::is_learner(&self.fsm.peer.peer);
-            if remove_self || demote_self {
-                warn!(
-                    "Removing or demoting leader";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "remove" => remove_self,
-                    "demote" => demote_self,
-                );
-                if demote_self {
-                    self.fsm
-                        .peer
-                        .raft_group
-                        .raft
-                        .become_follower(self.fsm.peer.term(), raft::INVALID_ID);
-                }
-                // Don't ping to speed up leader election
-                need_ping = false;
-            }
-        }
-        if need_ping {
-            // Speed up snapshot instead of waiting another heartbeat.
-            self.fsm.peer.ping();
-        }
-        if remove_self {
-            self.destroy_peer(false);
-        }
-    }
-
-    fn on_ready_split_region(&mut self, regions: Vec<metapb::Region>) {
-        fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
-        let derived = regions.last().unwrap().clone();
-        let region_id = derived.get_id();
-        let mut meta = self.ctx.global.store_meta.lock().unwrap();
-        meta.set_region(
-            &self.ctx.global.coprocessor_host,
-            derived,
-            &mut self.fsm.peer,
-        );
-
-        let is_leader = self.fsm.peer.is_leader();
-        if is_leader {
-            self.fsm.peer.heartbeat_pd(&self.ctx);
-            // Notify pd immediately to let it update the region meta.
-            info!(
-                "notify pd with split";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "split_count" => regions.len(),
-            );
-            // Now pd only uses ReportBatchSplit for history operation show,
-            // so we send it independently here.
-            let task = PdTask::ReportBatchSplit {
-                regions: regions.to_vec(),
-            };
-            if let Err(e) = self.ctx.global.pd_scheduler.schedule(task) {
-                error!(
-                    "failed to notify pd";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "err" => %e,
-                );
-            }
-        }
-
-        let last_key = raw_end_key(regions.last().unwrap());
-        if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{} original region should exist", self.fsm.peer.tag());
-        }
-        for new_region in regions {
-            let new_region_id = new_region.get_id();
-
-            if new_region_id == region_id {
-                let not_exist = meta
-                    .region_ranges
-                    .insert(raw_end_key(&new_region), new_region_id)
-                    .is_none();
-                assert!(not_exist, "[region {}] should not exist", new_region_id);
-                continue;
-            }
-            if let Some(r) = meta.regions.get(&new_region_id) {
-                if is_region_initialized(r) {
-                    // The region is created by raft message.
-                    info!("initialized region already exists, must be created by raft message.");
-                    continue;
-                }
-            }
-            // Now all checking passed.
-            // Insert new regions and validation
-            info!(
-                "insert new region";
-                "region_id" => new_region_id,
-                "region" => ?new_region,
-            );
-            meta.pending_new_regions.remove(&new_region_id);
-
-            let mut new_peer = match PeerFsm::create(
-                self.ctx.store_id(),
-                &self.ctx.cfg,
-                self.ctx.global.engines.clone(),
-                &new_region,
-            ) {
-                Ok(new_peer) => new_peer,
-                Err(e) => {
-                    // peer information is already written into db, can't recover.
-                    // there is probably a bug.
-                    panic!("create new split region {:?} err {:?}", new_region, e);
-                }
-            };
-
-            let meta_peer = new_peer.peer.peer.clone();
-
-            for p in new_region.get_peers() {
-                // Add this peer to cache.
-                new_peer.peer.insert_peer_cache(p.clone());
-            }
-
-            // New peer derive write flow from parent region,
-            // this will be used by balance write flow.
-            new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
-            new_peer.peer.need_campaign = is_leader;
-
-            if is_leader {
-                // The new peer is likely to become leader, send a heartbeat immediately to reduce
-                // client query miss.
-                new_peer.peer.heartbeat_pd(&self.ctx);
-            }
-            self.ctx.global.coprocessor_host.on_region_changed(
-                &new_region,
-                RegionChangeEvent::Create,
-                new_peer.peer.get_role(),
-            );
-            meta.regions.insert(new_region_id, new_region.clone());
-            let not_exist = meta
-                .region_ranges
-                .insert(raw_end_key(&new_region), new_region_id)
-                .is_none();
-            assert!(not_exist, "[region {}] should not exist", new_region_id);
-            meta.readers
-                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
-            self.ctx.global.router.register(new_peer);
-            self.ctx
-                .global
-                .router
-                .send(new_region_id, PeerMsg::Start)
-                .unwrap();
-
-            if !is_leader {
-                if let Some(msg) = meta
-                    .pending_msgs
-                    .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
-                {
-                    if let Err(e) = self
-                        .ctx
-                        .global
-                        .router
-                        .send(new_region_id, PeerMsg::RaftMessage(msg))
-                    {
-                        warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
-                    }
-                }
-            }
-        }
-        drop(meta);
-        if is_leader {
-            if let Some(shard) = self.ctx.global.engines.kv.get_shard(self.region_id()) {
-                self.ctx.global.engines.kv.trigger_flush(&shard);
-            }
-        }
-        fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
-    }
-
     fn on_ready_result(&mut self, exec_results: &mut VecDeque<ExecResult>) {
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
-                ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::SplitRegion { regions } => self.on_ready_split_region(regions),
+                ExecResult::ChangePeer(cp) => {
+                    if cp.index != raft::INVALID_INDEX {
+                        self.ctx.global.router.send_store(StoreMsg::ChangePeer(cp));
+                    }
+                }
+                ExecResult::SplitRegion { regions } => {
+                    self.ctx
+                        .global
+                        .router
+                        .send_store(StoreMsg::SplitRegion(regions));
+                }
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
                 }
                 ExecResult::UnsafeDestroy => {
-                    self.destroy_peer(false);
+                    self.ctx
+                        .global
+                        .router
+                        .send_store(StoreMsg::DestroyPeer(self.region_id()));
                 }
             }
         }
@@ -984,13 +646,12 @@ impl<'a> PeerMsgHandler<'a> {
         }
 
         match _util::check_region_epoch(msg, self.fsm.peer.region(), true) {
-            Err(Error::EpochNotMatch(m, mut new_regions)) => {
+            Err(Error::EpochNotMatch(m, new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
                 // updated.
-                let requested_version = msg.get_header().get_region_epoch().get_version();
-                self.collect_sibling_region(requested_version, &mut new_regions);
+                // TODO(x) add sibling region.
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
                 Err(Error::EpochNotMatch(m, new_regions))
             }
@@ -1036,39 +697,6 @@ impl<'a> PeerMsgHandler<'a> {
 
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
-    }
-
-    fn collect_sibling_region(&self, requested_version: u64, regions: &mut Vec<Region>) {
-        let mut max_version = self.fsm.peer.region().get_region_epoch().version;
-        if requested_version >= max_version {
-            // Our information is stale.
-            return;
-        }
-        // Current region is included in the vec.
-        let mut collect_cnt = max_version - requested_version;
-        let anchor = Excluded(raw_end_key(self.fsm.peer.region()));
-        let meta = self.ctx.global.store_meta.lock().unwrap();
-        let mut ranges = meta.region_ranges.range((Unbounded::<Bytes>, anchor));
-
-        for _ in 0..MAX_REGIONS_IN_ERROR {
-            let res = ranges.next_back();
-            if let Some((_, id)) = res {
-                let r = &meta.regions[id];
-                collect_cnt -= 1;
-                // For example, A is split into B, A, and then B is split into C, B.
-                if r.get_region_epoch().version >= max_version {
-                    // It doesn't matter if it's a false positive, as it's limited by MAX_REGIONS_IN_ERROR.
-                    collect_cnt += r.get_region_epoch().version - max_version;
-                    max_version = r.get_region_epoch().version;
-                }
-                regions.push(r.to_owned());
-                if collect_cnt == 0 {
-                    return;
-                }
-            } else {
-                return;
-            }
-        }
     }
 
     fn on_split_region_check_tick(&mut self) {

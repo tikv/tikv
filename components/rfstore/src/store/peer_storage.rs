@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use super::keys::raft_state_key;
 use crate::store::{
     get_preprocess_cmd, region_state_key, Engines, RaftApplyState, RaftContext, RaftState,
-    RegionIDVer, KV_ENGINE_META_KEY, TERM_KEY,
+    RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use engine_traits::RaftEngineReadOnly;
@@ -360,19 +360,20 @@ impl PeerStorage {
         &mut self,
         ctx: &mut RaftContext,
         ready: &mut raft::Ready,
+        store_meta: &mut Option<&mut StoreMeta>,
     ) -> Option<ApplySnapResult> {
         let mut res = None;
         let prev_raft_state = self.raft_state;
         if !ready.snapshot().is_empty() {
             let region_id = self.get_region_id();
-            let store_meta = ctx.global.store_meta.lock().unwrap();
-            let pending_split = store_meta.pending_new_regions.contains_key(&region_id);
-            let replaced_by_split = if let Some(meta_region) = store_meta.regions.get(&region_id) {
+            let meta = store_meta.take().unwrap();
+            let pending_split = meta.pending_new_regions.contains_key(&region_id);
+            let replaced_by_split = if let Some(meta_region) = meta.regions.get(&region_id) {
                 !self.region.is_initialized() && meta_region.is_initialized()
             } else {
                 false
             };
-            drop(store_meta);
+            *store_meta = Some(meta);
             if !pending_split && !replaced_by_split {
                 let prev_region = self.region().clone();
                 let change_set = self.apply_snapshot(ready.snapshot(), ctx).unwrap();
@@ -417,18 +418,15 @@ impl PeerStorage {
             if let Some(cmd) = get_preprocess_cmd(entry) {
                 if cmd.has_admin_request() {
                     let splits = cmd.get_admin_request().get_splits();
-                    let mut meta = ctx.global.store_meta.lock().unwrap();
+                    let mut new_regions = vec![];
                     for req in splits.get_requests() {
                         if req.new_region_id != self.get_region_id() {
-                            if let Some(meta_region) = meta.regions.get(&req.new_region_id) {
-                                if meta_region.is_initialized() {
-                                    continue;
-                                }
-                            }
-                            meta.pending_new_regions.insert(req.new_region_id, true);
+                            new_regions.push(req.new_region_id);
                         }
                     }
-                    drop(meta);
+                    ctx.global
+                        .router
+                        .send_store(StoreMsg::PendingNewRegions(new_regions));
                 }
             }
         }
@@ -504,7 +502,9 @@ impl PeerStorage {
     pub(crate) fn parent_id(&self) -> Option<u64> {
         if let Some(meta) = &self.shard_meta {
             if let Ok(shard) = self.engines.kv.get_shard_with_ver(meta.id, meta.ver) {
-                return Some(shard.parent_id);
+                if shard.parent_id > 0 {
+                    return Some(shard.parent_id);
+                }
             }
         }
         None

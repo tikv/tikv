@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, StoreMsg};
-use crate::{DiscardReason, Error, RaftRouter, Result};
+use crate::{RaftRouter, Result};
 use dyn_clone::DynClone;
 use kvproto::raft_serverpb::RaftMessage;
 use std::sync::mpsc;
@@ -21,12 +21,12 @@ dyn_clone::clone_trait_object!(Transport);
 ///
 /// Messages are not guaranteed to be delivered by this trait.
 pub trait CasualRouter: Send {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()>;
+    fn send(&self, region_id: u64, msg: CasualMessage);
 }
 
 /// Routes proposal to target region.
 pub trait ProposalRouter {
-    fn send(&self, cmd: RaftCommand) -> Result<()>;
+    fn send(&self, cmd: RaftCommand);
 }
 
 /// Routes message to store FSM.
@@ -38,14 +38,14 @@ pub trait StoreRouter: Send {
 
 impl CasualRouter for RaftRouter {
     #[inline]
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+    fn send(&self, region_id: u64, msg: CasualMessage) {
         self.send(region_id, PeerMsg::CasualMessage(msg))
     }
 }
 
 impl ProposalRouter for RaftRouter {
     #[inline]
-    fn send(&self, cmd: RaftCommand) -> Result<()> {
+    fn send(&self, cmd: RaftCommand) {
         let region_id = cmd.request.get_header().get_region_id();
         let msg = PeerMsg::RaftCommand(cmd);
         self.send(region_id, msg)
@@ -60,23 +60,14 @@ impl StoreRouter for RaftRouter {
 }
 
 impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
-    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
-        match self.try_send((region_id, msg)) {
-            Ok(()) => Ok(()),
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                Err(Error::Transport(DiscardReason::Disconnected))
-            }
-            Err(mpsc::TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
-        }
+    fn send(&self, region_id: u64, msg: CasualMessage) {
+        self.send((region_id, msg)).unwrap();
     }
 }
 
 impl ProposalRouter for mpsc::SyncSender<RaftCommand> {
-    fn send(&self, cmd: RaftCommand) -> Result<()> {
-        match self.send(cmd) {
-            Ok(()) => Ok(()),
-            Err(mpsc::SendError(_)) => Err(Error::Transport(DiscardReason::Disconnected)),
-        }
+    fn send(&self, cmd: RaftCommand) {
+        self.send(cmd).unwrap();
     }
 }
 

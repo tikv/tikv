@@ -351,7 +351,7 @@ impl StatusServer {
         engine: kvengine::Engine,
     ) -> hyper::Result<Response<Body>> {
         let path = req.uri().path();
-        let mut last = get_last_path_segment(path);
+        let last = get_last_path_segment(path);
         let res;
         if let Ok(region_id) = u64::from_str(last) {
             let shard_stats = engine.get_shard_stat(region_id);
@@ -360,7 +360,7 @@ impl StatusServer {
             let all_shard_stats = engine.get_all_shard_stats();
             res = serde_json::to_string_pretty(&all_shard_stats);
         } else {
-            let mut all_shard_stats = engine.get_all_shard_stats();
+            let all_shard_stats = engine.get_all_shard_stats();
             let engine_stats = kvengine::Engine::get_engine_stats(all_shard_stats);
             res = serde_json::to_string_pretty(&engine_stats);
         }
@@ -378,7 +378,7 @@ impl StatusServer {
         engine: rfengine::RFEngine,
     ) -> hyper::Result<Response<Body>> {
         let path = req.uri().path();
-        let mut last = get_last_path_segment(path);
+        let last = get_last_path_segment(path);
         let res;
         if let Ok(region_id) = u64::from_str(last) {
             let region_stats = engine.get_region_stats(region_id);

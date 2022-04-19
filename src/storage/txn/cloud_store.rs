@@ -7,7 +7,6 @@ use bytes::{Buf, Bytes};
 use kvengine::Item;
 use std::borrow::Cow;
 use std::marker::PhantomData;
-use std::ops;
 use tikv_kv::{Snapshot, Statistics};
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value};
 

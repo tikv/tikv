@@ -17,7 +17,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     u64,
 };
 
@@ -144,7 +144,7 @@ struct TiKVServer {
 }
 
 struct TiKVEngines {
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Option<StoreMeta>,
     engine: RaftKv,
 }
 
@@ -380,19 +380,22 @@ impl TiKVServer {
 
     fn init_engines(&mut self) {
         info!("init engines");
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
+        let store_meta = StoreMeta::new(
+            PENDING_MSG_CAP,
+            self.coprocessor_host.as_ref().unwrap().clone(),
+        );
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
                 LocalReader::new(
                     self.raw_engines.kv.clone(),
-                    store_meta.clone(),
+                    store_meta.readers.clone(),
                     self.router.clone(),
                 ),
             ),
             self.raw_engines.kv.clone(),
         );
-
+        let store_meta = Some(store_meta);
         self.engines = Some(TiKVEngines { store_meta, engine });
     }
 
@@ -537,7 +540,7 @@ impl TiKVServer {
             self.raw_engines.clone(),
             Box::new(server.transport()),
             pd_worker,
-            engines.store_meta.clone(),
+            engines.store_meta.take().unwrap(),
             self.coprocessor_host.clone().unwrap(),
             self.concurrency_manager.clone(),
         )
@@ -706,13 +709,11 @@ impl TiKVServer {
                 convert_compression_type(cf_opt.compression_per_level[1]),
                 convert_compression_type(cf_opt.compression_per_level[2]),
             ],
-            DBCompressionType::No => {
-                [
-                    kvengine::table::sstable::NO_COMPRESSION,
-                    kvengine::table::sstable::NO_COMPRESSION,
-                    kvengine::table::sstable::NO_COMPRESSION,
-                ]
-            },
+            DBCompressionType::No => [
+                kvengine::table::sstable::NO_COMPRESSION,
+                kvengine::table::sstable::NO_COMPRESSION,
+                kvengine::table::sstable::NO_COMPRESSION,
+            ],
             DBCompressionType::Lz4 => [
                 kvengine::table::sstable::NO_COMPRESSION,
                 kvengine::table::sstable::LZ4_COMPRESSION,
