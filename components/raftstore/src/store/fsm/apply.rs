@@ -515,7 +515,6 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            fail_point!("raft_store_apply_post_write_db");
             self.perf_context.report_metrics();
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
@@ -2315,16 +2314,12 @@ where
                 Ok(None) => (),
                 Ok(Some(state)) => {
                     if replace_regions.get(region_id).is_some() {
-                        // This peer must be the first one on local store. So if this peer is created on the other side,
-                        // it means no `RegionLocalState` in kv engine.
-                        info!(
-                            "failed to replace region because state exists";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "split_region_id" => region_id,
-                            "split_peer_id" => new_split_peer.peer_id,
-                            "local_state" => ?state,
-                        );
+                        // It's marked replaced, then further destroy will skip cleanup, so there
+                        // should be no region local state.
+                        panic!(
+                            "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, new_split_peer.peer_id, state
+                        )
                     }
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
