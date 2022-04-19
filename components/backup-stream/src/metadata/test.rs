@@ -103,9 +103,7 @@ async fn test_watch() -> Result<()> {
     assert_eq!(
         events,
         vec![
-            MetadataEvent::AddTask {
-                task: "simple_2".to_owned()
-            },
+            MetadataEvent::AddTask { task: task2 },
             MetadataEvent::RemoveTask {
                 task: "simple_1".to_owned()
             }

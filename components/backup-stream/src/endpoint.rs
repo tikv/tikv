@@ -11,7 +11,9 @@ use concurrency_manager::ConcurrencyManager;
 use dashmap::DashMap;
 use engine_traits::KvEngine;
 
+use error_code::ErrorCodeExt;
 use futures::executor::block_on;
+use kvproto::brpb::StreamBackupError;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
@@ -30,10 +32,10 @@ use crate::errors::Error;
 use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
-use crate::metrics;
 use crate::router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL};
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
+use crate::{metrics, try_send};
 
 use online_config::ConfigChange;
 use raftstore::coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider};
@@ -212,10 +214,38 @@ where
     RT: RaftStoreRouter<E> + 'static,
     PDC: PdClient + 'static,
 {
-    fn on_fatal_error(&self, _task: String, _err: Box<Error>) {
-        // This is a stub.
-        // TODO: implement the feature of reporting fatal error to the meta storage,
-        //       and pause the task then.
+    fn get_meta_client(&self) -> MetadataClient<S> {
+        self.meta_client.as_ref().unwrap().clone()
+    }
+
+    fn on_fatal_error(&self, task: String, err: Box<Error>) {
+        // Let's pause the task locally first.
+        self.on_unregister(&task);
+
+        let meta_cli = self.get_meta_client();
+        let store_id = self.store_id;
+        let sched = self.scheduler.clone();
+        self.pool.block_on(async move {
+            // TODO: also pause the task using the meta client.
+            let err_fut = async {
+                meta_cli.pause(&task).await?;
+                let mut last_error = StreamBackupError::new();
+                last_error.set_error_code(err.error_code().code.to_owned());
+                last_error.set_error_message(err.to_string());
+                last_error.set_store_id(store_id);
+                last_error.set_happen_at(TimeStamp::physical_now());
+                meta_cli.report_last_error(&task, last_error).await?;
+                Result::Ok(())
+            };
+            if let Err(err_report) = err_fut.await {
+                err_report.report(format_args!("failed to upload error {}", err_report));
+                // Let's retry reporting after 5s.
+                tokio::task::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    try_send!(sched, Task::FatalError(task, err));
+                });
+            }
+        })
     }
 
     async fn starts_flush_ticks(router: Router) {
@@ -719,7 +749,20 @@ where
         }
     }
 
-    pub fn do_backup(&mut self, events: Vec<CmdBatch>) {
+    pub fn run_task(&self, task: Task) {
+        debug!("run backup stream task"; "task" => ?task);
+        match task {
+            Task::WatchTask(op) => self.handle_watch_task(op),
+            Task::BatchEvent(events) => self.do_backup(events),
+            Task::Flush(task) => self.on_flush(task, self.store_id),
+            Task::ModifyObserve(op) => self.on_modify_observe(op),
+            Task::ForceFlush(task) => self.on_force_flush(task, self.store_id),
+            Task::FatalError(task, err) => self.on_fatal_error(task, err),
+            _ => (),
+        }
+    }
+
+    pub fn do_backup(&self, events: Vec<CmdBatch>) {
         for batch in events {
             self.backup_batch(batch)
         }
@@ -821,15 +864,6 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task);
-        match task {
-            Task::WatchTask(op) => self.handle_watch_task(op),
-            Task::BatchEvent(events) => self.do_backup(events),
-            Task::Flush(task) => self.on_flush(task, self.store_id),
-            Task::ModifyObserve(op) => self.on_modify_observe(op),
-            Task::ForceFlush(task) => self.on_force_flush(task, self.store_id),
-            Task::FatalError(task, err) => self.on_fatal_error(task, err),
-            _ => (),
-        }
+        self.run_task(task)
     }
 }

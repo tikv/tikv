@@ -6,6 +6,7 @@ const PATH_INFO: &str = "/info";
 const PATH_NEXT_BACKUP_TS: &str = "/checkpoint";
 const PATH_RANGES: &str = "/ranges";
 const PATH_PAUSE: &str = "/pause";
+const PATH_LAST_ERROR: &str = "/last-error";
 // Note: maybe use something like `const_fmt` for concatenating constant strings?
 const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 
@@ -121,6 +122,10 @@ impl MetaKey {
     /// The key for pausing some task.
     pub fn pause_of(name: &str) -> Self {
         Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
+    }
+
+    pub fn last_error_of(name: &str, store: u64) -> Self {
+        Self(format!("{}{}/{}/{}", PREFIX, PATH_LAST_ERROR, name, store).into_bytes())
     }
 
     /// return the key that keeps the range [self, self.next()) contains only

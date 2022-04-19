@@ -19,6 +19,7 @@ use crate::{
     errors::Error,
     metadata::StreamTask,
     metrics::SKIP_KV_COUNTER,
+    try_send,
     utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
@@ -60,6 +61,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 use txn_types::{Key, Lock, TimeStamp};
 
 pub const FLUSH_STORAGE_INTERVAL: u64 = 300;
+pub const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 16;
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -451,14 +453,22 @@ impl RouterInner {
         match task {
             Some(task_info) => {
                 let result = task_info.do_flush(store_id, resolve_to).await;
-                if let Err(ref e) = result {
-                    e.report("failed to flush task.");
-                    warn!("backup steam do flush fail"; "err" => ?e);
-                }
-
                 // set false to flushing whether success or fail
                 task_info.set_flushing_status(false);
                 task_info.update_flush_time();
+
+                if let Err(e) = result {
+                    e.report("failed to flush task.");
+                    warn!("backup steam do flush fail"; "err" => ?e);
+                    if task_info.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
+                        // NOTE: Maybe we'd better record all errors and send them to the client?
+                        try_send!(
+                            self.scheduler,
+                            Task::FatalError(task_name.to_owned(), Box::new(e))
+                        );
+                    }
+                    return None;
+                }
                 result.ok().flatten()
             }
             _ => None,
@@ -618,6 +628,8 @@ pub struct StreamTaskInfo {
     ///
     /// If the request failed, that thread can set it to `false` back then.
     flushing: AtomicBool,
+    /// This counts how many times this task has failed to flush.
+    flush_fail_count: AtomicUsize,
 }
 
 impl std::fmt::Debug for StreamTaskInfo {
@@ -652,6 +664,7 @@ impl StreamTaskInfo {
             flush_interval: Duration::from_secs(FLUSH_STORAGE_INTERVAL),
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
+            flush_fail_count: AtomicUsize::new(0),
         })
     }
 
@@ -835,6 +848,11 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    /// get the total count of adjacent error.
+    pub fn flush_failure_count(&self) -> usize {
+        self.flush_fail_count.load(Ordering::SeqCst)
+    }
+
     /// execute the flush: copy local files to external storage.
     /// if success, return the last resolved ts of this flush.
     /// The caller can try to advance the resolved ts and provide it to the function,
@@ -845,54 +863,65 @@ impl StreamTaskInfo {
         resolved_ts_provided: TimeStamp,
     ) -> Result<Option<u64>> {
         // do nothing if not flushing status.
-        if !self.is_flushing() {
-            return Ok(None);
+        let result: Result<Option<u64>> = async move {
+            if !self.is_flushing() {
+                return Ok(None);
+            }
+            let begin = Instant::now_coarse();
+            let mut sw = StopWatch::new();
+
+            // generate meta data and prepare to flush to storage
+            let mut metadata_info = self
+                .move_to_flushing_files()
+                .await
+                .generate_metadata(store_id)
+                .await?;
+            metadata_info.min_resolved_ts = metadata_info
+                .min_resolved_ts
+                .max(Some(resolved_ts_provided.into_inner()));
+            let rts = metadata_info.min_resolved_ts;
+            crate::metrics::FLUSH_DURATION
+                .with_label_values(&["generate_metadata"])
+                .observe(sw.lap().as_secs_f64());
+
+            // There is no file to flush, don't write the meta file.
+            if metadata_info.files.is_empty() {
+                return Ok(rts);
+            }
+
+            // flush log file to storage.
+            self.flush_log().await?;
+
+            let file_len = metadata_info.files.len();
+            let file_size = metadata_info.files.iter().fold(0, |a, d| a + d.length);
+            // flush meta file to storage.
+            self.flush_meta(metadata_info).await?;
+            crate::metrics::FLUSH_DURATION
+                .with_label_values(&["save_files"])
+                .observe(sw.lap().as_secs_f64());
+
+            // clear flushing files
+            self.clear_flushing_files().await;
+            crate::metrics::FLUSH_DURATION
+                .with_label_values(&["clear_temp_files"])
+                .observe(sw.lap().as_secs_f64());
+
+            info!("log backup flush done";
+                "files" => %file_len,
+                "total_size" => %file_size,
+                "take" => ?begin.saturating_elapsed(),
+            );
+            Ok(rts)
         }
-        let begin = Instant::now_coarse();
-        let mut sw = StopWatch::new();
+        .await;
 
-        // generate meta data and prepare to flush to storage
-        let mut metadata_info = self
-            .move_to_flushing_files()
-            .await
-            .generate_metadata(store_id)
-            .await?;
-        metadata_info.min_resolved_ts = metadata_info
-            .min_resolved_ts
-            .max(Some(resolved_ts_provided.into_inner()));
-        let rts = metadata_info.min_resolved_ts;
-        crate::metrics::FLUSH_DURATION
-            .with_label_values(&["generate_metadata"])
-            .observe(sw.lap().as_secs_f64());
-
-        // There is no file to flush, don't write the meta file.
-        if metadata_info.files.is_empty() {
-            return Ok(rts);
+        if result.is_err() {
+            self.flush_fail_count.fetch_add(1, Ordering::SeqCst);
+        } else {
+            self.flush_fail_count.store(0, Ordering::SeqCst);
         }
 
-        // flush log file to storage.
-        self.flush_log().await?;
-
-        let file_len = metadata_info.files.len();
-        let file_size = metadata_info.files.iter().fold(0, |a, d| a + d.length);
-        // flush meta file to storage.
-        self.flush_meta(metadata_info).await?;
-        crate::metrics::FLUSH_DURATION
-            .with_label_values(&["save_files"])
-            .observe(sw.lap().as_secs_f64());
-
-        // clear flushing files
-        self.clear_flushing_files().await;
-        crate::metrics::FLUSH_DURATION
-            .with_label_values(&["clear_temp_files"])
-            .observe(sw.lap().as_secs_f64());
-
-        info!("log backup flush done";
-            "files" => %file_len,
-            "total_size" => %file_size,
-            "take" => ?begin.saturating_elapsed(),
-        );
-        Ok(rts)
+        result
     }
 }
 
@@ -1357,6 +1386,18 @@ mod tests {
                 }),
             }
         }
+
+        fn with_always_error(inner: Inner) -> Self {
+            Self {
+                inner,
+                error_on_write: Box::new(move || {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "I won't let you delete my friends!",
+                    ))
+                }),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -1451,6 +1492,42 @@ mod tests {
         let ts = TimeStamp::compose(TimeStamp::physical_now(), 42);
         let rts = router.do_flush("nothing", 1, ts).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
+    }
+
+    #[tokio::test]
+    async fn test_flush_with_pausing_self() -> Result<()> {
+        test_util::init_log_for_test();
+        let (tx, rx) = dummy_scheduler();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let router = Arc::new(RouterInner::new(tmp.clone(), tx, 1));
+        let (task, _path) = task("flush_failure".to_owned()).await?;
+        must_register_table(router.as_ref(), task, 1).await;
+        router
+            .must_mut_task_info("flush_failure", |i| {
+                i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
+            })
+            .await;
+        for i in 0..=16 {
+            router.on_events(build_kv_event(i * 10, 10)).await.unwrap();
+            assert_eq!(
+                router
+                    .do_flush("flush_failure", 42, TimeStamp::zero())
+                    .await,
+                None,
+            );
+        }
+        let messages = collect_recv(rx);
+        assert!(
+            messages.iter().any(|task| {
+                if let Task::FatalError(name, _err) = task {
+                    return name == "flush_failure";
+                }
+                false
+            }),
+            "messages = {:?}",
+            messages
+        );
+        Ok(())
     }
 
     #[test]
