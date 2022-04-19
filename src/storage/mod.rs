@@ -1592,36 +1592,38 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
                 let read_id = Some(ThreadReadId::new());
                 let mut snaps = vec![];
-                for (req, id) in gets.into_iter().zip(ids) {
+                for (mut req, id) in gets.into_iter().zip(ids) {
+                    let ctx = req.take_context();
+                    let key = Api::encode_raw_key_owned(req.take_key(), None);
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Don't place in loop of `snaps`, otherwise `snap.wait` may run in another thread,
+                    // and cause the `thread-local` statistics unstable for test.
+                    tls_collect_query(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        key.as_encoded(),
+                        key.as_encoded(),
+                        false,
+                        QueryKind::Get,
+                    );
+
                     let snap_ctx = SnapContext {
-                        pb_ctx: req.get_context(),
+                        pb_ctx: &ctx,
                         read_id: read_id.clone(),
                         ..Default::default()
                     };
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
-                    snaps.push((id, req, snap));
+                    snaps.push((id, key, ctx, req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 let begin_instant = Instant::now_coarse();
-                for (id, mut req, snap) in snaps {
-                    let ctx = req.take_context();
+                for (id, key, ctx, mut req, snap) in snaps {
                     let cf = req.take_cf();
-                    let key = req.take_key();
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
                             let buckets = snapshot.ext().get_buckets();
                             let store = RawStore::new(snapshot, api_version);
-                            let key = Api::encode_raw_key_owned(key, None);
-                            // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
-                            tls_collect_query(
-                                ctx.get_region_id(),
-                                ctx.get_peer(),
-                                key.as_encoded(),
-                                key.as_encoded(),
-                                false,
-                                QueryKind::Get,
-                            );
                             match Self::rawkv_cf(&cf, api_version) {
                                 Ok(cf) => {
                                     consumer.consume(
@@ -1711,8 +1713,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                     let mut stats = Statistics::default();
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
-                        .map(|k| Api::encode_raw_key_owned(k, None))
                         .map(|k| {
+                            let k = Api::encode_raw_key_owned(k, None);
                             let mut s = Statistics::default();
                             let v = store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
                             tls_collect_read_flow(
@@ -1878,6 +1880,14 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         Ok(())
     }
 
+    fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>) -> Modify {
+        let key = Api::encode_raw_key_owned(key, None);
+        match Api::TAG {
+            ApiVersion::V2 => Modify::Put(cf, key, APIV2::ENCODED_LOGICAL_DELETE.to_vec()),
+            _ => Modify::Delete(cf, key),
+        }
+    }
+
     /// Delete a raw key from the storage.
     /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_delete(
@@ -1896,24 +1906,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
-        let m = match self.api_version {
-            ApiVersion::V2 => {
-                let raw_value = RawValue {
-                    user_value: vec![],
-                    expire_ts: None,
-                    is_delete: true,
-                };
-                Modify::Put(
-                    Self::rawkv_cf(&cf, self.api_version)?,
-                    APIV2::encode_raw_key_owned(key, None),
-                    APIV2::encode_raw_value_owned(raw_value),
-                )
-            }
-            _ => Modify::Delete(
-                Self::rawkv_cf(&cf, self.api_version)?,
-                Key::from_encoded(key),
-            ),
-        };
+        let m = Self::raw_delete_request_to_modify(Self::rawkv_cf(&cf, self.api_version)?, key);
         let mut batch = WriteData::from_modifies(vec![m]);
         batch.set_allowed_on_disk_almost_full();
 
@@ -1964,28 +1957,6 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         Ok(())
     }
 
-    fn raw_batch_delete_requests_to_modifies(cf: CfName, keys: Vec<Vec<u8>>) -> Vec<Modify> {
-        keys.into_iter()
-            .map(|k| match Api::TAG {
-                ApiVersion::V1 | ApiVersion::V1ttl => {
-                    Modify::Delete(cf, Api::encode_raw_key_owned(k, None))
-                }
-                ApiVersion::V2 => {
-                    let raw_value = RawValue {
-                        user_value: vec![],
-                        expire_ts: None,
-                        is_delete: true,
-                    };
-                    Modify::Put(
-                        cf,
-                        Api::encode_raw_key_owned(k, None),
-                        Api::encode_raw_value_owned(raw_value),
-                    )
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
     /// Delete some raw keys in a batch.
     /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_batch_delete(
@@ -2005,7 +1976,10 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
-        let modifies = Self::raw_batch_delete_requests_to_modifies(cf, keys);
+        let modifies = keys
+            .into_iter()
+            .map(|k| Self::raw_delete_request_to_modify(cf, k))
+            .collect();
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
 
@@ -2453,7 +2427,10 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let modifies = Self::raw_batch_delete_requests_to_modifies(cf, keys);
+        let modifies = keys
+            .into_iter()
+            .map(|k| Self::raw_delete_request_to_modify(cf, k))
+            .collect();
         let cmd = RawAtomicStore::new(cf, modifies, ctx);
         self.sched_txn_command(cmd, callback)
     }
@@ -2831,22 +2808,12 @@ impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
         self
     }
 
-    fn register_causal_observer(&mut self) {
-        if let (ApiVersion::V2, Some(coprocessor)) = (Api::TAG, self.engine.mut_coprocessor()) {
-            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(coprocessor);
-        }
-    }
-
     /// Build a `Storage<E>`.
-    pub fn build(mut self) -> Result<Storage<E, L, Api>> {
+    pub fn build(self) -> Result<Storage<E, L, Api>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        // invoke here, as there are two entries to create `TestStorageBuilder` (`new` & `from_engine_and_lock_mgr`)
-        self.register_causal_observer();
 
         Storage::from_engine(
             self.engine,

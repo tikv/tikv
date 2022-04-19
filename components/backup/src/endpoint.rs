@@ -1513,9 +1513,9 @@ pub mod tests {
         format!("v_{}", generate_test_raw_key(idx))
     }
 
-    fn generate_engine_test_key(user_key: String, ts: u64, api_ver: ApiVersion) -> Key {
+    fn generate_engine_test_key(user_key: String, ts: Option<TimeStamp>, api_ver: ApiVersion) -> Key {
         dispatch_api_version!(api_ver, {
-            return API::encode_raw_key_owned(user_key.into_bytes(), Some(ts.into()));
+            return API::encode_raw_key_owned(user_key.into_bytes(), ts);
         })
     }
 
@@ -1545,7 +1545,7 @@ pub mod tests {
         {
             let mut dst_key = raw_key;
             dst_key.insert(0, RAW_KEY_PREFIX as char);
-            return generate_engine_test_key(dst_key, BACKUP_V1_TO_V2_TS, dst_ver);
+            return generate_engine_test_key(dst_key, Some(BACKUP_V1_TO_V2_TS.into()), dst_ver);
         }
         Key::from_encoded(raw_key.into_bytes())
     }
@@ -1567,15 +1567,13 @@ pub mod tests {
         let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true);
         let engine = endpoint.engine.clone();
 
-        let start_key_idx = 0;
-        let end_key_idx = 10;
+        let start_key_idx = 100;
+        let end_key_idx = 111;
         endpoint.region_info.set_regions(vec![(
             generate_test_raw_key(start_key_idx).into_bytes(),
             generate_test_raw_key(end_key_idx).into_bytes(),
             1,
         )]);
-        let start_key_idx = 0;
-        let end_key_idx = 10;
         let ctx = Context::default();
         let mut i = start_key_idx;
         let digest = crc64fast::Digest::new();
@@ -1583,7 +1581,7 @@ pub mod tests {
         while i < end_key_idx {
             let key_str = generate_test_raw_key(i);
             let value_str = generate_test_raw_value(i);
-            let key = generate_engine_test_key(key_str.clone(), i as u64, cur_api_ver);
+            let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
             let dst_key = convert_test_backup_raw_key(key_str, i as u64, cur_api_ver, dst_api_ver);
             let dst_value = convert_test_backup_raw_value(value_str, cur_api_ver, dst_api_ver);
@@ -1631,7 +1629,7 @@ pub mod tests {
         let kv_backup_size = {
             let raw_key_str = generate_test_raw_key(0);
             let raw_value_str = generate_test_raw_value(0);
-            let backup_key = convert_test_backup_raw_key(raw_key_str, 0, cur_api_ver, dst_api_ver);
+            let backup_key = convert_test_backup_raw_key(raw_key_str, 1, cur_api_ver, dst_api_ver);
             let backup_value =
                 convert_test_backup_raw_value(raw_value_str, cur_api_ver, dst_api_ver);
             backup_key.len() + backup_value.len()

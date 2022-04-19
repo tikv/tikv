@@ -28,9 +28,8 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
         iter_opt.set_fill_cache(opts.map_or(true, |v| v.fill_cache()));
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
-        let mut end_key = key.clone().append_ts(TimeStamp::zero()).into_encoded();
-        end_key.push(0); // `end_key` is inclusive.
-        iter_opt.set_vec_upper_bound(end_key, DATA_KEY_PREFIX_LEN);
+        let upper_bound = key.clone().append_ts(TimeStamp::zero()).into_encoded();
+        iter_opt.set_vec_upper_bound(upper_bound, DATA_KEY_PREFIX_LEN);
         let mut iter = match cf {
             Some(cf_name) => self.iter_cf(cf_name, iter_opt)?,
             None => self.iter(iter_opt)?,
@@ -248,7 +247,7 @@ mod tests {
     use api_version::{APIVersion, RawValue, APIV2};
     use engine_traits::raw_ttl::ttl_to_expire_ts;
     use engine_traits::CF_DEFAULT;
-    use kvproto::kvrpcpb::{ApiVersion, Context};
+    use kvproto::kvrpcpb::Context;
     use std::fmt::Debug;
     use std::iter::Iterator as StdIterator;
     use std::sync::mpsc::{channel, Sender};
@@ -263,16 +262,11 @@ mod tests {
 
     #[test]
     fn test_raw_mvcc_snapshot() {
-        let engine = TestEngineBuilder::new() // Use `TestEngine` to be independent to `Storage`.
-            .api_version(ApiVersion::V2)
-            .build()
-            .unwrap();
-
+        // Use `Engine` to be independent to `Storage`.
+        // Do not set "api version" to use `Engine` as a raw RocksDB.
+        let engine = TestEngineBuilder::new().build().unwrap();
         let (tx, rx) = channel();
-        let ctx = Context {
-            api_version: ApiVersion::V2,
-            ..Default::default()
-        };
+        let ctx = Context::default();
 
         // TODO: Consider another way other than hard coding, to generate keys' prefix of test data.
         let test_data = vec![

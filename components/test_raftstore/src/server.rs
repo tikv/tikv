@@ -278,6 +278,12 @@ impl ServerCluster {
         }
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
+        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
+            for hook in hooks {
+                hook(&mut coprocessor_host);
+            }
+        }
+
         // Create storage.
         let pd_worker = LazyWorker::new("test-pd-worker");
         let pd_sender = pd_worker.scheduler();

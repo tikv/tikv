@@ -168,13 +168,12 @@ impl<T: Simulator> Cluster<T> {
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
     ) -> Cluster<T> {
-        let cfg = Config {
-            tikv: new_tikv_config_with_api_ver(id, api_version),
-            prefer_mem: true,
-        };
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
-            cfg,
+            cfg: Config {
+                tikv: new_tikv_config_with_api_ver(id, api_version),
+                prefer_mem: true,
+            },
             leaders: HashMap::default(),
             count,
             paths: vec![],
