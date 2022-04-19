@@ -631,7 +631,6 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.recovery_read_block_size.0 = ReadableSize::kb(1).0;
     raft_engine_config.recovery_threads = 2;
     value.storage = StorageConfig {
-        background_error_recovery_window: ReadableDuration::hours(24),
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
         max_key_size: 4096,
@@ -674,6 +673,7 @@ fn test_serde_custom_tikv_config() {
             export_priority: IOPriority::High,
             other_priority: IOPriority::Low,
         },
+        background_error_recovery_window: ReadableDuration::hours(24),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

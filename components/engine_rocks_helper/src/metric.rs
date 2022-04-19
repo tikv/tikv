@@ -9,4 +9,9 @@ lazy_static! {
         "Number of rocksdb damaged sst files waiting for recovery"
     )
     .unwrap();
+    pub static ref TIKV_ROCKSDB_DAMAGED_FILES_DELETED: IntCounter = register_int_counter!(
+        "tikv_rocksdb_damaged_files_deleted",
+        "Number of rocksdb damaged sst files deleted by sst recovery"
+    )
+    .unwrap();
 }

@@ -135,7 +135,7 @@ impl rocksdb::EventListener for RocksEventListener {
                         match scheduler.schedule(path) {
                             Ok(()) => {
                                 status.reset();
-                                CRITICAL_ERROR.with_label_values(&["sst corruption"]).inc();
+                                CRITICAL_ERROR.with_label_values(&["sst_corruption"]).inc();
                                 return;
                             }
                             Err(e) => {

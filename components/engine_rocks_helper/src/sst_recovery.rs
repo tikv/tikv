@@ -4,7 +4,7 @@ use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::metric::TIKV_ROCKSDB_DAMAGED_FILES;
+use crate::metric::*;
 use engine_rocks::raw::*;
 use fail::fail_point;
 use raftstore::store::fsm::StoreMeta;
@@ -107,7 +107,7 @@ impl RecoveryRunner {
         self.damaged_files.iter().any(|f| f.name == sst_path)
     }
 
-    // Periodically check for recorded damaged files。
+    // Cleans up obsolete damaged files and panics if some files are not handled in time.
     //
     // Acquire meta lock.
     fn check_damaged_files(&mut self) {
@@ -166,8 +166,9 @@ impl RecoveryRunner {
             }
         } else {
             fail_point!("sst_recovery_before_delete_files");
-            // The sst file can be deleted safely.
-            // set `include_end` to `true` otherwise the file with the same largest key will be skipped.
+            // The sst file can be deleted safely and set `include_end` to `true` otherwise the
+            // file with the same largest key will be skipped.
+            // Here store meta lock should be held to prevent peers from being added back.
             self.db
                 .delete_files_in_range(&file.smallest_key, &file.largest_key, true)
                 .unwrap();
@@ -177,6 +178,7 @@ impl RecoveryRunner {
                     "Failed to delete the corrupted sst file",
                 );
             }
+            TIKV_ROCKSDB_DAMAGED_FILES_DELETED.inc();
         }
 
         overlap
@@ -212,7 +214,7 @@ mod tests {
 
         db.put(b"z2", b"val").unwrap();
         db.put(b"z7", b"val").unwrap();
-        // generate SST file range from z3 to z8
+        // generate SST file.
         db.compact_range(None, None);
 
         let files = db.get_live_files();
