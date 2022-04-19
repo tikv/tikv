@@ -1922,7 +1922,7 @@ mod tests {
 
         // A retried prewrite of the first transaction should be idempotent.
         let prewrite_cmd = Prewrite::new(
-            vec![Mutation::make_put(Key::from_raw(k1), v1.to_vec())],
+            vec![Mutation::Put((Key::from_raw(k1), v1.to_vec()))],
             k1.to_vec(),
             5.into(),
             2000,
@@ -1932,7 +1932,6 @@ mod tests {
             1000.into(),
             Some(vec![]),
             false,
-            AssertionLevel::Off,
             Context::default(),
         );
         let context = WriteContext {
