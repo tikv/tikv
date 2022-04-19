@@ -212,24 +212,18 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    /// Disable this feature by set to 0, logic will be removed in other pr.
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
-    /// increasing. For raftstore layer entries will be evicted from entry cache, if they
-    /// utilize memory more than `evict_cache_on_memory_ratio` * total.
-    ///
-    /// Set it to 0 can disable cache evict.
-    // By default it's 0.2. So for different system memory capacity, cache evict happens:
-    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
-    // * system=16G, memory_usage_limit=12G, evict=2.4G
-    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    /// increasing. For raftstore layer entries that have been applied will be evicted from
+    /// entry cache as soon as possible, if they utilize memory more than
+    /// `evict_cache_on_memory_ratio` * total.
+    /// Set it to 0 can disable cache evict. By default it's 0.15. The recommended
+    /// configuration values for different memory specifications are as follows:
+    /// total memory    suggested value
+    ///     (0, 30]           0.1
+    ///     [30, 100]        0.15
+    ///     [100, )          0.20
+    /// Too huge value will not always get a better performance.
     pub evict_cache_on_memory_ratio: f64,
-
-    #[doc(hidden)]
-    #[online_config(skip)]
-    /// When TiKV memory usage reaches `memory_usage_high_water`, we will try to reject the incoming
-    /// logappend entries, as well as to reclaim the leader entry cache that has been applied, if the
-    /// total log entry cache size exceeds `force_reclaim_leader_entry_cache_ratio` * total.
-    pub force_reclaim_leader_entry_cache_ratio: f64,
 
     pub cmd_batch: bool,
 
@@ -352,8 +346,7 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::EnableTime,
-            evict_cache_on_memory_ratio: 0.1,
-            force_reclaim_leader_entry_cache_ratio: 0.1,
+            evict_cache_on_memory_ratio: 0.15,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -611,17 +604,11 @@ impl Config {
             );
         }
 
-        if self.evict_cache_on_memory_ratio < 0.0 || self.evict_cache_on_memory_ratio > 0.15 {
+        if self.evict_cache_on_memory_ratio < 0.0 || self.evict_cache_on_memory_ratio > 0.3 {
             return Err(box_err!(
-                "evict_cache_on_memory_ratio must be limited into 0.0-0.15 than 0"
-            ));
-        }
-
-        if self.force_reclaim_leader_entry_cache_ratio < 0.0
-            || self.force_reclaim_leader_entry_cache_ratio > 0.15
-        {
-            return Err(box_err!(
-                "force_reclaim_leader_entry_cache_ratio must be limited into 0.0-0.15"
+                "evict_cache_on_memory_ratio must be limited into [0, 0.3]. \
+                For total memory < 30G, 0.1 suggested; For total memory > 30G, 0.15 suggested.\
+                More huge is not suggested."
             ));
         }
 

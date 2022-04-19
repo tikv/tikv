@@ -222,7 +222,6 @@ fn test_serde_custom_tikv_config() {
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
-        force_reclaim_leader_entry_cache_ratio: 0.8,
         cmd_batch: false,
         cmd_batch_concurrent_ready_max_count: 123,
         raft_write_size_limit: ReadableSize::mb(34),
