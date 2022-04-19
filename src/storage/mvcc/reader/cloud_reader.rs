@@ -132,8 +132,8 @@ impl CloudReader {
         self.statistics.write.processed_keys += 1;
         self.statistics.processed_size += raw_key.len() + item.value_len();
         if item.user_meta_len() > 0 {
-            let (write, commit_ts) = parse_write(item);
-            return Ok(Some((TimeStamp::new(commit_ts), write.to_owned())));
+            let (commit_ts, write) = parse_write(item);
+            return Ok(Some((commit_ts, write.to_owned())));
         }
         return Ok(None);
     }
@@ -215,18 +215,17 @@ impl CloudReader {
         Ok((locks, false))
     }
 
-    pub fn get_newer(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Write>> {
+    pub fn get_newer(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         let raw_key = key.to_raw()?;
         let item = self.snapshot.get_newer(WRITE_CF, &raw_key, ts.into_inner());
         if item.user_meta_len() > 0 {
-            let (write, _) = parse_write(item);
-            return Ok(Some(write));
+            return Ok(Some(parse_write(item)));
         }
         return Ok(None);
     }
 }
 
-fn parse_write(item: kvengine::Item) -> (Write, u64) {
+fn parse_write(item: kvengine::Item) -> (TimeStamp, Write) {
     let user_meta = UserMeta::from_slice(item.user_meta());
     let commit_ts = user_meta.commit_ts;
     let write_type: WriteType;
@@ -239,7 +238,7 @@ fn parse_write(item: kvengine::Item) -> (Write, u64) {
         short_value = Some(item.get_value().to_vec())
     }
     (
+        TimeStamp::new(commit_ts),
         Write::new(write_type, TimeStamp::new(user_meta.start_ts), short_value),
-        commit_ts,
     )
 }

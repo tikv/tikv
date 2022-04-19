@@ -314,11 +314,13 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<Write>> {
-        if reader.cloud_reader.is_some() {
+        let opt_write = if !self.should_not_exist && reader.cloud_reader.is_some() {
             let cloud_reader = reader.cloud_reader.as_mut().unwrap();
-            return cloud_reader.get_newer(&self.key, self.txn_props.start_ts);
-        }
-        match reader.seek_write(&self.key, TimeStamp::max())? {
+            cloud_reader.get_newer(&self.key, self.txn_props.start_ts)?
+        } else {
+            reader.seek_write(&self.key, TimeStamp::max())?
+        };
+        match opt_write {
             Some((commit_ts, write)) => {
                 // Abort on writes after our start timestamp ...
                 // If exists a commit version whose commit timestamp is larger than current start
