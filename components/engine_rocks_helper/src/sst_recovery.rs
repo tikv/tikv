@@ -8,6 +8,7 @@ use crate::metric::*;
 use engine_rocks::raw::*;
 use fail::fail_point;
 use raftstore::store::fsm::StoreMeta;
+use tikv_util::warn;
 use tikv_util::{self, set_panic_mark, worker::*};
 
 pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(10);
@@ -156,6 +157,14 @@ impl RecoveryRunner {
         let overlap = should_overlap().unwrap_or(!ids.is_empty());
 
         if overlap {
+            warn!(
+                "detected damaged regions overlapping with corrupted file";
+                "region_ids" => ?&ids,
+                "file" => &file.name,
+                "smallest_key" => ?&file.smallest_key,
+                "largest_key" => ?&file.largest_key,
+            );
+
             // damaged file context should be updated.
             for id in ids {
                 meta.damaged_regions_id.insert(id);
@@ -178,7 +187,14 @@ impl RecoveryRunner {
                     "Failed to delete the corrupted sst file",
                 );
             }
+
             TIKV_ROCKSDB_DAMAGED_FILES_DELETED.inc();
+            warn!(
+                "damaged file has been deleted";
+                "file" => &file.name,
+                "smallest_key" => ?&file.smallest_key,
+                "largest_key" => ?&file.largest_key,
+            );
         }
 
         overlap

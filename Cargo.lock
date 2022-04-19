@@ -1423,6 +1423,8 @@ dependencies = [
  "prometheus",
  "protobuf",
  "raftstore",
+ "slog",
+ "slog-global",
  "tempfile",
  "tikv_util",
 ]
