@@ -54,6 +54,8 @@ if [[ -n "$X_RUSTFLAGS" ]]; then
     export RUSTFLAGS="$RUSTFLAGS $X_RUSTFLAGS"
 fi
 
+export RUSTFLAGS="$RUSTFLAGS -Cforce-frame-pointers=yes"
+
 if [[ -n "$X_DEBUG" ]]; then
     export CARGO_PROFILE_DEV_DEBUG="true"
     export CARGO_PROFILE_RELEASE_DEBUG="true"
