@@ -1180,7 +1180,7 @@ pub fn check_compacted(
     }
 
     // wait for actual deletion.
-    sleep_ms(100);
+    sleep_ms(250);
 
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {

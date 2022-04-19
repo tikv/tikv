@@ -89,7 +89,7 @@ fn test_node_async_fetch() {
         must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
     }
 
-    for i in 60..200u32 {
+    for i in 60..500u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
         cluster.must_put(&k, &v);
