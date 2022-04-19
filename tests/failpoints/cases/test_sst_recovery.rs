@@ -18,44 +18,90 @@ fn test_sst_recovery_basic() {
     let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
     // Test that only sst recovery can delete the sst file, remove peer don't delete it.
-    fail::cfg("sst_recovery_should_overlap", "return(true)").unwrap();
+    fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
 
     // Remove peers for safe deletion of files in sst recovery.
-    let region = cluster.get_region(b"3");
+    let region = cluster.get_region(b"2");
     let peer = find_peer(&region, 1).unwrap();
     pd_client.must_remove_peer(region.id, peer.clone());
-    let region = cluster.get_region(b"5");
+    let region = cluster.get_region(b"4");
     let peer = find_peer(&region, 1).unwrap();
     pd_client.must_remove_peer(region.id, peer.clone());
 
+    // Read from other store must success.
+    assert_eq!(cluster.must_get(b"4").unwrap(), b"val");
+
     std::thread::sleep(CHECK_DURATION);
+
     assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val");
     assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val");
     assert!(engine1.get(b"z4").unwrap_err().contains("Corruption"));
 
-    fail::remove("sst_recovery_should_overlap");
+    fail::remove("sst_recovery_before_delete_files");
     std::thread::sleep(CHECK_DURATION);
 
     assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val");
     assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val");
     assert!(engine1.get(b"z4").unwrap().is_none());
 
+    // Damaged file has been deleted.
+    let files = engine1.get_live_files();
+    assert_eq!(files.get_files_count(), 2);
+
     // only store 1 remove peer so key "4" should be accessed by cluster.
     assert_eq!(cluster.must_get(b"4").unwrap(), b"val");
 }
 
 #[test]
+fn test_sst_recovery_overlap_range_sst_exist() {
+    let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
+
+    // create a new sst [1,7] flushed to L0.
+    cluster.must_put_cf(CF_DEFAULT, b"1", b"val_1");
+    cluster.must_put_cf(CF_DEFAULT, b"4", b"val_1");
+    cluster.must_put_cf(CF_DEFAULT, b"7", b"val_1");
+    cluster.flush_data();
+
+    let files = engine1.get_live_files();
+    assert_eq!(files.get_files_count(), 4);
+
+    // Remove peers for safe deletion of files in sst recovery.
+    let region = cluster.get_region(b"2");
+    let peer = find_peer(&region, 1).unwrap();
+    pd_client.must_remove_peer(region.id, peer.clone());
+    let region = cluster.get_region(b"4");
+    let peer = find_peer(&region, 1).unwrap();
+    pd_client.must_remove_peer(region.id, peer.clone());
+
+    // Peer has been removed from store 1 so it won't get this replica.
+    cluster.must_put_cf(CF_DEFAULT, b"4", b"val_2");
+
+    std::thread::sleep(CHECK_DURATION);
+    assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val_1");
+    assert_eq!(&engine1.get(b"z4").unwrap().unwrap().to_owned(), b"val_1");
+    assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val_1");
+
+    // Validate the damaged sst has been deleted.
+    compact_files_to_target_level(&engine1, true, 3).unwrap();
+    let files = engine1.get_live_files();
+    assert_eq!(files.get_files_count(), 1);
+
+    must_get_equal(&engine1, b"4", b"val_1");
+    assert_eq!(cluster.must_get(b"4").unwrap(), b"val_2");
+}
+
+#[test]
 fn test_sst_recovery_atomic_when_adding_peer() {
-    let (cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
+    let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
     // To validate atomic of sst recovery.
     fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
 
     // Remove peers for safe deletion of files in sst recovery.
-    let region = cluster.get_region(b"3");
+    let region = cluster.get_region(b"2");
     let peer = find_peer(&region, 1).unwrap();
     pd_client.must_remove_peer(region.id, peer.clone());
-    let region = cluster.get_region(b"5");
+    let region = cluster.get_region(b"4");
     let peer = find_peer(&region, 1).unwrap();
     pd_client.must_remove_peer(region.id, peer.clone());
 
@@ -70,21 +116,10 @@ fn test_sst_recovery_atomic_when_adding_peer() {
     pd_client.must_add_peer(region.id, new_peer(1, 1099));
 
     // store meta should be locked in sst recovery so conf change can't be finished.
-    assert!(!region_exist_with_timeout(
-        &cluster,
-        region.id,
-        1,
-        Duration::from_millis(1000)
-    ));
-
+    cluster.must_region_not_exist(region.id, 1);
     fail::remove("sst_recovery_before_delete_files");
     std::thread::sleep(CHECK_DURATION);
-    assert!(region_exist_with_timeout(
-        &cluster,
-        region.id,
-        1,
-        Duration::from_millis(1000)
-    ));
+    cluster.must_region_exist(region.id, 1);
 
     must_get_equal(&engine1, b"3", b"val");
 }
@@ -98,22 +133,28 @@ fn disturb_sst_file(path: &Path) {
 }
 
 // To trigger compaction and test background error.
-fn compact_files_to_bottom(engine: &Arc<DB>, files: Vec<String>) -> Result<(), String> {
-    let handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
-    // output_level should be from 0 to 6.
-    engine.compact_files_cf(handle, &CompactionOptions::new(), &files, 2)
-}
+// set `compact_all` to `false` only compact the latest flushed file.
+fn compact_files_to_target_level(
+    engine: &Arc<DB>,
+    compact_all: bool,
+    level: i32,
+) -> Result<(), String> {
+    let files = engine.get_live_files();
+    let mut file_names = vec![];
+    if compact_all {
+        for i in 0..files.get_files_count() {
+            let mut name = files.get_name(i as _);
+            name.remove(0);
+            file_names.push(name);
+        }
+    } else {
+        let mut name = files.get_name(0);
+        name.remove(0);
+        file_names.push(name);
+    }
 
-// Test if the region exists on that store.
-fn region_exist_with_timeout(
-    cluster: &Cluster<ServerCluster>,
-    region_id: u64,
-    store_id: u64,
-    timeout: Duration,
-) -> bool {
-    let find_leader = new_status_request(region_id, new_peer(store_id, 0), new_region_leader_cmd());
-    let resp = cluster.call_command(find_leader, timeout).unwrap();
-    !is_error_response(&resp)
+    let handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
+    engine.compact_files_cf(handle, &CompactionOptions::new(), &file_names, level)
 }
 
 fn create_tikv_cluster_with_one_node_damaged()
@@ -150,29 +191,20 @@ fn create_tikv_cluster_with_one_node_damaged()
     cluster.must_put_cf(CF_DEFAULT, b"1", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"2", b"val");
     cluster.flush_data();
-    let files = engine1.get_live_files();
-    let mut file_name = files.get_name(0);
-    file_name.remove(0);
-    compact_files_to_bottom(&engine1, vec![file_name]).unwrap();
+    compact_files_to_target_level(&engine1, false, 2).unwrap();
 
     // create a sst [3,5]
     cluster.must_put_cf(CF_DEFAULT, b"3", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"4", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"5", b"val");
     cluster.flush_data();
-    let files = engine1.get_live_files();
-    let mut file_name = files.get_name(0);
-    file_name.remove(0);
-    compact_files_to_bottom(&engine1, vec![file_name]).unwrap();
+    compact_files_to_target_level(&engine1, false, 2).unwrap();
 
     // create a sst [6,7]
     cluster.must_put_cf(CF_DEFAULT, b"6", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"7", b"val");
     cluster.flush_data();
-    let files = engine1.get_live_files();
-    let mut file_name = files.get_name(0);
-    file_name.remove(0);
-    compact_files_to_bottom(&engine1, vec![file_name]).unwrap();
+    compact_files_to_target_level(&engine1, false, 2).unwrap();
 
     let region = cluster.get_region(b"2");
     cluster.must_split(&region, b"2");
@@ -195,16 +227,9 @@ fn create_tikv_cluster_with_one_node_damaged()
         .join(file_name.clone());
     disturb_sst_file(&sst_path);
 
-    let files = engine1.get_live_files();
-    let mut file_names = vec![];
-    for i in 0..files.get_files_count() {
-        let mut name = files.get_name(i as _);
-        name.remove(0);
-        file_names.push(name);
-    }
     // The sst file is damaged, so this action will fail.
     assert!(
-        compact_files_to_bottom(&engine1, file_names)
+        compact_files_to_target_level(&engine1, true, 3)
             .unwrap_err()
             .contains("Corruption")
     );

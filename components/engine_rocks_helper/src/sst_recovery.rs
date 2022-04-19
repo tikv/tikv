@@ -152,14 +152,7 @@ impl RecoveryRunner {
             }
         }
 
-        let should_overlap = || {
-            fail_point!("sst_recovery_should_overlap", |t| -> Option<bool> {
-                Some(t.unwrap().parse::<bool>().unwrap())
-            });
-            None
-        };
-        let overlap = should_overlap().unwrap_or(!ids.is_empty());
-
+        let overlap = !ids.is_empty();
         if overlap {
             warn!(
                 "detected damaged regions overlapping with corrupted file";
