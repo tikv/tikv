@@ -72,7 +72,8 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
         for m in batch.get_pairs().iter() {
             dispatch_api_version!(self.api_version, {
-                if API::parse_key_mode(m.get_key()) == KeyMode::Raw {
+                let key_mode = API::parse_key_mode(m.get_key());
+                if key_mode == KeyMode::Raw {
                     return Err(Error::InvalidKeyMode {
                         storage_api_version: self.api_version,
                         writer: SstWriterType::Txn,
@@ -369,22 +370,15 @@ mod tests {
         dispatch_api_version!(api_version, {
             // put value
             let mut pair = Pair::default();
-            pair.set_key(
-                API::encode_raw_key(key1, Some(TimeStamp::new(0)))
-                    .as_encoded()
-                    .to_vec(),
-            );
+            pair.set_op(PairOp::Put);
+            pair.set_key(key1.to_vec());
             pair.set_value(b"short_value".to_vec());
             pairs.push(pair);
 
             // delete value
             let mut pair = Pair::default();
-            pair.set_key(
-                API::encode_raw_key(key2, Some(TimeStamp::new(0)))
-                    .as_encoded()
-                    .to_vec(),
-            );
             pair.set_op(PairOp::Delete);
+            pair.set_key(key2.to_vec());
             pairs.push(pair);
 
             // generate meta
@@ -395,7 +389,7 @@ mod tests {
             assert_eq!(w.default_deletes, 1);
             match api_version {
                 ApiVersion::V1ttl => {
-                    // ttl takes 8 more bytes
+                    // ttl takes i more bytes
                     assert_eq!(
                         w.default_bytes as usize,
                         b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
@@ -405,7 +399,9 @@ mod tests {
                     // ttl takes 8 more bytes and meta take 1 more byte
                     assert_eq!(
                         w.default_bytes as usize,
-                        b"zk1".len() + b"short_value".len() + b"zk2".len() + 9
+                        (b"z".len()
+                            + Key::from_raw(b"rk1").as_encoded().len() + 8)
+                            + (b"short_value".len() + 9) + (b"z".len() + Key::from_raw(b"rk2").as_encoded().len() + 8)
                     );
                 }
                 _ => unreachable!(),
