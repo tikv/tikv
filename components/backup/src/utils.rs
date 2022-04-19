@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::metrics::*;
-use crate::Result;
+use crate::{Error, Result};
 use api_version::{dispatch_api_version, APIVersion, KeyMode};
 use file_system::IOType;
 use futures::Future;
@@ -12,7 +12,7 @@ use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use txn_types::{Key, TimeStamp};
 
-use tikv_util::error;
+use tikv_util::{box_err, error};
 
 // use 1 as timestamp as ts is desc encoded in key,
 // when seeking, use user_key+0 as the ending key(exclusive), so 0 should not be used.
@@ -169,20 +169,53 @@ impl KeyValueCodec {
         self.is_raw_kv && self.cur_api_ver == ApiVersion::V2
     }
 
-    pub fn encode_backup_key(key: Vec<u8>, is_raw_kv: bool, api_ver: ApiVersion) -> Option<Key> {
+    pub fn encode_backup_key(&self, key: Vec<u8>) -> Option<Key> {
         if key.is_empty() {
             return None;
         }
-        if !is_raw_kv || api_ver == ApiVersion::V2 {
+        if !self.is_raw_kv || self.cur_api_ver == ApiVersion::V2 {
             return Some(Key::from_raw(&key));
         }
         Some(Key::from_encoded(key))
     }
 
-    pub fn decode_backup_key(key: Key, is_raw_kv: bool, api_ver: ApiVersion) -> Vec<u8> {
-        if !is_raw_kv || api_ver == ApiVersion::V2 {
-            return key.into_raw().unwrap();
+    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst apiversion key。
+    // If key is empty, return [r, s).
+    pub fn decode_to_dst_backup_key(&self, key: Option<Key>, is_end_key: bool) -> Result<Vec<u8>> {
+        if key.is_none() {
+            return self.convert_empty_backup_key(is_end_key);
         }
-        key.into_encoded()
+        let key = key.unwrap();
+        let mut raw_key = if !self.is_raw_kv || self.cur_api_ver == ApiVersion::V2 {
+            key.into_raw()?
+        } else {
+            key.into_encoded()
+        };
+        if !self.is_raw_kv || self.cur_api_ver == self.dst_api_ver {
+            return Ok(raw_key);
+        } else if self.dst_api_ver == ApiVersion::V2 {
+            raw_key.insert(0, b'r');
+            return Ok(raw_key);
+        }
+        return Err(Error::Other(box_err!("unsupported api version conversion")));
+    }
+
+    fn convert_empty_backup_key(&self, is_end: bool) -> Result<Vec<u8>> {
+        if self.cur_api_ver == self.dst_api_ver {
+            if self.cur_api_ver != ApiVersion::V2 {
+                return Ok(vec![]);
+            } else {
+                return Err(Error::Other(box_err!(
+                    "apiv2 backup key should not be empty"
+                )));
+            }
+        } else if self.dst_api_ver == ApiVersion::V2 {
+            if is_end {
+                return Ok(vec![b's']);
+            } else {
+                return Ok(vec![b'r']);
+            }
+        }
+        return Err(Error::Other(box_err!("unsupported api version conversion")));
     }
 }

@@ -531,15 +531,11 @@ impl BackupRange {
             Err(e) => return Err(e),
         };
         let start_key = self
-            .start_key
-            .clone()
-            .map(Key::into_encoded)
-            .unwrap_or_default();
+            .codec
+            .decode_to_dst_backup_key(self.start_key.clone(), false)?;
         let end_key = self
-            .end_key
-            .clone()
-            .map(Key::into_encoded)
-            .unwrap_or_default();
+            .codec
+            .decode_to_dst_backup_key(self.end_key.clone(), true)?;
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
@@ -824,7 +820,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
         let limit = self.softlimit.limit();
-        let cur_api_version = self.api_version;
 
         self.pool.borrow_mut().spawn(async move {
             loop {
@@ -869,7 +864,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // TODO: make file_name unique and short
                     let key = brange.start_key.clone().and_then(|k| {
                         // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = KeyValueCodec::decode_backup_key(k, is_raw_kv, cur_api_version);
+                        let input = brange.codec.decode_to_dst_backup_key(Some(k), false).unwrap();
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
                     let name = backup_file_name(store_id, &brange.region, key);
@@ -940,26 +935,26 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             && request.dst_api_ver != ApiVersion::V2
         {
             let mut response = BackupResponse::default();
-            response.set_error(crate::Error::Other(box_err!("invalid backup api version")).into());
+            let err_msg = format!(
+                "invalid backup version cur{:?}, dst{:?}",
+                self.api_version, request.dst_api_ver
+            );
+            response.set_error(crate::Error::Other(box_err!(err_msg)).into());
             if let Err(err) = resp.unbounded_send(response) {
                 error_unknown!(?err; "backup failed to send response");
             }
             return;
         }
-        let start_key = KeyValueCodec::encode_backup_key(
-            request.start_key.clone(),
-            is_raw_kv,
-            self.api_version,
-        );
-        let end_key =
-            KeyValueCodec::encode_backup_key(request.end_key.clone(), is_raw_kv, self.api_version);
+        let codec = KeyValueCodec::new(is_raw_kv, self.api_version, request.dst_api_ver);
+        let start_key = codec.encode_backup_key(request.start_key.clone());
+        let end_key = codec.encode_backup_key(request.end_key.clone());
 
         let prs = Arc::new(Mutex::new(Progress::new(
             self.store_id,
             start_key,
             end_key,
             self.region_info.clone(),
-            KeyValueCodec::new(is_raw_kv, self.api_version, request.dst_api_ver),
+            codec,
             request.cf,
         )));
         let backend = match create_storage(&request.backend, self.get_config()) {
