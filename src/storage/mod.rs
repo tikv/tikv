@@ -2842,6 +2842,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
             self.engine.clone(),
         );
         // invoke here, as there are two entries to create `TestStorageBuilder` (`new` & `from_engine_and_lock_mgr`)
+        // TODO(zhouzemin): fix here;
         // self.register_causal_observer();
 
         Storage::from_engine(
