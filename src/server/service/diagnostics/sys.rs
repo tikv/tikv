@@ -630,22 +630,19 @@ mod tests {
                 .iter()
                 .map(|x| x.get_key())
                 .collect::<Vec<&str>>();
-            assert_eq!(
-                keys,
-                vec![
-                    "read_io/s",
-                    "read_merges/s",
-                    "read_sectors/s",
-                    "read_ticks/s",
-                    "write_io/s",
-                    "write_merges/s",
-                    "write_sectors/s",
-                    "write_ticks/s",
-                    "in_flight/s",
-                    "io_ticks/s",
-                    "time_in_queue/s",
-                ]
-            );
+            assert!(keys.starts_with(&[
+                "read_io/s",
+                "read_merges/s",
+                "read_sectors/s",
+                "read_ticks/s",
+                "write_io/s",
+                "write_merges/s",
+                "write_sectors/s",
+                "write_ticks/s",
+                "in_flight/s",
+                "io_ticks/s",
+                "time_in_queue/s",
+            ]));
         }
     }
 
