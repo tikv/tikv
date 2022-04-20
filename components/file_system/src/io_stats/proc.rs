@@ -27,7 +27,15 @@ lazy_static! {
 
 thread_local! {
     /// A private copy of I/O type. Optimized for local access.
-    static IO_CTX: Cell<IOContext> = Cell::new(IOContext::new(IOType::Other));
+    static IO_CTX: Cell<IOContext> = Cell::new(init_io_context());
+}
+
+/// IO context will always be accessed by IO rate limiter regardless of whether
+/// the IO type is set correctly. We do some thread initialization work here.
+fn init_io_context() -> IOContext {
+    // Initialize thread local context.
+    LOCAL_IO_STATS.get_or(|| CachePadded::new(Mutex::new(LocalIOStats::current())));
+    IOContext::new(IOType::Other)
 }
 
 #[derive(Debug)]
@@ -164,11 +172,9 @@ pub(crate) fn set_io_context(mut new_ctx: IOContext) {
             let mut sentinel = LOCAL_IO_STATS
                 .get_or(|| CachePadded::new(Mutex::new(LocalIOStats::current())))
                 .lock();
-            let thread_bytes = flush_thread_io(&mut sentinel);
-            let outstanding = thread_bytes.read - old_ctx.total_read_bytes;
-            if outstanding > 0 {
-                new_ctx.unprocessed_read_bytes = Some((old_ctx.io_type, outstanding));
-            }
+            flush_thread_io(&mut sentinel);
+            // FIXME: outstanding buffered bytes of old type should be
+            // preserved instead of being passed to the new type.
             sentinel.io_type = new_ctx.io_type;
         }
         ctx.set(new_ctx);

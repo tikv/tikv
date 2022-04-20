@@ -93,13 +93,14 @@ impl IOType {
 #[derive(Clone, Copy)]
 pub struct IOContext {
     pub(crate) io_type: IOType,
-    /// Total I/O bytes used by current thread.
+    /// Accumulated physical read I/O bytes used by current thread.
+    /// This counter is periodically refreshed in [`IORateLimiter`].
     pub(crate) total_read_bytes: usize,
-    /// Buffered I/O bytes used after last refresh of `total_read_bytes`, by
-    /// current thread.
+    /// Buffered read I/O bytes used by current thread since last refresh of
+    /// `total_read_bytes`.
+    /// This counter is updated when new read requests arrive at
+    /// [`IORateLimiter`].
     pub(crate) outstanding_read_bytes: usize,
-    /// Unprocessed physical I/O bytes used by current thread.
-    pub(crate) unprocessed_read_bytes: Option<(IOType, usize)>,
 }
 
 impl IOContext {
@@ -108,15 +109,16 @@ impl IOContext {
             io_type,
             total_read_bytes: 0,
             outstanding_read_bytes: 0,
-            unprocessed_read_bytes: None,
         }
     }
 }
 
 pub fn set_io_type(io_type: IOType) {
     let mut ctx = io_stats::get_io_context();
-    ctx.io_type = io_type;
-    io_stats::set_io_context(ctx);
+    if ctx.io_type != io_type {
+        ctx.io_type = io_type;
+        io_stats::set_io_context(ctx);
+    }
 }
 
 pub fn get_io_type() -> IOType {

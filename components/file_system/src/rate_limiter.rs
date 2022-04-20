@@ -17,6 +17,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::EnumCount;
 use tikv_util::time::Instant;
 
+/// Theoretically a smaller refill period increases CPU overhead while reduces
+/// busty IOs. In practice the value of this parameter is of little importance.
 pub(crate) const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(100);
 pub(crate) const DEFAULT_REFILLS_PER_SEC: usize =
     (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
@@ -177,6 +179,7 @@ impl IORateLimiterInner {
     }
 }
 
+/// Macro that can unfold to both async or sync code.
 macro_rules! do_sleep {
     ($duration:expr, sync) => {
         std::thread::sleep($duration);
@@ -199,6 +202,7 @@ macro_rules! do_sleep {
     };
 }
 
+/// Macro that can unfold to both async or sync code.
 macro_rules! request_physical_imp {
     ($self:ident, $priority:ident, $bytes:expr, $mode:tt) => {{
         let priority_idx = $priority as usize;
@@ -318,12 +322,6 @@ impl IORateLimiter {
                 request_physical_imp!(self, priority, bytes, sync);
             } else {
                 let batch = self.batch_buffered_reads.unwrap();
-                if let Some((t, b)) = ctx.unprocessed_read_bytes.take() {
-                    let p = IOPriority::unsafe_from_u32(
-                        self.priority_map[t as usize].load(Ordering::Relaxed),
-                    );
-                    request_physical_imp!(self, p, b, sync);
-                }
                 ctx.outstanding_read_bytes += bytes;
                 if ctx.outstanding_read_bytes >= batch {
                     let true_bytes = io_stats::fetch_thread_io_bytes().read;
