@@ -96,7 +96,10 @@ impl RecoveryRunner {
                 }
 
                 // lock the store_meta and check if the range exist.
-                let _ = self.check_overlap_damaged_regions(f);
+                if self.check_overlap_damaged_regions(&f) {
+                    self.damaged_files.push(f);
+                    TIKV_ROCKSDB_DAMAGED_FILES.inc();
+                }
 
                 return;
             }
@@ -124,7 +127,7 @@ impl RecoveryRunner {
                     &format!("recovery job exceeded {:?}", self.max_hang_duration),
                 );
             }
-            self.check_overlap_damaged_regions(f.clone())
+            self.check_overlap_damaged_regions(f)
         });
         TIKV_ROCKSDB_DAMAGED_FILES.set(new_damaged_files.len() as i64);
         self.damaged_files = new_damaged_files;
@@ -134,7 +137,7 @@ impl RecoveryRunner {
     // recorded fault region ids to report to PD and add file info into `damaged_files`.
     //
     // Acquire meta lock.
-    fn check_overlap_damaged_regions(&mut self, file: FileInfo) -> bool {
+    fn check_overlap_damaged_regions(&self, file: &FileInfo) -> bool {
         let mut meta = self.store_meta.lock().unwrap();
 
         // Find overlapping region ids.
@@ -166,10 +169,6 @@ impl RecoveryRunner {
             for id in ids {
                 meta.damaged_regions_id.insert(id);
             }
-            if !self.exist_scheduling_regions(&file.name) {
-                self.damaged_files.push(file);
-                TIKV_ROCKSDB_DAMAGED_FILES.inc();
-            }
         } else {
             fail_point!("sst_recovery_before_delete_files");
             // The sst file can be deleted safely and set `include_end` to `true` otherwise the
@@ -178,12 +177,7 @@ impl RecoveryRunner {
             self.db
                 .delete_files_in_range(&file.smallest_key, &file.largest_key, true)
                 .unwrap();
-            if self.db.get(&file.smallest_key).unwrap().is_some() {
-                self.set_panic_mark_and_panic(
-                    &file.name,
-                    "Failed to delete the corrupted sst file",
-                );
-            }
+            self.must_file_not_exist(&file.name);
 
             TIKV_ROCKSDB_DAMAGED_FILES_DELETED.inc();
             warn!(
@@ -203,6 +197,15 @@ impl RecoveryRunner {
             "Failed to recover sst file: {}, error: {}, damaged_files:{:?}",
             sst, err, self.damaged_files
         );
+    }
+
+    fn must_file_not_exist(&self, fname: &str) {
+        let live_files = self.db.get_live_files();
+        for i in 0..live_files.get_files_count() {
+            if live_files.get_name(i as i32) == fname {
+                self.set_panic_mark_and_panic(fname, "file still exists");
+            }
+        }
     }
 }
 

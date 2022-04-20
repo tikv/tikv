@@ -58,7 +58,9 @@ fn test_sst_recovery_overlap_range_sst_exist() {
 
     // create a new sst [1,7] flushed to L0.
     cluster.must_put_cf(CF_DEFAULT, b"1", b"val_1");
+    cluster.must_put_cf(CF_DEFAULT, b"3", b"val_1");
     cluster.must_put_cf(CF_DEFAULT, b"4", b"val_1");
+    cluster.must_put_cf(CF_DEFAULT, b"5", b"val_1");
     cluster.must_put_cf(CF_DEFAULT, b"7", b"val_1");
     cluster.flush_data();
 
@@ -219,6 +221,8 @@ fn create_tikv_cluster_with_one_node_damaged()
 
     // disturb sst file range [3,5]
     let mut file_name = files.get_name(1);
+    assert_eq!(files.get_smallestkey(1), b"z3");
+    assert_eq!(files.get_largestkey(1), b"z5");
     file_name.remove(0);
     let sst_path = cluster.paths[cluster.sst_workers_map[&1]]
         .path()
