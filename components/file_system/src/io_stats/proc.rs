@@ -56,12 +56,22 @@ impl ThreadID {
         }
     }
 
+    /// Gets the accumulated disk IO bytes of current thread from procfs.
+    // proc file example:
+    // test:/tmp # cat /proc/3828/io
+    // rchar: 323934931
+    // wchar: 323929600
+    // syscr: 632687
+    // syscw: 632675
+    // read_bytes: 0
+    // write_bytes: 323932160
+    // cancelled_write_bytes: 0
     fn fetch_io_bytes(&mut self) -> Option<IOBytes> {
         if self.proc_reader.is_none() {
             let path = PathBuf::from("/proc")
-                .join(format!("{}", self.pid))
+                .join(self.pid.to_string())
                 .join("task")
-                .join(format!("{}", self.tid))
+                .join(self.tid.to_string())
                 .join("io");
             match File::open(path) {
                 Ok(file) => {
