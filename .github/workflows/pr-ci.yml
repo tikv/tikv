@@ -55,6 +55,7 @@ jobs:
           # export RUSTC_WRAPPER=~/.cargo/bin/sccache
           # make test
           # make debug
+          export RUST_BACKTRACE=full
           cargo check
           cargo test --package tests --test failpoints cases::test_normal
           cargo test --package tests --test failpoints cases::test_bootstrap
