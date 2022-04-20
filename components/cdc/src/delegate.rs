@@ -973,10 +973,12 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
     row.key = decoded_key;
-    row.value = decoded_value.user_value.to_vec();
+    row.value = decoded_value.user_value;
 
     if let Some(expire_ts) = decoded_value.expire_ts {
         row.expire_ts_unix_secs = expire_ts;
+    } else {
+        row.expire_ts_unix_secs = u64::max_value();
     }
 
     if decoded_value.is_delete {
@@ -1187,5 +1189,55 @@ mod tests {
         assert!(delegate.downstreams().is_empty());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(!delegate.handle.is_observing());
+    }
+
+    #[test]
+    fn test_decode_rawkv() {
+        let cases = vec![
+            (
+                vec![b'r', 2, 3, 4],
+                vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb],
+                vec![b'w', b'o', b'r', b'l', b'd', b'1'],
+                1,
+                Some(10),
+                false,
+            ),
+            (
+                vec![b'r', 3, 4, 5],
+                vec![b'r', 3, 4, 5, 0, 0, 0, 0, 0xfb],
+                vec![b'w', b'o', b'r', b'l', b'd', b'2'],
+                2,
+                None,
+                true,
+            ),
+        ];
+
+        for (key, mut key_with_ts, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
+            let mut row = EventRow::default();
+            APIV2::append_ts_on_encoded_bytes(&mut key_with_ts, start_ts.into());
+            let raw_value = RawValue {
+                user_value: value.to_vec(),
+                expire_ts,
+                is_delete,
+            };
+            let encoded_value = APIV2::encode_raw_value_owned(raw_value);
+            decode_rawkv(key_with_ts, encoded_value, &mut row);
+
+            assert_eq!(row.start_ts, start_ts);
+            assert_eq!(row.key, key);
+            assert_eq!(row.value, value);
+
+            if is_delete {
+                assert_eq!(row.op_type, EventRowOpType::Delete);
+            } else {
+                assert_eq!(row.op_type, EventRowOpType::Put);
+            }
+
+            if let Some(expire_ts) = expire_ts {
+                assert_eq!(row.expire_ts_unix_secs, expire_ts);
+            } else {
+                assert_eq!(row.expire_ts_unix_secs, u64::max_value());
+            }
+        }
     }
 }

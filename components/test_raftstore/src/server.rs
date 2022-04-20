@@ -22,7 +22,6 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use crate::Config;
 use api_version::{dispatch_api_version, APIVersion};
-use causal_ts;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
