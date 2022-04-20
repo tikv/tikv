@@ -1952,28 +1952,6 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         Ok(())
     }
 
-    fn raw_batch_delete_requests_to_modifies(cf: CfName, keys: Vec<Vec<u8>>) -> Vec<Modify> {
-        keys.into_iter()
-            .map(|k| match Api::TAG {
-                ApiVersion::V1 | ApiVersion::V1ttl => {
-                    Modify::Delete(cf, Api::encode_raw_key_owned(k, None))
-                }
-                ApiVersion::V2 => {
-                    let raw_value = RawValue {
-                        user_value: vec![],
-                        expire_ts: None,
-                        is_delete: true,
-                    };
-                    Modify::Put(
-                        cf,
-                        Api::encode_raw_key_owned(k, None),
-                        Api::encode_raw_value_owned(raw_value),
-                    )
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
     /// Delete some raw keys in a batch.
     /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
     pub fn raw_batch_delete(
