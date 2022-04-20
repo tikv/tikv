@@ -13,7 +13,7 @@ use tikv_util::config::*;
 
 #[test]
 fn test_stale_resolver() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let fp = "before_schedule_resolver_ready";
     fail::cfg(fp, "pause").unwrap();

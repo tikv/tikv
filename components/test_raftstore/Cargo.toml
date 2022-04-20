@@ -51,3 +51,4 @@ tokio = { version = "1.5", features = ["rt-multi-thread"]}
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 fail = "0.5"
 resource_metering = { path = "../resource_metering" }
+causal_ts = { path = "../causal_ts" }

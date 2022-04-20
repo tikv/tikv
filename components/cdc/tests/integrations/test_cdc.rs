@@ -21,7 +21,7 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -180,8 +180,60 @@ fn test_cdc_basic() {
 }
 
 #[test]
+fn test_cdc_rawkv_basic() {
+    let mut suite = TestSuite::new(1, ApiVersion::V2);
+
+    // rawkv
+    let mut req = suite.new_changedata_request(1);
+    req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    let (mut req_tx, _event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let event = receive_event(false);
+    event.events.into_iter().for_each(|e| {
+        match e.event.unwrap() {
+            // Even if there is no write,
+            // it should always outputs an Initialized event.
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        }
+    });
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(1000);
+    // There must be a delegate.
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    scheduler
+        .schedule(Task::Validate(Validate::Region(
+            1,
+            Box::new(|delegate| {
+                let d = delegate.unwrap();
+                assert_eq!(d.downstreams().len(), 1);
+            }),
+        )))
+        .unwrap();
+
+    let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
+    suite.must_kv_raw_v2(1, k, v);
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+}
+
+#[test]
 fn test_cdc_not_leader() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let leader = suite.cluster.leader_of_region(1).unwrap();
     let req = suite.new_changedata_request(1);
@@ -298,7 +350,7 @@ fn test_cdc_not_leader() {
 
 #[test]
 fn test_cdc_cluster_id_mismatch() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     // Send request with mismatched cluster id.
     let mut req = suite.new_changedata_request(1);
@@ -343,7 +395,7 @@ fn test_cdc_cluster_id_mismatch() {
 
 #[test]
 fn test_cdc_stale_epoch_after_region_ready() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -404,7 +456,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
 
 #[test]
 fn test_cdc_scan() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let (k, v) = (b"key1".to_vec(), b"value".to_vec());
     // Prewrite
@@ -524,8 +576,58 @@ fn test_cdc_scan() {
 }
 
 #[test]
+fn test_cdc_rawkv_scan() {
+    let mut suite = TestSuite::new(3, ApiVersion::V2);
+
+    let (k1, v1) = (b"rkey1".to_vec(), b"value".to_vec());
+    suite.must_kv_raw_v2(1, k1.clone(), v1.clone());
+
+    let (k2, v2) = (b"rkey2".to_vec(), b"value".to_vec());
+    suite.must_kv_raw_v2(1, k2.clone(), v2.clone());
+
+    let mut req = suite.new_changedata_request(1);
+    req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    if events.len() == 1 {
+        events.extend(receive_event(false).events.into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+
+    match events.remove(0).event.unwrap() {
+        // Batch size is set to 3.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k1, "{:?}", es);
+            assert_eq!(e.value, v1, "{:?}", es);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k2, "{:?}", es);
+            assert_eq!(e.value, v2, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
 fn test_cdc_tso_failure() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -663,7 +765,7 @@ fn test_region_split() {
 
 #[test]
 fn test_duplicate_subscribe() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -700,7 +802,7 @@ fn test_duplicate_subscribe() {
 
 #[test]
 fn test_cdc_batch_size_limit() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -791,7 +893,7 @@ fn test_cdc_batch_size_limit() {
 
 #[test]
 fn test_old_value_basic() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -948,7 +1050,7 @@ fn test_old_value_basic() {
 
 #[test]
 fn test_old_value_multi_changefeeds() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
@@ -1041,7 +1143,7 @@ fn test_old_value_multi_changefeeds() {
 
 #[test]
 fn test_cdc_resolve_ts_checking_concurrency_manager() {
-    let mut suite: crate::TestSuite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
     let lock_key = |key: &[u8], ts: u64| {
         let guard = block_on(cm.lock_key(&Key::from_raw(key)));
@@ -1138,7 +1240,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
 #[test]
 fn test_cdc_1pc() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1222,7 +1324,7 @@ fn test_cdc_1pc() {
 
 #[test]
 fn test_old_value_1pc() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1281,7 +1383,7 @@ fn test_old_value_1pc() {
 
 #[test]
 fn test_old_value_cache_hit() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
@@ -1430,7 +1532,7 @@ fn test_old_value_cache_hit() {
 
 #[test]
 fn test_old_value_cache_hit_pessimistic() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
@@ -1622,7 +1724,7 @@ fn test_region_created_replicate() {
 #[test]
 fn test_cdc_scan_ignore_gc_fence() {
     // This case is similar to `test_cdc_scan` but constructs a case with GC Fence.
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let (key, v1, v2) = (b"key", b"value1", b"value2");
 
@@ -1702,7 +1804,7 @@ fn test_cdc_scan_ignore_gc_fence() {
 
 #[test]
 fn test_cdc_extract_rollback_if_gc_fence_set() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1942,7 +2044,7 @@ fn test_term_change() {
 
 #[test]
 fn test_cdc_no_write_corresponding_to_lock() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1987,7 +2089,7 @@ fn test_cdc_no_write_corresponding_to_lock() {
 
 #[test]
 fn test_cdc_write_rollback_when_no_lock() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));

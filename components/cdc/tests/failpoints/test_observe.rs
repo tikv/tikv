@@ -18,7 +18,7 @@ use tikv_util::HandyRwLock;
 
 #[test]
 fn test_observe_duplicate_cmd() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, ApiVersion::V1);
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.get_id());
