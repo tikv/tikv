@@ -914,11 +914,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Start CDC.
-        self.config.cdc.api_version = self.config.storage.api_version;
         let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
+            self.config.storage.api_version,
             self.pd_client.clone(),
             cdc_scheduler.clone(),
             self.router.clone(),

@@ -313,6 +313,7 @@ pub struct Endpoint<T, E> {
     concurrency_manager: ConcurrencyManager,
 
     config: CdcConfig,
+    api_version: u8,
 
     // Incremental scan
     workers: Runtime,
@@ -344,6 +345,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
+        api_version: u8,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
@@ -398,6 +400,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
+            api_version,
             workers,
             scan_concurrency_semaphore,
             raft_router,
@@ -576,7 +579,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     ) {
         let region_id = request.region_id;
         let kv_api = request.get_kv_api();
-        let api_version = self.config.api_version;
+        let api_version = self.api_version;
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
 
@@ -1302,12 +1305,13 @@ mod tests {
         }
     }
 
-    fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>) -> TestEndpointSuite {
+    fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>, api_version: u8) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
+            api_version,
             Arc::new(TestPdClient::new(0, true)),
             task_sched.clone(),
             raft_router.clone(),
@@ -1336,7 +1340,7 @@ mod tests {
     #[test]
     fn test_change_endpoint_cfg() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, 1);
         let ep = &mut suite.endpoint;
 
         // Modify min_ts_interval and hibernate_regions_compatible.
@@ -1461,7 +1465,7 @@ mod tests {
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
@@ -1507,7 +1511,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, 1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1687,7 +1691,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, 1);
         suite.add_region(1, 100);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -1837,7 +1841,7 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1978,7 +1982,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None);
+        let mut suite = mock_endpoint(&cfg, None, 1);
 
         // Open two connections a and b, registers region 1, 2 to conn a and
         // region 3 to conn b.
@@ -2087,7 +2091,7 @@ mod tests {
     // too, because epoch not match.
     #[test]
     fn test_deregister_conn_then_delegate() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
