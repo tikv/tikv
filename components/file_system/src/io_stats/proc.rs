@@ -175,7 +175,7 @@ pub(crate) fn get_io_context() -> IOContext {
     IO_CTX.with(|ctx| ctx.get())
 }
 
-pub(crate) fn set_io_context(mut new_ctx: IOContext) {
+pub(crate) fn set_io_context(new_ctx: IOContext) {
     IO_CTX.with(|ctx| {
         let old_ctx = ctx.get();
         if new_ctx.io_type != old_ctx.io_type {

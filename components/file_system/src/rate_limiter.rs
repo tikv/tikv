@@ -292,6 +292,26 @@ impl IORateLimiter {
         RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(bytes_per_sec as i64);
     }
 
+    pub fn with_io_rate_limit<F>(&self, f: F)
+    where
+        F: FnOnce(usize) -> Option<usize>,
+    {
+        let mut locked = self.protected.lock();
+        let old_bytes_per_sec = (self.bytes_per_epoch.load(Ordering::Relaxed) as f64
+            / DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+        if let Some(bytes_per_sec) = f(old_bytes_per_sec) {
+            let new_rate = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+            self.reset_rate(&mut locked, new_rate);
+            RATE_LIMITER_MAX_BYTES_PER_SEC
+                .high
+                .set(bytes_per_sec as i64);
+            RATE_LIMITER_MAX_BYTES_PER_SEC
+                .medium
+                .set(bytes_per_sec as i64);
+            RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(bytes_per_sec as i64);
+        }
+    }
+
     pub fn set_io_priority(&self, io_type: IOType, io_priority: IOPriority) {
         let mut locked = self.protected.lock();
         self.priority_map[io_type as usize].store(io_priority as u32, Ordering::Relaxed);

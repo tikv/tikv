@@ -17,10 +17,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
-    },
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
     u64,
 };
@@ -36,8 +33,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File,
-    MetricsManager as IOMetricsManager,
+    set_io_rate_limiter, BytesFetcher, File, IORateLimiter, MetricsManager as IOMetricsManager,
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -117,9 +113,9 @@ fn run_impl<CER: ConfiguredRaftEngine>(config: TiKvConfig) {
     tikv.init_fs();
     tikv.init_yatp();
     tikv.init_encryption();
-    let fetcher = tikv.init_io_utility();
+    let (io_limiter, fetcher) = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    let (engines, engines_info) = tikv.init_raw_engines(io_limiter, listener);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
     tikv.register_services();
@@ -1086,7 +1082,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_io_utility(&mut self) -> BytesFetcher {
+    fn init_io_utility(&mut self) -> (Arc<IORateLimiter>, BytesFetcher) {
         let stats_collector_enabled = file_system::init_io_stats_collector()
             .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
             .is_ok();
@@ -1104,14 +1100,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         };
         // Set up IO limiter even when rate limit is disabled, so that rate limits can be
         // dynamically applied later on.
-        set_io_rate_limiter(Some(limiter));
-        fetcher
+        set_io_rate_limiter(Some(limiter.clone()));
+        (limiter, fetcher)
     }
 
     fn init_metrics_flusher(
         &mut self,
         fetcher: BytesFetcher,
-        engines_info: Arc<EnginesResourceInfo>,
+        mut engines_info: EnginesBacklogMonitor,
     ) {
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.engines.as_ref().unwrap().engines.clone(),
@@ -1271,7 +1267,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 }
 
 trait ConfiguredRaftEngine: RaftEngine {
-    fn build(_: &TiKVServer<Self>, _: &Arc<Env>, _: &Option<Cache>) -> Self;
+    fn build(_: &TiKVServer<Self>, _: &Arc<Env>, _: &Option<Cache>, _: Arc<IORateLimiter>) -> Self;
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
@@ -1279,7 +1275,12 @@ trait ConfiguredRaftEngine: RaftEngine {
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
-    fn build(server: &TiKVServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
+    fn build(
+        server: &TiKVServer<Self>,
+        env: &Arc<Env>,
+        block_cache: &Option<Cache>,
+        _: Arc<IORateLimiter>,
+    ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &server.config.storage.data_dir,
             &server.config.raft_engine.config().dir,
@@ -1324,7 +1325,12 @@ impl ConfiguredRaftEngine for RocksEngine {
 }
 
 impl ConfiguredRaftEngine for RaftLogEngine {
-    fn build(server: &TiKVServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
+    fn build(
+        server: &TiKVServer<Self>,
+        env: &Arc<Env>,
+        block_cache: &Option<Cache>,
+        io_limiter: Arc<IORateLimiter>,
+    ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &server.config.storage.data_dir,
             &server.config.raft_store.raftdb_path,
@@ -1336,7 +1342,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         let raft_engine = RaftLogEngine::new(
             raft_config,
             server.encryption_key_manager.clone(),
-            get_io_rate_limiter(),
+            Some(io_limiter),
         )
         .unwrap_or_else(|e| fatal!("Failed to create raft engine: {}", e));
 
@@ -1362,16 +1368,20 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {
     fn init_raw_engines(
         &mut self,
+        io_limiter: Arc<IORateLimiter>,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+    ) -> (Engines<RocksEngine, CER>, EnginesBacklogMonitor) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
-            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .build_shared_rocks_env(
+                self.encryption_key_manager.clone(),
+                Some(io_limiter.clone()),
+            )
             .unwrap();
 
         // Create raft engine
-        let raft_engine = CER::build(self, &env, &block_cache);
+        let raft_engine = CER::build(self, &env, &block_cache, io_limiter.clone());
 
         // Create kv engine.
         let mut builder = KvEngineFactoryBuilder::new(env, &self.config, &self.store_path)
@@ -1400,9 +1410,8 @@ impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(
-            &engines, 180, /*max_samples_to_preserve*/
-        ));
+        let engines_info =
+            EnginesBacklogMonitor::new(&engines, 180 /*max_samples_to_preserve*/, io_limiter);
 
         (engines, engines_info)
     }
@@ -1550,30 +1559,35 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
     }
 }
 
-pub struct EnginesResourceInfo {
+pub struct EnginesBacklogMonitor {
     kv_engine: RocksEngine,
     raft_engine: Option<RocksEngine>,
-    latest_normalized_pending_bytes: AtomicU32,
+    io_rate_limiter: Arc<IORateLimiter>,
+
     normalized_pending_bytes_collector: MovingAvgU32,
+    // the original io rate, the io rate recently set by us.
+    history_io_rate_limits: Option<(usize, usize)>,
 }
 
-impl EnginesResourceInfo {
+impl EnginesBacklogMonitor {
     const SCALE_FACTOR: u64 = 100;
 
     fn new<CER: ConfiguredRaftEngine>(
         engines: &Engines<RocksEngine, CER>,
         max_samples_to_preserve: usize,
+        io_rate_limiter: Arc<IORateLimiter>,
     ) -> Self {
         let raft_engine = engines.raft.as_rocks_engine().cloned();
-        EnginesResourceInfo {
+        EnginesBacklogMonitor {
             kv_engine: engines.kv.clone(),
             raft_engine,
-            latest_normalized_pending_bytes: AtomicU32::new(0),
+            io_rate_limiter,
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+            history_io_rate_limits: None,
         }
     }
 
-    pub fn update(&self, _now: Instant) {
+    pub fn update(&mut self, _now: Instant) {
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
@@ -1582,7 +1596,7 @@ impl EnginesResourceInfo {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,
-                            (b * EnginesResourceInfo::SCALE_FACTOR
+                            (b * EnginesBacklogMonitor::SCALE_FACTOR
                                 / cf_opts.get_soft_pending_compaction_bytes_limit())
                                 as u32,
                         );
@@ -1600,9 +1614,35 @@ impl EnginesResourceInfo {
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes.store(
-            std::cmp::max(normalized_pending_bytes, avg),
-            Ordering::Relaxed,
-        );
+
+        // Maps [80, 100] to [1,2].
+        let score =
+            std::cmp::max(normalized_pending_bytes, avg).saturating_sub(80) as f32 / 20.0 + 1.0;
+        let io_limiter = self.io_rate_limiter.clone();
+        if score > 1.0 {
+            io_limiter.with_io_rate_limit(|current| {
+                if let Some((original, last)) = self.history_io_rate_limits.take() {
+                    if last == current {
+                        let new = (original as f32 * score) as usize;
+                        self.history_io_rate_limits = Some((original, new));
+                        return Some(new);
+                    }
+                } else {
+                    let new = (current as f32 * score) as usize;
+                    self.history_io_rate_limits = Some((current, new));
+                    return Some(new);
+                }
+                None
+            });
+        } else if let Some((original, last)) = self.history_io_rate_limits.take() {
+            io_limiter.with_io_rate_limit(|current| {
+                // Reset to original rate limit if user hasn't modified it.
+                if last == current {
+                    Some(original)
+                } else {
+                    None
+                }
+            });
+        }
     }
 }
