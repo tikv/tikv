@@ -122,7 +122,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
-    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
+    let can_use_get_newer = !should_not_exist && !need_value && !need_old_value;
+    let res = if can_use_get_newer && reader.cloud_reader.is_some() {
+        let cloud_reader = reader.cloud_reader.as_mut().unwrap();
+        cloud_reader.get_newer(&key, reader.start_ts)?
+    } else {
+        reader.seek_write(&key, TimeStamp::max())?
+    };
+    if let Some((commit_ts, write)) = res {
         // Find a previous write.
         if need_old_value {
             prev_write = Some(write.clone());
@@ -161,7 +168,16 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
         // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
         if commit_ts > reader.start_ts {
-            if let Some((older_commit_ts, older_write)) =
+            if reader.cloud_reader.is_some() {
+                let cloud_reader = reader.cloud_reader.as_mut().unwrap();
+                if cloud_reader.get_rollback(&key, reader.start_ts) {
+                    return Err(ErrorInner::PessimisticLockRolledBack {
+                        start_ts: reader.start_ts,
+                        key: key.into_raw()?,
+                    }
+                    .into());
+                }
+            } else if let Some((older_commit_ts, older_write)) =
                 reader.seek_write(&key, reader.start_ts)?
             {
                 if older_commit_ts == reader.start_ts

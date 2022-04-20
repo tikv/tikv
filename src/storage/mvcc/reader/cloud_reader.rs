@@ -80,6 +80,18 @@ impl CloudReader {
         })
     }
 
+    pub fn get_rollback(&mut self, key: &Key, start_ts: TimeStamp) -> bool {
+        let raw_key = key.to_raw().unwrap();
+        let rollback_key =
+            rfstore::mvcc::encode_extra_txn_status_key(&raw_key, start_ts.into_inner());
+        let item = self.snapshot.get(EXTRA_CF, &rollback_key, 0);
+        if item.user_meta_len() == 0 {
+            return false;
+        }
+        let user_meta = UserMeta::from_slice(item.user_meta());
+        user_meta.commit_ts == 0
+    }
+
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         let raw_key = key.to_raw().unwrap();
         let item = self.snapshot.get(LOCK_CF, &raw_key, 0);
