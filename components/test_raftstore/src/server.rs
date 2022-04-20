@@ -48,7 +48,7 @@ use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
-use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::import::{ImportSstService, SstImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoadPool;
@@ -130,7 +130,7 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
-    pub importers: HashMap<u64, Arc<SSTImporter>>,
+    pub importers: HashMap<u64, Arc<SstImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
@@ -370,7 +370,7 @@ impl ServerCluster {
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(
-                SSTImporter::new(
+                SstImporter::new(
                     &cfg.import,
                     dir,
                     key_manager.clone(),
@@ -379,7 +379,7 @@ impl ServerCluster {
                 .unwrap(),
             )
         };
-        let import_service = ImportSSTService::new(
+        let import_service = ImportSstService::new(
             cfg.import.clone(),
             sim_router.clone(),
             engines.kv.clone(),

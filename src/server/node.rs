@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::RaftKv;
 use super::Result;
-use crate::import::SSTImporter;
+use crate::import::SstImporter;
 use crate::read_pool::ReadPoolHandle;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
@@ -179,7 +179,7 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
@@ -457,7 +457,7 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,

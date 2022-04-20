@@ -13,7 +13,7 @@ use std::{cmp, mem, u64};
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, SSTMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
+    Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatch, WriteBatchExt, WriteOptions,
 };
 use engine_traits::{CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
@@ -5522,7 +5522,7 @@ where
         self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::NotAllowedOnFull);
     }
 
-    fn on_ingest_sst_result(&mut self, ssts: Vec<SSTMetaInfo>) {
+    fn on_ingest_sst_result(&mut self, ssts: Vec<SstMetaInfo>) {
         let mut size = 0;
         let mut keys = 0;
         for sst in &ssts {

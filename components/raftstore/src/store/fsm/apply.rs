@@ -28,7 +28,7 @@ use engine_traits::{
     DeleteStrategy, KvEngine, Mutable, RaftEngine, RaftEngineReadOnly, Range as EngineRange,
     Snapshot, WriteBatch,
 };
-use engine_traits::{SSTMetaInfo, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{SstMetaInfo, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -47,7 +47,7 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use smallvec::{smallvec, SmallVec};
-use sst_importer::SSTImporter;
+use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::memory::HeapSize;
@@ -273,7 +273,7 @@ pub enum ExecResult<S> {
         ranges: Vec<Range>,
     },
     IngestSst {
-        ssts: Vec<SSTMetaInfo>,
+        ssts: Vec<SstMetaInfo>,
     },
     TransferLeader {
         term: u64,
@@ -352,7 +352,7 @@ where
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
@@ -386,9 +386,9 @@ where
     /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
     /// peer could see this update if leader had changed. We must also delete them after the applied-index
     /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
-    /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
+    /// happened before `WriteBatch::write` and after `SstImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
-    delete_ssts: Vec<SSTMetaInfo>,
+    delete_ssts: Vec<SstMetaInfo>,
 
     /// The priority of this Handler.
     priority: Priority,
@@ -396,7 +396,7 @@ where
     yield_high_latency_operation: bool,
 
     /// The ssts waiting to be ingested in `write_to_db`.
-    pending_ssts: Vec<SSTMetaInfo>,
+    pending_ssts: Vec<SstMetaInfo>,
 
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
@@ -413,7 +413,7 @@ where
     pub fn new(
         tag: String,
         host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
         router: ApplyRouter<EK>,
@@ -1667,7 +1667,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &Request,
-        ssts: &mut Vec<SSTMetaInfo>,
+        ssts: &mut Vec<SstMetaInfo>,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
@@ -3881,7 +3881,7 @@ pub struct Builder<EK: KvEngine> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
     engine: EK,
     sender: Box<dyn Notifier<EK>>,
@@ -4261,10 +4261,10 @@ mod tests {
         (path, engine)
     }
 
-    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
+    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(
-            SSTImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
+            SstImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),
         );
         (dir, importer)
     }

@@ -69,7 +69,7 @@ use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
-    import::{ImportSSTService, SSTImporter},
+    import::{ImportSstService, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::raftkv::ReplicaReadLockChecker,
     server::{
@@ -207,7 +207,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
-    importer: Arc<SSTImporter>,
+    importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: MemoryQuota,
     rsmeter_pubsub_service: resource_metering::PubSubService,
@@ -818,7 +818,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
 
         let import_path = self.store_path.join("import");
-        let mut importer = SSTImporter::new(
+        let mut importer = SstImporter::new(
             &self.config.import,
             import_path,
             self.encryption_key_manager.clone(),
@@ -976,7 +976,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let engines = self.engines.as_ref().unwrap();
 
         // Import SST service.
-        let import_service = ImportSSTService::new(
+        let import_service = ImportSstService::new(
             self.config.import.clone(),
             self.router.clone(),
             engines.engines.kv.clone(),
