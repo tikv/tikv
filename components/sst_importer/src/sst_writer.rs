@@ -399,9 +399,9 @@ mod tests {
                     // ttl takes 8 more bytes and meta take 1 more byte
                     assert_eq!(
                         w.default_bytes as usize,
-                        (b"z".len()
-                            + Key::from_raw(b"rk1").as_encoded().len() + 8)
-                            + (b"short_value".len() + 9) + (b"z".len() + Key::from_raw(b"rk2").as_encoded().len() + 8)
+                        (b"z".len() + Key::from_raw(b"rk1").as_encoded().len() + 8)
+                            + (b"short_value".len() + 9)
+                            + (b"z".len() + Key::from_raw(b"rk2").as_encoded().len() + 8)
                     );
                 }
                 _ => unreachable!(),
