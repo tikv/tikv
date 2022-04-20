@@ -99,7 +99,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 }
             };
             let start = Instant::now();
-            let apply_index = snap.get_apply_index().unwrap();
+            let apply_index = match snap.get_apply_index() {
+                Ok(i) => i,
+                Err(e) => {
+                    warn!("failed to get apply index"; "error" => ?e);
+                    return;
+                },
+            };
             let mut entries = vec![];
             match task.mode {
                 ScanMode::All | ScanMode::AllWithOldValue => {

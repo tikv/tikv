@@ -343,8 +343,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         }
 
         if errors.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
+            let write_opts = WriteOptions::new();
             box_try!(wb.write_opt(&write_opts));
         }
         Ok(errors)
@@ -377,8 +376,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             write_peer_state(&mut wb, region, PeerState::Tombstone, None).unwrap();
         }
 
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
+        let write_opts = WriteOptions::new();
         wb.write_opt(&write_opts).unwrap();
         Ok(errors)
     }
@@ -660,8 +658,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             }
         }
 
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
+        let write_opts = WriteOptions::new();
         box_try!(wb.write_opt(&write_opts));
         Ok(())
     }
@@ -807,8 +804,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         }
         box_try!(write_initial_raft_state(&mut raft_wb, region_id));
 
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
+        let write_opts = WriteOptions::new();
         box_try!(kv_wb.write_opt(&write_opts));
         box_try!(self.engines.raft.consume(&mut raft_wb, true));
         Ok(())
@@ -1007,8 +1003,7 @@ fn recover_mvcc_for_range(
         let batch_size = wb.count();
 
         if !read_only {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
+            let write_opts = WriteOptions::new();
             box_try!(wb.write_opt(&write_opts));
         } else {
             info!("thread {}: skip write {} rows", thread_index, batch_size);

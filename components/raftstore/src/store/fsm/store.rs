@@ -2666,8 +2666,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     region, e
                 )
             });
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
+        let write_opts = WriteOptions::new();
         if let Err(e) = kv_wb.write_opt(&write_opts) {
             panic!("fail to write while creating {:?} err {:?}", region, e);
         }

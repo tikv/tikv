@@ -510,8 +510,7 @@ where
             self.pending_ssts = vec![];
         }
         if !self.kv_wb_mut().is_empty() {
-            let mut write_opts = engine_traits::WriteOptions::new();
-            write_opts.set_sync(need_sync);
+            let write_opts = engine_traits::WriteOptions::new();
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
@@ -1010,7 +1009,7 @@ where
     }
 
     fn write_apply_state(&self, wb: &mut EK::WriteBatch) {
-        wb.put_msg_cf(
+        /*wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
             &self.apply_state,
@@ -1020,7 +1019,7 @@ where
                 "{} failed to save apply state to write batch, error: {:?}",
                 self.tag, e
             );
-        });
+        });*/
     }
 
     fn handle_raft_entry_normal(
