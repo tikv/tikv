@@ -1093,14 +1093,17 @@ fn test_txn_store_rawkv_api_version() {
                     vec![(key.to_vec(), b"value".to_vec())],
                 );
 
-                // TODO: uncomment after raw_checksum is done for API V2
-                // let mut digest = crc64fast::Digest::new();
-                // digest.write(key);
-                // digest.write(b"value");
-                // store.raw_checksum_ok(
-                //     vec![range_bounded.clone()],
-                //     (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
-                // );
+                // TODO: Remove this conditional statement after raw_checksum is done for API V2
+                if storage_api_version != ApiVersion::V2 {
+                    let mut digest = crc64fast::Digest::new();
+                    digest.write(key);
+                    digest.write(b"value");
+                    store.raw_checksum_ok(
+                        vec![range_bounded.clone()],
+                        (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
+                    );
+                }
+
             } else {
                 store.raw_get_err(cf.to_owned(), key.to_vec());
                 if !matches!(storage_api_version, ApiVersion::V1) {
