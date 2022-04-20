@@ -698,7 +698,7 @@ impl SlowScore {
     fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
         if self.timeout_requests == 0 {
             let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-            if OrderedFloat(desc) > self.value {
+            if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
                 self.value = 1.0.into();
             } else {
                 self.value -= desc;
@@ -2316,6 +2316,13 @@ mod tests {
         assert_eq!(
             OrderedFloat(19.0),
             slow_score.update_impl(Duration::from_secs(15))
+        );
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.0),
+            slow_score.update_impl(Duration::from_secs(57))
         );
     }
 

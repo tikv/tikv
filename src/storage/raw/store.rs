@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::encoded::RawEncodeSnapshot;
-// use super::raw_mvcc::RawMvccSnapshot;
+use super::raw_mvcc::RawMvccSnapshot;
 
 use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
@@ -18,12 +18,11 @@ use yatp::task::future::reschedule;
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
+// TODO: refactor to utilize generic type `APIVersion` and eliminate matching `api_version`.
 pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S>),
     V1TTL(RawStoreInner<RawEncodeSnapshot<S, APIV1TTL>>),
-    V2(RawStoreInner<RawEncodeSnapshot<S, APIV2>>),
-    // TODO: after ts encoded in rawkv interface, RawMvccSnapshot should be used.
-    // V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, APIV2>>),
+    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, APIV2>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
@@ -34,12 +33,8 @@ impl<'a, S: Snapshot> RawStore<S> {
                 RawEncodeSnapshot::from_snapshot(snapshot),
             )),
             ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
-                snapshot,
-            ))),
-            // TODO: after ts encoded in raw interface, RawMvccSnapshot should be used.
-            /*ApiVersion::V2 => RawStore::V2(RawStoreInner::new(RawEncodeSnapshot::from_snapshot(
                 RawMvccSnapshot::from_snapshot(snapshot),
-            ))),*/
+            ))),
         }
     }
 
