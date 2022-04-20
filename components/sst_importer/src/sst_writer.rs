@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::match_template_api_version;
-use api_version::APIVersion;
+use api_version::KvFormat;
 use api_version::RawValue;
 use engine_traits::raw_ttl::ttl_to_expire_ts;
 use kvproto::import_sstpb::*;

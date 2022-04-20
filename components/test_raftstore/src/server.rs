@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use crate::Config;
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::{dispatch_api_version, KvFormat};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -233,7 +233,7 @@ impl ServerCluster {
         )
     }
 
-    fn run_node_impl<Api: APIVersion>(
+    fn run_node_impl<F: KvFormat>(
         &mut self,
         node_id: u64,
         mut cfg: Config,
@@ -349,7 +349,7 @@ impl ServerCluster {
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-        let store = create_raft_storage::<_, _, _, Api>(
+        let store = create_raft_storage::<_, _, _, F>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),

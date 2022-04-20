@@ -7,7 +7,7 @@ use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
 use crate::storage::Statistics;
 
-use api_version::{APIV1TTL, APIV2};
+use api_version::{ApiV1Ttl, ApiV2};
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use std::time::Duration;
@@ -18,11 +18,11 @@ use yatp::task::future::reschedule;
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
-// TODO: refactor to utilize generic type `APIVersion` and eliminate matching `api_version`.
+// TODO: refactor to utilize generic type `KvFormat` and eliminate matching `api_version`.
 pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S>),
-    V1TTL(RawStoreInner<RawEncodeSnapshot<S, APIV1TTL>>),
-    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, APIV2>>),
+    V1TTL(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>>),
+    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, ApiV2>>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {

@@ -25,7 +25,7 @@ use std::{
     u64,
 };
 
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::{dispatch_api_version, KvFormat};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -106,7 +106,7 @@ use crate::raft_engine_switch::*;
 use crate::{memory::*, setup::*, signal_handler};
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig) {
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
     let mut tikv = TiKVServer::<CER>::init(config);
 
     // Must be called after `TiKVServer::init`.
@@ -122,7 +122,7 @@ fn run_impl<CER: ConfiguredRaftEngine, Api: APIVersion>(config: TiKvConfig) {
     let listener = tikv.init_flow_receiver();
     let (engines, engines_info) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
-    let server_config = tikv.init_servers::<Api>();
+    let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_storage_stats_task(engines);
@@ -542,7 +542,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers<Api: APIVersion>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::new(
             &self.config.storage.flow_control,
             self.engines.as_ref().unwrap().engine.kv_engine(),
@@ -649,7 +649,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, Api>(
+        let storage = create_raft_storage::<_, _, _, F>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -716,7 +716,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Register causal observer for RawKV API V2
-        if let ApiVersion::V2 = Api::TAG {
+        if let ApiVersion::V2 = F::TAG {
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 self.pd_client.clone(),
                 self.config.causal_ts.renew_interval.0,

@@ -14,7 +14,7 @@ use crate::storage::kv::FlowStatsReporter;
 use crate::storage::txn::flow_controller::FlowController;
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{config::Config as StorageConfig, Storage};
-use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, APIVersion};
+use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::ApiVersion;
@@ -39,7 +39,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter, Api: APIVersion>(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
@@ -51,7 +51,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter, Api: APIVersion>(
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-) -> Result<Storage<RaftKv<EK, S>, LockManager, Api>>
+) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
