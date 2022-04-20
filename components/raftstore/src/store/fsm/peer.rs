@@ -1251,30 +1251,69 @@ where
                 // already is a force leader, do nothing
                 return;
             }
+            Some(ForceLeaderState::WaitTicks { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
             None => {}
         }
 
-        if self.fsm.peer.is_leader() {
-            warn!(
-                "reject pre force leader due to already being leader";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            return;
-        }
-
+        let ticks = if self.fsm.peer.is_leader() {
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
+                warn!(
+                    "reject pre force leader due to already being leader";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait two rounds of election timeout to trigger check quorum to step down the leader
+            // note: check quorum is triggered every `election_timeout` instead of `randomized_election_timeout`
+            Some(
+                self.fsm.peer.raft_group.raft.election_timeout() * 2
+                    - self.fsm.peer.raft_group.raft.election_elapsed,
+            )
         // When election timeout is triggered, leader_id is set to INVALID_ID.
         // But learner(not promotable) is a exception here as it wouldn't tick
         // election.
-        if self.fsm.peer.raft_group.raft.promotable()
-            && self.fsm.hibernate_state.group_state() != GroupState::Idle
+        } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
-            warn!(
-                "reject pre force leader due to leader lease may not expired";
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered
+                || self.fsm.hibernate_state.group_state() == GroupState::Chaos
+            {
+                warn!(
+                    "reject pre force leader due to leader lease may not expired";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait one round of election timeout to make sure leader_id is invalid
+            Some(
+                self.fsm.peer.raft_group.raft.randomized_election_timeout()
+                    - self.fsm.peer.raft_group.raft.election_elapsed,
+            )
+        } else {
+            None
+        };
+
+        if let Some(ticks) = ticks {
+            info!(
+                "enter wait ticks";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "ticks" => ticks,
             );
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitTicks {
+                failed_stores,
+                ticks,
+            });
+            self.reset_raft_tick(if self.fsm.peer.is_leader() {
+                GroupState::Ordered
+            } else {
+                GroupState::Chaos
+            });
+            self.fsm.has_ready = true;
             return;
         }
 
@@ -1397,7 +1436,7 @@ where
         );
         self.fsm.peer.force_leader = None;
         // make sure it's not hibernated
-        self.reset_raft_tick(GroupState::Ordered);
+        assert_eq!(self.fsm.hibernate_state.group_state(), GroupState::Ordered);
         // leader lease shouldn't be renewed in force leader state.
         assert_eq!(
             self.fsm.peer.leader_lease().inspect(None),
@@ -1439,6 +1478,20 @@ where
 
     #[inline]
     fn check_force_leader(&mut self) {
+        if let Some(ForceLeaderState::WaitTicks {
+            failed_stores,
+            ticks,
+        }) = &mut self.fsm.peer.force_leader
+        {
+            if *ticks == 0 {
+                let s = mem::take(failed_stores);
+                self.on_enter_pre_force_leader(s);
+            } else {
+                *ticks -= 1;
+            }
+            return;
+        };
+
         let failed_stores = match &self.fsm.peer.force_leader {
             None => return,
             Some(ForceLeaderState::ForceLeader { .. }) => {
@@ -1448,6 +1501,7 @@ where
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
         if self.fsm.peer.raft_group.raft.election_elapsed + 1
@@ -1770,14 +1824,14 @@ where
                 // follower may tick more than an election timeout in chaos state.
                 // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
                 // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
-                // and the follwer's `election_elapsed` in raft-rs is 1.
+                // and the follower's `election_elapsed` in raft-rs is 1.
                 // After the group state becomes Chaos, the next tick will call `raft_group.tick`
                 // `missing_tick` + 1 times(default 7).
                 // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
                 // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
                 // The reason is that we don't want let all followers become (pre)candidate if one
                 // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
-                // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
+                // to others. As long as the leader can wake up and broadcast heartbeats in one `raft_heartbeat_ticks`
                 // time(default 2s), no more followers will wake up and sends vote msg again.
                 if self.fsm.missing_ticks + 1 /* for the next tick after the peer isn't Idle */
                     + self.fsm.peer.raft_group.raft.election_elapsed
