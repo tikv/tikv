@@ -456,9 +456,24 @@ pub struct ReadyResult {
 }
 
 #[derive(Debug)]
+/// ForceLeader process would be:
+/// 1. If it's hibernated, enter wait ticks state, and wake up the peer
+/// 2. Enter pre force leader state, become candidate and send request vote to all peers
+/// 3. Wait for the responses of the request vote, no reject should be received.
+/// 4. Enter force leader state, become leader without leader lease
+/// 5. Execute recovery plan(some remove-peer commands)
+/// 6. After the plan steps are all applied, exit force leader state
 pub enum ForceLeaderState {
-    PreForceLeader { failed_stores: HashSet<u64> },
-    ForceLeader { failed_stores: HashSet<u64> },
+    WaitTicks {
+        failed_stores: HashSet<u64>,
+        ticks: usize,
+    },
+    PreForceLeader {
+        failed_stores: HashSet<u64>,
+    },
+    ForceLeader {
+        failed_stores: HashSet<u64>,
+    },
 }
 
 pub enum UnsafeRecoveryState {
@@ -518,12 +533,7 @@ where
     /// With that, we can further propose remove failed-nodes conf-change, to make
     /// the Raft group forms majority and works normally later on.
     ///
-    /// ForceLeader process would be:
-    /// 1. Enter pre force leader state, become candidate and send request vote to all peers
-    /// 2. Wait for the responses of the request vote, no reject should be received.
-    /// 3. Enter force leader state, become leader without leader lease
-    /// 4. Execute recovery plan(some remove-peer commands)
-    /// 5. After the plan steps are all applied, exit force leader state
+    /// For details, see the comment of `ForceLeaderState`.
     pub force_leader: Option<ForceLeaderState>,
 
     /// Record the instants of peers being added into the configuration.
@@ -1118,6 +1128,10 @@ where
         }
         if self.raft_group.raft.lead_transferee.is_some() {
             res.reason = "transfer leader";
+            return res;
+        }
+        if self.force_leader.is_some() {
+            res.reason = "force leader";
             return res;
         }
         // Unapplied entries can change the configuration of the group.
