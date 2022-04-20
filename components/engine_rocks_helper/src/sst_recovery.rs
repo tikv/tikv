@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -140,36 +139,9 @@ impl RecoveryRunner {
     fn check_overlap_damaged_regions(&self, file: &FileInfo) -> bool {
         let mut meta = self.store_meta.lock().unwrap();
 
-        // Find overlapping region ids.
-        // Condition:
-        // end_key > file.smallestkey
-        // start_key <= file.largestkey
-        let mut ids = vec![];
-        for (_, id) in meta
-            .region_ranges
-            .range((Excluded(file.smallest_key.clone()), Unbounded::<Vec<u8>>))
-        {
-            let region = &meta.regions[id];
-            if keys::enc_start_key(region) <= file.largest_key {
-                ids.push(*id);
-            }
-        }
-
-        let overlap = !ids.is_empty();
-        if overlap {
-            warn!(
-                "detected damaged regions overlapping with corrupted file";
-                "region_ids" => ?&ids,
-                "file" => &file.name,
-                "smallest_key" => ?&file.smallest_key,
-                "largest_key" => ?&file.largest_key,
-            );
-
-            // damaged file context should be updated.
-            for id in ids {
-                meta.damaged_regions_id.insert(id);
-            }
-        } else {
+        let overlap =
+            meta.update_overlap_damaged_ranges(&file.name, &file.smallest_key, &file.largest_key);
+        if !overlap {
             fail_point!("sst_recovery_before_delete_files");
             // The sst file can be deleted safely and set `include_end` to `true` otherwise the
             // file with the same largest key will be skipped.
@@ -266,10 +238,11 @@ mod tests {
         tx.schedule(files.get_name(0)).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        assert_eq!(meta.lock().unwrap().damaged_regions_id.len(), 3);
-        assert!(meta.lock().unwrap().damaged_regions_id.get(&2).is_some());
-        assert!(meta.lock().unwrap().damaged_regions_id.get(&3).is_some());
-        assert!(meta.lock().unwrap().damaged_regions_id.get(&4).is_some());
+        let damaged_ids = meta.lock().unwrap().get_all_damaged_region_ids();
+        assert_eq!(damaged_ids.len(), 3);
+        assert!(damaged_ids.contains(&2));
+        assert!(damaged_ids.contains(&3));
+        assert!(damaged_ids.contains(&4));
     }
 
     fn add_region_to_store_meta(meta: &mut StoreMeta, id: u64, start_key: Vec<u8>) {

@@ -20,6 +20,17 @@ fn test_sst_recovery_basic() {
     // Test that only sst recovery can delete the sst file, remove peer don't delete it.
     fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
 
+    let store_meta = cluster.store_metas.get(&1).unwrap().clone();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        store_meta
+            .lock()
+            .unwrap()
+            .get_all_damaged_region_ids()
+            .len(),
+        2
+    );
+
     // Remove peers for safe deletion of files in sst recovery.
     let region = cluster.get_region(b"2");
     let peer = find_peer(&region, 1).unwrap();
@@ -47,6 +58,7 @@ fn test_sst_recovery_basic() {
     // Damaged file has been deleted.
     let files = engine1.get_live_files();
     assert_eq!(files.get_files_count(), 2);
+    assert_eq!(store_meta.lock().unwrap().damaged_ranges.len(), 0);
 
     // only store 1 remove peer so key "4" should be accessed by cluster.
     assert_eq!(cluster.must_get(b"4").unwrap(), b"val");

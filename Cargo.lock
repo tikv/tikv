@@ -1414,6 +1414,7 @@ name = "engine_rocks_helper"
 version = "0.1.0"
 dependencies = [
  "engine_rocks",
+ "engine_test",
  "fail",
  "futures 0.3.15",
  "keys",
