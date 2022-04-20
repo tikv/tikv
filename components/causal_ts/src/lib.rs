@@ -41,10 +41,8 @@ pub mod tests {
     impl Default for TestProvider {
         fn default() -> Self {
             Self {
-                // `ts` starts from 1, to avoid generating `TimeStamp::zero()`,
-                // as `TimeStamp::zero()` would be a special value.
-                // E.g, in `RawMvccSnapshot`, `TimeStamp::zero()` is used as the exclusive upper-bound of a key.
-                ts: Arc::new(AtomicU64::new(1)),
+                // Note that `ts` should not start from 0. See `APIV2::encode_raw_key`.
+                ts: Arc::new(AtomicU64::new(100)),
             }
         }
     }

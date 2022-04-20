@@ -141,6 +141,7 @@ impl APIVersion for APIV2 {
     fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
         let encoded_key = Key::from_raw(user_key);
         if let Some(ts) = ts {
+            debug_assert!(is_valid_ts(ts));
             encoded_key.append_ts(ts)
         } else {
             encoded_key
@@ -161,6 +162,7 @@ impl APIVersion for APIV2 {
 
         let encoded_key = Key::from_encoded(user_key);
         if let Some(ts) = ts {
+            debug_assert!(is_valid_ts(ts));
             encoded_key.append_ts(ts)
         } else {
             encoded_key
@@ -171,8 +173,11 @@ impl APIVersion for APIV2 {
 impl APIV2 {
     pub fn append_ts_on_encoded_bytes(encoded_bytes: &mut Vec<u8>, ts: TimeStamp) {
         debug_assert!(is_valid_encoded_bytes(encoded_bytes, false));
+        debug_assert!(is_valid_ts(ts));
         encoded_bytes.encode_u64_desc(ts.into_inner()).unwrap();
     }
+
+    pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
 #[inline]
@@ -187,6 +192,13 @@ fn is_valid_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
     is_valid_encoded_bytes(encoded_key.as_encoded(), with_ts)
 }
 
+/// TimeStamp::zero is not acceptable, as such entries can not be retrieved by RawKV MVCC.
+/// See `RawMvccSnapshot::seek_first_key_value_cf`.
+#[inline]
+fn is_valid_ts(ts: TimeStamp) -> bool {
+    !ts.is_zero()
+}
+
 #[inline]
 fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<TimeStamp>> {
     let ts = if with_ts {
@@ -199,8 +211,8 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
 
 #[cfg(test)]
 mod tests {
-    use crate::{APIVersion, APIV2};
-    use txn_types::Key;
+    use crate::{APIVersion, RawValue, APIV2};
+    use txn_types::{Key, TimeStamp};
 
     #[test]
     fn test_key_decode_err() {
@@ -245,6 +257,27 @@ mod tests {
     }
 
     #[test]
+    fn test_key_encode_err() {
+        let cases: Vec<(Vec<u8>, Option<TimeStamp>)> = vec![
+            (vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], Some(0.into())), // ts 0 is invalid.
+        ];
+
+        for (idx, (bytes, ts)) in cases.into_iter().enumerate() {
+            let res = vec![
+                panic_hook::recover_safe(|| {
+                    let _ = APIV2::encode_raw_key(&bytes, ts);
+                }),
+                panic_hook::recover_safe(|| {
+                    let _ = APIV2::encode_raw_key_owned(bytes, ts);
+                }),
+            ];
+            for r in res {
+                assert!(r.is_err(), "case {}: {:?}", idx, r);
+            }
+        }
+    }
+
+    #[test]
     fn test_append_ts_on_encoded_bytes() {
         let cases = vec![
             (true, vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], 10),
@@ -255,6 +288,7 @@ mod tests {
                 ],
                 20,
             ),
+            (false, vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], 0), // ts 0 is invalid.
             (false, vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 1),
             (false, vec![b'r', 2, 3, 4, 5, 6, 7, 8], 2),
             (false, vec![b'r', 2, 3, 4, 5, 6, 7, 8, 9, 10], 3),
@@ -273,6 +307,23 @@ mod tests {
                 });
                 assert!(r.is_err(), "case {}: {:?}", idx, r);
             }
+        }
+    }
+
+    #[test]
+    fn test_encoded_logical_delete() {
+        {
+            let v = RawValue {
+                user_value: vec![],
+                expire_ts: None,
+                is_delete: true,
+            };
+            let encoded = APIV2::encode_raw_value_owned(v);
+            assert_eq!(encoded, APIV2::ENCODED_LOGICAL_DELETE);
+        }
+        {
+            let v = APIV2::decode_raw_value(&APIV2::ENCODED_LOGICAL_DELETE).unwrap();
+            assert!(v.is_delete);
         }
     }
 }
