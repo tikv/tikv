@@ -105,7 +105,7 @@ impl PluginRegistry {
     /// system.
     ///
     /// A file will only be loaded if it has the proper file ending of dynamic link libraries for
-    /// the current platform (`.so` for Linux, `.dylib` for MacOS, `.dll` for Windows).
+    /// the current platform (`.so` for Linux, `.dylib` for macOS, `.dll` for Windows).
     pub fn start_hot_reloading(
         &mut self,
         plugin_directory: impl Into<PathBuf>,
@@ -225,7 +225,7 @@ impl PluginRegistry {
     /// If a file could not be successfully loaded as a plugin, it will be discarded.
     ///
     /// The plugins have to follow the system's naming convention in order to be loaded, e.g. `.so`
-    /// for Linux, `.dylib` for MacOS and `.dll` for Windows.
+    /// for Linux, `.dylib` for macOS and `.dll` for Windows.
     pub fn load_plugins_from_dir(
         &self,
         dir_name: impl Into<PathBuf>,
