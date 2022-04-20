@@ -123,6 +123,8 @@ pub struct SSTableCore {
     smallest_buf: Bytes,
     biggest_buf: Bytes,
     pub max_ts: u64,
+    pub entries: u32,
+    pub old_entries: u32,
     pub tombs: u32,
     pub idx: Index,
     pub old_idx: Index,
@@ -162,6 +164,8 @@ impl SSTableCore {
         let mut smallest_buf = Bytes::new();
         let mut biggest_buf = Bytes::new();
         let mut max_ts = 0;
+        let mut entries = 0;
+        let mut old_entries = 0;
         let mut tombs = 0;
         while prop_slice.len() > 0 {
             let (key, val, remain) = parse_prop_data(prop_slice);
@@ -172,6 +176,10 @@ impl SSTableCore {
                 biggest_buf = Bytes::copy_from_slice(val);
             } else if key == PROP_KEY_MAX_TS.as_bytes() {
                 max_ts = LittleEndian::read_u64(val);
+            } else if key == PROP_KEY_ENTRIES.as_bytes() {
+                entries = LittleEndian::read_u32(val);
+            } else if key == PROP_KEY_OLD_ENTRIES.as_bytes() {
+                old_entries = LittleEndian::read_u32(val);
             } else if key == PROP_KEY_TOMBS.as_bytes() {
                 tombs = LittleEndian::read_u32(val);
             } else if key == PROP_KEY_FUSE8.as_bytes() {
@@ -193,6 +201,8 @@ impl SSTableCore {
             smallest_buf,
             biggest_buf,
             max_ts,
+            entries,
+            old_entries,
             tombs,
             idx,
             old_idx,

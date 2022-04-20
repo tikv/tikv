@@ -14,6 +14,8 @@ pub const CRC32_IEEE: u8 = 1;
 pub const PROP_KEY_SMALLEST: &str = "smallest";
 pub const PROP_KEY_BIGGEST: &str = "biggest";
 pub const PROP_KEY_MAX_TS: &str = "max_ts";
+pub const PROP_KEY_ENTRIES: &str = "entries";
+pub const PROP_KEY_OLD_ENTRIES: &str = "old_entries";
 pub const PROP_KEY_TOMBS: &str = "tombs";
 pub const PROP_KEY_FUSE8: &str = "fuse8";
 pub const NO_COMPRESSION: u8 = 0;
@@ -112,6 +114,7 @@ pub struct Builder {
     smallest: Vec<u8>,
     biggest: Vec<u8>,
     max_ts: u64,
+    old_entries: u32,
     tombs: u32,
 }
 
@@ -149,6 +152,7 @@ impl Builder {
             self.block_builder
                 .set_last_entry_old_ver_if_zero(val.version);
             self.old_builder.add_entry(key, val);
+            self.old_entries += 1;
         } else {
             // Only try to finish block when the key is different than last.
             if self.block_builder.block.size > self.block_size {
@@ -228,6 +232,13 @@ impl Builder {
         Builder::add_property(buf, PROP_KEY_SMALLEST.as_bytes(), self.smallest.as_slice());
         Builder::add_property(buf, PROP_KEY_BIGGEST.as_bytes(), self.biggest.as_slice());
         Builder::add_property(buf, PROP_KEY_MAX_TS.as_bytes(), &self.max_ts.to_le_bytes());
+        let entries = self.key_hashes.len() as u32;
+        Builder::add_property(buf, PROP_KEY_ENTRIES.as_bytes(), &entries.to_le_bytes());
+        Builder::add_property(
+            buf,
+            PROP_KEY_OLD_ENTRIES.as_bytes(),
+            &self.old_entries.to_le_bytes(),
+        );
         Builder::add_property(buf, PROP_KEY_TOMBS.as_bytes(), &self.tombs.to_le_bytes());
         if let Ok(filter) = BinaryFuse8::try_from(&self.key_hashes) {
             let bin = bincode::serialize(&filter).unwrap();

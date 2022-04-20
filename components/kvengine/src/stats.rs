@@ -23,6 +23,9 @@ pub struct EngineStats {
     pub level_total_sizes: Vec<u64>,
     pub tbl_index_size: u64,
     pub tbl_filter_size: u64,
+    pub entries: usize,
+    pub old_entries: usize,
+    pub tombs: usize,
     pub top_10_write: Vec<ShardStats>,
 }
 
@@ -74,6 +77,9 @@ impl super::Engine {
             engine_stats.partial_ln_count += shard.partial_tbls;
             engine_stats.tbl_index_size += shard.tbl_index_size;
             engine_stats.tbl_filter_size += shard.tbl_filter_size;
+            engine_stats.entries += shard.entries;
+            engine_stats.old_entries += shard.old_entries;
+            engine_stats.tombs += shard.tombs;
             for cf in 0..NUM_CFS {
                 let shard_cf_stat = &shard.cfs[cf];
                 for (i, level_stat) in shard_cf_stat.levels.iter().enumerate() {
@@ -113,6 +119,8 @@ pub struct ShardStats {
     pub cfs: Vec<CFStats>,
     pub tbl_index_size: u64,
     pub tbl_filter_size: u64,
+    pub entries: usize,
+    pub old_entries: usize,
     pub tombs: usize,
     pub base_version: u64,
     pub max_mem_table_size: u64,
@@ -142,6 +150,8 @@ pub struct LevelStats {
     pub data_size: u64,
     pub index_size: u64,
     pub filter_size: u64,
+    pub entries: usize,
+    pub old_entries: usize,
     pub tombs: usize,
 }
 
@@ -150,6 +160,8 @@ impl super::Shard {
         let mut total_size = 0;
         let mut tbl_index_size = 0;
         let mut tbl_filter_size = 0;
+        let mut entries = 0;
+        let mut old_entries = 0;
         let mut tombs = 0;
         let data = self.get_data();
         let mem_table_count = data.mem_tbls.len();
@@ -172,6 +184,8 @@ impl super::Shard {
                 if let Some(cf_tbl) = l0_tbl.get_cf(cf) {
                     tbl_index_size += cf_tbl.index_size();
                     tbl_filter_size += cf_tbl.filter_size();
+                    entries += cf_tbl.entries as usize;
+                    old_entries += cf_tbl.old_entries as usize;
                     tombs += cf_tbl.tombs as usize;
                 }
             }
@@ -191,11 +205,15 @@ impl super::Shard {
                         level_stats.data_size += t.size();
                         level_stats.index_size += t.index_size();
                         level_stats.filter_size += t.filter_size();
+                        level_stats.entries += t.entries as usize;
+                        level_stats.old_entries += t.old_entries as usize;
                         level_stats.tombs += t.tombs as usize;
                     } else {
                         level_stats.data_size += t.size() / 2;
                         level_stats.index_size += t.index_size() / 2;
                         level_stats.filter_size += t.filter_size() / 2;
+                        level_stats.entries += t.entries as usize / 2;
+                        level_stats.old_entries += t.old_entries as usize / 2;
                         level_stats.tombs += t.tombs as usize / 2;
                         partial_tbls += 1;
                     }
@@ -203,6 +221,8 @@ impl super::Shard {
                 total_size += level_stats.data_size;
                 tbl_index_size += level_stats.index_size;
                 tbl_filter_size += level_stats.filter_size;
+                entries += level_stats.entries;
+                old_entries += level_stats.old_entries;
                 tombs += level_stats.tombs;
                 cf_stat.levels.push(level_stats);
             }
@@ -232,6 +252,8 @@ impl super::Shard {
             total_size,
             tbl_index_size,
             tbl_filter_size,
+            entries,
+            old_entries,
             tombs,
             partial_l0s,
             partial_tbls,
