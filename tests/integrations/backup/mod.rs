@@ -264,178 +264,6 @@ fn test_backup_huge_range_and_import() {
     suite.stop();
 }
 
-#[test]
-fn test_backup_meta() {
-    let mut suite = TestSuite::new(3, 144 * 1024 * 1024, ApiVersion::V1);
-    // 3 version for each key.
-    let key_count = 60;
-    suite.must_kv_put(key_count, 3);
-
-    let backup_ts = suite.alloc_ts();
-    // key are order by lexicographical order, 'a'-'z' will cover all
-    let (admin_checksum, admin_total_kvs, admin_total_bytes) =
-        suite.admin_checksum(backup_ts, "a".to_owned(), "z".to_owned());
-
-    // Push down backup request.
-    let tmp = Builder::new().tempdir().unwrap();
-    let storage_path = make_unique_dir(tmp.path());
-    let rx = suite.backup(
-        vec![],   // start
-        vec![],   // end
-        0.into(), // begin_ts
-        backup_ts,
-        &storage_path,
-    );
-    let resps1 = block_on(rx.collect::<Vec<_>>());
-    // Only leader can handle backup.
-    assert_eq!(resps1.len(), 1);
-    let files: Vec<_> = resps1[0].files.clone().into_iter().collect();
-    // Short value is piggybacked in write cf, so we get 1 sst at least.
-    assert!(!files.is_empty());
-    let mut checksum = 0;
-    let mut total_kvs = 0;
-    let mut total_bytes = 0;
-    for f in files {
-        checksum ^= f.get_crc64xor();
-        total_kvs += f.get_total_kvs();
-        total_bytes += f.get_total_bytes();
-    }
-    assert_eq!(total_kvs, key_count as u64);
-    assert_eq!(total_kvs, admin_total_kvs);
-    assert_eq!(total_bytes, admin_total_bytes);
-    assert_eq!(checksum, admin_checksum);
-
-    suite.stop();
-}
-
-fn test_backup_rawkv_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) {
-    let mut suite = TestSuite::new(3, 144 * 1024 * 1024, cur_api_ver);
-    let key_count = 60;
-
-    let cf = match cur_api_ver {
-        ApiVersion::V2 => String::from(""),
-        _ => String::from(CF_DEFAULT),
-    };
-    for i in 0..key_count {
-        let (k, v) = suite.gen_raw_kv(i);
-        suite.must_raw_put(k.clone().into_bytes(), v.clone().into_bytes(), cf.clone());
-    }
-
-    // Push down backup request.
-    let tmp = Builder::new().tempdir().unwrap();
-    let storage_path = make_unique_dir(tmp.path());
-    let rx = suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
-        cf.clone(),
-        &storage_path,
-        dst_api_ver,
-    );
-    let resps1 = block_on(rx.collect::<Vec<_>>());
-    // Only leader can handle backup.
-    assert_eq!(resps1.len(), 1);
-    let files1 = resps1[0].files.clone();
-    assert!(!resps1[0].get_files().is_empty());
-
-    // Delete all data, there should be no backup files.
-    suite.cluster.must_delete_range_cf(&cf, b"", b"");
-    // Backup file should have same contents.
-    let rx = suite.backup_raw(
-        vec![], // start
-        vec![], // end
-        cf.clone(),
-        &make_unique_dir(tmp.path()),
-        dst_api_ver,
-    );
-    let resps2 = block_on(rx.collect::<Vec<_>>());
-    assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
-
-    // Use importer to restore backup files.
-    let backend = make_local_backend(&storage_path);
-    let storage = create_storage(&backend, Default::default()).unwrap();
-    let region = suite.cluster.get_region(b"");
-    let mut sst_meta = SstMeta::default();
-    sst_meta.region_id = region.get_id();
-    sst_meta.set_region_epoch(region.get_region_epoch().clone());
-    sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
-    sst_meta.set_api_version(dst_api_ver);
-    let mut metas = vec![];
-    for f in files1.clone().into_iter() {
-        let mut reader = storage.read(&f.name);
-        let mut content = vec![];
-        block_on(reader.read_to_end(&mut content)).unwrap();
-        let mut m = sst_meta.clone();
-        m.crc32 = calc_crc32_bytes(&content);
-        m.length = content.len() as _;
-        m.cf_name = name_to_cf(&f.name).to_owned();
-        metas.push((m, content));
-    }
-
-    for (m, c) in &metas {
-        for importer in suite.cluster.sim.rl().importers.values() {
-            let mut f = importer.create(m).unwrap();
-            f.append(c).unwrap();
-            f.finish().unwrap();
-        }
-
-        // Make ingest command.
-        let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSst);
-        ingest.mut_ingest_sst().set_sst(m.clone());
-        let mut header = RaftRequestHeader::default();
-        let leader = suite.context.get_peer().clone();
-        header.set_peer(leader);
-        header.set_region_id(suite.context.get_region_id());
-        header.set_region_epoch(suite.context.get_region_epoch().clone());
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.mut_requests().push(ingest);
-        let resp = suite
-            .cluster
-            .call_command_on_leader(cmd, Duration::from_secs(5))
-            .unwrap();
-        assert!(!resp.get_header().has_error(), "{:?}", resp);
-    }
-
-    // Backup file should have same contents.
-    // Set non-empty range to check if it's incorrectly encoded.
-    let rx = suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
-        cf,
-        &make_unique_dir(tmp.path()),
-        dst_api_ver,
-    );
-    let resps3 = block_on(rx.collect::<Vec<_>>());
-    let files3 = resps3[0].files.clone();
-
-    // After https://github.com/tikv/tikv/pull/8707 merged.
-    // the backup file name will based on local timestamp.
-    // so the two backup's file name may not be same, we should skip this check.
-    assert_eq!(files1.len(), 1);
-    assert_eq!(files3.len(), 1);
-    assert_eq!(files1[0].sha256, files3[0].sha256);
-    assert_eq!(files1[0].total_bytes, files3[0].total_bytes);
-    assert_eq!(files1[0].total_kvs, files3[0].total_kvs);
-    assert_eq!(files1[0].size, files3[0].size);
-    suite.stop();
-}
-
-#[test]
-fn test_backup_rawkv_v1() {
-    test_backup_rawkv_impl(ApiVersion::V1, ApiVersion::V1)
-}
-
-#[test]
-fn test_backup_rawkv_v1ttl() {
-    test_backup_rawkv_impl(ApiVersion::V1ttl, ApiVersion::V1ttl)
-}
-
-#[test]
-fn test_backup_rawkv_v2() {
-    test_backup_rawkv_impl(ApiVersion::V2, ApiVersion::V2)
-}
-
 fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) {
     let suite = TestSuite::new(3, 144 * 1024 * 1024, cur_api_ver);
     let key_count = 60;
@@ -537,8 +365,17 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
 }
 
 #[test]
-fn test_backup_rawkv_v1_to_v2() {
-    test_backup_rawkv_convert_impl(ApiVersion::V1, ApiVersion::V2)
+fn test_backup_rawkv_convert() {
+    let raw_test_cases = vec![
+        (ApiVersion::V1, ApiVersion::V1),
+        (ApiVersion::V1ttl, ApiVersion::V1ttl),
+        (ApiVersion::V2, ApiVersion::V2),
+        (ApiVersion::V1, ApiVersion::V2),
+        (ApiVersion::V1ttl, ApiVersion::V2),
+    ];
+    for (cur_api_ver, dst_api_ver) in raw_test_cases {
+        test_backup_rawkv_convert_impl(cur_api_ver, dst_api_ver);
+    }
 }
 
 fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVersion) {
@@ -599,13 +436,15 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
 }
 
 #[test]
-fn test_backup_raw_meta_v1() {
-    test_backup_raw_meta_impl(ApiVersion::V1, ApiVersion::V1);
-}
-
-#[test]
-fn test_backup_raw_meta_v2() {
-    test_backup_raw_meta_impl(ApiVersion::V2, ApiVersion::V2);
+fn test_backup_raw_meta() {
+    let raw_meta_test_cases = vec![
+        (ApiVersion::V1, ApiVersion::V1),
+        (ApiVersion::V1ttl, ApiVersion::V1ttl),
+        (ApiVersion::V2, ApiVersion::V2),
+    ];
+    for (cur_api_ver, dst_api_ver) in raw_meta_test_cases {
+        test_backup_raw_meta_impl(cur_api_ver, dst_api_ver);
+    }
 }
 
 #[test]

@@ -452,7 +452,7 @@ impl BackupRange {
                         self.codec.convert_to_dst_raw_value(value)?,
                     )));
                 };
-                debug!("backup raw key";
+                info!("backup raw key";
                     "key" => &log_wrappers::Value::key(&self.codec.convert_to_dst_raw_key(key)?.into_encoded()),
                     "value" => &log_wrappers::Value::value(&self.codec.convert_to_dst_raw_value(value)?),
                     "valid" => is_valid,
@@ -1513,7 +1513,11 @@ pub mod tests {
         format!("v_{}", generate_test_raw_key(idx))
     }
 
-    fn generate_engine_test_key(user_key: String, ts: Option<TimeStamp>, api_ver: ApiVersion) -> Key {
+    fn generate_engine_test_key(
+        user_key: String,
+        ts: Option<TimeStamp>,
+        api_ver: ApiVersion,
+    ) -> Key {
         dispatch_api_version!(api_ver, {
             return API::encode_raw_key_owned(user_key.into_bytes(), ts);
         })
@@ -1646,63 +1650,25 @@ pub mod tests {
     }
 
     #[test]
-    fn test_handle_backup_raw_v1() {
-        assert!(test_handle_backup_raw_task_impl(
-            ApiVersion::V1,
-            ApiVersion::V1
-        ));
-    }
-
-    #[test]
-    fn test_handle_backup_raw_v1ttl() {
-        assert!(test_handle_backup_raw_task_impl(
-            ApiVersion::V1ttl,
-            ApiVersion::V1ttl
-        ));
-    }
-
-    #[test]
-    fn test_handle_backup_raw_v2() {
-        assert!(test_handle_backup_raw_task_impl(
-            ApiVersion::V2,
-            ApiVersion::V2
-        ));
-    }
-
-    #[test]
-    fn test_handle_backup_raw_v1_to_v2() {
-        assert!(test_handle_backup_raw_task_impl(
-            ApiVersion::V1,
-            ApiVersion::V2
-        ));
-    }
-
-    #[test]
-    fn test_handle_backup_raw_v1ttl_to_v2() {
-        assert!(test_handle_backup_raw_task_impl(
-            ApiVersion::V1ttl,
-            ApiVersion::V2
-        ));
-    }
-
-    #[test]
-    fn test_handle_backup_raw_invalid() {
-        assert!(!test_handle_backup_raw_task_impl(
-            ApiVersion::V1,
-            ApiVersion::V1ttl
-        ));
-        assert!(!test_handle_backup_raw_task_impl(
-            ApiVersion::V2,
-            ApiVersion::V1ttl
-        ));
-        assert!(!test_handle_backup_raw_task_impl(
-            ApiVersion::V2,
-            ApiVersion::V1
-        ));
-        assert!(!test_handle_backup_raw_task_impl(
-            ApiVersion::V1ttl,
-            ApiVersion::V1
-        ));
+    fn test_handle_backup_raw() {
+        // (src_api_version, dst_api_version, result)
+        let test_backup_cases = vec![
+            (ApiVersion::V1, ApiVersion::V1, true),
+            (ApiVersion::V1ttl, ApiVersion::V1ttl, true),
+            (ApiVersion::V2, ApiVersion::V2, true),
+            (ApiVersion::V1, ApiVersion::V2, true),
+            (ApiVersion::V1ttl, ApiVersion::V2, true),
+            (ApiVersion::V1, ApiVersion::V1ttl, false),
+            (ApiVersion::V2, ApiVersion::V1, false),
+            (ApiVersion::V2, ApiVersion::V1ttl, false),
+            (ApiVersion::V1ttl, ApiVersion::V1, false),
+        ];
+        for (cur_api_ver, dst_api_ver, ret) in test_backup_cases {
+            assert_eq!(
+                test_handle_backup_raw_task_impl(cur_api_ver, dst_api_ver),
+                ret
+            );
+        }
     }
 
     #[test]
