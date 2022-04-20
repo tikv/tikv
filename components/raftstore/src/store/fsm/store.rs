@@ -178,7 +178,7 @@ impl StoreMeta {
             .range((Excluded(start.to_owned()), Unbounded::<Vec<u8>>))
         {
             let region = &self.regions[id];
-            if keys::enc_start_key(region) <= end.to_owned() {
+            if keys::enc_start_key(region).as_slice() <= end {
                 match self.damaged_ranges.entry(fname.to_owned()) {
                     HashMapEntry::Occupied(_) => {}
                     HashMapEntry::Vacant(v) => {
@@ -202,7 +202,7 @@ impl StoreMeta {
                 .range((Excluded(start.clone()), Unbounded::<Vec<u8>>))
             {
                 let region = &self.regions[id];
-                if keys::enc_start_key(region) <= *end {
+                if &keys::enc_start_key(region) <= end {
                     ids.insert(*id);
                 }
             }
