@@ -73,7 +73,7 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         for m in batch.get_pairs().iter() {
             dispatch_api_version!(self.api_version, {
                 let key_mode = API::parse_key_mode(m.get_key());
-                if key_mode == KeyMode::Raw {
+                if self.api_version == ApiVersion::V2 && key_mode != KeyMode::Txn {
                     return Err(Error::InvalidKeyMode {
                         storage_api_version: self.api_version,
                         writer: SstWriterType::Txn,
@@ -218,13 +218,15 @@ impl<E: KvEngine> RawSSTWriter<E> {
                     };
 
                     for m in batch.take_pairs().into_iter() {
-                        if API::parse_key_mode(m.get_key()) != KeyMode::Raw {
+                        let key_mode = API::parse_key_mode(m.get_key());
+                        if self.api_version == ApiVersion::V2 && key_mode != KeyMode::Raw {
                             return Err(Error::InvalidKeyMode {
                                 storage_api_version: self.api_version,
                                 writer: SstWriterType::Raw,
                                 key: log_wrappers::hex_encode_upper(m.get_key()),
                             });
                         }
+
                         let key =
                             API::encode_raw_key(m.get_key(), Some(TimeStamp::new(batch.get_ts())));
                         match m.get_op() {
@@ -283,7 +285,6 @@ impl<E: KvEngine> RawSSTWriter<E> {
 
 #[cfg(test)]
 mod tests {
-    use api_version::APIV2;
     use engine_traits::DATA_CFS;
     use test_sst_importer::*;
     use uuid::Uuid;
@@ -354,7 +355,7 @@ mod tests {
 
         let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = RawWriteBatch::default();
-        batch.set_ts(0);
+        batch.set_ts(1);
         let mut pairs = vec![];
         let key1: &[u8] = if api_version == ApiVersion::V2 {
             b"rk1"
@@ -430,6 +431,27 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_write_v1() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let mut batch = RawWriteBatch::default();
+
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"v1".to_vec());
+        batch.set_pairs(vec![pair].into());
+        w.write(batch).unwrap();
+    }
+
+    #[test]
     fn test_raw_write_invalid_key_mode() {
         let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
@@ -442,18 +464,49 @@ mod tests {
 
         let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
         let mut batch = RawWriteBatch::default();
+        batch.set_ts(1);
 
         // put an invalid key
         let mut pair = Pair::default();
-        pair.set_key(
-            APIV2::encode_raw_key(b"k1", Some(TimeStamp::new(0)))
-                .as_encoded()
-                .to_vec(),
-        );
+        pair.set_key(b"k1".to_vec());
         pair.set_value(b"short_value".to_vec());
         let pairs = vec![pair];
         batch.set_pairs(pairs.into());
 
         assert!(w.write(batch).is_err());
+    }
+
+    #[test]
+    fn test_txn_write_v2() {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V2).unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
+        let mut batch = WriteBatch::default();
+        batch.set_commit_ts(1);
+
+        // put an invalid key
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        let pairs = vec![pair];
+        batch.set_pairs(pairs.into());
+
+        assert!(w.write(batch.clone()).is_err());
+
+        // put a valid key
+        let mut pair = Pair::default();
+        pair.set_key(b"xk1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        let pairs = vec![pair];
+        batch.set_pairs(pairs.into());
+
+        w.write(batch).unwrap();
     }
 }

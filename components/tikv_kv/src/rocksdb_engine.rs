@@ -262,10 +262,6 @@ impl Engine for RocksEngine {
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }
-
-    fn mut_coprocessor(&mut self) -> Option<&mut CoprocessorHost<BaseRocksEngine>> {
-        Some(&mut self.coprocessor)
-    }
 }
 
 impl Snapshot for Arc<RocksSnapshot> {

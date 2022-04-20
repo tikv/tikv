@@ -783,7 +783,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, Api: API
         let region_id = req.get_context().get_region_id();
         let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
-            // TODO: process Txn & Raw data in a unified manner. CDC & BR have similar request.
             if !req.get_split_key().is_empty() {
                 vec![Api::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
             } else {
