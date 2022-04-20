@@ -2,7 +2,7 @@
 
 use std::sync::mpsc::channel;
 
-use api_version::{ApiV1Ttl, ApiV2, KvFormat, RawValue};
+use api_version::{check_kv_format, KvFormat, RawValue};
 use engine_rocks::raw::CompactOptions;
 use engine_rocks::util::get_cf_handle;
 use engine_traits::{IterOptions, MiscExt, Peekable, SyncMutable, CF_DEFAULT};
@@ -19,8 +19,7 @@ use txn_types::Key;
 
 #[test]
 fn test_ttl_checker() {
-    test_ttl_checker_impl::<ApiV1Ttl>();
-    test_ttl_checker_impl::<ApiV2>();
+    check_kv_format!(test_ttl_checker_impl<ApiV1Ttl ApiV2>);
 }
 
 fn test_ttl_checker_impl<F: KvFormat>() {
@@ -102,8 +101,7 @@ fn test_ttl_checker_impl<F: KvFormat>() {
 
 #[test]
 fn test_ttl_compaction_filter() {
-    test_ttl_compaction_filter_impl::<ApiV1Ttl>();
-    test_ttl_compaction_filter_impl::<ApiV2>();
+    check_kv_format!(test_ttl_compaction_filter_impl<ApiV1Ttl ApiV2>);
 }
 
 fn test_ttl_compaction_filter_impl<F: KvFormat>() {
@@ -169,8 +167,7 @@ fn test_ttl_compaction_filter_impl<F: KvFormat>() {
 
 #[test]
 fn test_ttl_snapshot() {
-    test_ttl_snapshot_impl::<ApiV1Ttl>();
-    test_ttl_snapshot_impl::<ApiV2>();
+    check_kv_format!(test_ttl_snapshot_impl<ApiV1Ttl ApiV2>);
 }
 
 fn test_ttl_snapshot_impl<F: KvFormat>() {
@@ -267,8 +264,7 @@ fn test_ttl_snapshot_impl<F: KvFormat>() {
 
 #[test]
 fn test_ttl_iterator() {
-    test_ttl_iterator_impl::<ApiV1Ttl>();
-    test_ttl_iterator_impl::<ApiV2>();
+    check_kv_format!(test_ttl_iterator_impl<ApiV1Ttl ApiV2>);
 }
 
 fn test_ttl_iterator_impl<F: KvFormat>() {
@@ -389,8 +385,7 @@ fn test_ttl_iterator_impl<F: KvFormat>() {
 
 #[test]
 fn test_stoarge_raw_batch_put_ttl() {
-    test_stoarge_raw_batch_put_ttl_impl::<ApiV1Ttl>();
-    test_stoarge_raw_batch_put_ttl_impl::<ApiV2>();
+    check_kv_format!(test_stoarge_raw_batch_put_ttl_impl<ApiV1Ttl ApiV2>);
 }
 
 fn test_stoarge_raw_batch_put_ttl_impl<F: KvFormat>() {

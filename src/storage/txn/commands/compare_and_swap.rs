@@ -101,16 +101,14 @@ mod tests {
     use super::*;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Engine, Statistics, TestEngineBuilder};
-    use api_version::{ApiV1, ApiV1Ttl, ApiV2};
+    use api_version::check_kv_format;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
 
     #[test]
     fn test_cas_basic() {
-        test_cas_basic_impl::<ApiV1>();
-        test_cas_basic_impl::<ApiV1Ttl>();
-        test_cas_basic_impl::<ApiV2>();
+        check_kv_format!(test_cas_basic_impl);
     }
 
     /// Note: for API V2, TestEngine don't support MVCC reading, so `pre_propose` observer is ignored,

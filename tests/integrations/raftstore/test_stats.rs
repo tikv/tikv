@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use kvproto::pdpb::QueryKind;
-
-use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
+use api_version::check_kv_format;
+use api_version::KvFormat;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
+use kvproto::pdpb::QueryKind;
 use kvproto::tikvpb_grpc::TikvClient;
 use pd_client::PdClient;
 use raftstore::store::QueryStats;
@@ -157,12 +157,9 @@ type Query = dyn Fn(Context, &Cluster<ServerCluster>, TikvClient, u64, u64, Vec<
 
 #[test]
 fn test_query_stats() {
-    test_raw_query_stats_tmpl::<ApiV1>();
-    test_raw_query_stats_tmpl::<ApiV1Ttl>();
-    test_raw_query_stats_tmpl::<ApiV2>();
+    check_kv_format!(test_raw_query_stats_tmpl);
 
-    test_txn_query_stats_tmpl::<ApiV1>();
-    test_txn_query_stats_tmpl::<ApiV2>();
+    check_kv_format!(test_txn_query_stats_tmpl<ApiV1  ApiV2>);
 }
 
 fn test_raw_query_stats_tmpl<F: KvFormat>() {

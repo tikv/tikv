@@ -3085,7 +3085,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
-    use api_version::{ApiV1, ApiV1Ttl, ApiV2};
+    use api_version::{check_kv_format, ApiV2};
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -4459,9 +4459,7 @@ mod tests {
 
     #[test]
     fn test_raw_get_put() {
-        test_raw_get_put_impl::<ApiV1>();
-        test_raw_get_put_impl::<ApiV1Ttl>();
-        test_raw_get_put_impl::<ApiV2>();
+        check_kv_format!(test_raw_get_put_impl);
     }
 
     fn test_raw_get_put_impl<F: KvFormat>() {
@@ -4574,9 +4572,7 @@ mod tests {
 
     #[test]
     fn test_raw_delete() {
-        test_raw_delete_impl::<ApiV1>();
-        test_raw_delete_impl::<ApiV1Ttl>();
-        test_raw_delete_impl::<ApiV2>();
+        check_kv_format!(test_raw_delete_impl);
     }
 
     fn test_raw_delete_impl<F: KvFormat>() {
@@ -4656,9 +4652,7 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        test_raw_delete_range_impl::<ApiV1>();
-        test_raw_delete_range_impl::<ApiV1Ttl>();
-        test_raw_delete_range_impl::<ApiV2>();
+        check_kv_format!(test_raw_delete_range_impl);
     }
 
     fn test_raw_delete_range_impl<F: KvFormat>() {
@@ -4769,9 +4763,7 @@ mod tests {
     #[test]
     fn test_raw_batch_put() {
         for for_cas in vec![false, true].into_iter() {
-            test_raw_batch_put_impl::<ApiV1>(for_cas);
-            test_raw_batch_put_impl::<ApiV1Ttl>(for_cas);
-            test_raw_batch_put_impl::<ApiV2>(for_cas);
+            check_kv_format!(test_raw_batch_put_impl(for_cas));
         }
     }
 
@@ -4863,9 +4855,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        test_raw_batch_get_impl::<ApiV1>();
-        test_raw_batch_get_impl::<ApiV1Ttl>();
-        test_raw_batch_get_impl::<ApiV2>();
+        check_kv_format!(test_raw_batch_get_impl);
     }
 
     fn test_raw_batch_get_impl<F: KvFormat>() {
@@ -4912,9 +4902,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get_command() {
-        test_raw_batch_get_command_impl::<ApiV1>();
-        test_raw_batch_get_command_impl::<ApiV1Ttl>();
-        test_raw_batch_get_command_impl::<ApiV2>();
+        check_kv_format!(test_raw_batch_get_command_impl);
     }
 
     fn test_raw_batch_get_command_impl<F: KvFormat>() {
@@ -4976,9 +4964,7 @@ mod tests {
     #[test]
     fn test_raw_batch_delete() {
         for for_cas in vec![false, true].into_iter() {
-            test_raw_batch_delete_impl::<ApiV1>(for_cas);
-            test_raw_batch_delete_impl::<ApiV1Ttl>(for_cas);
-            test_raw_batch_delete_impl::<ApiV2>(for_cas);
+            check_kv_format!(test_raw_batch_delete_impl(for_cas));
         }
     }
 
@@ -5087,9 +5073,7 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        test_raw_scan_impl::<ApiV1>();
-        test_raw_scan_impl::<ApiV1Ttl>();
-        test_raw_scan_impl::<ApiV2>();
+        check_kv_format!(test_raw_scan_impl);
     }
 
     fn test_raw_scan_impl<F: KvFormat>() {
@@ -5479,9 +5463,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_scan() {
-        test_raw_batch_scan_impl::<ApiV1>();
-        test_raw_batch_scan_impl::<ApiV1Ttl>();
-        test_raw_batch_scan_impl::<ApiV2>();
+        check_kv_format!(test_raw_batch_scan_impl);
     }
 
     fn test_raw_batch_scan_impl<F: KvFormat>() {
@@ -5736,8 +5718,7 @@ mod tests {
 
     #[test]
     fn test_raw_get_key_ttl() {
-        test_raw_get_key_ttl_impl::<ApiV1Ttl>();
-        test_raw_get_key_ttl_impl::<ApiV2>();
+        check_kv_format!(test_raw_get_key_ttl_impl<ApiV1Ttl ApiV2>());
     }
 
     fn test_raw_get_key_ttl_impl<F: KvFormat>() {
@@ -5796,9 +5777,7 @@ mod tests {
 
     #[test]
     fn test_raw_compare_and_swap() {
-        test_raw_compare_and_swap_impl::<ApiV1>();
-        test_raw_compare_and_swap_impl::<ApiV1Ttl>();
-        test_raw_compare_and_swap_impl::<ApiV2>();
+        check_kv_format!(test_raw_compare_and_swap_impl);
     }
 
     fn test_raw_compare_and_swap_impl<F: KvFormat>() {
