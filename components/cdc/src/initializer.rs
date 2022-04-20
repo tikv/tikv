@@ -241,8 +241,8 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
-            iter_opt.set_lower_bound(b"r", 1);
-            iter_opt.set_upper_bound(b"s", 1);
+            iter_opt.set_lower_bound(region.get_start_key(), 0);
+            iter_opt.set_upper_bound(region.get_end_key(), 0);
             let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
 
             iter.seek_to_first().unwrap();
