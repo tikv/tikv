@@ -128,13 +128,13 @@ impl<F: KvFormat> TablePropertiesCollectorFactory<TtlPropertiesCollector<F>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use api_version::check_kv_format;
+    use api_version::test_kv_format_impl;
     use kvproto::kvrpcpb::ApiVersion;
     use tikv_util::time::UnixSecs;
 
     #[test]
     fn test_ttl_properties() {
-        check_kv_format!(test_ttl_properties_impl<ApiV1Ttl ApiV2>);
+        test_kv_format_impl!(test_ttl_properties_impl<ApiV1Ttl ApiV2>);
     }
 
     fn test_ttl_properties_impl<F: KvFormat>() {

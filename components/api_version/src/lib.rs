@@ -78,15 +78,15 @@ pub struct ApiV1Ttl;
 pub struct ApiV2;
 
 #[macro_export]
-macro_rules! check_kv_format {
+macro_rules! test_kv_format_impl {
     ($func:ident<$ver:ident $($left_ver:ident)*> $(($($arg:expr),*))?) => {
-        $crate::check_kv_format!(__imp $func<$ver> $(($($arg),*))?);
-        $crate::check_kv_format!($func<$($left_ver)*> $(($($arg),*))?);
+        $crate::test_kv_format_impl!(__imp $func<$ver> $(($($arg),*))?);
+        $crate::test_kv_format_impl!($func<$($left_ver)*> $(($($arg),*))?);
     };
     ($func:ident<> $(($($arg:expr),*))?) => {
     };
     ($func:ident $(($($arg:expr),*))?) => {
-        $crate::check_kv_format!($func<ApiV1 ApiV1Ttl ApiV2>$(($($arg),*))?);
+        $crate::test_kv_format_impl!($func<ApiV1 ApiV1Ttl ApiV2>$(($($arg),*))?);
     };
     (__imp $func:ident<$ver:ident>) => {
         $func::<$crate::$ver>();

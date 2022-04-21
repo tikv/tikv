@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use api_version::check_kv_format;
+use api_version::test_kv_format_impl;
 use api_version::KvFormat;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::*;
@@ -157,9 +157,9 @@ type Query = dyn Fn(Context, &Cluster<ServerCluster>, TikvClient, u64, u64, Vec<
 
 #[test]
 fn test_query_stats() {
-    check_kv_format!(test_raw_query_stats_tmpl);
+    test_kv_format_impl!(test_raw_query_stats_tmpl);
 
-    check_kv_format!(test_txn_query_stats_tmpl<ApiV1  ApiV2>);
+    test_kv_format_impl!(test_txn_query_stats_tmpl<ApiV1  ApiV2>);
 }
 
 fn test_raw_query_stats_tmpl<F: KvFormat>() {
