@@ -2065,7 +2065,9 @@ where
             self.fsm
                 .peer
                 .raft_group
-                .report_unreachable(msg.get_from_peer().get_id());
+                .raft
+                .step(msg.get_message().to_owned())
+                .unwrap();
 
             fail_point!(
                 "leader_handle_recved_msgunreachable_check",
