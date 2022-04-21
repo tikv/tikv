@@ -207,6 +207,10 @@ impl StoreMeta {
                 }
             }
         }
+        warn!(
+            "detected damaged regions overlapping damaged file ranges";
+            "id" => ?&ids,
+        );
         ids.into_iter().collect()
     }
 }
