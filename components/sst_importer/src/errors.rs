@@ -159,9 +159,7 @@ impl ErrorCodeExt for Error {
             Error::CodecError(e) => e.error_code(),
             Error::FileConflict => error_code::sst_importer::FILE_CONFLICT,
             Error::TtlNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
-            Error::TtlLenNotEqualsToPairs => {
-                error_code::sst_importer::TTL_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            Error::TtlLenNotEqualsToPairs => error_code::sst_importer::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
         }
     }

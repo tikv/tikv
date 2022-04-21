@@ -154,9 +154,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
             ErrorInner::TtlNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
-            ErrorInner::TtlLenNotEqualsToPairs => {
-                error_code::storage::TTL_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            ErrorInner::TtlLenNotEqualsToPairs => error_code::storage::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
             ErrorInner::InvalidKeyMode { .. } => error_code::storage::INVALID_KEY_MODE,
             ErrorInner::InvalidKeyRangeMode { .. } => error_code::storage::INVALID_KEY_MODE,
