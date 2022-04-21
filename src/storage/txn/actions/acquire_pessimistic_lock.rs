@@ -6,6 +6,7 @@ use crate::storage::mvcc::{
     ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
 };
 use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
+use crate::storage::types::PessimisticLockKeyResult;
 use crate::storage::Snapshot;
 use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
@@ -124,7 +125,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 .inc();
         }
         return Ok((
-            PessimisticLockKeyResult::new(
+            PessimisticLockKeyResult::new_success(
                 need_value,
                 need_check_existence,
                 locked_with_conflict_ts,
@@ -247,7 +248,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // TODO don't we need to commit the modifies in txn?
 
     Ok((
-        PessimisticLockKeyResult::new(
+        PessimisticLockKeyResult::new_success(
             need_value,
             need_check_existence,
             locked_with_conflict_ts,

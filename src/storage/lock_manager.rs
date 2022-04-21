@@ -3,13 +3,23 @@
 use crate::server::lock_manager::waiter_manager;
 use crate::server::lock_manager::waiter_manager::Callback;
 use crate::storage::{txn::ProcessResult, types::StorageCallback};
+use kvproto::kvrpcpb::LockInfo;
 use std::time::Duration;
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct Lock {
+pub struct LockDigest {
     pub ts: TimeStamp,
     pub hash: u64,
+}
+
+impl LockDigest {
+    pub fn from_lock_info_pb(lock_info: &LockInfo) -> Self {
+        Self {
+            ts: lock_info.get_lock_version().into(),
+            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
+        }
+    }
 }
 
 /// DiagnosticContext is for diagnosing problems about locks
@@ -71,7 +81,7 @@ pub trait LockManager: Clone + Send + 'static {
         start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
-        lock: Lock,
+        lock: LockDigest,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
         diag_ctx: DiagnosticContext,
@@ -106,7 +116,7 @@ impl LockManager for DummyLockManager {
         _start_ts: TimeStamp,
         _cb: StorageCallback,
         _pr: ProcessResult,
-        _lock: Lock,
+        _lock: LockDigest,
         _is_first_lock: bool,
         _wait_timeout: Option<WaitTimeout>,
         _diag_ctx: DiagnosticContext,

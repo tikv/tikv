@@ -6,7 +6,7 @@ use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::{DiagnosticContext, Lock};
+use crate::storage::lock_manager::{DiagnosticContext, LockDigest};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
@@ -378,7 +378,7 @@ pub enum Task {
     Detect {
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         // Only valid when `tp == Detect`.
         diag_ctx: DiagnosticContext,
     },
@@ -440,7 +440,7 @@ impl Scheduler {
         }
     }
 
-    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock, diag_ctx: DiagnosticContext) {
+    pub fn detect(&self, txn_ts: TimeStamp, lock: LockDigest, diag_ctx: DiagnosticContext) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
             txn_ts,
@@ -449,7 +449,7 @@ impl Scheduler {
         });
     }
 
-    pub fn clean_up_wait_for(&self, txn_ts: TimeStamp, lock: Lock) {
+    pub fn clean_up_wait_for(&self, txn_ts: TimeStamp, lock: LockDigest) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUpWaitFor,
             txn_ts,
@@ -462,7 +462,7 @@ impl Scheduler {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUp,
             txn_ts,
-            lock: Lock::default(),
+            lock: LockDigest::default(),
             diag_ctx: DiagnosticContext::default(),
         });
     }
@@ -764,7 +764,7 @@ where
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let entry = resp.take_entry();
             let txn = entry.txn.into();
-            let lock = Lock {
+            let lock = LockDigest {
                 ts: entry.wait_for_txn.into(),
                 hash: entry.key_hash,
             };
@@ -788,7 +788,7 @@ where
         &mut self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         diag_ctx: DiagnosticContext,
     ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
@@ -824,7 +824,7 @@ where
         &self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
@@ -860,7 +860,7 @@ where
         &mut self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         diag_ctx: DiagnosticContext,
     ) {
         if self.is_leader() {

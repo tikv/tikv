@@ -38,14 +38,17 @@ pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
+use std::collections::hash_map::DefaultHasher;
 use tikv_util::deadline::Deadline;
 pub use txn_heart_beat::TxnHeartBeat;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::iter;
 use std::marker::PhantomData;
+use std::num::NonZeroU64;
 use std::ops::{Deref, DerefMut};
 
 use kvproto::kvrpcpb::*;
@@ -57,10 +60,10 @@ use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotR
 use crate::storage::txn::latch;
 use crate::storage::txn::{ProcessResult, Result};
 use crate::storage::types::{
-    MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
-    TxnStatus,
+    MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
+    SecondaryLocksStatus, StorageCallbackType, TxnStatus,
 };
-use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
+use crate::storage::{metrics, Callback, Result as StorageResult, Snapshot, Statistics};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 
 /// Store Transaction scheduler commands.
@@ -370,33 +373,55 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    pub lock_info: Option<WriteResultLockInfo>,
+    pub encountered_locks: Option<Vec<WriteResultLockInfo>>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
 
 pub struct WriteResultLockInfo {
-    pub lock: lock_manager::Lock,
-    pub key: Vec<u8>,
+    pub index_in_request: usize,
+    pub key: Key,
+    pub last_found_lock: LockInfo,
+    pub lock_digest: lock_manager::LockDigest,
+    pub hash_for_latch: u64,
+    pub key_cb: Option<Callback<PessimisticLockResults>>,
+    // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
     pub is_first_lock: bool,
+    pub pb_ctx: Context,
+    pub term: Option<NonZeroU64>,
+    pub start_ts: TimeStamp,
+    pub for_update_ts: TimeStamp,
     pub wait_timeout: Option<WaitTimeout>,
 }
 
 impl WriteResultLockInfo {
-    pub fn from_lock_info_pb(
-        lock_info: &LockInfo,
+    pub fn new(
+        index_in_request: usize,
+        key: Key,
+        last_found_lock: LockInfo,
         is_first_lock: bool,
+        ctx: Context,
+        term: Option<NonZeroU64>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
         wait_timeout: Option<WaitTimeout>,
     ) -> Self {
-        let lock = lock_manager::Lock {
-            ts: lock_info.get_lock_version().into(),
-            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
-        };
-        let key = lock_info.get_key().to_owned();
+        let lock_digest = lock_manager::LockDigest::from_lock_info_pb(last_found_lock);
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let hash_for_latch = hasher.finish();
         Self {
-            lock,
+            index_in_request,
             key,
+            last_found_lock,
+            lock_digest,
+            hash_for_latch,
+            key_cb: None,
             is_first_lock,
+            pb_ctx: ctx,
+            term,
+            start_ts,
+            for_update_ts,
             wait_timeout,
         }
     }

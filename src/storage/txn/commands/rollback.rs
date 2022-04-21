@@ -59,7 +59,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
             to_be_write: write_data,
             rows,
             pr: ProcessResult::Res,
-            lock_info: None,
+            encountered_locks: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

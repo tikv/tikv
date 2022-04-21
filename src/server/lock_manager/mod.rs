@@ -22,7 +22,7 @@ use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::DynamicConfigs as StorageDynamicConfigs;
 use crate::storage::{
-    lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
+    lock_manager::{LockDigest, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
 };
 use raftstore::coprocessor::CoprocessorHost;
@@ -243,7 +243,7 @@ impl LockManagerTrait for LockManager {
         start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
-        lock: Lock,
+        lock: LockDigest,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
         diag_ctx: DiagnosticContext,
@@ -387,7 +387,7 @@ mod tests {
         // Wake up
         let (waiter_ts, lock) = (
             10.into(),
-            Lock {
+            LockDigest {
                 ts: 20.into(),
                 hash: 20,
             },

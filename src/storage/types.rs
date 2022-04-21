@@ -5,7 +5,7 @@
 use crate::storage::{
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
-    Callback, Result,
+    Callback, Error, Result,
 };
 use kvproto::kvrpcpb;
 use std::fmt::Debug;
@@ -129,10 +129,12 @@ pub enum PessimisticLockKeyResult {
         value: Option<Value>,
         conflict_ts: TimeStamp,
     },
+    Waiting,
+    Failed(Error),
 }
 
 impl PessimisticLockKeyResult {
-    fn new(
+    pub fn new_success(
         need_value: bool,
         need_check_existence: bool,
         locked_with_conflict_ts: Option<TimeStamp>,

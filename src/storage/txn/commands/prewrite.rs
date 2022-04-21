@@ -605,7 +605,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write,
                 rows,
                 pr,
-                lock_info: None,
+                encountered_locks: None,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -623,7 +623,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write: WriteData::default(),
                 rows,
                 pr,
-                lock_info: None,
+                encountered_locks: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }

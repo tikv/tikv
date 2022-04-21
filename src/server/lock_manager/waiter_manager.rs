@@ -3,7 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::{DiagnosticContext, Lock, WaitTimeout};
+use crate::storage::lock_manager::{DiagnosticContext, LockDigest, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
@@ -102,7 +102,7 @@ pub enum Task {
         start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
-        lock: Lock,
+        lock: LockDigest,
         timeout: WaitTimeout,
         diag_ctx: DiagnosticContext,
     },
@@ -118,7 +118,7 @@ pub enum Task {
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     },
@@ -173,7 +173,7 @@ pub(crate) struct Waiter {
     /// to `WriteConflict` error if the lock is released or `Deadlock` error if
     /// it causes deadlock.
     pub(crate) pr: ProcessResult,
-    pub(crate) lock: Lock,
+    pub(crate) lock: LockDigest,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
@@ -184,7 +184,7 @@ impl Waiter {
         start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
-        lock: Lock,
+        lock: LockDigest,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
     ) -> Self {
@@ -326,12 +326,12 @@ impl WaitTable {
     }
 
     /// Removes all waiters waiting for the lock.
-    fn remove(&mut self, lock: Lock) {
+    fn remove(&mut self, lock: LockDigest) {
         self.wait_table.remove(&lock.hash);
         WAIT_TABLE_STATUS_GAUGE.locks.dec();
     }
 
-    fn remove_waiter(&mut self, lock: Lock, waiter_ts: TimeStamp) -> Option<Waiter> {
+    fn remove_waiter(&mut self, lock: LockDigest, waiter_ts: TimeStamp) -> Option<Waiter> {
         let waiters = self.wait_table.get_mut(&lock.hash)?;
         let idx = waiters
             .iter()
@@ -349,7 +349,7 @@ impl WaitTable {
     ///
     /// NOTE: Due to the borrow checker, it doesn't remove the entry in the `WaitTable`
     /// even if there is no remaining waiter.
-    fn remove_oldest_waiter(&mut self, lock: Lock) -> Option<(Waiter, &mut Waiters)> {
+    fn remove_oldest_waiter(&mut self, lock: LockDigest) -> Option<(Waiter, &mut Waiters)> {
         let waiters = self.wait_table.get_mut(&lock.hash)?;
         let oldest_idx = waiters
             .iter()
@@ -406,7 +406,7 @@ impl Scheduler {
         start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
-        lock: Lock,
+        lock: LockDigest,
         timeout: WaitTimeout,
         diag_ctx: DiagnosticContext,
     ) {
@@ -435,7 +435,7 @@ impl Scheduler {
     pub fn deadlock(
         &self,
         txn_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
@@ -520,7 +520,7 @@ impl WaiterManager {
         let duration: Duration = self.wake_up_delay_duration.into();
         let new_timeout = Instant::now() + duration;
         for hash in hashes {
-            let lock = Lock { ts: lock_ts, hash };
+            let lock = LockDigest { ts: lock_ts, hash };
             if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
                 // Notify the oldest one immediately.
                 self.detector_scheduler
@@ -551,7 +551,7 @@ impl WaiterManager {
     fn handle_deadlock(
         &mut self,
         waiter_ts: TimeStamp,
-        lock: Lock,
+        lock: LockDigest,
         deadlock_key_hash: u64,
         wait_chain: Vec<WaitForEntry>,
     ) {
@@ -654,7 +654,7 @@ pub mod tests {
             start_ts,
             cb: StorageCallback::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
-            lock: Lock { ts: lock_ts, hash },
+            lock: LockDigest { ts: lock_ts, hash },
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
@@ -747,7 +747,7 @@ pub mod tests {
                 MvccErrorInner::KeyIsLocked(info.clone()),
             )))),
         };
-        let lock = Lock {
+        let lock = LockDigest {
             ts: lock_ts,
             hash: lock_hash,
         };
@@ -945,7 +945,7 @@ pub mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..20 {
             let waiter_ts = rng.gen::<u64>().into();
-            let lock = Lock {
+            let lock = LockDigest {
                 ts: rng.gen::<u64>().into(),
                 hash: rng.gen(),
             };
@@ -969,7 +969,7 @@ pub mod tests {
         assert!(
             wait_table
                 .remove_waiter(
-                    Lock {
+                    LockDigest {
                         ts: TimeStamp::zero(),
                         hash: 0
                     },
@@ -983,7 +983,7 @@ pub mod tests {
     fn test_wait_table_add_duplicated_waiter() {
         let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
         let waiter_ts = 10.into();
-        let lock = Lock {
+        let lock = LockDigest {
             ts: 20.into(),
             hash: 20,
         };
@@ -1002,7 +1002,7 @@ pub mod tests {
     #[test]
     fn test_wait_table_remove_oldest_waiter() {
         let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
-        let lock = Lock {
+        let lock = LockDigest {
             ts: 10.into(),
             hash: 10,
         };
@@ -1031,7 +1031,7 @@ pub mod tests {
         let waiter_count = Arc::new(AtomicUsize::new(0));
         let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
 
-        let lock = Lock {
+        let lock = LockDigest {
             ts: 2.into(),
             hash: 2,
         };
@@ -1197,7 +1197,7 @@ pub mod tests {
         }
 
         // Multiple waiters are waiting for one lock.
-        let mut lock = Lock {
+        let mut lock = LockDigest {
             ts: 10.into(),
             hash: 10,
         };
@@ -1251,7 +1251,7 @@ pub mod tests {
         );
 
         // The max lifetime of waiter is its timeout.
-        let lock = Lock {
+        let lock = LockDigest {
             ts: 10.into(),
             hash: 10,
         };
@@ -1302,7 +1302,7 @@ pub mod tests {
         let (mut worker, scheduler) = start_waiter_manager(1000, 100);
         let (waiter_ts, lock) = (
             10.into(),
-            Lock {
+            LockDigest {
                 ts: 20.into(),
                 hash: 20,
             },
@@ -1330,7 +1330,7 @@ pub mod tests {
         let (mut worker, scheduler) = start_waiter_manager(1000, 100);
         let (waiter_ts, lock) = (
             10.into(),
-            Lock {
+            LockDigest {
                 ts: 20.into(),
                 hash: 20,
             },

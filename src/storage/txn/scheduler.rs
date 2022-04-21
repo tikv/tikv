@@ -23,6 +23,7 @@
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{mem, u64};
@@ -50,7 +51,7 @@ use crate::storage::kv::{
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
-    ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+    self, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
@@ -60,10 +61,11 @@ use crate::storage::txn::{
     sched_pool::{tls_collect_read_duration, tls_collect_scan_details, SchedPool},
     Error, ProcessResult,
 };
+use crate::storage::types::{PessimisticLockKeyResult, PessimisticLockResults};
 use crate::storage::DynamicConfigs;
 use crate::storage::{
     get_priority_tag, kv::FlowStatsReporter, types::StorageCallback, Error as StorageError,
-    ErrorInner as StorageErrorInner,
+    ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -396,8 +398,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Releases all the latches held by a command.
-    fn release_lock(&self, lock: &Lock, cid: u64) {
-        let wakeup_list = self.inner.latches.release(lock, cid);
+    fn release_latches(
+        &self,
+        lock: &Lock,
+        cid: u64,
+        wait_for_locks: Option<Vec<WriteResultLockInfo>>,
+    ) {
+        let wakeup_list = self.inner.latches.release(lock, cid, wait_for_locks);
         for wcid in wakeup_list {
             self.try_to_wake_up(wcid);
         }
@@ -562,7 +569,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid);
     }
 
     /// Event handler for the success of read.
@@ -581,7 +588,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid);
     }
 
     /// Event handler for the success of write.
@@ -591,6 +598,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pr: Option<ProcessResult>,
         result: EngineResult<()>,
         lock_guards: Vec<KeyHandleGuard>,
+        wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: metrics::CommandKind,
@@ -632,10 +640,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 cb.execute(pr);
             }
         } else {
-            assert!(pipelined || async_apply_prewrite);
+            assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid);
     }
 
     /// Event handler for the request of waiting for lock
@@ -644,7 +652,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         start_ts: TimeStamp,
         pr: ProcessResult,
-        lock: lock_manager::Lock,
+        lock: lock_manager::LockDigest,
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
         diag_ctx: DiagnosticContext,
@@ -661,7 +669,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             wait_timeout,
             diag_ctx,
         );
-        self.release_lock(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid);
     }
 
     fn early_response(
@@ -800,7 +808,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             mut to_be_write,
             rows,
             pr,
-            lock_info,
+            encountered_locks: mut lock_info,
             lock_guards,
             response_policy,
         } = match deadline
@@ -822,24 +830,42 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
-        if let Some(lock_info) = lock_info {
-            let WriteResultLockInfo {
-                lock,
-                key,
-                is_first_lock,
-                wait_timeout,
-            } = lock_info;
-            let diag_ctx = DiagnosticContext {
-                key,
-                resource_group_tag: ctx.get_resource_group_tag().into(),
-            };
-            scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
-            return;
+        // if let Some(lock_info) = lock_info {
+        //     let WriteResultLockInfo {
+        //         locks,
+        //         is_first_lock,
+        //         wait_timeout,
+        //     } = lock_info;
+        //     let diag_ctx = DiagnosticContext {
+        //         key,
+        //         resource_group_tag: ctx.get_resource_group_tag().into(),
+        //     };
+        //     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
+        //     return;
+        // }
+
+        let mut partial_lock_ctx = None;
+        let mut pr = Some(pr);
+        if let Some(l) = lock_info.as_mut() {
+            if let Command::AcquirePessimisticLock(cmd) = &task {
+                if !cmd.is_resumed_after_waiting() {
+                    let ctx = scheduler.convert_to_ref_counting_callback(
+                        cid,
+                        cmd,
+                        pr.take.unwrap(),
+                        cmd.keys.len(),
+                        cmd.keys.len() - l.locks.len(),
+                    );
+                    for (index, _, _, ref mut cb) in l.locks {
+                        assert!(cb.is_none());
+                        *cb = Some(Box::new(ctx.get_callback_for_blocked_key(index)));
+                    }
+                }
+            }
         }
 
-        let mut pr = Some(pr);
         if to_be_write.modifies.is_empty() {
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, lock_info, false, false, tag);
             return;
         }
 
@@ -859,7 +885,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, lock_info, false, false, tag);
             return;
         }
 
@@ -898,7 +924,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     (None, Some(committed_cb))
                 }
                 ResponsePolicy::OnProposed => {
-                    if pipelined {
+                    // The only work `proposed_cb` currently does is to reply the response to the
+                    // client. If there are some locks to wait for, we do not set the callback
+                    // and `pr` is still `Some`.
+                    if pipelined && lock_info.is_none() {
                         // The normal write process is respond to clients and release
                         // latches after async write finished. If pipelined pessimistic
                         // locking is enabled, the process becomes parallel and there are
@@ -1035,6 +1064,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         pr,
                         result,
                         lock_guards,
+                        lock_info,
                         pipelined,
                         is_async_apply_prewrite,
                         tag,
@@ -1136,6 +1166,127 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             PessimisticLockMode::Sync
         }
+    }
+
+    fn convert_to_ref_counting_callback(
+        &self,
+        cid: u64,
+        cmd: &commands::AcquirePessimisticLock,
+        first_batch_pr: ProcessResult,
+        total_size: usize,
+        first_batch_size: usize,
+    ) -> PartialPessimisticLockRequestContext {
+        let mut slot = self.inner.get_task_slot(cid);
+        let task_ctx = slot.get_mut(&cid).unwrap();
+
+        let ctx = PartialPessimisticLockRequestContext::new(
+            cmd,
+            first_batch_pr,
+            task_ctx.cb.unwrap(),
+            total_size,
+        );
+        let first_batch_cb = ctx.get_callback_for_first_write_batch(first_batch_size);
+        task_ctx.cb = Some(first_batch_cb);
+        ctx
+    }
+}
+
+struct PartialPessimisticLockRequestContextInner {
+    pr: ProcessResult,
+    cb: StorageCallback,
+    result_rx: std::sync::mpsc::Receiver<(usize, StorageResult<PessimisticLockKeyResult>)>,
+}
+
+#[derive(Clone)]
+struct PartialPessimisticLockRequestContext {
+    // (inner_ctx, remaining_count)
+    shared_states: Arc<(
+        Mutex<Option<PartialPessimisticLockRequestContextInner>>,
+        AtomicUsize,
+    )>,
+    tx: std::sync::mpsc::Sender<(usize, StorageResult<PessimisticLockKeyResult>)>,
+
+    // Fields for logging:
+    start_ts: TimeStamp,
+    for_update_ts: TimeStamp,
+}
+
+impl PartialPessimisticLockRequestContext {
+    fn new(
+        cmd: &commands::AcquirePessimisticLock,
+        first_batch_pr: ProcessResult,
+        cb: StorageCallback,
+        size: usize,
+    ) -> Self {
+        let (tx, rx) = channel();
+        let inner = PartialPessimisticLockRequestContextInner {
+            pr: first_batch_pr,
+            cb,
+            result_rx: rx,
+        };
+        Self {
+            shared_states: Arc::new((Mutex::new(Some(inner)), AtomicUsize::new(size))),
+            tx,
+            start_ts: cmd.start_ts,
+            for_update_ts: cmd.for_update_ts,
+        }
+    }
+
+    fn get_callback_for_first_write_batch(&self, first_batch_size: usize) -> StorageCallback {
+        let ctx = self.clone();
+        StorageCallback::Boolean(Box::new(move |res| {
+            // TODO: Handle error properly
+            let prev = ctx
+                .shared_states
+                .1
+                .fetch_sub(first_batch_size, Ordering::SeqCst);
+            if prev == first_batch_size {
+                let inner = ctx.shared_states.0.lock().take().unwrap();
+                Self::finish_request(inner);
+            }
+        }))
+    }
+
+    fn get_callback_for_blocked_key(
+        &self,
+        index: usize,
+    ) -> impl FnOnce(StorageResult<PessimisicLockKeyRsult>) {
+        let ctx = self.clone();
+        move |res| {
+            // TODO: Handle error.
+            if let Err(e) = ctx.tx.send((index, res)) {
+                info!("sending partial pessimistic lock result to closed channel, maybe the request is already cancelled due to error.";
+                    "start_ts" => ctx.start_ts,
+                    "for_update_ts" => ctx.for_update_ts,
+                    "err" => ?e,
+                );
+                return;
+            }
+            let prev = ctx.shared_states.1.fetch_sub(1, Ordering::SeqCst);
+            if prev == 1 {
+                // All keys are finished.
+                let inner = ctx.shared_states.0.lock().take().unwrap();
+                Self::finish_request(inner);
+            }
+        }
+    }
+
+    fn finish_request(ctx_inner: PartialPessimisticLockRequestContextInner) {
+        let results = match ctx_inner.pr {
+            ProcessResult::PessimisticLockRes {
+                res: Ok(PessimisticLockResults(ref mut v)),
+            } => v,
+            _ => unreachable!(),
+        };
+        while let Ok((index, msg)) = ctx_inner.result_rx.try_recv() {
+            assert!(matches!(results[index], PessimisticLockKeyResult::Waiting));
+            match msg {
+                Ok(lock_key_res) => results[index] = lock_key_res,
+                Err(e) => results[index] = PessimisticLockKeyResult::Failed(e), // ???
+            }
+        }
+
+        ctx_inner.cb.execute(ctx_inner.pr);
     }
 }
 
@@ -1342,7 +1493,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_lock(&lock, cid);
+        scheduler.release_latches(&lock, cid);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -1524,7 +1675,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_lock(&lock, cid);
+        scheduler.release_latches(&lock, cid);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

@@ -128,7 +128,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             to_be_write: write_data,
             rows: 1,
             pr,
-            lock_info: None,
+            encountered_locks: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

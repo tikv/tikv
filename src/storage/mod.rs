@@ -3082,7 +3082,7 @@ mod tests {
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as KvError, ErrorInner as EngineErrorInner},
-        lock_manager::{Lock, WaitTimeout},
+        lock_manager::{LockDigest, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
@@ -6736,7 +6736,7 @@ mod tests {
             start_ts: TimeStamp,
             cb: StorageCallback,
             pr: ProcessResult,
-            lock: Lock,
+            lock: LockDigest,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
             diag_ctx: DiagnosticContext,
@@ -6777,7 +6777,7 @@ mod tests {
             start_ts: TimeStamp,
             cb: StorageCallback,
             pr: ProcessResult,
-            lock: Lock,
+            lock: LockDigest,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
             diag_ctx: DiagnosticContext,
@@ -6887,7 +6887,7 @@ mod tests {
                 assert_eq!(start_ts, TimeStamp::new(20));
                 assert_eq!(
                     lock,
-                    Lock {
+                    LockDigest {
                         ts: 10.into(),
                         hash: Key::from_raw(&k).gen_hash(),
                     }

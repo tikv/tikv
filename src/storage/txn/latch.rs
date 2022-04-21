@@ -4,10 +4,14 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
 use std::usize;
 
+use crate::storage::txn::commands::WriteResultLockInfo;
+use collections::HashMap;
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
+use txn_types::Key;
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
 const WAITING_LIST_MAX_CAPACITY: usize = 16;
@@ -23,6 +27,8 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 struct Latch {
     // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,
+    // TODO: Filter by the known hash to make it perhaps faster.
+    pub lock_waiting: HashMap<Key, Vec<WriteResultLockInfo>>,
 }
 
 impl Latch {
@@ -30,6 +36,7 @@ impl Latch {
     pub fn new() -> Latch {
         Latch {
             waiting: VecDeque::new(),
+            lock_waiting: HashMap::new(),
         }
     }
 
@@ -88,6 +95,39 @@ impl Latch {
         {
             self.waiting.shrink_to_fit();
         }
+    }
+
+    fn push_lock_waiting(&mut self, lock_info: WriteResultLockInfo) {
+        let key = lock_info.clone();
+        self.lock_waiting
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(lock_info);
+    }
+
+    fn pop_lock_waiting(
+        &mut self,
+        key: &Key,
+        _term: Option<NonZeroU64>,
+    ) -> Option<WriteResultLockInfo> {
+        let (result, delete_entry) = if let Some(v) = self.lock_waiting.get_mut(key) {
+            let mut result = None;
+            for i in 0..v.len() {
+                let lock_info = &v[i];
+                // TODO: Early cancel entries with mismatching term.
+                result = Some(v.swap_remove(i));
+                break;
+            }
+            (result, v.is_empty())
+        } else {
+            (None, false)
+        };
+
+        if delete_entry {
+            self.lock_waiting.remove(key);
+        }
+
+        result
     }
 }
 
@@ -186,8 +226,19 @@ impl Latches {
     /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
     ///
     /// Preconditions: the caller must ensure the command is at the front of the latches.
-    pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
+    pub fn release(
+        &self,
+        lock: &Lock,
+        who: u64,
+        wait_for_locks: Option<Vec<WriteResultLockInfo>>,
+    ) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
+        let mut wait_for_locks = if let Some(mut v) = wait_for_locks {
+            v.sort_unstable_by_key(|x| x.hash_for_latch);
+            v.into_iter().peekable()
+        } else {
+            vec![].into_iter().peekable()
+        };
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
             let (v, front) = latch.pop_front(key_hash).unwrap();
@@ -196,7 +247,13 @@ impl Latches {
             if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
                 wakeup_list.push(wakeup);
             }
+
+            while let Some(next_lock) = wait_for_locks.next_if(|v| v.hash_for_latch <= key_hash) {
+                assert!(next_lock.hash_for_latch == *key_hash);
+                latch.push_lock_waiting(next_lock);
+            }
         }
+        assert!(wait_for_locks.peek().is_none());
         wakeup_list
     }
 
