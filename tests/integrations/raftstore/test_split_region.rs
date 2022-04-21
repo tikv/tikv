@@ -483,7 +483,9 @@ fn test_server_apply_new_version_snapshot() {
     test_apply_new_version_snapshot(&mut cluster);
 }
 
-fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test]
+fn test_server_split_with_stale_peer() {
+    let mut cluster = new_server_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
@@ -549,18 +551,6 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     // node 3 must have k3.
     must_get_equal(&engine3, b"k3", b"v3");
-}
-
-#[test]
-fn test_node_split_with_stale_peer() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_split_with_stale_peer(&mut cluster);
-}
-
-#[test]
-fn test_server_split_with_stale_peer() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_split_with_stale_peer(&mut cluster);
 }
 
 fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
