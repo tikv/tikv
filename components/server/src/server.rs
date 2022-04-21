@@ -8,7 +8,7 @@
 //! The entry point is `run_tikv`.
 //!
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
-//! We keep these components in the `TiKVServer` struct.
+//! We keep these components in the `TiKvServer` struct.
 
 use std::{
     cmp,
@@ -107,9 +107,9 @@ use crate::{memory::*, setup::*, signal_handler};
 
 #[inline]
 fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
-    let mut tikv = TiKVServer::<CER>::init(config);
+    let mut tikv = TiKvServer::<CER>::init(config);
 
-    // Must be called after `TiKVServer::init`.
+    // Must be called after `TiKvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
     register_memory_usage_high_water(high_water);
@@ -171,7 +171,7 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A complete TiKV server.
-struct TiKVServer<ER: RaftEngine> {
+struct TiKvServer<ER: RaftEngine> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
@@ -185,7 +185,7 @@ struct TiKVServer<ER: RaftEngine> {
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKVEngines<RocksEngine, ER>>,
+    engines: Option<TiKvEngines<RocksEngine, ER>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -197,7 +197,7 @@ struct TiKVServer<ER: RaftEngine> {
     quota_limiter: Arc<QuotaLimiter>,
 }
 
-struct TiKVEngines<EK: KvEngine, ER: RaftEngine> {
+struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
     engines: Engines<EK, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
@@ -217,8 +217,8 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER: RaftEngine> TiKVServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+impl<ER: RaftEngine> TiKvServer<ER> {
+    fn init(mut config: TiKvConfig) -> TiKvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -269,7 +269,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             config.quota.max_delay_duration,
         ));
 
-        TiKVServer {
+        TiKvServer {
             config,
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -502,7 +502,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.kv.clone(),
         );
 
-        self.engines = Some(TiKVEngines {
+        self.engines = Some(TiKvEngines {
             engines,
             store_meta,
             engine,
@@ -1277,7 +1277,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 }
 
 trait ConfiguredRaftEngine: RaftEngine {
-    fn build(_: &TiKVServer<Self>, _: &Arc<Env>, _: &Option<Cache>) -> Self;
+    fn build(_: &TiKvServer<Self>, _: &Arc<Env>, _: &Option<Cache>) -> Self;
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
@@ -1285,7 +1285,7 @@ trait ConfiguredRaftEngine: RaftEngine {
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
-    fn build(server: &TiKVServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
+    fn build(server: &TiKvServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &server.config.storage.data_dir,
             &server.config.raft_engine.config().dir,
@@ -1330,7 +1330,7 @@ impl ConfiguredRaftEngine for RocksEngine {
 }
 
 impl ConfiguredRaftEngine for RaftLogEngine {
-    fn build(server: &TiKVServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
+    fn build(server: &TiKvServer<Self>, env: &Arc<Env>, block_cache: &Option<Cache>) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &server.config.storage.data_dir,
             &server.config.raft_store.raftdb_path,
@@ -1365,7 +1365,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TiKVServer<CER> {
+impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,

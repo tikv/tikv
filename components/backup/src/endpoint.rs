@@ -147,7 +147,7 @@ pub struct BackupRange {
 /// Maybe what we really need is make Writer a trait...
 enum KvWriter {
     Txn(BackupWriter),
-    Raw(BackupRawKVWriter),
+    Raw(BackupRawKvWriter),
 }
 
 impl std::fmt::Debug for KvWriter {
@@ -415,7 +415,7 @@ impl BackupRange {
 
     fn backup_raw<E: Engine>(
         &self,
-        writer: &mut BackupRawKVWriter,
+        writer: &mut BackupRawKvWriter,
         engine: &E,
     ) -> Result<Statistics> {
         assert!(self.is_raw_kv);
@@ -486,7 +486,7 @@ impl BackupRange {
         cipher: CipherInfo,
         saver_tx: async_channel::Sender<InMemBackupFiles>,
     ) -> Result<Statistics> {
-        let mut writer = match BackupRawKVWriter::new(
+        let mut writer = match BackupRawKvWriter::new(
             db,
             &file_name,
             cf,
