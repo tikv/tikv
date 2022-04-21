@@ -1323,6 +1323,93 @@ fn test_cdc_1pc() {
 }
 
 #[test]
+fn test_cdc_rawkv_resolve_ts() {
+    let mut suite = TestSuite::new(1, ApiVersion::V2);
+
+    let mut req = suite.new_changedata_request(1);
+    req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Make sure region 1 is registered.
+    let mut events = receive_event(false).events;
+    assert_eq!(events.len(), 1);
+    match events.pop().unwrap().event.unwrap() {
+        // Even if there is no write,
+        // it should always outputs an Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
+    suite.must_kv_rawkv_v2(1, k.clone(), v.clone());
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    for retry in 0.. {
+        let event = receive_event(true);
+        let mut current_rts = 0;
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            current_rts = resolved_ts.ts;
+            if resolved_ts.ts < 100 {
+                break;
+            }
+        }
+        if retry >= 5 {
+            panic!(
+                "resolved ts didn't push properly after unlocking memlock. current resolved_ts: {}",
+                current_rts
+            );
+        }
+    }
+
+    suite.set_tso(100);
+    let (k, v) = (b"rkey2".to_vec(), b"value".to_vec());
+    suite.must_kv_rawkv_v2(1, k.clone(), v.clone());
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    for retry in 0.. {
+        let event = receive_event(true);
+        let mut current_rts = 0;
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            current_rts = resolved_ts.ts;
+            if resolved_ts.ts >= 100 {
+                break;
+            }
+        }
+        if retry >= 5 {
+            panic!(
+                "resolved ts didn't push properly after unlocking memlock. current resolved_ts: {}",
+                current_rts
+            );
+        }
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
 fn test_old_value_1pc() {
     let mut suite = TestSuite::new(1, ApiVersion::V1);
     let mut req = suite.new_changedata_request(1);

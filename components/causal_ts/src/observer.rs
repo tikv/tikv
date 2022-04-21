@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::{Arc, RwLock};
 
 use api_version::{APIVersion, KeyMode, APIV2};
+use collections::HashMap;
 use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
@@ -9,7 +11,7 @@ use raftstore::coprocessor::{
     BoxQueryObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     QueryObserver, RoleChange, RoleObserver,
 };
-use std::sync::Arc;
+use resolved_ts::Resolver;
 
 use crate::CausalTsProvider;
 
@@ -18,12 +20,14 @@ use crate::CausalTsProvider;
 /// Should be used ONLY when API v2 is enabled.
 pub struct CausalObserver<Ts: CausalTsProvider> {
     causal_ts_provider: Arc<Ts>,
+    subscribed_regions: Arc<RwLock<HashMap<u64, Arc<RwLock<Resolver>>>>>,
 }
 
 impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
+            subscribed_regions: self.subscribed_regions.clone(),
         }
     }
 }
@@ -33,7 +37,10 @@ const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
 impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
     pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
-        Self { causal_ts_provider }
+        Self {
+            causal_ts_provider,
+            subscribed_regions: Arc::default(),
+        }
     }
 
     pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
@@ -45,6 +52,18 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
             .registry
             .register_role_observer(CAUSAL_OBSERVER_PRIORITY, BoxRoleObserver::new(self.clone()));
     }
+
+    pub fn subscribe_region(&self, region_id: u64, resolver: Arc<RwLock<Resolver>>) {
+        self.subscribed_regions
+            .write()
+            .unwrap()
+            .insert(region_id, resolver);
+    }
+
+    pub fn unsubscribe_region(&self, region_id: u64) {
+        let mut regions = self.subscribed_regions.write().unwrap();
+        regions.remove(&region_id);
+    }
 }
 
 impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
@@ -52,11 +71,36 @@ impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
 impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
     fn pre_propose_query(
         &self,
-        _: &mut ObserverContext<'_>,
+        ctx: &mut ObserverContext<'_>,
         requests: &mut Vec<RaftRequest>,
     ) -> coprocessor::Result<()> {
         let mut ts = None;
 
+        let region_id = ctx.region().id;
+        let mut m = self.subscribed_regions.write().unwrap();
+        let resolver = m.get_mut(&region_id);
+
+        if let Some(resolver) = resolver {
+            for req in requests.iter_mut().filter(|r| {
+                r.get_cmd_type() == CmdType::Put
+                    && APIV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
+            }) {
+                if ts.is_none() {
+                    ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
+                        coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
+                    })?);
+                }
+                let mut lock_key = req.get_put().key.clone();
+                APIV2::append_ts_on_encoded_bytes(&mut lock_key, ts.unwrap());
+
+                resolver
+                    .write()
+                    .unwrap()
+                    .track_lock(ts.unwrap(), lock_key, None);
+            }
+        }
+
+        ts = None;
         for req in requests.iter_mut().filter(|r| {
             r.get_cmd_type() == CmdType::Put
                 && APIV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw

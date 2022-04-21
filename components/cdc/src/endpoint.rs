@@ -4,7 +4,7 @@ use std::cmp::Reverse;
 use std::cmp::{Ord, Ordering as CmpOrdering, PartialOrd};
 use std::collections::BinaryHeap;
 use std::fmt;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Duration;
 
 use collections::{HashMap, HashMapEntry, HashSet};
@@ -40,6 +40,7 @@ use tikv_util::{debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::{Mutex, Semaphore};
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
+use causal_ts::{CausalObserver, CausalTsProvider};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
 use crate::delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState};
@@ -132,7 +133,8 @@ pub enum Task {
     },
     MinTS {
         regions: Vec<u64>,
-        min_ts: TimeStamp,
+        txnkv_min_ts: TimeStamp,
+        rawkv_min_ts: TimeStamp,
     },
     ResolverReady {
         observe_id: ObserveID,
@@ -189,9 +191,11 @@ impl fmt::Debug for Task {
                 .field("type", &"multi_batch")
                 .field("multi_batch", &multi.len())
                 .finish(),
-            Task::MinTS { ref min_ts, .. } => {
-                de.field("type", &"mit_ts").field("min_ts", min_ts).finish()
-            }
+            Task::MinTS { ref txnkv_min_ts, ref rawkv_min_ts, .. } => de
+                .field("type", &"txnkv_min_ts")
+                .field("txnkv_min_ts", txnkv_min_ts)
+                .field("rawkv_min_ts", rawkv_min_ts)
+                .finish(),
             Task::ResolverReady {
                 ref observe_id,
                 ref region,
@@ -294,7 +298,7 @@ impl ResolvedRegionHeap {
     }
 }
 
-pub struct Endpoint<T, E> {
+pub struct Endpoint<T, E, Ts: CausalTsProvider> {
     cluster_id: u64,
 
     capture_regions: HashMap<u64, Delegate>,
@@ -303,6 +307,7 @@ pub struct Endpoint<T, E> {
     raft_router: T,
     engine: E,
     observer: CdcObserver,
+    causal_observer: Option<CausalObserver<Ts>>,
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
@@ -324,7 +329,8 @@ pub struct Endpoint<T, E> {
     sink_memory_quota: MemoryQuota,
 
     old_value_cache: OldValueCache,
-    resolved_region_heap: ResolvedRegionHeap,
+    txnkv_resolved_region_heap: ResolvedRegionHeap,
+    rawkv_resolved_region_heap: ResolvedRegionHeap,
 
     // Check leader
     // store_id -> client
@@ -334,14 +340,18 @@ pub struct Endpoint<T, E> {
     region_read_progress: RegionReadProgressRegistry,
 
     // Metrics and logging.
-    min_resolved_ts: TimeStamp,
-    min_ts_region_id: u64,
-    resolved_region_count: usize,
-    unresolved_region_count: usize,
+    txnkv_min_resolved_ts: TimeStamp,
+    rawkv_min_resolved_ts: TimeStamp,
+    txnkv_min_ts_region_id: u64,
+    rawkv_min_ts_region_id: u64,
+    txnkv_resolved_region_count: usize,
+    rawkv_resolved_region_count: usize,
+    txnkv_unresolved_region_count: usize,
+    rawkv_unresolved_region_count: usize,
     warn_resolved_ts_repeat_count: usize,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> Endpoint<T, E, Ts> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
@@ -351,12 +361,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         raft_router: T,
         engine: E,
         observer: CdcObserver,
+        causal_observer: Option<CausalObserver<Ts>>,
         store_meta: Arc<StdMutex<StoreMeta>>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-    ) -> Endpoint<T, E> {
+    ) -> Endpoint<T, E, Ts> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
@@ -406,16 +417,24 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             raft_router,
             engine,
             observer,
+            causal_observer,
             store_meta,
             concurrency_manager,
-            min_resolved_ts: TimeStamp::max(),
-            min_ts_region_id: 0,
-            resolved_region_heap: ResolvedRegionHeap {
+            txnkv_min_resolved_ts: TimeStamp::max(),
+            rawkv_min_resolved_ts: TimeStamp::max(),
+            txnkv_min_ts_region_id: 0,
+            rawkv_min_ts_region_id: 0,
+            txnkv_resolved_region_heap: ResolvedRegionHeap {
+                heap: BinaryHeap::new(),
+            },
+            rawkv_resolved_region_heap: ResolvedRegionHeap {
                 heap: BinaryHeap::new(),
             },
             old_value_cache,
-            resolved_region_count: 0,
-            unresolved_region_count: 0,
+            txnkv_resolved_region_count: 0,
+            rawkv_resolved_region_count: 0,
+            txnkv_unresolved_region_count: 0,
+            rawkv_unresolved_region_count: 0,
             sink_memory_quota,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
             region_read_progress,
@@ -511,6 +530,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                         region_id,
                         id
                     );
+                    if let Some(causal_observer) = &self.causal_observer {
+                        causal_observer.unsubscribe_region(region_id);
+                    }
                 }
             }
             Deregister::Delegate {
@@ -561,6 +583,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                                         region_id,
                                         id
                                     );
+                                    if let Some(causal_observer) = &self.causal_observer {
+                                        causal_observer.unsubscribe_region(region_id);
+                                    }
                                 }
                             }
                         },
@@ -776,16 +801,20 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         let mut failed_downstreams = Vec::new();
+        let resolver = Arc::new(RwLock::new(resolver));
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
                 let region_id = delegate.region_id;
-                for (downstream, e) in delegate.on_region_ready(resolver, region) {
+                for (downstream, e) in delegate.on_region_ready(resolver.clone(), region) {
                     failed_downstreams.push(Deregister::Downstream {
                         region_id,
                         downstream_id: downstream.get_id(),
                         conn_id: downstream.get_conn_id(),
                         err: Some(e),
                     });
+                }
+                if let Some(causal_observer) = &self.causal_observer {
+                    causal_observer.subscribe_region(region_id, resolver);
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -804,33 +833,90 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         }
     }
 
-    fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp) {
+
+    fn on_min_ts(&mut self, regions: Vec<u64>, txnkv_min_ts: TimeStamp, rawkv_min_ts: TimeStamp) {
+        let mut txnkv_only: Vec<u64> = Vec::new();
+        let mut rawkv_only: Vec<u64> = Vec::new();
+        let mut has_mixed_region = false;
+
+        for region_id in regions {
+            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                if delegate.has_rawkv_downstream() {
+                    if delegate.has_txnkv_downstream() {
+                        if has_mixed_region {
+                            // TODO: error
+                        }
+                        if let Some(resolved_ts) = delegate.on_min_ts(txnkv_min_ts) {
+                            let mut regions = HashSet::with_capacity_and_hasher(1, Default::default());
+                            regions.insert(region_id);
+                            self.broadcast_resolved_ts(resolved_ts, regions);
+                        }
+                        has_mixed_region = true;
+                    } else {
+                        rawkv_only.push(region_id);
+                    }
+                } else {
+                    txnkv_only.push(region_id);
+                }
+            }
+        }
+
+        if txnkv_only.len() != 0 {
+            ( self.txnkv_min_resolved_ts,
+              self.txnkv_min_ts_region_id,
+              self.txnkv_resolved_region_count,
+              self.txnkv_unresolved_region_count
+            ) = self.min_ts(txnkv_only, true, txnkv_min_ts);
+        }
+
+        if rawkv_only.len() != 0 {
+            ( self.rawkv_min_resolved_ts,
+              self.rawkv_min_ts_region_id,
+              self.rawkv_resolved_region_count,
+              self.rawkv_unresolved_region_count
+            ) = self.min_ts(rawkv_only, false, rawkv_min_ts);
+        }
+    }
+
+    fn min_ts(&mut self,
+        regions: Vec<u64>,
+        resolved_regions_flag: bool,
+        min_ts: TimeStamp) -> (TimeStamp, u64, usize, usize) {
         // Reset resolved_regions to empty.
-        let resolved_regions = &mut self.resolved_region_heap;
+        let mut resolved_regions = &mut self.rawkv_resolved_region_heap;
+        if resolved_regions_flag {
+            resolved_regions = &mut self.txnkv_resolved_region_heap;
+        }
         resolved_regions.clear();
 
         let total_region_count = regions.len();
-        self.min_resolved_ts = TimeStamp::max();
+        let mut min_resolved_ts = TimeStamp::max();
+        let mut min_ts_region_id = 0;
+
         let mut advance_ok = 0;
         let mut advance_failed_none = 0;
         let mut advance_failed_same = 0;
         let mut advance_failed_stale = 0;
+
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 let old_resolved_ts = delegate
                     .resolver
                     .as_ref()
+                    .unwrap()
+                    .read()
                     .map_or(TimeStamp::zero(), |r| r.resolved_ts());
+
                 if old_resolved_ts > min_ts {
                     advance_failed_stale += 1;
                 }
+
                 if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                    if resolved_ts < self.min_resolved_ts {
-                        self.min_resolved_ts = resolved_ts;
-                        self.min_ts_region_id = region_id;
+                    if resolved_ts < min_resolved_ts {
+                        min_resolved_ts = resolved_ts;
+                        min_ts_region_id = region_id;
                     }
                     resolved_regions.push(region_id, resolved_ts);
-
                     if resolved_ts == old_resolved_ts {
                         advance_failed_same += 1;
                     } else {
@@ -841,16 +927,18 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 }
             }
         }
+
         let lag_millis = min_ts
             .physical()
-            .saturating_sub(self.min_resolved_ts.physical());
+            .saturating_sub(min_resolved_ts.physical());
+
         if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
             self.warn_resolved_ts_repeat_count += 1;
             if self.warn_resolved_ts_repeat_count >= WARN_RESOLVED_TS_COUNT_THRESHOLD {
                 self.warn_resolved_ts_repeat_count = 0;
                 warn!("cdc resolved ts lag too large";
-                    "min_resolved_ts" => self.min_resolved_ts,
-                    "min_ts_region_id" => self.min_ts_region_id,
+                    "min_resolved_ts" => min_resolved_ts,
+                    "min_ts_region_id" => min_ts_region_id,
                     "min_ts" => min_ts,
                     "ok" => advance_ok,
                     "none" => advance_failed_none,
@@ -858,8 +946,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     "same" => advance_failed_same);
             }
         }
-        self.resolved_region_count = resolved_regions.heap.len();
-        self.unresolved_region_count = total_region_count - self.resolved_region_count;
+        let resolved_region_count = resolved_regions.heap.len();
+        let unresolved_region_count = total_region_count - resolved_region_count;
 
         // Separate broadcasting outlier regions and normal regions,
         // so 1) downstreams know where they should send resolve lock requests,
@@ -872,6 +960,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let (normal_min_resolved_ts, normal_regions) = resolved_regions.to_hash_set();
         self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
         self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
+
+        (min_resolved_ts, min_ts_region_id, resolved_region_count, unresolved_region_count)
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1041,7 +1131,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 };
 
             if !regions.is_empty() {
-                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                match scheduler.schedule(Task::MinTS { regions, txnkv_min_ts: min_ts, rawkv_min_ts: min_ts_pd }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                     // advance normally.
@@ -1112,14 +1202,18 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> Runnable for Endpoint<T, E, Ts> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
         debug!("cdc run task"; "task" => %task);
 
         match task {
-            Task::MinTS { regions, min_ts } => self.on_min_ts(regions, min_ts),
+            Task::MinTS { 
+                regions,
+                txnkv_min_ts,
+                rawkv_min_ts,
+            } => self.on_min_ts(regions, txnkv_min_ts, rawkv_min_ts),
             Task::Register {
                 request,
                 downstream,
@@ -1181,27 +1275,43 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoint<T, E> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> RunnableWithTimer for Endpoint<T, E, Ts> {
     fn on_timeout(&mut self) {
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
 
         // Reclaim resolved_region_heap memory.
-        self.resolved_region_heap
+        self.txnkv_resolved_region_heap
+            .reset_and_shrink_to(self.capture_regions.len());
+
+        self.rawkv_resolved_region_heap
             .reset_and_shrink_to(self.capture_regions.len());
 
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
-            .with_label_values(&["unresolved"])
-            .set(self.unresolved_region_count as _);
+            .with_label_values(&["txnkv_unresolved"])
+            .set(self.txnkv_unresolved_region_count as _);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
-            .with_label_values(&["resolved"])
-            .set(self.resolved_region_count as _);
-        if self.min_resolved_ts != TimeStamp::max() {
-            CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
-            CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
+            .with_label_values(&["txnkv_resolved"])
+            .set(self.txnkv_resolved_region_count as _);
+        CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["txnkv_unresolved"])
+            .set(self.rawkv_unresolved_region_count as _);
+        CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["txnkv_resolved"])
+            .set(self.rawkv_resolved_region_count as _);
+
+        if self.txnkv_min_resolved_ts != TimeStamp::max() {
+            CDC_MIN_RESOLVED_TS_REGION.set(self.txnkv_min_ts_region_id as i64);
+            CDC_MIN_RESOLVED_TS.set(self.txnkv_min_resolved_ts.physical() as i64);
         }
-        self.min_resolved_ts = TimeStamp::max();
-        self.min_ts_region_id = 0;
+        if self.rawkv_min_resolved_ts != TimeStamp::max() {
+            CDC_MIN_RESOLVED_TS_REGION.set(self.rawkv_min_ts_region_id as i64);
+            CDC_MIN_RESOLVED_TS.set(self.rawkv_min_resolved_ts.physical() as i64);
+        }
+        self.txnkv_min_resolved_ts = TimeStamp::max();
+        self.rawkv_min_resolved_ts = TimeStamp::max();
+        self.txnkv_min_ts_region_id = 0;
+        self.rawkv_min_ts_region_id = 0;
 
         self.old_value_cache.flush_metrics();
         CDC_SINK_BYTES.set(self.sink_memory_quota.in_use() as i64);
@@ -1247,13 +1357,14 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use causal_ts::tests::TestProvider;
 
     use super::*;
     use crate::{channel, recv_timeout};
 
     struct TestEndpointSuite {
         // The order must ensure `endpoint` be dropped before other fields.
-        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine>,
+        endpoint: Endpoint<MockRaftStoreRouter, RocksEngine, TestProvider>,
         raft_router: MockRaftStoreRouter,
         task_rx: ReceiverWrapper<Task>,
         raft_rxs: HashMap<u64, tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>>>,
@@ -1293,7 +1404,7 @@ mod tests {
     }
 
     impl Deref for TestEndpointSuite {
-        type Target = Endpoint<MockRaftStoreRouter, RocksEngine>;
+        type Target = Endpoint<MockRaftStoreRouter, RocksEngine, TestProvider>;
         fn deref(&self) -> &Self::Target {
             &self.endpoint
         }
@@ -1308,6 +1419,7 @@ mod tests {
     fn mock_endpoint(
         cfg: &CdcConfig,
         engine: Option<RocksEngine>,
+        causal_ob: Option<CausalObserver<TestProvider>>,
         api_version: u8,
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
@@ -1326,6 +1438,7 @@ mod tests {
                     .kv_engine()
             }),
             CdcObserver::new(task_sched),
+            causal_ob,
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -1344,7 +1457,7 @@ mod tests {
     #[test]
     fn test_change_endpoint_cfg() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, None, 1);
         let ep = &mut suite.endpoint;
 
         // Modify min_ts_interval and hibernate_regions_compatible.
@@ -1469,7 +1582,7 @@ mod tests {
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, None, 1);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
@@ -1515,7 +1628,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, None, 1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1695,7 +1808,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, None, 1);
         suite.add_region(1, 100);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -1732,7 +1845,8 @@ mod tests {
         suite.on_region_ready(observe_id, resolver, region.clone());
         suite.run(Task::MinTS {
             regions: vec![1],
-            min_ts: TimeStamp::from(1),
+            txnkv_min_ts: TimeStamp::from(1),
+            rawkv_min_ts: TimeStamp::from(1),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1767,7 +1881,8 @@ mod tests {
         suite.on_region_ready(observe_id, resolver, region);
         suite.run(Task::MinTS {
             regions: vec![1, 2],
-            min_ts: TimeStamp::from(2),
+            txnkv_min_ts: TimeStamp::from(2),
+            rawkv_min_ts: TimeStamp::from(2),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1811,7 +1926,8 @@ mod tests {
         suite.on_region_ready(observe_id, resolver, region);
         suite.run(Task::MinTS {
             regions: vec![1, 2, 3],
-            min_ts: TimeStamp::from(3),
+            txnkv_min_ts: TimeStamp::from(3),
+            rawkv_min_ts: TimeStamp::from(3),
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1845,7 +1961,7 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, None, 1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1982,37 +2098,41 @@ mod tests {
 
     #[test]
     fn test_broadcast_resolved_ts() {
-        let cfg = CdcConfig {
+        let mut cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, None, 2);
 
-        // Open two connections a and b, registers region 1, 2 to conn a and
-        // region 3 to conn b.
+        // Open five connections a, b, c, d, e,
+        // registers region 1, 2 to conn a,
+        // region 3, 4 to conn b, region 5 to conn c, region 6 to d,
+        // region 7, 8 to conn e,
         let mut conn_rxs = vec![];
         let quota = channel::MemoryQuota::new(usize::MAX);
-        for region_ids in vec![vec![1, 2], vec![3]] {
+        let cdc_reqs = vec![
+            vec![(1, ChangeDataRequestKvApi::TiDb), (2, ChangeDataRequestKvApi::TiDb)],
+            vec![(3, ChangeDataRequestKvApi::RawKv), (4, ChangeDataRequestKvApi::RawKv)],
+            vec![(5, ChangeDataRequestKvApi::TiDb)],
+            vec![(6, ChangeDataRequestKvApi::RawKv)],
+            vec![(7, ChangeDataRequestKvApi::TiDb), (8, ChangeDataRequestKvApi::RawKv)],
+        ];
+
+        for cdc_req in cdc_reqs {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());
             let conn_id = conn.get_id();
             suite.run(Task::OpenConn { conn });
 
-            for region_id in region_ids {
+            for (region_id, kv_api) in cdc_req {
                 suite.add_region(region_id, 100);
                 let mut req_header = Header::default();
                 req_header.set_cluster_id(0);
                 let mut req = ChangeDataRequest::default();
                 req.set_region_id(region_id);
                 let region_epoch = req.get_region_epoch().clone();
-                let downstream = Downstream::new(
-                    "".to_string(),
-                    region_epoch.clone(),
-                    0,
-                    conn_id,
-                    ChangeDataRequestKvApi::TiDb,
-                );
+                let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, kv_api);
                 downstream.get_state().store(DownstreamState::Normal);
                 suite.run(Task::Register {
                     request: req.clone(),
@@ -2027,7 +2147,6 @@ mod tests {
                 suite.on_region_ready(observe_id, resolver, region);
             }
         }
-
         let assert_batch_resolved_ts = |drain: &mut channel::Drain,
                                         regions: Vec<u64>,
                                         resolved_ts: u64| {
@@ -2044,7 +2163,8 @@ mod tests {
 
         suite.run(Task::MinTS {
             regions: vec![1],
-            min_ts: TimeStamp::from(1),
+            txnkv_min_ts: TimeStamp::from(1),
+            rawkv_min_ts: TimeStamp::from(0),
         });
         // conn a must receive a resolved ts that only contains region 1.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
@@ -2057,7 +2177,8 @@ mod tests {
 
         suite.run(Task::MinTS {
             regions: vec![1, 2],
-            min_ts: TimeStamp::from(2),
+            txnkv_min_ts: TimeStamp::from(2),
+            rawkv_min_ts: TimeStamp::from(0),
         });
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
@@ -2069,22 +2190,44 @@ mod tests {
         .unwrap_err();
 
         suite.run(Task::MinTS {
-            regions: vec![1, 2, 3],
-            min_ts: TimeStamp::from(3),
+            regions: vec![1, 2, 3, 4],
+            txnkv_min_ts: TimeStamp::from(3),
+            rawkv_min_ts: TimeStamp::from(4),
         });
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
-        // conn b must receive a resolved ts that contains region 3.
-        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
+        // conn b must receive a resolved ts that contains region 3, 4.
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![4, 3], 4);
 
         suite.run(Task::MinTS {
             regions: vec![1, 3],
-            min_ts: TimeStamp::from(4),
+            txnkv_min_ts: TimeStamp::from(4),
+            rawkv_min_ts: TimeStamp::from(5),
         });
         // conn a must receive a resolved ts that only contains region 1.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
         // conn b must receive a resolved ts that contains region 3.
-        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 4);
+        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 5);
+
+        suite.run(Task::MinTS {
+            regions: vec![5, 6],
+            txnkv_min_ts: TimeStamp::from(5),
+            rawkv_min_ts: TimeStamp::from(6),
+        });
+        // conn c must receive a resolved ts that only contains region 5.
+        assert_batch_resolved_ts(conn_rxs.get_mut(2).unwrap(), vec![5], 5);
+        // conn d must receive a resolved ts that contains region 6.
+        assert_batch_resolved_ts(conn_rxs.get_mut(3).unwrap(), vec![6], 6);
+
+        suite.run(Task::MinTS {
+            regions: vec![7, 8],
+            txnkv_min_ts: TimeStamp::from(7),
+            rawkv_min_ts: TimeStamp::from(8),
+        });
+        // conn e must receive a resolved ts that only contains region 7.
+        assert_batch_resolved_ts(conn_rxs.get_mut(4).unwrap(), vec![7], 7);
+        // conn e must receive a resolved ts that contains region 8.
+        assert_batch_resolved_ts(conn_rxs.get_mut(4).unwrap(), vec![8], 8);
     }
 
     // Suppose there are two Conn that capture the same region,
@@ -2095,7 +2238,7 @@ mod tests {
     // too, because epoch not match.
     #[test]
     fn test_deregister_conn_then_delegate() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, None, 1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 

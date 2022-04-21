@@ -25,6 +25,8 @@ thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }
+collections = { path = "../collections" }
+resolved_ts = { path = "../resolved_ts", default-features = false }
 
 [dev-dependencies]
 test_raftstore = { path = "../test_raftstore", default-features = false }
