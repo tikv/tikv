@@ -151,6 +151,34 @@ impl RocksEngine {
         let core = self.core.lock().unwrap();
         core.worker.stop();
     }
+    pub fn register_observer(&mut self, f: impl FnOnce(&mut CoprocessorHost<BaseRocksEngine>)) {
+        f(&mut self.coprocessor);
+    }
+
+    /// `pre_propose` is called before propose.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
+        let requests = batch
+            .modifies
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
+        cmd_req.set_requests(requests.into());
+
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        self.coprocessor
+            .pre_propose(&region, &mut cmd_req)
+            .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
+
+        batch.modifies = cmd_req
+            .take_requests()
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        Ok(batch)
+    }
 }
 
 impl Display for RocksEngine {
@@ -192,7 +220,7 @@ impl Engine for RocksEngine {
     fn async_write_ext(
         &self,
         _: &Context,
-        mut batch: WriteData,
+        batch: WriteData,
         cb: Callback<()>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -203,25 +231,8 @@ impl Engine for RocksEngine {
             return Err(Error::from(ErrorInner::EmptyRequest));
         }
 
-        // Trigger "pre_propose_query" observers for RawKV API V2.
-        let requests = batch
-            .modifies
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        let mut cmd_req = raft_cmdpb::RaftCmdRequest::default();
-        cmd_req.set_requests(requests.into());
-        let mut region = metapb::Region::default();
-        region.set_id(1);
-        self.coprocessor
-            .pre_propose(&region, &mut cmd_req)
-            .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;
-        batch.modifies = cmd_req
-            .take_requests()
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-
+        let batch = self.pre_propose(batch)?;
+      
         if let Some(cb) = proposed_cb {
             cb();
         }
