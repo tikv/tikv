@@ -221,6 +221,10 @@ impl ImportDir {
         })
     }
 
+    pub fn get_root_dir(&self) -> &PathBuf {
+        &self.root_dir
+    }
+
     pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
         let save_path = self.root_dir.join(&file_name);
         let temp_path = self.temp_dir.join(&file_name);

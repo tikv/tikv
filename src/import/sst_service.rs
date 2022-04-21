@@ -168,7 +168,7 @@ where
     // will panic if found duplicated entry during Vec<PutRequest>.
     fn build_apply_request<'a, 'b>(
         raft_size: u64,
-        reqs: &'a mut HashMap<Vec<u8>, Request>,
+        reqs: &'a mut HashMap<Vec<u8>, (Request, u64)>,
         cmd_reqs: &'a mut Vec<RaftCmdRequest>,
         is_delete: bool,
         cf: &'b str,
@@ -185,13 +185,19 @@ where
                 let mut req = Request::default();
                 let mut del = DeleteRequest::default();
 
-                let hk = Key::truncate_ts_for(&k).expect("key without ts").to_vec();
-                del.set_key(k);
+                let (encoded_key, ts) = Key::split_on_ts_for(&k).expect("key without ts");
+                del.set_key(k.clone());
                 del.set_cf(cf.to_string());
                 req.set_cmd_type(CmdType::Delete);
                 req.set_delete(del);
                 req_size += req.compute_size() as u64;
-                reqs.insert(hk, req);
+                if reqs
+                    .get(encoded_key)
+                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
+                    .unwrap_or(true)
+                {
+                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
+                };
                 if req_size > raft_size / 2 {
                     req_size = 0;
                     let cmd = make_request(reqs, context.clone());
@@ -202,14 +208,21 @@ where
             Box::new(move |k: Vec<u8>, v: Vec<u8>| {
                 let mut req = Request::default();
                 let mut put = PutRequest::default();
-                let hk = Key::truncate_ts_for(&k).expect("key without ts").to_vec();
-                put.set_key(k);
+
+                let (encoded_key, ts) = Key::split_on_ts_for(&k).expect("key without ts");
+                put.set_key(k.clone());
                 put.set_value(v);
                 put.set_cf(cf.to_string());
                 req.set_cmd_type(CmdType::Put);
                 req.set_put(put);
                 req_size += req.compute_size() as u64;
-                reqs.insert(hk, req);
+                if reqs
+                    .get(encoded_key)
+                    .map(|(_, old_ts)| *old_ts < ts.into_inner())
+                    .unwrap_or(true)
+                {
+                    reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
+                };
                 if req_size > raft_size / 2 {
                     req_size = 0;
                     let cmd = make_request(reqs, context.clone());
@@ -439,6 +452,41 @@ where
         self.threads.spawn_ok(handle_task);
     }
 
+    // clear_files the KV files after apply finished.
+    // it will remove the direcotry in import path.
+    fn clear_files(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        req: ClearRequest,
+        sink: UnarySink<ClearResponse>,
+    ) {
+        let label = "clear_files";
+        let timer = Instant::now_coarse();
+        let importer = Arc::clone(&self.importer);
+        let start = Instant::now();
+        let mut resp = ClearResponse::default();
+
+        let handle_task = async move {
+            // Records how long the apply task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            if let Err(e) = importer.remove_dir(req.get_prefix()) {
+                let mut import_err = kvproto::import_sstpb::Error::default();
+                import_err.set_message(format!("failed to remove directory: {}", e));
+                resp.set_error(import_err);
+            }
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&[label])
+                .observe(start.saturating_elapsed().as_secs_f64());
+
+            let resp = Ok(resp);
+            crate::send_rpc_response!(resp, sink, label, timer);
+        };
+        self.threads.spawn_ok(handle_task);
+    }
+
     // Downloads KV file and performs key-rewrite then apply kv into this tikv store.
     fn apply(
         &mut self,
@@ -468,7 +516,7 @@ where
             let result = (|| -> Result<()> {
                 let temp_file =
                     importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
-                let mut reqs = HashMap::<Vec<u8>, Request>::default();
+                let mut reqs = HashMap::<Vec<u8>, (Request, u64)>::default();
                 let mut cmd_reqs = vec![];
                 let mut build_req_fn = Self::build_apply_request(
                     raft_size.0,
@@ -882,7 +930,7 @@ fn make_request_header(mut context: Context) -> RaftRequestHeader {
     header
 }
 
-fn make_request(reqs: &mut HashMap<Vec<u8>, Request>, context: Context) -> RaftCmdRequest {
+fn make_request(reqs: &mut HashMap<Vec<u8>, (Request, u64)>, context: Context) -> RaftCmdRequest {
     let mut cmd = RaftCmdRequest::default();
     let mut header = make_request_header(context);
     // Set the UUID of header to prevent raftstore batching our requests.
@@ -894,6 +942,7 @@ fn make_request(reqs: &mut HashMap<Vec<u8>, Request>, context: Context) -> RaftC
     cmd.set_requests(
         std::mem::take(reqs)
             .into_values()
+            .map(|(req, _)| req)
             .collect::<Vec<Request>>()
             .into(),
     );

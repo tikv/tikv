@@ -543,7 +543,7 @@ mod test {
             .unwrap();
         info!("err"; "err" => ?err);
         assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
-        assert!(err.error_message.find("everything is alright").is_some());
+        assert!(err.error_message.contains("everything is alright"));
         assert_eq!(err.store_id, *victim);
         let paused = run_async_test(meta_cli.check_task_paused("test_fatal_error")).unwrap();
         assert!(paused)

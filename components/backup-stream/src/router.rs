@@ -768,8 +768,9 @@ impl StreamTaskInfo {
     /// move need-flushing files to flushing_files.
     pub async fn move_to_flushing_files(&self) -> &Self {
         let mut w = self.files.write().await;
+        let mut fw = self.flushing_files.write().await;
         for (k, v) in w.drain() {
-            self.flushing_files.write().await.push((k, v));
+            fw.push((k, v));
         }
         self
     }
