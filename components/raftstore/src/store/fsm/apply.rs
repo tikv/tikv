@@ -2812,6 +2812,8 @@ where
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
+    pub commit_index: u64,
+    pub commit_term: u64,
     pub entries: CachedEntries,
     pub cbs: Vec<Proposal<S>>,
 }
@@ -2821,6 +2823,8 @@ impl<S: Snapshot> Apply<S> {
         peer_id: u64,
         region_id: u64,
         term: u64,
+        commit_index: u64,
+        commit_term: u64,
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
@@ -2829,6 +2833,8 @@ impl<S: Snapshot> Apply<S> {
             peer_id,
             region_id,
             term,
+            commit_index,
+            commit_term,
             entries,
             cbs,
         }
@@ -3185,21 +3191,19 @@ where
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        if let Some(entry) = entries.last() {
-            let prev_state = (
-                self.delegate.apply_state.get_commit_index(),
-                self.delegate.apply_state.get_commit_term(),
+        let prev_state = (
+            self.delegate.apply_state.get_commit_index(),
+            self.delegate.apply_state.get_commit_term(),
+        );
+        let cur_state = (apply.commit_index, apply.commit_term);
+        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+            panic!(
+                "{} commit state jump backward {:?} -> {:?}",
+                self.delegate.tag, prev_state, cur_state
             );
-            let cur_state = (entry.get_index(), entry.get_term());
-            if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
-                panic!(
-                    "{} commit state jump backward {:?} -> {:?}",
-                    self.delegate.tag, prev_state, cur_state
-                );
-            }
-            self.delegate.apply_state.set_commit_index(cur_state.0);
-            self.delegate.apply_state.set_commit_term(cur_state.1);
         }
+        self.delegate.apply_state.set_commit_index(cur_state.0);
+        self.delegate.apply_state.set_commit_term(cur_state.1);
 
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
@@ -4295,7 +4299,19 @@ mod tests {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply::new(peer_id, region_id, term, entries, cbs)
+        let (commit_index, commit_term) = entries
+            .last()
+            .map(|e| (e.get_index(), e.get_term()))
+            .unwrap();
+        Apply::new(
+            peer_id,
+            region_id,
+            term,
+            commit_index,
+            commit_term,
+            entries,
+            cbs,
+        )
     }
 
     #[test]
