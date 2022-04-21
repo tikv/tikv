@@ -195,7 +195,7 @@ async fn save_backup_file_worker(
     rx: async_channel::Receiver<InMemBackupFiles>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
-    api_version: ApiVersion,
+    codec: KeyValueCodec,
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
@@ -231,9 +231,9 @@ async fn save_backup_file_worker(
                 response.set_files(files.into());
             }
         }
-        response.set_start_key(msg.start_key.clone());
-        response.set_end_key(msg.end_key.clone());
-        response.set_api_version(api_version);
+        response.set_start_key(codec.revert_to_src_raw_key_format(msg.start_key.clone()));
+        response.set_end_key(codec.revert_to_src_raw_key_format(msg.end_key.clone()));
+        response.set_api_version(codec.dst_api_ver);
         if let Err(e) = tx.unbounded_send(response) {
             error_unknown!(?e; "backup failed to send response"; "region" => ?msg.region,
             "start_key" => &log_wrappers::Value::key(&msg.start_key),
@@ -954,7 +954,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             start_key,
             end_key,
             self.region_info.clone(),
-            codec,
+            codec.clone(),
             request.cf,
         )));
         let backend = match create_storage(&request.backend, self.get_config()) {
@@ -986,7 +986,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 rx.clone(),
                 resp.clone(),
                 backend.clone(),
-                self.api_version,
+                codec,
             ));
         }
     }
@@ -1663,10 +1663,10 @@ pub mod tests {
             (ApiVersion::V2, ApiVersion::V1ttl, false),
             (ApiVersion::V1ttl, ApiVersion::V1, false),
         ];
-        for (cur_api_ver, dst_api_ver, ret) in test_backup_cases {
+        for test_case in test_backup_cases {
             assert_eq!(
-                test_handle_backup_raw_task_impl(cur_api_ver, dst_api_ver),
-                ret
+                test_handle_backup_raw_task_impl(test_case.0, test_case.1),
+                test_case.2
             );
         }
     }

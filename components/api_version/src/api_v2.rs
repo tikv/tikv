@@ -8,6 +8,7 @@ use tikv_util::codec::{bytes, Error};
 use super::*;
 
 pub const RAW_KEY_PREFIX: u8 = b'r';
+pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
@@ -179,6 +180,22 @@ impl APIVersion for APIV2 {
                 Ok(Self::encode_raw_key_owned(apiv2_key, ts))
             }
             ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
+        }
+    }
+
+    fn convert_user_key_from(src_api: ApiVersion, key: Vec<u8>, is_range_end: bool) -> Vec<u8> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => {
+                let prefix = if is_range_end && key.len() == 0 {
+                    RAW_KEY_PREFIX_END
+                } else {
+                    RAW_KEY_PREFIX
+                };
+                let mut ret_key = key.clone();
+                ret_key.insert(0, prefix);
+                ret_key
+            }
+            ApiVersion::V2 => key,
         }
     }
 }

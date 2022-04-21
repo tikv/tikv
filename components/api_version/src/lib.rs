@@ -77,6 +77,10 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
         Ok(Key::from_encoded_slice(key))
     }
 
+    fn convert_user_key_from(_src_api: ApiVersion, user_key: Vec<u8>, _is_range_end: bool) -> Vec<u8> {
+        user_key
+    }
+
     /// convertion between different ApiVersion encoded values.
     fn convert_raw_value_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
         if src_api == Self::TAG {
