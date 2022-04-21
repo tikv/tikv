@@ -81,7 +81,7 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        ttl::TTLChecker,
+        ttl::TtlChecker,
         KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
         GRPC_THREAD_PREFIX,
     },
@@ -905,7 +905,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         initial_metric(&self.config.metric);
         if self.config.storage.enable_ttl {
-            ttl_checker.start_with_timer(TTLChecker::new(
+            ttl_checker.start_with_timer(TtlChecker::new(
                 self.engines.as_ref().unwrap().engine.kv_engine(),
                 self.region_info_accessor.clone(),
                 self.config.storage.ttl_check_poll_interval.into(),

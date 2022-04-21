@@ -194,7 +194,7 @@ impl<E: KvEngine> RawSstWriter<E> {
                     } else if API::IS_TTL_ENABLED {
                         ttl_to_expire_ts(batch.get_ttl())
                     } else {
-                        return Err(crate::Error::TTLNotEnabled);
+                        return Err(crate::Error::TtlNotEnabled);
                     };
 
                     for m in batch.take_pairs().into_iter() {

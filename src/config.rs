@@ -61,7 +61,7 @@ use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::ttl::TTLCompactionFilterFactory;
+use crate::server::ttl::TtlCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
@@ -605,7 +605,7 @@ impl DefaultCfConfig {
                         cf_opts
                             .set_compaction_filter_factory(
                                 "ttl_compaction_filter_factory",
-                                TTLCompactionFilterFactory::<API>::default(),
+                                TtlCompactionFilterFactory::<API>::default(),
                             )
                             .unwrap();
                     }
@@ -3611,7 +3611,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::ttl::TTLCheckerTask;
+    use crate::server::ttl::TtlCheckerTask;
     use crate::storage::config_manager::StorageConfigManger;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
@@ -3962,7 +3962,7 @@ mod tests {
     ) -> (
         Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
-        ReceiverWrapper<TTLCheckerTask>,
+        ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
@@ -4296,7 +4296,7 @@ mod tests {
             .unwrap();
         match rx.recv() {
             None => unreachable!(),
-            Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
+            Some(TtlCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
     }
 

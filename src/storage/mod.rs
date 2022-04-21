@@ -1777,7 +1777,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
         if !F::IS_TTL_ENABLED && ttl != 0 {
-            return Err(Error::from(ErrorInner::TTLNotEnabled));
+            return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
 
         let raw_value = RawValue {
@@ -1810,10 +1810,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> Result<Vec<Modify>> {
         if !F::IS_TTL_ENABLED {
             if ttls.iter().any(|&x| x != 0) {
-                return Err(Error::from(ErrorInner::TTLNotEnabled));
+                return Err(Error::from(ErrorInner::TtlNotEnabled));
             }
         } else if ttls.len() != pairs.len() {
-            return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
+            return Err(Error::from(ErrorInner::TtlLenNotEqualsToPairs));
         }
 
         let modifies = pairs
@@ -2374,7 +2374,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
         if !F::IS_TTL_ENABLED && ttl != 0 {
-            return Err(Error::from(ErrorInner::TTLNotEnabled));
+            return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
 
         let key = F::encode_raw_key_owned(key, None);

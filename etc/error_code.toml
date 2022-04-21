@@ -518,14 +518,14 @@ error = '''
 KV:SSTImporter:FileConflict
 '''
 
-["KV:SSTImporter:TTLNotEnabled"]
+["KV:SSTImporter:TtlNotEnabled"]
 error = '''
-KV:SSTImporter:TTLNotEnabled
+KV:SSTImporter:TtlNotEnabled
 '''
 
-["KV:SSTImporter:TTLsLenNotEqualsToPairs"]
+["KV:SSTImporter:TtlLenNotEqualsToPairs"]
 error = '''
-KV:SSTImporter:TTLsLenNotEqualsToPairs
+KV:SSTImporter:TtlLenNotEqualsToPairs
 '''
 
 ["KV:SSTImporter:IncompatibleApiVersion"]
@@ -578,14 +578,14 @@ error = '''
 KV:Storage:CFDeprecated
 '''
 
-["KV:Storage:TTLNotEnabled"]
+["KV:Storage:TtlNotEnabled"]
 error = '''
-KV:Storage:TTLNotEnabled
+KV:Storage:TtlNotEnabled
 '''
 
-["KV:Storage:TTLsLenNotEqualsToPairs"]
+["KV:Storage:TtlLenNotEqualsToPairs"]
 error = '''
-KV:Storage:TTLsLenNotEqualsToPairs
+KV:Storage:TtlLenNotEqualsToPairs
 '''
 
 ["KV:Storage:Protobuf"]

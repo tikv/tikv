@@ -13,11 +13,11 @@ use engine_rocks::RocksTtlProperties;
 use engine_traits::raw_ttl::ttl_current_ts;
 
 #[derive(Default)]
-pub struct TTLCompactionFilterFactory<F: KvFormat> {
+pub struct TtlCompactionFilterFactory<F: KvFormat> {
     _phantom: PhantomData<F>,
 }
 
-impl<F: KvFormat> CompactionFilterFactory for TTLCompactionFilterFactory<F> {
+impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
@@ -39,7 +39,7 @@ impl<F: KvFormat> CompactionFilterFactory for TTLCompactionFilterFactory<F> {
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = TTLCompactionFilter::<F> {
+        let filter = TtlCompactionFilter::<F> {
             ts: current,
             _phantom: PhantomData,
         };
@@ -47,12 +47,12 @@ impl<F: KvFormat> CompactionFilterFactory for TTLCompactionFilterFactory<F> {
     }
 }
 
-struct TTLCompactionFilter<F: KvFormat> {
+struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
     _phantom: PhantomData<F>,
 }
 
-impl<F: KvFormat> CompactionFilter for TTLCompactionFilter<F> {
+impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
     fn featured_filter(
         &mut self,
         _level: usize,
