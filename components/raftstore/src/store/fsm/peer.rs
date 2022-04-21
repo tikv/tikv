@@ -1823,7 +1823,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
         let is_initialized = self.fsm.peer.is_initialized();
+<<<<<<< HEAD
         if let Err(e) = self.fsm.peer.destroy(self.ctx, merged_by_target) {
+=======
+        if let Err(e) = self.fsm.peer.destroy(
+            &self.ctx.engines,
+            &mut self.ctx.perf_context,
+            merged_by_target,
+            &self.ctx.pending_create_peers,
+        ) {
+>>>>>>> b706adcf1... raftstore: fix race between split check and destroy (#12386)
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
             // before restarting, the gc action will delete the overlap region's
@@ -1846,21 +1855,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if meta.regions.remove(&region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
-        }
-
-        if self.fsm.peer.local_first_replicate {
-            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
-            if is_initialized {
-                assert!(pending_create_peers.get(&region_id).is_none());
-            } else {
-                // If this region's data in `pending_create_peers` is not equal to `(peer_id, false)`,
-                // it means this peer will be replaced by the split one.
-                if let Some(status) = pending_create_peers.get(&region_id) {
-                    if *status == (self.fsm.peer_id(), false) {
-                        pending_create_peers.remove(&region_id);
-                    }
-                }
-            }
         }
 
         // Clear merge related structures.
@@ -1898,6 +1892,31 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             }
         }
+<<<<<<< HEAD
+=======
+
+        fail_point!("raft_store_finish_destroy_peer");
+
+        true
+    }
+
+    // Update some region infos
+    fn update_region(&mut self, mut region: metapb::Region) {
+        {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                region.clone(),
+                &mut self.fsm.peer,
+            );
+        }
+        for peer in region.take_peers().into_iter() {
+            if self.fsm.peer.peer_id() == peer.get_id() {
+                self.fsm.peer.peer = peer.clone();
+            }
+            self.fsm.peer.insert_peer_cache(peer);
+        }
+>>>>>>> b706adcf1... raftstore: fix race between split check and destroy (#12386)
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
