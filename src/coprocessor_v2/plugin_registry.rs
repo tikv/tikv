@@ -466,12 +466,9 @@ mod tests {
     use coprocessor_plugin_api::util::pkgname_to_libname;
 
     fn initialize_library() -> PathBuf {
-        Path::new(if cfg!(debug_assertions) {
-            "target/debug/deps"
-        } else {
-            "target/release/deps"
-        })
-        .join(pkgname_to_libname("example-plugin"))
+        let mut path = std::env::current_exe().unwrap();
+        path.set_file_name(pkgname_to_libname("example-plugin"));
+        path
     }
 
     #[test]
