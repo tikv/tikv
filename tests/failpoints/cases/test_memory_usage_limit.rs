@@ -109,6 +109,7 @@ fn test_memory_full_cause_of_raft_message() {
     ));
 
     // A MsgHeartbeatResponse will trigger one MsgAppend.
+    fail::cfg("leader_handle_recved_msgunreachable_check", "return").unwrap();
     fail::cfg("needs_reject_raft_append", "return").unwrap();
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     let now = Instant::now();

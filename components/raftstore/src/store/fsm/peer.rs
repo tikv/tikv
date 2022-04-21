@@ -38,8 +38,8 @@ use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{
-    self, GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
+    self, GetEntriesContext, Progress, ProgressState, ReadState, SnapshotStatus, StateRole,
+    INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
@@ -2066,6 +2066,28 @@ where
                 .peer
                 .raft_group
                 .report_unreachable(msg.get_from_peer().get_id());
+
+            fail_point!(
+                "leader_handle_recved_msgunreachable_check",
+                self.fsm.peer.is_leader(),
+                |_| {
+                    let pr = self
+                        .fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .prs
+                        .get(msg.get_from_peer().get_id())
+                        .unwrap();
+                    debug!(
+                        "leader check the progress state of peer {} is {}",
+                        msg.get_from_peer().get_id(),
+                        pr.state
+                    );
+                    assert_eq!(pr.state, ProgressState::Probe);
+                    return Ok(());
+                }
+            );
             return Ok(());
         }
 
