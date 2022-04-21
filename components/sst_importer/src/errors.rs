@@ -128,6 +128,20 @@ pub enum Error {
     },
 }
 
+impl Error {
+    pub fn invalid_key_mode(
+        writer: SstWriterType,
+        storage_api_version: ApiVersion,
+        key: &[u8],
+    ) -> Self {
+        Error::InvalidKeyMode {
+            writer,
+            storage_api_version,
+            key: log_wrappers::hex_encode_upper(key),
+        }
+    }
+}
+
 impl From<String> for Error {
     fn from(msg: String) -> Self {
         Self::RocksDB(msg)

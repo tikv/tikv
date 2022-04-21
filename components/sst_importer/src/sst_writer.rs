@@ -66,20 +66,25 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         }
     }
 
+    fn check_api_version<A: APIVersion>(&self, key: &[u8]) -> Result<()> {
+        let mode = A::parse_key_mode(key);
+        if self.api_version == ApiVersion::V2 && mode != KeyMode::Txn && mode != KeyMode::TiDB {
+            return Err(Error::invalid_key_mode(
+                SstWriterType::Raw,
+                self.api_version,
+                key,
+            ));
+        }
+        Ok(())
+    }
+
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         let start = Instant::now_coarse();
 
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
         for m in batch.get_pairs().iter() {
             dispatch_api_version!(self.api_version, {
-                let key_mode = API::parse_key_mode(m.get_key());
-                if self.api_version == ApiVersion::V2 && key_mode != KeyMode::Txn {
-                    return Err(Error::InvalidKeyMode {
-                        storage_api_version: self.api_version,
-                        writer: SstWriterType::Txn,
-                        key: log_wrappers::hex_encode_upper(m.get_key()),
-                    });
-                }
+                self.check_api_version::<API>(m.get_key())?;
             });
             let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
             self.put(k.as_encoded(), m.get_value(), m.get_op())?;
@@ -202,6 +207,19 @@ impl<E: KvEngine> RawSSTWriter<E> {
         Ok(())
     }
 
+    // TODO: move this check to mod api_version
+    fn check_api_version<A: APIVersion>(&self, key: &[u8]) -> Result<()> {
+        let mode = A::parse_key_mode(key);
+        if self.api_version == ApiVersion::V2 && mode != KeyMode::Raw {
+            return Err(Error::invalid_key_mode(
+                SstWriterType::Raw,
+                self.api_version,
+                key,
+            ));
+        }
+        Ok(())
+    }
+
     pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let start = Instant::now_coarse();
 
@@ -217,28 +235,22 @@ impl<E: KvEngine> RawSSTWriter<E> {
                         return Err(crate::Error::TTLNotEnabled);
                     };
 
-                    for m in batch.take_pairs().into_iter() {
-                        let key_mode = API::parse_key_mode(m.get_key());
-                        if self.api_version == ApiVersion::V2 && key_mode != KeyMode::Raw {
-                            return Err(Error::InvalidKeyMode {
-                                storage_api_version: self.api_version,
-                                writer: SstWriterType::Raw,
-                                key: log_wrappers::hex_encode_upper(m.get_key()),
-                            });
-                        }
-
-                        let key =
-                            API::encode_raw_key(m.get_key(), Some(TimeStamp::new(batch.get_ts())));
+                    for mut m in batch.take_pairs().into_iter() {
+                        self.check_api_version::<API>(m.get_key())?;
+                        let key = API::encode_raw_key_owned(
+                            m.take_key(),
+                            Some(TimeStamp::new(batch.get_ts())),
+                        );
                         match m.get_op() {
                             PairOp::Put => {
                                 let value = RawValue {
-                                    user_value: m.get_value(),
+                                    user_value: m.take_value(),
                                     expire_ts,
                                     is_delete: false,
                                 };
                                 self.put(
                                     key.as_encoded(),
-                                    &API::encode_raw_value(value),
+                                    &API::encode_raw_value_owned(value),
                                     PairOp::Put,
                                 )?;
                             }
@@ -285,12 +297,31 @@ impl<E: KvEngine> RawSSTWriter<E> {
 
 #[cfg(test)]
 mod tests {
+    use api_version::{APIV1TTL, APIV2};
+    use engine_rocks::RocksEngine;
     use engine_traits::DATA_CFS;
+    use tempfile::TempDir;
     use test_sst_importer::*;
     use uuid::Uuid;
 
     use super::*;
     use crate::{Config, SSTImporter};
+
+    // Return the temp dir path to avoid it drop out of the scope.
+    fn new_writer<W, F: Fn(&SSTImporter, &RocksEngine, SstMeta) -> Result<W>>(
+        f: F,
+        api_version: ApiVersion,
+    ) -> (W, TempDir) {
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+        (f(&importer, &db, meta).unwrap(), importer_dir)
+    }
 
     #[test]
     fn test_write_txn_sst() {
@@ -307,7 +338,7 @@ mod tests {
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
-        // put short value kv in wirte cf
+        // put short value kv in write cf
         let mut pair = Pair::default();
         pair.set_key(b"k1".to_vec());
         pair.set_value(b"short_value".to_vec());
@@ -344,16 +375,7 @@ mod tests {
     }
 
     fn test_raw_write_sst_ttl_impl(api_version: ApiVersion) {
-        let mut meta = SstMeta::default();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
-        let db_path = importer_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-
-        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let (mut w, _handle) = new_writer(SSTImporter::new_raw_writer, api_version);
         let mut batch = RawWriteBatch::default();
         batch.set_ts(1);
         let mut pairs = vec![];
@@ -368,63 +390,61 @@ mod tests {
             b"k2"
         };
 
-        dispatch_api_version!(api_version, {
-            // put value
-            let mut pair = Pair::default();
-            pair.set_op(PairOp::Put);
-            pair.set_key(key1.to_vec());
-            pair.set_value(b"short_value".to_vec());
-            pairs.push(pair);
+        // put value
+        let mut pair = Pair::default();
+        pair.set_op(PairOp::Put);
+        pair.set_key(key1.to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
 
-            // delete value
-            let mut pair = Pair::default();
-            pair.set_op(PairOp::Delete);
-            pair.set_key(key2.to_vec());
-            pairs.push(pair);
+        // delete value
+        let mut pair = Pair::default();
+        pair.set_op(PairOp::Delete);
+        pair.set_key(key2.to_vec());
+        pairs.push(pair);
 
-            // generate meta
-            batch.set_ttl(10);
-            batch.set_pairs(pairs.into());
-            w.write(batch).unwrap();
-            assert_eq!(w.default_entries, 1);
-            assert_eq!(w.default_deletes, 1);
-            match api_version {
-                ApiVersion::V1ttl => {
-                    // ttl takes i more bytes
-                    assert_eq!(
-                        w.default_bytes as usize,
-                        b"zk1".len() + b"short_value".len() + 8 + b"zk2".len()
-                    );
-                }
-                ApiVersion::V2 => {
-                    // ttl takes 8 more bytes and meta take 1 more byte
-                    assert_eq!(
-                        w.default_bytes as usize,
-                        (b"z".len() + Key::from_raw(b"rk1").as_encoded().len() + 8)
-                            + (b"short_value".len() + 9)
-                            + (b"z".len() + Key::from_raw(b"rk2").as_encoded().len() + 8)
-                    );
-                }
-                _ => unreachable!(),
+        // generate meta
+        batch.set_ttl(10);
+        batch.set_pairs(pairs.into());
+        w.write(batch).unwrap();
+        assert_eq!(w.default_entries, 1);
+        assert_eq!(w.default_deletes, 1);
+
+        match api_version {
+            ApiVersion::V1ttl => {
+                let write_size = b"z".len()
+                    + APIV1TTL::encode_raw_key(b"k1", None).len()
+                    + APIV1TTL::encode_raw_value_owned(RawValue {
+                    user_value: b"short_value".to_vec(),
+                    expire_ts: Some(10),
+                    is_delete: false,
+                })
+                    .len()
+                    + b"z".len() + APIV1TTL::encode_raw_key(b"k2", None).len();
+                assert_eq!(write_size, w.default_bytes as usize);
             }
+            ApiVersion::V2 => {
+                let write_size = b"z".len()
+                    + APIV2::encode_raw_key(b"rk1", Some(TimeStamp::new(1))).len()
+                    + APIV2::encode_raw_value_owned(RawValue {
+                    user_value: b"short_value".to_vec(),
+                    expire_ts: Some(10),
+                    is_delete: false,
+                })
+                    .len()
+                    + b"z".len() + APIV2::encode_raw_key(b"rk2", Some(TimeStamp::new(1))).len();
+                assert_eq!(write_size, w.default_bytes as usize);
+            }
+            _ => unreachable!(),
+        }
 
-            let metas = w.finish().unwrap();
-            assert_eq!(metas.len(), 1);
-        })
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 1);
     }
 
     #[test]
     fn test_raw_write_ttl_not_enabled() {
-        let mut meta = SstMeta::default();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
-        let db_path = importer_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-
-        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let (mut w, _handle) = new_writer(SSTImporter::new_raw_writer, ApiVersion::V1);
         let mut batch = RawWriteBatch::default();
         batch.set_ttl(10);
         assert!(w.write(batch).is_err());
@@ -432,16 +452,7 @@ mod tests {
 
     #[test]
     fn test_raw_write_v1() {
-        let mut meta = SstMeta::default();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
-        let db_path = importer_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-
-        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let (mut w, _handle) = new_writer(SSTImporter::new_raw_writer, ApiVersion::V1);
         let mut batch = RawWriteBatch::default();
 
         let mut pair = Pair::default();
@@ -453,16 +464,7 @@ mod tests {
 
     #[test]
     fn test_raw_write_invalid_key_mode() {
-        let mut meta = SstMeta::default();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V2).unwrap();
-        let db_path = importer_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-
-        let mut w = importer.new_raw_writer::<TestEngine>(&db, meta).unwrap();
+        let (mut w, _handle) = new_writer(SSTImporter::new_raw_writer, ApiVersion::V2);
         let mut batch = RawWriteBatch::default();
         batch.set_ts(1);
 
@@ -478,16 +480,7 @@ mod tests {
 
     #[test]
     fn test_txn_write_v2() {
-        let mut meta = SstMeta::default();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V2).unwrap();
-        let db_path = importer_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-
-        let mut w = importer.new_txn_writer::<TestEngine>(&db, meta).unwrap();
+        let (mut w, _handle) = new_writer(SSTImporter::new_txn_writer, ApiVersion::V2);
         let mut batch = WriteBatch::default();
         batch.set_commit_ts(1);
 
