@@ -4,7 +4,7 @@ use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use api_version::{APIVersion, KeyMode, RawValue, APIV2};
+use api_version::{APIVersion, KeyMode, APIV2};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use kvproto::cdcpb::{
@@ -998,6 +998,7 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use api_version::RawValue;
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
