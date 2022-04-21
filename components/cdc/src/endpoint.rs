@@ -1305,7 +1305,11 @@ mod tests {
         }
     }
 
-    fn mock_endpoint(cfg: &CdcConfig, engine: Option<RocksEngine>, api_version: u8) -> TestEndpointSuite {
+    fn mock_endpoint(
+        cfg: &CdcConfig,
+        engine: Option<RocksEngine>,
+        api_version: u8,
+    ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let ep = Endpoint::new(
