@@ -202,8 +202,8 @@ async fn save_backup_file_worker(
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
-                        file.set_start_key(msg.start_key.clone());
-                        file.set_end_key(msg.end_key.clone());
+                        file.set_start_key(codec.convert_to_dst_user_key(msg.start_key.clone(), false));
+                        file.set_end_key(codec.convert_to_dst_user_key(msg.end_key.clone(), true));
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
@@ -231,8 +231,8 @@ async fn save_backup_file_worker(
                 response.set_files(files.into());
             }
         }
-        response.set_start_key(codec.revert_to_src_raw_key_format(msg.start_key.clone()));
-        response.set_end_key(codec.revert_to_src_raw_key_format(msg.end_key.clone()));
+        response.set_start_key(msg.start_key.clone());
+        response.set_end_key(msg.end_key.clone());
         response.set_api_version(codec.dst_api_ver);
         if let Err(e) = tx.unbounded_send(response) {
             error_unknown!(?e; "backup failed to send response"; "region" => ?msg.region,
@@ -532,10 +532,10 @@ impl BackupRange {
         };
         let start_key = self
             .codec
-            .decode_to_dst_backup_key(self.start_key.clone(), false)?;
+            .decode_backup_key(self.start_key.clone())?;
         let end_key = self
             .codec
-            .decode_to_dst_backup_key(self.end_key.clone(), true)?;
+            .decode_backup_key(self.end_key.clone())?;
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
@@ -864,7 +864,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // TODO: make file_name unique and short
                     let key = brange.start_key.clone().and_then(|k| {
                         // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = brange.codec.decode_to_dst_backup_key(Some(k), false).unwrap();
+                        let input = brange.codec.decode_backup_key(Some(k)).unwrap();
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
                     let name = backup_file_name(store_id, &brange.region, key);
@@ -1574,8 +1574,8 @@ pub mod tests {
         let start_key_idx = 100;
         let end_key_idx = 111;
         endpoint.region_info.set_regions(vec![(
-            generate_test_raw_key(start_key_idx).into_bytes(),
-            generate_test_raw_key(end_key_idx).into_bytes(),
+            vec![], //generate_test_raw_key(start_key_idx).into_bytes(),
+            vec![], //generate_test_raw_key(end_key_idx).into_bytes(),
             1,
         )]);
         let ctx = Context::default();
@@ -1604,8 +1604,28 @@ pub mod tests {
         // TODO: check key number for each snapshot.
         stats.reset();
         let mut req = BackupRequest::default();
-        req.set_start_key(generate_test_raw_key(start_key_idx).into_bytes());
-        req.set_end_key(generate_test_raw_key(end_key_idx).into_bytes());
+        let backup_start = if cur_api_ver == ApiVersion::V2 {
+            vec![b'r']
+        } else {
+            vec![]
+        };
+        let backup_end = if cur_api_ver == ApiVersion::V2 {
+            vec![b's']
+        } else {
+            vec![]
+        };
+        let file_start = if dst_api_ver == ApiVersion::V2 {
+            vec![b'r']
+        } else {
+            vec![]
+        };
+        let file_end = if dst_api_ver == ApiVersion::V2 {
+            vec![b's']
+        } else {
+            vec![]
+        };
+        req.set_start_key(backup_start.clone());
+        req.set_end_key(backup_end.clone());
         req.set_is_raw_kv(true);
         req.set_dst_api_version(dst_api_ver);
         let (tx, rx) = unbounded();
@@ -1624,12 +1644,16 @@ pub mod tests {
             return false;
         }
         assert!(!resp.has_error(), "{:?}", resp);
+        assert_eq!(resp.get_start_key(), backup_start);
+        assert_eq!(resp.get_end_key(), backup_end);
         let file_len = 1;
         let files = resp.get_files();
         info!("{:?}", files);
         assert_eq!(files.len(), file_len /* default cf*/, "{:?}", resp);
         assert_eq!(files[0].total_kvs, (end_key_idx - start_key_idx) as u64);
         assert_eq!(files[0].crc64xor, checksum);
+        assert_eq!(files[0].get_start_key(), file_start);
+        assert_eq!(files[0].get_end_key(), file_end);
         let kv_backup_size = {
             let raw_key_str = generate_test_raw_key(0);
             let raw_value_str = generate_test_raw_value(0);

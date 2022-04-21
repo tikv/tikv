@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn test_raw_key_convert() {
         let timestamp = 30;
-        let apiv1_keys = vec![&b""[..], &b"abc"[..], &b"api_ver_test"[..]];
+        let apiv1_keys = vec![b""[..].to_owned(), b"abc"[..].to_owned(), b"api_ver_test"[..].to_owned()];
         let apiv2_keys: Vec<Vec<u8>> = apiv1_keys
             .clone()
             .into_iter()
@@ -631,46 +631,30 @@ mod tests {
                 APIV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
-
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
+            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
+        ];
         for i in 0..apiv1_keys.len() {
-            let dst_key = dispatch_api_version!(ApiVersion::V2, {
-                API::convert_raw_key_from(
-                    ApiVersion::V1,
-                    apiv1_keys[i],
-                    Some(TimeStamp::from(timestamp)),
-                )
-            });
-            assert_eq!(dst_key.unwrap().into_encoded(), apiv2_keys[i]);
-            let dst_key = dispatch_api_version!(ApiVersion::V2, {
-                API::convert_raw_key_from(
-                    ApiVersion::V1ttl,
-                    apiv1_keys[i],
-                    Some(TimeStamp::from(timestamp)),
-                )
-            });
-            assert_eq!(dst_key.unwrap().into_encoded(), apiv2_keys[i]);
-            let dst_key = dispatch_api_version!(ApiVersion::V1, {
-                API::convert_raw_key_from(
-                    ApiVersion::V2,
-                    &apiv2_keys[i],
-                    Some(TimeStamp::from(timestamp)),
-                )
-            });
-            assert_eq!(dst_key.unwrap().into_encoded(), apiv1_keys[i]);
-            let dst_key = dispatch_api_version!(ApiVersion::V1ttl, {
-                API::convert_raw_key_from(
-                    ApiVersion::V2,
-                    &apiv2_keys[i],
-                    Some(TimeStamp::from(timestamp)),
-                )
-            });
-            assert_eq!(dst_key.unwrap().into_encoded(), apiv1_keys[i]);
+            for case in &test_cases {
+                let dst_key = dispatch_api_version!(case.1, {
+                    API::convert_raw_key_from(
+                        case.0,
+                        &case.2[i],
+                        Some(TimeStamp::from(timestamp)),
+                    )
+                });
+                assert_eq!(dst_key.unwrap().into_encoded(), case.3[i]);
+            }
         }
     }
 
     #[test]
     fn test_raw_value_convert() {
-        let apiv1_values = vec![&b""[..], &b"abc"[..], &b"api_ver_test"[..]];
+        let apiv1_values = vec![b""[..].to_owned(), b"abc"[..].to_owned(), b"api_ver_test"[..].to_owned()];
         let apiv1ttl_values: Vec<Vec<u8>> = apiv1_values
             .clone()
             .into_iter()
@@ -695,24 +679,61 @@ mod tests {
                 APIV2::encode_raw_value_owned(raw_value)
             })
             .collect();
-
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_values, &apiv2_values),
+            (ApiVersion::V1ttl, ApiVersion::V2, &apiv1ttl_values, &apiv2_values),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_values, &apiv1_values),
+            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_values, &apiv1ttl_values),
+        ];
         for i in 0..apiv1_values.len() {
-            let dst_value = dispatch_api_version!(ApiVersion::V2, {
-                API::convert_raw_value_from(ApiVersion::V1, &apiv1_values[i])
-            });
-            assert_eq!(dst_value.unwrap(), apiv2_values[i]);
-            let dst_value = dispatch_api_version!(ApiVersion::V2, {
-                API::convert_raw_value_from(ApiVersion::V1ttl, &apiv1ttl_values[i])
-            });
-            assert_eq!(dst_value.unwrap(), apiv2_values[i]);
-            let dst_value = dispatch_api_version!(ApiVersion::V1, {
-                API::convert_raw_value_from(ApiVersion::V2, &apiv2_values[i])
-            });
-            assert_eq!(dst_value.unwrap(), apiv1_values[i]);
-            let dst_value = dispatch_api_version!(ApiVersion::V1ttl, {
-                API::convert_raw_value_from(ApiVersion::V2, &apiv2_values[i])
-            });
-            assert_eq!(dst_value.unwrap(), apiv1ttl_values[i]);
+            for case in &test_cases {
+                let dst_value = dispatch_api_version!(case.1, {
+                    API::convert_raw_value_from(case.0, &case.2[i])
+                });
+                assert_eq!(dst_value.unwrap(), case.3[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_convert_user_key() {
+        let apiv1_keys = vec![b""[..].to_owned(), b"abc"[..].to_owned(), b"api_ver_test"[..].to_owned()];
+        let mut is_end = false;
+        let apiv2_keys: Vec<Vec<u8>> = apiv1_keys
+            .clone()
+            .into_iter()
+            .map(|key| {
+                let mut v2_key = key.to_owned();
+                if is_end && v2_key.is_empty() {
+                    v2_key.insert(0, RAW_KEY_PREFIX_END);
+                } else {
+                    v2_key.insert(0, RAW_KEY_PREFIX);
+                }
+                is_end = !is_end;
+                v2_key
+            })
+            .collect();
+        // src_api_ver, dst_api_ver, src_data, dst_data
+        let test_cases = vec![
+            (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
+            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
+            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
+        ];
+        for case in &test_cases {
+            is_end = false;
+            for i in 0..apiv1_keys.len() {
+                let dst_key = dispatch_api_version!(case.1, {
+                    API::convert_user_key_from(
+                        case.0,
+                        case.2[i].clone(),
+                        is_end,
+                    )
+                });
+                assert_eq!(dst_key, case.3[i]);
+                is_end = !is_end;
+            }
         }
     }
 }

@@ -42,7 +42,7 @@ impl APIVersion for APIV2 {
         }
 
         match key[0] {
-            RAW_KEY_PREFIX => KeyMode::Raw,
+            RAW_KEY_PREFIX | RAW_KEY_PREFIX_END => KeyMode::Raw,
             TXN_KEY_PREFIX => KeyMode::Txn,
             TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDB,
             _ => KeyMode::Unknown,
@@ -186,7 +186,7 @@ impl APIVersion for APIV2 {
     fn convert_user_key_from(src_api: ApiVersion, key: Vec<u8>, is_range_end: bool) -> Vec<u8> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                let prefix = if is_range_end && key.len() == 0 {
+                let prefix = if is_range_end && key.is_empty() {
                     RAW_KEY_PREFIX_END
                 } else {
                     RAW_KEY_PREFIX
