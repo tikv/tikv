@@ -2061,6 +2061,14 @@ where
             return Ok(());
         }
 
+        if matches!(msg_type, MessageType::MsgUnreachable) {
+            self.fsm
+                .peer
+                .raft_group
+                .report_unreachable(msg.get_from_peer().get_id());
+            return Ok(());
+        }
+
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
