@@ -19,7 +19,7 @@ use raft_engine::{
 };
 use tikv_util::Either;
 
-pub use raft_engine::{Config as RaftEngineConfig, RecoveryMode};
+pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 
 #[derive(Clone)]
 pub struct MessageExtTyped;

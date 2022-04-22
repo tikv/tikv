@@ -43,7 +43,9 @@ use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
-use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
+use raft_log_engine::{
+    RaftEngineConfig as RawRaftEngineConfig, ReadableSize as RaftEngineReadableSize,
+};
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
 use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
@@ -72,6 +74,9 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
+/// Maximum of 15% of system memory can be used by Raft Engine. Normally its
+/// memory usage is much smaller than that.
+const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
@@ -1410,6 +1415,11 @@ impl Default for RaftEngineConfig {
 impl RaftEngineConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.config.sanitize().map_err(Box::new)?;
+        if self.config.memory_limit.is_none() {
+            let total_mem = SysQuota::memory_limit_in_bytes() as f64;
+            let memory_limit = total_mem * RAFT_ENGINE_MEMORY_LIMIT_RATE;
+            self.config.memory_limit = Some(RaftEngineReadableSize(memory_limit as u64));
+        }
         Ok(())
     }
 
