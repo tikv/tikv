@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{APIVersion, KeyMode, APIV2};
-use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
 use raftstore::coprocessor;
@@ -36,7 +36,7 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
         Self { causal_ts_provider }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
         coprocessor_host.registry.register_query_observer(
             CAUSAL_OBSERVER_PRIORITY,
             BoxQueryObserver::new(self.clone()),

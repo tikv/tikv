@@ -639,7 +639,8 @@ impl Delegate {
                     let resolved_ts = resolver.resolved_ts();
                     assert!(
                         commit_ts > resolved_ts,
-                        "commit_ts: {:?}, resolved_ts: {:?}",
+                        "region {} commit_ts: {:?}, resolved_ts: {:?}",
+                        self.region_id,
                         commit_ts,
                         resolved_ts
                     );

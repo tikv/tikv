@@ -286,10 +286,10 @@ fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
-            iter_opt.set_vec_upper_bound(region_end_key);
+            iter_opt.set_vec_upper_bound(region_end_key, 0);
         }
     } else {
-        iter_opt.set_vec_upper_bound(region_end_key);
+        iter_opt.set_vec_upper_bound(region_end_key, 0);
     }
 }
 
