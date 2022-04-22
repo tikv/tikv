@@ -1,4 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::mem;
 use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,6 +12,7 @@ use kvproto::cdcpb::{
     ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
     EventRowOpType, Event_oneof_event,
 };
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -234,11 +236,16 @@ pub struct Delegate {
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
+    api_version: ApiVersion,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64, txn_extra_op: Arc<AtomicCell<TxnExtraOp>>) -> Delegate {
+    pub fn new(
+        region_id: u64,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+        api_version: ApiVersion,
+    ) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
@@ -248,6 +255,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
+            api_version,
         }
     }
 
@@ -632,6 +640,7 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
+            // No ready downstream or a dowsream that does not match the kv_api type, will be ignored.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
@@ -658,7 +667,7 @@ impl Delegate {
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
         let key_mode = APIV2::parse_key_mode(put.get_key());
-        if key_mode == KeyMode::Raw {
+        if self.api_version == ApiVersion::V2 && key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows)
         } else {
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
@@ -977,8 +986,6 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
 
     if let Some(expire_ts) = decoded_value.expire_ts {
         row.expire_ts_unix_secs = expire_ts;
-    } else {
-        row.expire_ts_unix_secs = u64::max_value();
     }
 
     if decoded_value.is_delete {
@@ -1027,7 +1034,7 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id, Default::default());
+        let mut delegate = Delegate::new(region_id, Default::default(), ApiVersion::V2);
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = Resolver::new(region_id);
@@ -1147,7 +1154,7 @@ mod tests {
 
         // Create a new delegate.
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op.clone());
+        let mut delegate = Delegate::new(1, txn_extra_op.clone(), ApiVersion::V2);
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
@@ -1198,7 +1205,7 @@ mod tests {
             (
                 vec![b'r', 2, 3, 4],
                 vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb],
-                vec![b'w', b'o', b'r', b'l', b'd', b'1'],
+                b"world1".to_vec(),
                 1,
                 Some(10),
                 false,
@@ -1206,7 +1213,7 @@ mod tests {
             (
                 vec![b'r', 3, 4, 5],
                 vec![b'r', 3, 4, 5, 0, 0, 0, 0, 0xfb],
-                vec![b'w', b'o', b'r', b'l', b'd', b'2'],
+                b"world2".to_vec(),
                 2,
                 None,
                 true,
@@ -1237,7 +1244,7 @@ mod tests {
             if let Some(expire_ts) = expire_ts {
                 assert_eq!(row.expire_ts_unix_secs, expire_ts);
             } else {
-                assert_eq!(row.expire_ts_unix_secs, u64::max_value());
+                assert_eq!(row.expire_ts_unix_secs, 0);
             }
         }
     }

@@ -918,7 +918,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
-            self.config.storage.api_version,
+            self.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
             self.router.clone(),

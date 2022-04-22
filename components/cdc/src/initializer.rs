@@ -31,6 +31,7 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
+use api_version::{APIVersion, APIV2};
 
 use crate::channel::CdcEvent;
 use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
@@ -241,8 +242,8 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
-            iter_opt.set_lower_bound(region.get_start_key(), 0);
-            iter_opt.set_upper_bound(region.get_end_key(), 0);
+            iter_opt.set_lower_bound(b"r", 1);
+            iter_opt.set_upper_bound(b"s", 1);
             let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
 
             iter.seek_to_first().unwrap();
@@ -331,12 +332,16 @@ impl<E: KvEngine> Initializer<E> {
                     }
                 },
                 Scanner::RawKvScanner(iter) => {
-                    if iter.valid().unwrap() {
+                    if iter.valid()? {
                         let key = iter.key().to_vec();
+                        let (_, ts) = APIV2::decode_raw_key_owned(Key::from_encoded(key.clone()), true)?;
+                        if ts.unwrap() < self.checkpoint_ts {
+                            continue;
+                        }
                         let value = iter.value().to_vec();
                         total_bytes += key.len() + value.len();
                         entries.push(Some(KvEntry::RawKvEntry((key, value))));
-                        iter.next().unwrap();
+                        iter.next()?;
                     } else {
                         entries.push(None);
                         break;
@@ -840,54 +845,54 @@ mod tests {
 
     #[test]
     fn test_initializer_initialize() {
-        let kv_api_set: [ChangeDataRequestKvApi; 2] =
-            [ChangeDataRequestKvApi::TiDb, ChangeDataRequestKvApi::RawKv];
+        test_initializer_initialize_impl(ChangeDataRequestKvApi::TiDb);
+        test_initializer_initialize_impl(ChangeDataRequestKvApi::RawKv);
+    }
 
-        for kv_api in kv_api_set {
-            let total_bytes = 1;
-            let buffer = 1;
-            let (mut worker, pool, mut initializer, _rx, _drain) =
-                mock_initializer(total_bytes, buffer, None, kv_api);
+    fn test_initializer_initialize_impl(kv_api: ChangeDataRequestKvApi) {
+        let total_bytes = 1;
+        let buffer = 1;
+        let (mut worker, pool, mut initializer, _rx, _drain) =
+            mock_initializer(total_bytes, buffer, None, kv_api);
 
-            let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-            let raft_router = MockRaftStoreRouter::new();
-            let concurrency_semaphore = Arc::new(Semaphore::new(1));
+        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
+        let raft_router = MockRaftStoreRouter::new();
+        let concurrency_semaphore = Arc::new(Semaphore::new(1));
 
-            initializer.downstream_state.store(DownstreamState::Stopped);
-            block_on(initializer.initialize(
-                change_cmd,
-                raft_router.clone(),
-                concurrency_semaphore.clone(),
-            ))
-            .unwrap_err();
+        initializer.downstream_state.store(DownstreamState::Stopped);
+        block_on(initializer.initialize(
+            change_cmd,
+            raft_router.clone(),
+            concurrency_semaphore.clone(),
+        ))
+        .unwrap_err();
 
-            let (tx, rx) = sync_channel(1);
-            let concurrency_semaphore_ = concurrency_semaphore.clone();
-            pool.spawn(async move {
-                let _permit = concurrency_semaphore_.acquire().await;
-                tx.send(()).unwrap();
-                tx.send(()).unwrap();
-                tx.send(()).unwrap();
-            });
-            rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        let (tx, rx) = sync_channel(1);
+        let concurrency_semaphore_ = concurrency_semaphore.clone();
+        pool.spawn(async move {
+            let _permit = concurrency_semaphore_.acquire().await;
+            tx.send(()).unwrap();
+            tx.send(()).unwrap();
+            tx.send(()).unwrap();
+        });
+        rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
-            let (tx1, rx1) = sync_channel(1);
-            let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-            pool.spawn(async move {
-                let res = initializer
-                    .initialize(change_cmd, raft_router, concurrency_semaphore)
-                    .await;
-                tx1.send(res).unwrap();
-            });
-            // Must timeout because there is no enough permit.
-            rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
+        let (tx1, rx1) = sync_channel(1);
+        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
+        pool.spawn(async move {
+            let res = initializer
+                .initialize(change_cmd, raft_router, concurrency_semaphore)
+                .await;
+            tx1.send(res).unwrap();
+        });
+        // Must timeout because there is no enough permit.
+        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
-            // Release the permit
-            rx.recv_timeout(Duration::from_millis(200)).unwrap();
-            let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-            res.unwrap_err();
+        // Release the permit
+        rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
+        res.unwrap_err();
 
-            worker.stop();
-        }
+        worker.stop();
     }
 }

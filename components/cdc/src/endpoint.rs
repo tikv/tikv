@@ -19,6 +19,7 @@ use kvproto::cdcpb::{
     Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
     Error as EventError, Event, Event_oneof_event, ResolvedTs,
 };
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::metapb::Region;
 use kvproto::tikvpb::TikvClient;
 use online_config::{ConfigChange, OnlineConfig};
@@ -313,7 +314,7 @@ pub struct Endpoint<T, E> {
     concurrency_manager: ConcurrencyManager,
 
     config: CdcConfig,
-    api_version: u8,
+    api_version: ApiVersion,
 
     // Incremental scan
     workers: Runtime,
@@ -345,7 +346,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
-        api_version: u8,
+        api_version: ApiVersion,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         raft_router: T,
@@ -600,22 +601,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
 
-        if kv_api == ChangeDataRequestKvApi::RawKv && api_version != 2 {
-            error!("RawKv and TxnKv are supported by api-version 2 only"; "api_version" => api_version);
+        if (kv_api == ChangeDataRequestKvApi::RawKv && api_version != ApiVersion::V2) || 
+            (kv_api == ChangeDataRequestKvApi::TxnKv) {
+            error!("RawKv are supported by api-version 2 only, TxnKv aren't supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
-            err.set_required_version("required tikv enable api-version 2".to_string());
-            err_event.set_compatibility(err);
-
-            let _ = downstream.sink_error_event(region_id, err_event);
-            return;
-        }
-
-        if kv_api == ChangeDataRequestKvApi::TxnKv {
-            error!("TxnKv cdc aren't supported now");
-            let mut err_event = EventError::default();
-            let mut err = ErrorCompatibility::default();
-            err.set_required_version("TxnKv cdc aren't supported now".to_string());
+            err.set_required_version("TxnKv doesn't support now, RawKv requires tikv version >= 6.1 with storage.api-version=2".to_string());
             err_event.set_compatibility(err);
 
             let _ = downstream.sink_error_event(region_id, err_event);
@@ -659,7 +650,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             HashMapEntry::Occupied(e) => e.into_mut(),
             HashMapEntry::Vacant(e) => {
                 is_new_delegate = true;
-                e.insert(Delegate::new(region_id, txn_extra_op))
+                e.insert(Delegate::new(region_id, txn_extra_op, self.api_version))
             }
         };
 
@@ -1308,7 +1299,7 @@ mod tests {
     fn mock_endpoint(
         cfg: &CdcConfig,
         engine: Option<RocksEngine>,
-        api_version: u8,
+        api_version: ApiVersion,
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
@@ -1342,9 +1333,136 @@ mod tests {
     }
 
     #[test]
+    fn test_api_version_check() {
+        let cfg = CdcConfig::default();
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
+        let (tx, mut rx) = channel::channel(1, quota);
+        let mut rx = rx.drain();
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+        req.set_region_id(1);
+        req.set_kv_api(ChangeDataRequestKvApi::TiDb);
+        let region_epoch = req.get_region_epoch().clone();
+        let version = FeatureGate::batch_resolved_ts();
+        
+        // Compatibility error.
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::RawKv,
+        );
+        req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: version.clone(),
+        });
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event.0 {
+            assert_eq!(e.region_id, 1);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        // Compatibility error.
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TxnKv,
+        );
+        req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+            version: version.clone(),
+        });
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event.0 {
+            assert_eq!(e.region_id, 1);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        suite.api_version = ApiVersion::V2;
+        // Compatibility error.
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            3,
+            conn_id,
+            ChangeDataRequestKvApi::TxnKv,
+        );
+        req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+            version: version.clone(),
+        });
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        if let CdcEvent::Event(mut e) = cdc_event.0 {
+            assert_eq!(e.region_id, 1);
+            let event = e.event.take().unwrap();
+            match event {
+                Event_oneof_event::Error(err) => {
+                    assert!(err.has_compatibility());
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        } else {
+            panic!("unknown cdc event {:?}", cdc_event);
+        }
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+    }
+
+    #[test]
     fn test_change_endpoint_cfg() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
         let ep = &mut suite.endpoint;
 
         // Modify min_ts_interval and hibernate_regions_compatible.
@@ -1469,7 +1587,7 @@ mod tests {
     fn test_raftstore_is_busy() {
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
@@ -1515,7 +1633,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1695,7 +1813,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
 
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -1845,7 +1963,7 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
@@ -1986,7 +2104,7 @@ mod tests {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
-        let mut suite = mock_endpoint(&cfg, None, 1);
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Open two connections a and b, registers region 1, 2 to conn a and
         // region 3 to conn b.
@@ -2095,7 +2213,7 @@ mod tests {
     // too, because epoch not match.
     #[test]
     fn test_deregister_conn_then_delegate() {
-        let mut suite = mock_endpoint(&CdcConfig::default(), None, 1);
+        let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
