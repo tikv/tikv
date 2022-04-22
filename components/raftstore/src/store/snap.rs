@@ -576,6 +576,13 @@ impl Snapshot {
         Ok(())
     }
 
+    pub fn load_snapshot_meta_if_necessary(&mut self) -> RaftStoreResult<()> {
+        if self.meta_file.meta.get_cf_files().is_empty() && file_exists(&self.meta_file.path) {
+            return self.load_snapshot_meta();
+        }
+        Ok(())
+    }
+
     fn get_display_path(dir_path: impl AsRef<Path>, prefix: &str) -> String {
         let cf_names = "(".to_owned() + &SNAPSHOT_CFS.join("|") + ")";
         format!(

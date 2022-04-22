@@ -73,8 +73,8 @@ use crate::store::peer_storage::write_peer_state;
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
 use crate::store::worker::{
-    Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate,
-    ReadProgress, RegionTask, SplitCheckTask,
+    Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogFetchTask,
+    RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]
@@ -1049,6 +1049,24 @@ where
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
+        macro_rules! schedule_delete_snapshot_files {
+            ($key: ident, $snap: ident) => {
+                if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::GcSnapshot(
+                    GcSnapshotTask::DeleteSnapshotFiles {
+                        key: $key.clone(),
+                        snapshot: $snap,
+                        check_entry: false,
+                    }
+                )) {
+                    error!(
+                        "failed to schedule task to delete compacted snap file";
+                        "key" => %$key,
+                        "err" => %e,
+                    )
+                }
+            };
+        }
+
         let is_applying_snap = self.fsm.peer.is_handling_snapshot();
         let s = self.fsm.peer.get_store();
         let compacted_idx = s.truncated_index();
@@ -1074,7 +1092,7 @@ where
                         "peer_id" => self.fsm.peer_id(),
                         "snap_file" => %key,
                     );
-                    self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                    schedule_delete_snapshot_files!(key, s);
                 } else if let Ok(meta) = s.meta() {
                     let modified = match meta.modified() {
                         Ok(m) => m,
@@ -1097,7 +1115,7 @@ where
                                 "peer_id" => self.fsm.peer_id(),
                                 "snap_file" => %key,
                             );
-                            self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                            schedule_delete_snapshot_files!(key, s);
                         }
                     }
                 }
@@ -1125,7 +1143,7 @@ where
                         continue;
                     }
                 };
-                self.ctx.snap_mgr.delete_snapshot(&key, a.as_ref(), false);
+                schedule_delete_snapshot_files!(key, a);
             }
         }
     }
