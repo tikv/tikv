@@ -113,9 +113,8 @@ where
         // For example, for a `prefix_sum` like [1, 2, 3, 4],
         // if we generate a random number in [0, 4], the probability of choosing the first index is 0.4
         // rather than 0.25 due to that 0 and 1 will both make `binary_search` get the same result.
-        let i = prefix_sum
-            .binary_search(&rng.gen_range(1..=all_key_ranges_num))
-            .unwrap_or_else(|i| i);
+        let random_num = rng.gen_range(1..=all_key_ranges_num);
+        let i = prefix_sum.binary_search(&random_num).unwrap_or_else(|i| i);
         let key_ranges = key_ranges_getter(&mut key_ranges_providers[i]);
         if !key_ranges.is_empty() {
             let j = rng.gen_range(0..key_ranges.len());
@@ -128,6 +127,7 @@ where
                 "sampled_key_ranges.len()" => sampled_key_ranges.len(),
                 "sample_num" => sample_num,
                 "prefix_sum" => ?prefix_sum,
+                "random_num" => random_num,
                 "i" => i,
                 "key_ranges" => ?key_ranges,
             );
