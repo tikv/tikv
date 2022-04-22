@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -339,6 +339,8 @@ where
     },
     EnterForceLeaderState {
         failed_stores: HashSet<u64>,
+        counter: Arc<AtomicUsize>,
+        forced_leaders: Arc<Mutex<Vec<u64>>>,
     },
     ExitForceLeaderState,
 }
@@ -570,7 +572,8 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    UpdateRegionForUnsafeRecover(metapb::Region),
+    DemoteFailedVotersForUnsafeRecovery(Vec<metapb::Peer>, Arc<AtomicUsize>),
+    DestroyForUnsafeRecovery(Arc<AtomicUsize>),
     UnsafeRecoveryWaitApply(Arc<AtomicUsize>),
 }
 
@@ -600,8 +603,11 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::UpdateRegionForUnsafeRecover(region) => {
-                write!(fmt, "Update Region {} to {:?}", region.get_id(), region)
+            PeerMsg::DemoteFailedVotersForUnsafeRecovery(voters, _) => {
+                write!(fmt, "Demote following voters {:?} from the region", voters)
+            }
+            PeerMsg::DestroyForUnsafeRecovery(_) => {
+                write!(fmt, "Destroy the peer for unsafe recovery")
             }
             PeerMsg::UnsafeRecoveryWaitApply(counter) => write!(fmt, "WaitApply {:?}", *counter),
         }
@@ -648,8 +654,8 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    UnsafeRecoveryReport,
-    CreatePeer(metapb::Region),
+    ReportForUnsafeRecovery(Option<Vec<u64>>),
+    CreatePeerForUnsafeRecovery(metapb::Region, Arc<AtomicUsize>),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -678,8 +684,8 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
-            StoreMsg::UnsafeRecoveryReport => write!(fmt, "UnsafeRecoveryReport"),
-            StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
+            StoreMsg::ReportForUnsafeRecovery( .. )=> write!(fmt, "ReportForUnsafeRecovery"),
+            StoreMsg::CreatePeerForUnsafeRecovery( .. ) => write!(fmt, "CreatePeerForUnsafeRecovery"),
         }
     }
 }

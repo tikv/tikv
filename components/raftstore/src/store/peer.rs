@@ -457,8 +457,14 @@ pub struct ReadyResult {
 
 #[derive(Debug)]
 pub enum ForceLeaderState {
-    PreForceLeader { failed_stores: HashSet<u64> },
-    ForceLeader { failed_stores: HashSet<u64> },
+    PreForceLeader {
+        failed_stores: HashSet<u64>,
+        counter: Arc<AtomicUsize>,
+        forced_leaders: Arc<Mutex<Vec<u64>>>,
+    },
+    ForceLeader {
+        failed_stores: HashSet<u64>,
+    },
 }
 
 pub enum UnsafeRecoveryState {
@@ -469,6 +475,11 @@ pub enum UnsafeRecoveryState {
     // sending a store heartbeat message to store fsm.
     WaitApply {
         target_index: u64,
+        task_counter: Arc<AtomicUsize>,
+    },
+    Destroy(Arc<AtomicUsize>),
+    DemoteFailedVoters {
+        failed_voters: Vec<metapb::Peer>,
         task_counter: Arc<AtomicUsize>,
     },
 }
@@ -1648,7 +1659,9 @@ where
 
     pub fn maybe_force_forward_commit_index(&mut self) -> bool {
         let failed_stores = match &self.force_leader {
-            Some(ForceLeaderState::ForceLeader { failed_stores }) => failed_stores,
+            Some(ForceLeaderState::ForceLeader {
+                failed_stores,
+            }) => failed_stores,
             _ => unreachable!(),
         };
 
@@ -4502,27 +4515,29 @@ where
         force: bool,
     ) {
         if let Some(unsafe_recovery_state) = &self.unsafe_recovery_state {
-            let UnsafeRecoveryState::WaitApply {
+            if let UnsafeRecoveryState::WaitApply {
                 target_index,
                 task_counter,
-            } = unsafe_recovery_state;
-            if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                info!(
-                    "unsafe recovery finish wait apply";
-                    "region_id" => self.region().get_id(),
-                    "peer_id" => self.peer_id(),
-                    "target_index" => target_index,
-                    "applied" =>  self.raft_group.raft.raft_log.applied,
-                    "force" => force,
-                    "counter" =>  task_counter.load(Ordering::SeqCst)
-                );
-                if task_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    if let Err(e) = ctx.router.send_control(StoreMsg::UnsafeRecoveryReport) {
-                        error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
+            } = unsafe_recovery_state
+            {
+                if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                    info!(
+                        "unsafe recovery finish wait apply";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer_id(),
+                        "target_index" => target_index,
+                        "applied" =>  self.raft_group.raft.raft_log.applied,
+                        "force" => force,
+                        "counter" =>  task_counter.load(Ordering::SeqCst)
+                    );
+                    if task_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                        if let Err(e) = ctx.router.send_control(StoreMsg::ReportForUnsafeRecovery(None)) {
+                            error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
+                        }
                     }
+                    // Reset the state if the wait is finished.
+                    self.unsafe_recovery_state = None;
                 }
-                // Reset the state if the wait is finished.
-                self.unsafe_recovery_state = None;
             }
         }
     }

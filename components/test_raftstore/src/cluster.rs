@@ -2,7 +2,7 @@
 
 use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::{atomic::AtomicUsize, mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
@@ -1381,7 +1381,11 @@ impl<T: Simulator> Cluster<T> {
         router
             .significant_send(
                 region_id,
-                SignificantMsg::EnterForceLeaderState { failed_stores },
+                SignificantMsg::EnterForceLeaderState {
+                    failed_stores,
+                    counter: Arc::new(AtomicUsize::new(1)),
+                    forced_leaders: Arc::new(Mutex::new(Vec::new())),
+                },
             )
             .unwrap();
     }
@@ -1630,57 +1634,6 @@ impl<T: Simulator> Cluster<T> {
     pub fn must_send_store_heartbeat(&self, node_id: u64) {
         let router = self.sim.rl().get_router(node_id).unwrap();
         StoreRouter::send(&router, StoreMsg::Tick(StoreTick::PdStoreHeartbeat)).unwrap();
-    }
-
-    pub fn must_update_region_for_unsafe_recover(&mut self, node_id: u64, region: &metapb::Region) {
-        let router = self.sim.rl().get_router(node_id).unwrap();
-        let mut try_cnt = 0;
-        loop {
-            if try_cnt % 50 == 0 {
-                // In case the message is ignored, re-send it every 50 tries.
-                router
-                    .force_send(
-                        region.get_id(),
-                        PeerMsg::UpdateRegionForUnsafeRecover(region.clone()),
-                    )
-                    .unwrap();
-            }
-            if let Ok(Some(current)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
-                if current.get_start_key() == region.get_start_key()
-                    && current.get_end_key() == region.get_end_key()
-                {
-                    return;
-                }
-            }
-            if try_cnt > 500 {
-                panic!("region {:?} is not updated", region);
-            }
-            try_cnt += 1;
-            sleep_ms(20);
-        }
-    }
-
-    pub fn must_recreate_region_for_unsafe_recover(
-        &mut self,
-        node_id: u64,
-        region: &metapb::Region,
-    ) {
-        let router = self.sim.rl().get_router(node_id).unwrap();
-        let mut try_cnt = 0;
-        loop {
-            if try_cnt % 50 == 0 {
-                // In case the message is ignored, re-send it every 50 tries.
-                StoreRouter::send(&router, StoreMsg::CreatePeer(region.clone())).unwrap();
-            }
-            if let Ok(Some(_)) = block_on(self.pd_client.get_region_by_id(region.get_id())) {
-                return;
-            }
-            if try_cnt > 250 {
-                panic!("region {:?} is not created", region);
-            }
-            try_cnt += 1;
-            sleep_ms(20);
-        }
     }
 
     pub fn gc_peer(

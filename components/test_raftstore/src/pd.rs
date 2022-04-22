@@ -329,6 +329,7 @@ struct PdCluster {
 
     unsafe_recovery_require_report: bool,
     unsafe_recovery_store_reported: HashMap<u64, i32>,
+    unsafe_recovery_plan: HashMap<u64, pdpb::RecoveryPlan>,
 }
 
 impl PdCluster {
@@ -364,6 +365,7 @@ impl PdCluster {
             check_merge_target_integrity: true,
             unsafe_recovery_require_report: false,
             unsafe_recovery_store_reported: HashMap::default(),
+            unsafe_recovery_plan: HashMap::default(),
             buckets: HashMap::default(),
         }
     }
@@ -731,10 +733,14 @@ impl PdCluster {
         self.min_resolved_ts
     }
 
-    fn handle_store_heartbeat(&mut self) -> Result<pdpb::StoreHeartbeatResponse> {
+    fn handle_store_heartbeat(&mut self, store_id: u64) -> Result<pdpb::StoreHeartbeatResponse> {
         let mut resp = pdpb::StoreHeartbeatResponse::default();
         resp.set_require_detailed_report(self.unsafe_recovery_require_report);
         self.unsafe_recovery_require_report = false;
+        if let Some((_, plan)) = self.unsafe_recovery_plan.remove_entry(&store_id) {
+            debug!("Unsafe recovery, sending recovery plan"; "store_id" => store_id, "plan" => ?plan);
+            resp.set_plan(plan);
+        }
 
         Ok(resp)
     }
@@ -743,10 +749,14 @@ impl PdCluster {
         self.unsafe_recovery_require_report = require_report;
     }
 
-    fn get_store_reported(&self, store_id: &u64) -> i32 {
+    fn set_unsafe_recovery_plan(&mut self, store_id: u64, recovery_plan: pdpb::RecoveryPlan) {
+        self.unsafe_recovery_plan.insert(store_id, recovery_plan);
+    }
+
+    fn get_store_reported(&self, store_id: u64) -> i32 {
         *self
             .unsafe_recovery_store_reported
-            .get(store_id)
+            .get(&store_id)
             .unwrap_or(&0)
     }
 
@@ -1313,8 +1323,12 @@ impl TestPdClient {
         self.cluster.wl().set_require_report(require_report);
     }
 
-    pub fn must_get_store_reported(&self, store_id: &u64) -> i32 {
+    pub fn must_get_store_reported(&self, store_id: u64) -> i32 {
         self.cluster.rl().get_store_reported(store_id)
+    }
+
+    pub fn must_set_unsafe_recovery_plan(&self, store_id: u64, plan: pdpb::RecoveryPlan) {
+        self.cluster.wl().set_unsafe_recovery_plan(store_id, plan)
     }
 
     pub fn get_buckets(&self, region_id: u64) -> Option<BucketStat> {
@@ -1605,7 +1619,7 @@ impl PdClient for TestPdClient {
             cluster.store_reported_inc(store_id);
         }
 
-        let mut resp = cluster.handle_store_heartbeat().unwrap();
+        let mut resp = cluster.handle_store_heartbeat(store_id).unwrap();
 
         if let Some(ref status) = cluster.replication_status {
             resp.set_replication_status(status.clone());

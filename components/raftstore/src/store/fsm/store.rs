@@ -623,8 +623,8 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::UnsafeRecoveryReport => self.store_heartbeat_pd(true),
-                StoreMsg::CreatePeer(region) => self.on_create_peer(region),
+                StoreMsg::ReportForUnsafeRecovery(forced_leaders) => self.store_heartbeat_pd(true, forced_leaders),
+                StoreMsg::CreatePeerForUnsafeRecovery(region, counter) => self.on_create_peer_for_unsafe_recovery(region, counter),
             }
         }
     }
@@ -2155,7 +2155,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
-    fn store_heartbeat_pd(&mut self, send_detailed_report: bool) {
+    fn store_heartbeat_pd(&mut self, send_detailed_report: bool, forced_leaders: Option<Vec<u64>>) {
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
@@ -2234,6 +2234,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             stats,
             store_info,
             send_detailed_report,
+            forced_leaders,
             dr_autosync_status: self
                 .ctx
                 .global_replication_state
@@ -2250,7 +2251,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_pd_store_heartbeat_tick(&mut self) {
-        self.store_heartbeat_pd(false);
+        self.store_heartbeat_pd(false, None);
         self.register_pd_store_heartbeat_tick();
     }
 
@@ -2637,8 +2638,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.report_status_update()
     }
 
-    fn on_create_peer(&self, region: Region) {
-        info!("creating a peer"; "peer" => ?region);
+    fn on_create_peer_for_unsafe_recovery(&self, region: Region, counter: Arc<AtomicUsize>) {
+        info!("Unsafe recovery, creating a peer"; "peer" => ?region);
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        for (_, id) in meta.region_ranges.range((
+            Excluded(data_key(region.get_start_key())),
+            Unbounded::<Vec<u8>>,
+        )) {
+            let exist_region = &meta.regions[id];
+            if enc_start_key(exist_region) >= data_end_key(region.get_end_key()) {
+                break;
+            }
+            panic!(
+                "{:?} is overlapped with an existing region {:?}",
+                region, exist_region
+            );
+        }
         let mut kv_wb = self.ctx.engines.kv.write_batch();
         let region_state_key = keys::region_state_key(region.get_id());
         match self
@@ -2690,20 +2705,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
         peer.peer.init_replication_mode(&mut *replication_state);
         peer.peer.activate(self.ctx);
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        for (_, id) in meta.region_ranges.range((
-            Excluded(data_key(region.get_start_key())),
-            Unbounded::<Vec<u8>>,
-        )) {
-            let exist_region = &meta.regions[id];
-            if enc_start_key(exist_region) >= data_end_key(region.get_end_key()) {
-                break;
-            }
-            panic!(
-                "{:?} is overlapped with an existing region {:?}",
-                region, exist_region
-            );
-        }
         if meta
             .region_ranges
             .insert(enc_end_key(&region), region.get_id())
@@ -2728,6 +2729,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .router
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
+            if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+                if let Err(e) = self
+                    .ctx
+                    .router
+                    .send_control(StoreMsg::ReportForUnsafeRecovery(None))
+                {
+                    error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
+                }
+            }
     }
 }
 

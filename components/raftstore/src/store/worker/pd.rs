@@ -3,7 +3,7 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io, mem};
@@ -26,18 +26,17 @@ use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
-use crate::store::util::{
-    is_epoch_stale, ConfChangeKind, KeysInfoFormatter, LatencyInspector, RaftstoreDuration,
-};
+use crate::store::transport::SignificantRouter;
+use crate::store::util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration};
 use crate::store::worker::query_stats::QueryStats;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats, WriteStats};
 use crate::store::{
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
+    RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
@@ -136,6 +135,7 @@ where
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
         send_detailed_report: bool,
+        forced_leaders: Option<Vec<u64>>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
@@ -1027,6 +1027,7 @@ where
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
         send_detailed_report: bool,
+        opt_forced_leaders: Option<Vec<u64>>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
@@ -1147,6 +1148,12 @@ where
         let mut optional_report = None;
         if send_detailed_report {
             let mut store_report = pdpb::StoreReport::new();
+            let mut forced_leaders = HashSet::default();
+            if let Some(leaders) = opt_forced_leaders {
+                for forced_leader in leaders {
+                    forced_leaders.insert(forced_leader);
+                }
+            };
             store_info
                 .kv_engine
                 .scan_cf(
@@ -1174,6 +1181,9 @@ where
                             Some(value) => value,
                         };
                         let mut peer_report = pdpb::PeerReport::new();
+                        if forced_leaders.contains(&region_local_state.get_region().get_id()) {
+                            peer_report.set_is_forced_leader(true);
+                        }
                         peer_report.set_region_state(region_local_state);
                         peer_report.set_raft_state(raft_local_state);
                         store_report.mut_peer_reports().push(peer_report);
@@ -1218,6 +1228,7 @@ where
                                 stats: stats_copy,
                                 store_info,
                                 send_detailed_report: true,
+                                forced_leaders: None,
                                 dr_autosync_status,
                             };
                             if let Err(e) = scheduler.schedule(task) {
@@ -1225,38 +1236,68 @@ where
                             }
                         }
                     } else if resp.has_plan() {
-                        info!("asked to execute recovery plan");
-                        for create in resp.get_plan().get_creates() {
-                            info!("asked to create region"; "region" => ?create);
-                            if let Err(e) =
-                                router.send_control(StoreMsg::CreatePeer(create.clone()))
-                            {
-                                error!("fail to send creat peer message for recovery"; "err" => ?e);
+                        info!("Unsafe recovery, received a recovery plan");
+                        let plan = resp.get_plan();
+                        if !plan.get_enter_force_leader_regions().is_empty() {
+                            let counter = Arc::new(AtomicUsize::new(
+                                plan.get_enter_force_leader_regions().len(),
+                            ));
+                            let forced_leaders = Arc::new(Mutex::new(Vec::new()));
+                            let mut failed_stores = HashSet::default();
+                            for failed_store in plan.get_failed_stores() {
+                                failed_stores.insert(*failed_store);
                             }
-                        }
-                        for delete in resp.get_plan().get_deletes() {
-                            info!("asked to delete peer"; "peer" => delete);
-                            if let Err(e) = router.force_send(*delete, PeerMsg::Destroy(*delete)) {
-                                error!("fail to send delete peer message for recovery"; "err" => ?e);
+                            for region in plan.get_enter_force_leader_regions() {
+                                info!("Unsafe recovery, forcely assign the peer in this store to be the leader"; "region" => region);
+                                if let Err(e) = router.significant_send(
+                                    *region,
+                                    SignificantMsg::EnterForceLeaderState {
+                                        failed_stores: failed_stores.clone(),
+                                        counter: counter.clone(),
+                                        forced_leaders: forced_leaders.clone(),
+                                    },
+                                ) {
+                                    error!("fail to send force leader message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        for update in resp.get_plan().get_updates() {
-                            info!("asked to update region's range"; "region" => ?update);
-                            if let Err(e) = router.force_send(
-                                update.get_id(),
-                                PeerMsg::UpdateRegionForUnsafeRecover(update.clone()),
-                            ) {
-                                error!("fail to send update range message for recovery"; "err" => ?e);
+                        } else {
+                            let counter = Arc::new(AtomicUsize::new(
+                                resp.get_plan().get_creates().len()
+                                    + resp.get_plan().get_deletes().len()
+                                    + resp.get_plan().get_peer_list_updates().len(),
+                            ));
+                            for create in resp.get_plan().get_creates() {
+                                info!("Unsafe recovery, asked to create region"; "region" => ?create);
+                                if let Err(e) =
+                                    router.send_control(StoreMsg::CreatePeerForUnsafeRecovery(
+                                        create.clone(),
+                                        counter.clone(),
+                                    ))
+                                {
+                                    error!("fail to send creat peer message for recovery"; "err" => ?e);
+                                }
                             }
-                        }
-                        let task = Task::StoreHeartbeat {
-                            stats: stats_copy,
-                            store_info,
-                            send_detailed_report: true,
-                            dr_autosync_status,
-                        };
-                        if let Err(e) = scheduler.schedule(task) {
-                            error!("notify pd failed"; "err" => ?e);
+                            for delete in resp.get_plan().get_deletes() {
+                                info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
+                                if let Err(e) = router.force_send(
+                                    *delete,
+                                    PeerMsg::DestroyForUnsafeRecovery(counter.clone()),
+                                ) {
+                                    error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                }
+                            }
+                            for demote in resp.get_plan().get_peer_list_updates() {
+                                info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
+                                if let Err(e) = router.force_send(
+                                    demote.get_region_id(),
+                                    PeerMsg::DemoteFailedVotersForUnsafeRecovery(
+                                        demote.get_demote_voters().to_vec(),
+                                        counter.clone(),
+                                    ),
+                                ) {
+                                    error!("fail to send update peer list message for recovery"; "err" => ?e);
+                                }
+                            }
                         }
                     }
                 }
@@ -1385,7 +1426,6 @@ where
                         "try to change peer";
                         "region_id" => region_id,
                         "changes" => ?change_peer_v2.get_changes(),
-                        "kind" => ?ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
                     let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
@@ -1863,11 +1903,13 @@ where
                 stats,
                 store_info,
                 send_detailed_report,
+                forced_leaders,
                 dr_autosync_status,
             } => self.handle_store_heartbeat(
                 stats,
                 store_info,
                 send_detailed_report,
+                forced_leaders,
                 dr_autosync_status,
             ),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
