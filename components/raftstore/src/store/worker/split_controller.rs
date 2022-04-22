@@ -81,6 +81,9 @@ where
     F: Fn(&mut T) -> &mut Vec<KeyRange>,
 {
     let mut sampled_key_ranges = vec![];
+    // Retain the non-empty key ranges.
+    key_ranges_providers
+        .retain_mut(|key_ranges_provider| !key_ranges_getter(key_ranges_provider).is_empty());
     if key_ranges_providers.is_empty() {
         return sampled_key_ranges;
     }
@@ -522,6 +525,10 @@ impl AutoSplitController {
         let capacity = read_stats_vec.len();
         for read_stats in read_stats_vec {
             for (region_id, region_info) in read_stats.region_infos {
+                // Filter out the region info which has no key ranges to sample later.
+                if region_info.key_ranges.is_empty() {
+                    continue;
+                }
                 let region_infos = region_infos_map
                     .entry(region_id)
                     .or_insert_with(|| Vec::with_capacity(capacity));
@@ -1080,6 +1087,20 @@ mod tests {
             ],
             // Case 4: all empty.
             vec![vec![], vec![], vec![], vec![]],
+            // Case 5: multiple one-length gaps.
+            vec![
+                vec![
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"e", b"f", false),
+                    build_key_range(b"g", b"h", false),
+                    build_key_range(b"e", b"f", false),
+                ],
+                vec![build_key_range(b"e", b"f", false)],
+                vec![],
+                vec![build_key_range(b"e", b"f", false)],
+                vec![],
+            ],
         ];
         for sample_num in 0..=DEFAULT_SAMPLE_NUM {
             for test_case in test_cases.iter() {
