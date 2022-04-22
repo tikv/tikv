@@ -639,7 +639,8 @@ impl AutoSplitController {
 mod tests {
     use super::*;
 
-    use rand::Rng;
+    use std::sync::mpsc;
+    use std::thread;
 
     use txn_types::Key;
 
@@ -927,6 +928,30 @@ mod tests {
         }
     }
 
+    fn check_sample_length_with_timeout(
+        sample_num: usize,
+        key_ranges: Vec<Vec<KeyRange>>,
+        timeout: Duration,
+    ) {
+        let (done_tx, done_rx) = mpsc::channel();
+        let key_ranges_to_check = key_ranges.clone();
+        let handle = thread::spawn(move || {
+            check_sample_length(sample_num, key_ranges_to_check);
+            done_tx
+                .send(())
+                .expect("Unable to send check_sample_length completion signal");
+        });
+
+        match done_rx.recv_timeout(timeout) {
+            Ok(_) => handle.join().expect("check_sample_length thread panicked"),
+            Err(_) => panic!(
+                "check_sample_length thread may fall into a dead loop with key_ranges: {:?}, prefix_sum: {:?}",
+                key_ranges,
+                prefix_sum(key_ranges.iter(), Vec::len),
+            ),
+        }
+    }
+
     #[test]
     fn test_sample_length() {
         // Test the sample_num = key range number.
@@ -1129,7 +1154,11 @@ mod tests {
                 }
             }
             for sample_num in 0..=DEFAULT_SAMPLE_NUM {
-                check_sample_length(sample_num, test_case.clone());
+                check_sample_length_with_timeout(
+                    sample_num,
+                    test_case.clone(),
+                    Duration::from_secs(20),
+                );
             }
         }
     }
