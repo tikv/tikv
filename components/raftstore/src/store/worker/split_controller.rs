@@ -103,6 +103,7 @@ where
             });
         return sampled_key_ranges;
     }
+    let mut count = 0;
     let mut rng = rand::thread_rng();
     // If the number of key ranges is greater than the sample number,
     // we will randomly sample the key ranges.
@@ -119,6 +120,17 @@ where
         if !key_ranges.is_empty() {
             let j = rng.gen_range(0..key_ranges.len());
             sampled_key_ranges.push(key_ranges.remove(j)); // Sampling without replacement
+        }
+        // For debug purpose.
+        count += 1;
+        if count > 1000 {
+            info!("sample may be in the dead loop";
+                "sampled_key_ranges.len()" => sampled_key_ranges.len(),
+                "sample_num" => sample_num,
+                "prefix_sum" => ?prefix_sum,
+                "i" => i,
+                "key_ranges" => ?key_ranges,
+            );
         }
     }
     sampled_key_ranges
