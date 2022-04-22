@@ -21,10 +21,10 @@ use kvproto::errorpb;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::kvrpcpb::DiskFullOpt;
 use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::CheckPolicy;
+use kvproto::pdpb::{self, CheckPolicy};
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType, PutRequest,
-    RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusResponse,
+    AdminCmdType, AdminRequest, CmdType, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
+    StatusCmdType, StatusResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -70,8 +70,8 @@ use crate::store::peer::{
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
 use crate::store::worker::{
-    Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate,
-    ReadProgress, RegionTask, SplitCheckTask,
+    new_change_peer_v2_request, Bucket, BucketRange, ConsistencyCheckTask, RaftlogFetchTask,
+    RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 #[cfg(any(test, feature = "testexport"))]
@@ -761,27 +761,18 @@ where
         let mut req = new_admin_request(region.get_id(), self.fsm.peer.peer.clone());
         req.mut_header()
             .set_region_epoch(region.get_region_epoch().clone());
-        let mut admin = AdminRequest::default();
-        admin.set_cmd_type(AdminCmdType::ChangePeerV2);
         let change_peer_reqs = voters
             .drain(..)
             .map(|mut peer| {
                 peer.set_role(metapb::PeerRole::Learner);
-                let mut cp = ChangePeerRequest::default();
+                let mut cp = pdpb::ChangePeer::default();
                 cp.set_change_type(ConfChangeType::AddLearnerNode);
                 cp.set_peer(peer);
                 cp
             })
             .collect();
-        let mut cpv2 = ChangePeerV2Request::default();
-        cpv2.set_changes(change_peer_reqs);
-        admin.set_change_peer_v2(cpv2);
-        req.set_admin_request(admin);
+        req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
         self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
-        // forward commit index.
-        self.fsm.peer.raft_group.raft.raft_log.committed =
-            self.fsm.peer.raft_group.raft.raft_log.last_index();
-        self.fsm.has_ready = true;
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::DemoteFailedVoters {
             failed_voters: voters,
             task_counter: num_tasks,
@@ -1195,7 +1186,7 @@ where
         &mut self,
         failed_stores: HashSet<u64>,
         counter: Arc<AtomicUsize>,
-        forced_leaders: Arc<Mutex<Vec<u64>>>
+        forced_leaders: Arc<Mutex<Vec<u64>>>,
     ) {
         match self.fsm.peer.force_leader {
             Some(ForceLeaderState::PreForceLeader { .. }) => {
@@ -1309,7 +1300,7 @@ where
             Some(ForceLeaderState::PreForceLeader {
                 failed_stores,
                 counter,
-                forced_leaders
+                forced_leaders,
             }) => (failed_stores, counter, forced_leaders),
             _ => unreachable!(),
         };
@@ -1894,45 +1885,44 @@ where
                 .fsm
                 .peer
                 .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false),
-            Some(UnsafeRecoveryState::DemoteFailedVoters { failed_voters: _, task_counter }) => {
-                    info!(
-                        "Unsafe recovery, entering joint state to demote failed voters is done";
-                        "region_id" => self.fsm.region_id(),
-                        "task_counter" => task_counter.load(Ordering::SeqCst)
-                    );
-                    let task_counter = task_counter.clone();
-                    self.fsm.peer.unsafe_recovery_state = None;
+            Some(UnsafeRecoveryState::DemoteFailedVoters {
+                failed_voters: _,
+                task_counter,
+            }) => {
+                info!(
+                    "Unsafe recovery, entering joint state to demote failed voters is done";
+                    "region_id" => self.fsm.region_id(),
+                    "task_counter" => task_counter.load(Ordering::SeqCst)
+                );
+                let task_counter = task_counter.clone();
+                self.fsm.peer.unsafe_recovery_state = None;
 
-                    // Exit joint state and wait for it to be applied.
-                    let region = self.fsm.peer.region();
-                    let region_id = region.get_id();
-                    let mut req = new_admin_request(region_id, self.fsm.peer.peer.clone());
-                    req.mut_header()
-                        .set_region_epoch(region.get_region_epoch().clone());
-                    let mut admin = AdminRequest::default();
-                    admin.set_cmd_type(AdminCmdType::ChangePeerV2);
-                    let cpv2 = ChangePeerV2Request::default();
-                    admin.set_change_peer_v2(cpv2);
-                    req.set_admin_request(admin);
-                    self.propose_raft_command_internal(
-                        req,
-                        Callback::None,
-                        DiskFullOpt::AllowedOnAlmostFull,
+                // Exit joint state and wait for it to be applied.
+                let region = self.fsm.peer.region();
+                let region_id = region.get_id();
+                let mut req = new_admin_request(region_id, self.fsm.peer.peer.clone());
+                req.mut_header()
+                    .set_region_epoch(region.get_region_epoch().clone());
+                req.set_admin_request(new_change_peer_v2_request(vec![]));
+                self.propose_raft_command_internal(
+                    req,
+                    Callback::None,
+                    DiskFullOpt::AllowedOnAlmostFull,
+                );
+                self.fsm.peer.raft_group.raft.raft_log.committed =
+                    self.fsm.peer.raft_group.raft.raft_log.last_index();
+                self.fsm.has_ready = true;
+                if let Err(e) = self
+                    .ctx
+                    .router
+                    .force_send(region_id, PeerMsg::UnsafeRecoveryWaitApply(task_counter))
+                {
+                    panic!(
+                        "fail to schedule wait apply after failed voters are demoted due to {:?}",
+                        e
                     );
-                    self.fsm.peer.raft_group.raft.raft_log.committed =
-                        self.fsm.peer.raft_group.raft.raft_log.last_index();
-                    self.fsm.has_ready = true;
-                    if let Err(e) = self
-                        .ctx
-                        .router
-                        .force_send(region_id, PeerMsg::UnsafeRecoveryWaitApply(task_counter))
-                    {
-                        panic!(
-                            "fail to schedule wait apply after failed voters are demoted due to {:?}",
-                            e
-                        );
-                    }
                 }
+            }
             Some(_) | None => {}
         }
     }

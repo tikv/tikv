@@ -1659,9 +1659,7 @@ where
 
     pub fn maybe_force_forward_commit_index(&mut self) -> bool {
         let failed_stores = match &self.force_leader {
-            Some(ForceLeaderState::ForceLeader {
-                failed_stores,
-            }) => failed_stores,
+            Some(ForceLeaderState::ForceLeader { failed_stores }) => failed_stores,
             _ => unreachable!(),
         };
 
@@ -4531,7 +4529,10 @@ where
                         "counter" =>  task_counter.load(Ordering::SeqCst)
                     );
                     if task_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                        if let Err(e) = ctx.router.send_control(StoreMsg::ReportForUnsafeRecovery(None)) {
+                        if let Err(e) = ctx
+                            .router
+                            .send_control(StoreMsg::ReportForUnsafeRecovery(None))
+                        {
                             error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
                         }
                     }
