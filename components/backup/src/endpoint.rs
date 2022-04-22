@@ -452,7 +452,7 @@ impl BackupRange {
                         self.codec.convert_to_dst_raw_value(value)?,
                     )));
                 };
-                info!("backup raw key";
+                debug!("backup raw key";
                     "key" => &log_wrappers::Value::key(&self.codec.convert_to_dst_raw_key(key)?.into_encoded()),
                     "value" => &log_wrappers::Value::value(&self.codec.convert_to_dst_raw_value(value)?),
                     "valid" => is_valid,
@@ -864,7 +864,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // TODO: make file_name unique and short
                     let key = brange.start_key.clone().and_then(|k| {
                         // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = brange.codec.decode_backup_key(Some(k)).unwrap();
+                        let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
                     let name = backup_file_name(store_id, &brange.region, key);
@@ -927,13 +927,18 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         });
     }
 
+    // only support conversion from non-apiv2 to apiv2.
+    fn check_backup_api_version(&self, request: &Request) -> bool {
+        if request.is_raw_kv && self.api_version != request.dst_api_ver
+            && request.dst_api_ver != ApiVersion::V2 {
+                return false;
+        }
+        return true;
+    }
+
     pub fn handle_backup_task(&self, task: Task) {
         let Task { request, resp } = task;
-        let is_raw_kv = request.is_raw_kv;
-        if is_raw_kv
-            && self.api_version != request.dst_api_ver
-            && request.dst_api_ver != ApiVersion::V2
-        {
+        if !self.check_backup_api_version(&request) {
             let mut response = BackupResponse::default();
             let err_msg = format!(
                 "invalid backup version cur{:?}, dst{:?}",
@@ -945,7 +950,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
             return;
         }
-        let codec = KeyValueCodec::new(is_raw_kv, self.api_version, request.dst_api_ver);
+        let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
         let start_key = codec.encode_backup_key(request.start_key.clone());
         let end_key = codec.encode_backup_key(request.end_key.clone());
 

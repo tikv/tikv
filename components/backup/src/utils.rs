@@ -184,16 +184,19 @@ impl KeyValueCodec {
     // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst apiversion key。
     // If key is empty, return [r, s).
     pub fn decode_backup_key(&self, key: Option<Key>) -> Result<Vec<u8>> {
-        if !self.is_raw_kv {
-            return Ok(key.map_or_else(||vec![], |k| k.into_raw().unwrap()));
+        if key.is_none() {
+            return Ok(vec![]);
         }
-        let raw_key = key.map_or_else(||vec![], |k|{
+        let key = key.unwrap();
+        let ret_key = if !self.is_raw_kv {
+            key.into_raw()?
+        } else {
             let (decode_key, _) = dispatch_api_version!(self.cur_api_ver,{
-                API::decode_raw_key_owned(k, false).unwrap()
+                API::decode_raw_key_owned(key, false)?
             });
             decode_key
-        });
-        Ok(raw_key)
+        };
+        Ok(ret_key)
     }
 
     pub fn convert_to_dst_user_key(&self, key: Vec<u8>, is_end_key: bool) -> Vec<u8> {
