@@ -44,6 +44,7 @@ pub fn open_cluster_and_tikv_import_client(
 ) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
     let cfg = cfg.unwrap_or_else(|| {
         let mut config = TiKvConfig::default();
+        config.server.addr = "127.0.0.1:0".to_owned();
         let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
         config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
         config.server.grpc_concurrency = 1;
@@ -90,6 +91,7 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     let mut security = test_util::new_security_cfg(None);
     security.encryption = encryption_cfg;
     let mut config = TiKvConfig::default();
+    config.server.addr = "127.0.0.1:0".to_owned();
     let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
     config.server.grpc_concurrency = 1;
