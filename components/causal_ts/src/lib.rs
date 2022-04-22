@@ -13,6 +13,8 @@ mod metrics;
 pub use metrics::*;
 mod observer;
 pub use observer::*;
+mod resolver;
+pub use resolver::*;
 
 use crate::errors::Result;
 use txn_types::TimeStamp;

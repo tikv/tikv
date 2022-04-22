@@ -11,9 +11,9 @@ use raftstore::coprocessor::{
     BoxQueryObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     QueryObserver, RoleChange, RoleObserver,
 };
-use resolved_ts::Resolver;
 
 use crate::CausalTsProvider;
+use crate::Resolver;
 
 /// CausalObserver appends timestamp for RawKV V2 data,
 /// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
@@ -81,22 +81,22 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
         let resolver = m.get_mut(&region_id);
 
         if let Some(resolver) = resolver {
-            for req in requests.iter_mut().filter(|r| {
-                r.get_cmd_type() == CmdType::Put
-                    && APIV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
-            }) {
+            let mut need_track = false;
+            for req in requests.iter() {
+                if req.get_cmd_type() == CmdType::Put
+                    && APIV2::parse_key_mode(req.get_put().get_key()) == KeyMode::Raw
+                {
+                    need_track = true;
+                    break;
+                }
+            }
+            if need_track {
                 if ts.is_none() {
                     ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
                         coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
                     })?);
                 }
-                let mut lock_key = req.get_put().key.clone();
-                APIV2::append_ts_on_encoded_bytes(&mut lock_key, ts.unwrap());
-
-                resolver
-                    .write()
-                    .unwrap()
-                    .track_lock(ts.unwrap(), lock_key, None);
+                resolver.write().unwrap().track_ts(ts.unwrap());
             }
         }
 

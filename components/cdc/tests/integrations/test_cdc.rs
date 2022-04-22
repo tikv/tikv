@@ -50,7 +50,7 @@ fn test_cdc_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.txnkv_downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -143,7 +143,7 @@ fn test_cdc_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.txnkv_downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -212,7 +212,7 @@ fn test_cdc_rawkv_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.rawkv_downstreams().len(), 1);
             }),
         )))
         .unwrap();
@@ -268,7 +268,7 @@ fn test_cdc_not_leader() {
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.txnkv_downstreams().len(), 1);
                 tx_.send(()).unwrap();
             }),
         )))

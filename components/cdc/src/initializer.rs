@@ -17,7 +17,8 @@ use raftstore::coprocessor::ObserveID;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
-use resolved_ts::Resolver;
+use resolved_ts::Resolver as TxnKvResolver;
+use causal_ts::Resolver as RawKvResolver;
 use tikv::storage::kv::{Iterator, PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot};
@@ -40,6 +41,7 @@ use crate::old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursor
 use crate::service::ConnID;
 use crate::Task;
 use crate::{Error, Result};
+use crate::endpoint::Resolver;
 
 struct ScanStat {
     // Fetched bytes to the scanner.
@@ -198,7 +200,11 @@ impl<E: KvEngine> Initializer<E> {
             "end_key" => log_wrappers::Value::key(snap.upper_bound().unwrap_or_default()));
 
         let mut resolver = if self.build_resolver {
-            Some(Resolver::new(region_id))
+            if self.kv_api == ChangeDataRequestKvApi::TiDb {
+                Some(Resolver::TxnKvResolver(TxnKvResolver::new(region_id)))
+            } else {
+                Some(Resolver::RawKvResolver(RawKvResolver::new(region_id)))
+            }
         } else {
             None
         };
@@ -383,7 +389,7 @@ impl<E: KvEngine> Initializer<E> {
         };
         self.speed_limiter.consume(require).await;
 
-        if let Some(resolver) = resolver {
+        if let Some(Resolver::TxnKvResolver(resolver)) = resolver {
             // Track the locks.
             for entry in entries.iter().flatten() {
                 if let KvEntry::TxnEntry(TxnEntry::Prewrite { ref lock, .. }) = entry {
@@ -425,14 +431,19 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
-        let rts = resolver.resolve(TimeStamp::zero());
+        let mut locks_count = 0;
+        let mut rts = TimeStamp::zero();
+        if let Resolver::TxnKvResolver(txnkv_resolver) = &mut resolver { 
+            rts = txnkv_resolver.resolve(TimeStamp::zero()); 
+            locks_count = txnkv_resolver.locks().len();
+        }
         info!(
             "cdc resolver initialized and schedule resolver ready";
             "region_id" => region.get_id(),
             "conn_id" => ?self.conn_id,
             "downstream_id" => ?self.downstream_id,
             "resolved_ts" => rts,
-            "lock_count" => resolver.locks().len(),
+            "lock_count" => locks_count,
             "observe_id" => ?observe_id,
         );
 
@@ -660,7 +671,9 @@ mod tests {
             let task = rx.recv().unwrap();
             match task {
                 Task::ResolverReady { resolver, .. } => {
-                    assert_eq!(resolver.locks(), &expected_locks);
+                    if let Resolver::TxnKvResolver(txnkv_resolver) = resolver {
+                        assert_eq!(txnkv_resolver.locks(), &expected_locks);
+                    }
                     return;
                 }
                 t => panic!("unexpected task {} received", t),

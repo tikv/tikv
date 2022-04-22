@@ -29,7 +29,7 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeObserver, StoreMeta};
 use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::RegionReadProgressRegistry;
-use resolved_ts::Resolver;
+use resolved_ts::Resolver as TxnKvResolver;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
 use tikv::storage::Statistics;
@@ -40,7 +40,7 @@ use tikv_util::{debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::{Mutex, Semaphore};
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
-use causal_ts::{CausalObserver, CausalTsProvider};
+use causal_ts::{CausalObserver, CausalTsProvider, Resolver as RawKvResolver};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
 use crate::delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState};
@@ -57,6 +57,11 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 // Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
+
+pub enum Resolver {
+    TxnKvResolver(TxnKvResolver),
+    RawKvResolver(RawKvResolver),
+}
 
 pub enum Deregister {
     Downstream {
@@ -511,6 +516,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 let mut is_last = false;
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                     is_last = delegate.unsubscribe(downstream_id, err);
+                    if delegate.rawkv_resolver.is_some() && !delegate.has_rawkv_downstream() {
+                        if let Some(causal_observer) = &self.causal_observer {
+                            causal_observer.unsubscribe_region(region_id);
+                        }
+                    }
                 }
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
                     if let Some(id) = conn.downstream_id(region_id) {
@@ -530,9 +540,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                         region_id,
                         id
                     );
-                    if let Some(causal_observer) = &self.causal_observer {
-                        causal_observer.unsubscribe_region(region_id);
-                    }
                 }
             }
             Deregister::Delegate {
@@ -549,6 +556,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                     .map_or(false, |d| d.handle.id == observe_id);
                 if need_remove {
                     if let Some(mut delegate) = self.capture_regions.remove(&region_id) {
+                        if delegate.rawkv_resolver.is_some() {
+                            if let Some(causal_observer) = &self.causal_observer {
+                                causal_observer.unsubscribe_region(region_id);
+                            }
+                        }
                         delegate.stop(err);
                     }
                     self.connections
@@ -572,7 +584,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                         |(region_id, (downstream_id, _))| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 delegate.unsubscribe(downstream_id, None);
-                                if delegate.downstreams().is_empty() {
+                                if !delegate.has_rawkv_downstream() && delegate.rawkv_resolver.is_some() {
+                                    if let Some(causal_observer) = &self.causal_observer {
+                                        causal_observer.unsubscribe_region(region_id);
+                                    }
+                                }
+                                if delegate.txnkv_downstreams().is_empty() && delegate.rawkv_downstreams().is_empty() {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
                                     let id = delegate.handle.id;
@@ -583,9 +600,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                                         region_id,
                                         id
                                     );
-                                    if let Some(causal_observer) = &self.causal_observer {
-                                        causal_observer.unsubscribe_region(region_id);
-                                    }
                                 }
                             }
                         },
@@ -700,6 +714,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
+        let mut build_resolver = false;
+        if (kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_txnkv_downstream()) ||
+            (kv_api == ChangeDataRequestKvApi::RawKv && !delegate.has_rawkv_downstream()) {
+            build_resolver = true;
+        }
+
         let downstream_ = downstream.clone();
         if let Err(err) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
@@ -740,7 +760,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
             checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
+            build_resolver,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
         };
@@ -801,20 +821,29 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         let mut failed_downstreams = Vec::new();
-        let resolver = Arc::new(RwLock::new(resolver));
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
+                let downstream;
                 let region_id = delegate.region_id;
-                for (downstream, e) in delegate.on_region_ready(resolver.clone(), region) {
+                match resolver {
+                    Resolver::RawKvResolver(rawkv_resolver) => {
+                        let rawkv_resolver = Arc::new(RwLock::new(rawkv_resolver));
+                        downstream = delegate.on_region_ready_for_rawkv(rawkv_resolver.clone(), region);
+                        if let Some(causal_observer) = &self.causal_observer {
+                            causal_observer.subscribe_region(region_id, rawkv_resolver);
+                        }
+                    }
+                    Resolver::TxnKvResolver(txnkv_resolver) => {
+                        downstream = delegate.on_region_ready_for_txnkv(txnkv_resolver, region);
+                    }
+                }
+                for (downstream, e) in downstream {
                     failed_downstreams.push(Deregister::Downstream {
                         region_id,
                         downstream_id: downstream.get_id(),
                         conn_id: downstream.get_conn_id(),
                         err: Some(e),
                     });
-                }
-                if let Some(causal_observer) = &self.causal_observer {
-                    causal_observer.subscribe_region(region_id, resolver);
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -835,56 +864,44 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
 
 
     fn on_min_ts(&mut self, regions: Vec<u64>, txnkv_min_ts: TimeStamp, rawkv_min_ts: TimeStamp) {
-        let mut txnkv_only: Vec<u64> = Vec::new();
-        let mut rawkv_only: Vec<u64> = Vec::new();
-        let mut has_mixed_region = false;
+        let mut txnkv_regions: Vec<u64> = Vec::new();
+        let mut rawkv_regions: Vec<u64> = Vec::new();
 
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_rawkv_downstream() {
-                    if delegate.has_txnkv_downstream() {
-                        if has_mixed_region {
-                            // TODO: error
-                        }
-                        if let Some(resolved_ts) = delegate.on_min_ts(txnkv_min_ts) {
-                            let mut regions = HashSet::with_capacity_and_hasher(1, Default::default());
-                            regions.insert(region_id);
-                            self.broadcast_resolved_ts(resolved_ts, regions);
-                        }
-                        has_mixed_region = true;
-                    } else {
-                        rawkv_only.push(region_id);
-                    }
-                } else {
-                    txnkv_only.push(region_id);
+                    rawkv_regions.push(region_id);
+                }
+                if delegate.has_txnkv_downstream() {
+                    txnkv_regions.push(region_id);
                 }
             }
         }
 
-        if txnkv_only.len() != 0 {
+        if txnkv_regions.len() != 0 {
             ( self.txnkv_min_resolved_ts,
               self.txnkv_min_ts_region_id,
               self.txnkv_resolved_region_count,
               self.txnkv_unresolved_region_count
-            ) = self.min_ts(txnkv_only, true, txnkv_min_ts);
+            ) = self.min_ts(txnkv_regions, true, txnkv_min_ts);
         }
 
-        if rawkv_only.len() != 0 {
+        if rawkv_regions.len() != 0 {
             ( self.rawkv_min_resolved_ts,
               self.rawkv_min_ts_region_id,
               self.rawkv_resolved_region_count,
               self.rawkv_unresolved_region_count
-            ) = self.min_ts(rawkv_only, false, rawkv_min_ts);
+            ) = self.min_ts(rawkv_regions, false, rawkv_min_ts);
         }
     }
 
     fn min_ts(&mut self,
         regions: Vec<u64>,
-        resolved_regions_flag: bool,
+        kv_type_flag: bool,
         min_ts: TimeStamp) -> (TimeStamp, u64, usize, usize) {
         // Reset resolved_regions to empty.
         let mut resolved_regions = &mut self.rawkv_resolved_region_heap;
-        if resolved_regions_flag {
+        if kv_type_flag {
             resolved_regions = &mut self.txnkv_resolved_region_heap;
         }
         resolved_regions.clear();
@@ -900,18 +917,33 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
 
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                let old_resolved_ts = delegate
-                    .resolver
+                let old_resolved_ts;
+                if kv_type_flag { 
+                    old_resolved_ts = delegate
+                    .txnkv_resolver
+                    .as_ref()
+                    .map_or(TimeStamp::zero(), |r| r.resolved_ts());
+                } else {
+                    old_resolved_ts = delegate
+                    .rawkv_resolver
                     .as_ref()
                     .unwrap()
                     .read()
                     .map_or(TimeStamp::zero(), |r| r.resolved_ts());
+                }
 
                 if old_resolved_ts > min_ts {
                     advance_failed_stale += 1;
                 }
 
-                if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
+                let resolved_ts;
+                if kv_type_flag {
+                    resolved_ts = delegate.on_txnkv_min_ts(min_ts);
+                } else {
+                    resolved_ts = delegate.on_rawkv_min_ts(min_ts);
+                }
+
+                if let Some(resolved_ts) = resolved_ts {
                     if resolved_ts < min_resolved_ts {
                         min_resolved_ts = resolved_ts;
                         min_ts_region_id = region_id;
@@ -1840,7 +1872,7 @@ mod tests {
             conn_id,
             version: version.clone(),
         });
-        let resolver = Resolver::new(1);
+        let resolver = Resolver::TxnKvResolver(TxnKvResolver::new(1));
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite.on_region_ready(observe_id, resolver, region.clone());
         suite.run(Task::MinTS {
@@ -1875,7 +1907,7 @@ mod tests {
             conn_id,
             version,
         });
-        let resolver = Resolver::new(2);
+        let resolver = Resolver::TxnKvResolver(TxnKvResolver::new(2));
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
@@ -1920,7 +1952,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 5),
         });
-        let resolver = Resolver::new(3);
+        let resolver = Resolver::TxnKvResolver(TxnKvResolver::new(3));
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
@@ -2098,7 +2130,7 @@ mod tests {
 
     #[test]
     fn test_broadcast_resolved_ts() {
-        let mut cfg = CdcConfig {
+        let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
         };
@@ -2115,7 +2147,6 @@ mod tests {
             vec![(3, ChangeDataRequestKvApi::RawKv), (4, ChangeDataRequestKvApi::RawKv)],
             vec![(5, ChangeDataRequestKvApi::TiDb)],
             vec![(6, ChangeDataRequestKvApi::RawKv)],
-            vec![(7, ChangeDataRequestKvApi::TiDb), (8, ChangeDataRequestKvApi::RawKv)],
         ];
 
         for cdc_req in cdc_reqs {
@@ -2140,7 +2171,12 @@ mod tests {
                     conn_id,
                     version: FeatureGate::batch_resolved_ts(),
                 });
-                let resolver = Resolver::new(region_id);
+                let resolver;
+                if kv_api == ChangeDataRequestKvApi::TiDb {
+                    resolver = Resolver::TxnKvResolver(TxnKvResolver::new(region_id));
+                } else {
+                    resolver = Resolver::RawKvResolver(RawKvResolver::new(region_id));
+                }
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
@@ -2311,7 +2347,7 @@ mod tests {
         suite.run(Task::ResolverReady {
             observe_id,
             region: region.clone(),
-            resolver: Resolver::new(1),
+            resolver: Resolver::TxnKvResolver(TxnKvResolver::new(1)),
         });
 
         // Deregister deletgate due to epoch not match for conn b.

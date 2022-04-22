@@ -17,7 +17,7 @@ mod service;
 pub use channel::{recv_timeout, CdcEvent, MemoryQuota};
 pub use config::CdcConfigManager;
 pub use delegate::Delegate;
-pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
+pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Resolver, Task, Validate};
 pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use old_value::OldValueCache;
