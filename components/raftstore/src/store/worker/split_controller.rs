@@ -638,9 +638,13 @@ impl AutoSplitController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use rand::Rng;
+
+    use txn_types::Key;
+
     use crate::store::util::build_key_range;
     use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
-    use txn_types::Key;
 
     enum Position {
         Left,
@@ -1104,6 +1108,27 @@ mod tests {
         ];
         for sample_num in 0..=DEFAULT_SAMPLE_NUM {
             for test_case in test_cases.iter() {
+                check_sample_length(sample_num, test_case.clone());
+            }
+        }
+    }
+
+    #[test]
+    fn test_sample_length_randomly() {
+        let mut rng = rand::thread_rng();
+        let mut test_case = vec![vec![]; DEFAULT_SAMPLE_NUM / 2];
+        for _ in 0..100 {
+            for key_ranges in test_case.iter_mut() {
+                key_ranges.clear();
+                // Make the empty range more likely to appear.
+                if rng.gen_range(0..=1) == 0 {
+                    continue;
+                }
+                for _ in 0..rng.gen_range(1..=5) as usize {
+                    key_ranges.push(build_key_range(b"a", b"b", false));
+                }
+            }
+            for sample_num in 0..=DEFAULT_SAMPLE_NUM {
                 check_sample_length(sample_num, test_case.clone());
             }
         }
