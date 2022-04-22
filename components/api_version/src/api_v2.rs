@@ -183,7 +183,7 @@ impl APIVersion for APIV2 {
         }
     }
 
-    fn convert_user_key_from(src_api: ApiVersion, key: Vec<u8>, is_range_end: bool) -> Vec<u8> {
+    fn convert_user_key_from(src_api: ApiVersion, mut key: Vec<u8>, is_range_end: bool) -> Vec<u8> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
                 let prefix = if is_range_end && key.is_empty() {
@@ -191,9 +191,8 @@ impl APIVersion for APIV2 {
                 } else {
                     RAW_KEY_PREFIX
                 };
-                let mut ret_key = key;
-                ret_key.insert(0, prefix);
-                ret_key
+                key.insert(0, prefix);
+                key
             }
             ApiVersion::V2 => key,
         }
