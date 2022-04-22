@@ -74,7 +74,11 @@ impl APIVersion for APIV1TTL {
         }
     }
 
-    fn convert_user_key_from(src_api: ApiVersion, mut key: Vec<u8>, _is_range_end: bool) -> Vec<u8> {
+    fn convert_user_key_from(
+        src_api: ApiVersion,
+        mut key: Vec<u8>,
+        _is_range_end: bool,
+    ) -> Vec<u8> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => key,
             ApiVersion::V2 => {
