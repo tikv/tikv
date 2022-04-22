@@ -176,7 +176,7 @@ impl KeyValueCodec {
         if !self.is_raw_kv {
             return Some(Key::from_raw(&key));
         }
-        dispatch_api_version!(self.cur_api_ver,{
+        dispatch_api_version!(self.cur_api_ver, {
             Some(API::encode_raw_key_owned(key, None))
         })
     }
@@ -191,9 +191,8 @@ impl KeyValueCodec {
         let ret_key = if !self.is_raw_kv {
             key.into_raw()?
         } else {
-            let (decode_key, _) = dispatch_api_version!(self.cur_api_ver,{
-                API::decode_raw_key_owned(key, false)?
-            });
+            let (decode_key, _) =
+                dispatch_api_version!(self.cur_api_ver, { API::decode_raw_key_owned(key, false)? });
             decode_key
         };
         Ok(ret_key)
@@ -203,9 +202,8 @@ impl KeyValueCodec {
         if !self.is_raw_kv {
             return key;
         }
-        dispatch_api_version!(self.dst_api_ver,{
+        dispatch_api_version!(self.dst_api_ver, {
             API::convert_user_key_from(self.cur_api_ver, key, is_end_key)
         })
     }
 }
- 

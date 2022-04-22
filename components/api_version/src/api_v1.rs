@@ -56,7 +56,7 @@ impl APIVersion for APIV1 {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => key,
             ApiVersion::V2 => {
-                let mut ret_key = key.clone();
+                let mut ret_key = key;
                 ret_key.remove(0);
                 ret_key
             }

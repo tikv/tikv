@@ -191,7 +191,7 @@ impl APIVersion for APIV2 {
                 } else {
                     RAW_KEY_PREFIX
                 };
-                let mut ret_key = key.clone();
+                let mut ret_key = key;
                 ret_key.insert(0, prefix);
                 ret_key
             }

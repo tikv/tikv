@@ -2,6 +2,7 @@
 
 use std::{fs::File, time::Duration};
 
+use api_version::{dispatch_api_version, APIVersion};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use external_storage_export::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
@@ -283,7 +284,7 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
     let rx = suite.backup_raw(
         vec![b'r', b'a'], // start
         vec![b'r', b'z'], // end
-        cf.clone(),
+        cf,
         &storage_path,
         dst_api_ver,
     );
@@ -339,6 +340,20 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
             .call_command_on_leader(cmd, Duration::from_secs(5))
             .unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
+    }
+
+    let cf = match dst_api_ver {
+        ApiVersion::V2 => String::from(""),
+        _ => String::from(CF_DEFAULT),
+    };
+    for i in 0..key_count {
+        let (mut k, v) = target_suit.gen_raw_kv(i);
+        dispatch_api_version!(dst_api_ver, {
+            let key = API::convert_user_key_from(cur_api_ver, k.into_bytes(), false);
+            k = String::from_utf8(key).expect("failed to convert user key")
+        });
+        let ret_val = target_suit.must_raw_get(k.clone().into_bytes(), cf.clone());
+        assert_eq!(v.clone().into_bytes(), ret_val);
     }
 
     // Backup file should have same contents.

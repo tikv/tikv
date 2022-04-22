@@ -176,6 +176,27 @@ impl TestSuite {
         assert!(response.error.is_empty(), "{:?}", response.get_error());
     }
 
+    pub fn must_raw_get(&self, k: Vec<u8>, cf: String) -> Vec<u8> {
+        let mut request = RawGetRequest::default();
+        let mut context = self.context.clone();
+        if context.api_version == ApiVersion::V1ttl {
+            context.api_version = ApiVersion::V1;
+        }
+        request.set_context(context);
+        request.set_key(k);
+        request.set_cf(cf);
+        let mut response = self.tikv_cli.raw_get(&request).unwrap();
+        retry_req!(
+            self.tikv_cli.raw_get(&request).unwrap(),
+            !response.has_region_error() && response.error.is_empty(),
+            response,
+            10,   // retry 10 times
+            1000  // 1s timeout
+        );
+        assert!(response.error.is_empty(), "{:?}", response.get_error());
+        response.take_value()
+    }
+
     pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
         let mut prewrite_req = PrewriteRequest::default();
         prewrite_req.set_context(self.context.clone());

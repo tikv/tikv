@@ -202,7 +202,9 @@ async fn save_backup_file_worker(
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
-                        file.set_start_key(codec.convert_to_dst_user_key(msg.start_key.clone(), false));
+                        file.set_start_key(
+                            codec.convert_to_dst_user_key(msg.start_key.clone(), false),
+                        );
                         file.set_end_key(codec.convert_to_dst_user_key(msg.end_key.clone(), true));
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
@@ -530,12 +532,8 @@ impl BackupRange {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
-        let start_key = self
-            .codec
-            .decode_backup_key(self.start_key.clone())?;
-        let end_key = self
-            .codec
-            .decode_backup_key(self.end_key.clone())?;
+        let start_key = self.codec.decode_backup_key(self.start_key.clone())?;
+        let end_key = self.codec.decode_backup_key(self.end_key.clone())?;
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
@@ -929,11 +927,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
     // only support conversion from non-apiv2 to apiv2.
     fn check_backup_api_version(&self, request: &Request) -> bool {
-        if request.is_raw_kv && self.api_version != request.dst_api_ver
-            && request.dst_api_ver != ApiVersion::V2 {
-                return false;
+        if request.is_raw_kv
+            && self.api_version != request.dst_api_ver
+            && request.dst_api_ver != ApiVersion::V2
+        {
+            return false;
         }
-        return true;
+        true
     }
 
     pub fn handle_backup_task(&self, task: Task) {
@@ -959,7 +959,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             start_key,
             end_key,
             self.region_info.clone(),
-            codec.clone(),
+            codec,
             request.cf,
         )));
         let backend = match create_storage(&request.backend, self.get_config()) {
