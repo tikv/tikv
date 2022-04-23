@@ -85,7 +85,7 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
         user_key
     }
 
-    /// convertion between different ApiVersion encoded values.
+    /// conversion between different ApiVersion encoded values.
     fn convert_raw_value_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
         if src_api == Self::TAG {
             return Ok(value.to_owned());
