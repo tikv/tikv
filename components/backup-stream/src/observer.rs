@@ -1,16 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::sync::{Arc, RwLock};
 
+use crate::debug;
 use crate::try_send;
 use crate::utils::SegmentSet;
-use dashmap::DashMap;
+
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
+
 use tikv_util::worker::Scheduler;
-use tikv_util::{debug, warn};
-use tikv_util::{info, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 use crate::endpoint::{ObserveOp, Task};
 
@@ -22,7 +23,6 @@ use crate::endpoint::{ObserveOp, Task};
 pub struct BackupStreamObserver {
     scheduler: Scheduler<Task>,
     // Note: maybe wrap those fields to methods?
-    pub subs: SubscriptionTracer,
     pub ranges: Arc<RwLock<SegmentSet<Vec<u8>>>>,
 }
 
@@ -34,7 +34,6 @@ impl BackupStreamObserver {
     pub fn new(scheduler: Scheduler<Task>) -> BackupStreamObserver {
         BackupStreamObserver {
             scheduler,
-            subs: Default::default(),
             ranges: Default::default(),
         }
     }
@@ -85,54 +84,6 @@ impl BackupStreamObserver {
 
 impl Coprocessor for BackupStreamObserver {}
 
-/// A utility to tracing the regions being subscripted.
-#[derive(Clone, Default)]
-pub struct SubscriptionTracer(Arc<DashMap<u64, ObserveHandle>>);
-
-impl SubscriptionTracer {
-    pub fn register_region(&self, region_id: u64, handle: ObserveHandle) {
-        info!("start listen stream from store"; "observer" => ?handle, "region_id" => %region_id);
-        if let Some(o) = self.0.insert(region_id, handle) {
-            warn!("register region which is already registered"; "region_id" => %region_id);
-            o.stop_observing();
-        }
-    }
-
-    /// try to mark a region no longer be tracked by this observer.
-    /// returns whether success (it failed if the region hasn't been observed when calling this.)
-    pub fn deregister_region(&self, region_id: u64) -> bool {
-        match self.0.remove(&region_id) {
-            Some(o) => {
-                o.1.stop_observing();
-                info!("stop listen stream from store"; "observer" => ?o.1, "region_id"=> %region_id);
-                true
-            }
-            None => {
-                warn!("trying to deregister region not registered"; "region_id" => %region_id);
-                false
-            }
-        }
-    }
-
-    /// check whether the region_id should be observed by this observer.
-    pub fn is_observing(&self, region_id: u64) -> bool {
-        let mut exists = false;
-
-        // The region traced, check it whether is still be observing,
-        // if not, remove it.
-        let still_observing = self
-            .0
-            // Assuming this closure would be called iff the key exists.
-            // So we can elide a `contains` check.
-            .remove_if(&region_id, |_, o| {
-                exists = true;
-                !o.is_observing()
-            })
-            .is_none();
-        exists && still_observing
-    }
-}
-
 impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
     // `BackupStreamObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
     // and only leader will trigger this.
@@ -156,12 +107,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         // TODO may be we should filter cmd batch here, to reduce the cost of clone.
         let cmd_batches: Vec<_> = cmd_batches
             .iter()
-            .filter(|cb| {
-                !cb.is_empty()
-                    && cb.level == ObserveLevel::All
-                    // Once the observe has been canceled by outside things, we should be able to stop.
-                    && self.subs.is_observing(cb.region_id)
-            })
+            .filter(|cb| !cb.is_empty() && cb.level == ObserveLevel::All)
             .cloned()
             .collect();
         if cmd_batches.is_empty() {
@@ -203,23 +149,14 @@ impl RegionChangeObserver for BackupStreamObserver {
         event: RegionChangeEvent,
         role: StateRole,
     ) {
-        if !self.subs.is_observing(ctx.region().get_id()) {
-            return;
-        }
         if role != StateRole::Leader {
-            try_send!(
-                self.scheduler,
-                Task::ModifyObserve(ObserveOp::Stop {
-                    region: ctx.region().clone(),
-                })
-            );
             return;
         }
         match event {
             RegionChangeEvent::Destroy => {
                 try_send!(
                     self.scheduler,
-                    Task::ModifyObserve(ObserveOp::Stop {
+                    Task::ModifyObserve(ObserveOp::CheckEpochAndStop {
                         region: ctx.region().clone(),
                     })
                 );
@@ -257,6 +194,7 @@ mod tests {
     use tikv_util::HandyRwLock;
 
     use crate::endpoint::{ObserveOp, Task};
+    use crate::subscription_track::SubscriptionTracer;
 
     use super::BackupStreamObserver;
 
@@ -274,6 +212,7 @@ mod tests {
 
         // Prepare: assuming a task wants the range of [0001, 0010].
         let o = BackupStreamObserver::new(sched);
+        let subs = SubscriptionTracer::default();
         assert!(o.ranges.wl().add((b"0001".to_vec(), b"0010".to_vec())));
 
         // Test regions can be registered.
@@ -281,14 +220,14 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { region, .. }) = task {
-            o.subs.register_region(region.get_id(), handle.clone())
+        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+            subs.register_region(region, handle.clone(), None);
         } else {
             panic!("unexpected message received: it is {}", task);
         }
-        assert!(o.subs.is_observing(42));
+        assert!(subs.is_observing(42));
         handle.stop_observing();
-        assert!(!o.subs.is_observing(42));
+        assert!(!subs.is_observing(42));
     }
 
     #[test]
@@ -298,6 +237,7 @@ mod tests {
 
         // Prepare: assuming a task wants the range of [0001, 0010].
         let o = BackupStreamObserver::new(sched);
+        let subs = SubscriptionTracer::default();
         assert!(o.ranges.wl().add((b"0001".to_vec(), b"0010".to_vec())));
 
         // Test regions can be registered.
@@ -305,8 +245,8 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { region, .. }) = task {
-            o.subs.register_region(region.get_id(), handle.clone());
+        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+            subs.register_region(region, handle.clone(), None);
         } else {
             panic!("not match, it is {:?}", task);
         }
@@ -338,14 +278,14 @@ mod tests {
         o.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
         let task = rx.recv_timeout(Duration::from_millis(20));
         assert!(task.is_err(), "it is {:?}", task);
-        assert!(!o.subs.is_observing(43));
+        assert!(!subs.is_observing(43));
 
         // Test newly created region out of range won't be added to observe list.
         let mut ctx = ObserverContext::new(&r);
         o.on_region_changed(&mut ctx, RegionChangeEvent::Create, StateRole::Leader);
         let task = rx.recv_timeout(Duration::from_millis(20));
         assert!(task.is_err(), "it is {:?}", task);
-        assert!(!o.subs.is_observing(43));
+        assert!(!subs.is_observing(43));
 
         // Test give up subscripting when become follower.
         let r = fake_region(42, b"0008", b"0009");

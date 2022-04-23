@@ -57,6 +57,12 @@ lazy_static! {
         "tikv_stream_flush_duration_sec",
         "The time cost of flushing a task.",
         &["stage"],
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
+    pub static ref INITIAL_SCAN_DURATION: Histogram = register_histogram!(
+        "tikv_stream_initial_scan_duration",
+        "The duration of initial scanning.",
         exponential_buckets(0.001, 2.0, 16).unwrap()
     )
     .unwrap();

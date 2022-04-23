@@ -5,6 +5,7 @@ use etcd_client::Error as EtcdError;
 use kvproto::errorpb::Error as StoreError;
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
+use raftstore::Error as RaftStoreError;
 use std::error::Error as StdError;
 use std::fmt::Display;
 use std::io::Error as IoError;
@@ -35,8 +36,10 @@ pub enum Error {
     Sched(#[from] ScheduleError<Task>),
     #[error("PD client meet error: {0}")]
     Pd(#[from] PdError),
-    #[error("Error During requesting raftstore: {0:?}")]
-    RaftStore(StoreError),
+    #[error("Error during requesting raftstore: {0:?}")]
+    RaftRequest(StoreError),
+    #[error("Error from raftstore: {0}")]
+    RaftStore(#[from] RaftStoreError),
     #[error("{context}: {inner_error}")]
     Contextual {
         context: String,
@@ -58,9 +61,10 @@ impl ErrorCodeExt for Error {
             Error::Txn(_) => TXN,
             Error::Sched(_) => SCHED,
             Error::Pd(_) => PD,
-            Error::RaftStore(_) => RAFTSTORE,
+            Error::RaftRequest(_) => RAFTREQ,
             Error::Contextual { inner_error, .. } => inner_error.error_code(),
             Error::Other(_) => OTHER,
+            Error::RaftStore(_) => RAFTSTORE,
         }
     }
 }
@@ -75,7 +79,7 @@ pub type Result<T> = StdResult<T, Error>;
 
 impl From<StoreError> for Error {
     fn from(e: StoreError) -> Self {
-        Self::RaftStore(e)
+        Self::RaftRequest(e)
     }
 }
 
@@ -128,6 +132,14 @@ impl Error {
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()
+    }
+
+    /// remove all context added to the error.
+    pub fn without_context(&self) -> &Self {
+        match self {
+            Error::Contextual { inner_error, .. } => inner_error.without_context(),
+            _ => self,
+        }
     }
 
     fn kind(&self) -> &'static str {

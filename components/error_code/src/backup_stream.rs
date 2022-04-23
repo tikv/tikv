@@ -34,8 +34,12 @@ define_error_codes! {
         "Error during requesting the Placement Driver.",
         "Please check the connectivity between TiKV and PD."
     ),
-    RAFTSTORE => ("Raftstore",
-        "Error happened at the raftstore.",
+    RAFTREQ => ("RaftReq",
+        "Error happened when sending raft command.",
+        "This is an internal error, please ask the community for help."
+    ),
+    RAFTSTORE => ("RaftStore",
+        "Error happened reported from raft store.",
         "This is an internal error, please ask the community for help."
     ),
     OTHER => ("Unknown",

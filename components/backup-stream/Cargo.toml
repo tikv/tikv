@@ -9,6 +9,7 @@ test-engines-rocksdb = [
   "tikv/test-engines-rocksdb",
 ]
 failpoints = ["fail/failpoints"]
+backup-stream-debug = []
 
 [dependencies]
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }

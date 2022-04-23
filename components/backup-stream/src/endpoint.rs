@@ -8,17 +8,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use concurrency_manager::ConcurrencyManager;
-use dashmap::DashMap;
+
 use engine_traits::KvEngine;
 
 use error_code::ErrorCodeExt;
-use futures::executor::block_on;
 use kvproto::brpb::StreamBackupError;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
-use resolved_ts::Resolver;
 
 use tikv_util::time::Instant;
 
@@ -33,6 +31,7 @@ use crate::event_loader::InitialDataLoader;
 use crate::metadata::store::{EtcdStore, MetaStore};
 use crate::metadata::{MetadataClient, MetadataEvent, StreamTask};
 use crate::router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL};
+use crate::subscription_track::SubscriptionTracer;
 use crate::utils::{self, StopWatch};
 use crate::{errors::Result, observer::BackupStreamObserver};
 use crate::{metrics, try_send};
@@ -64,7 +63,7 @@ pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
     engine: PhantomData<E>,
     router: RT,
     pd_client: Arc<PDC>,
-    resolvers: Arc<DashMap<u64, Resolver>>,
+    subs: SubscriptionTracer,
     concurrency_manager: ConcurrencyManager,
 }
 
@@ -126,7 +125,7 @@ where
             engine: PhantomData,
             router,
             pd_client,
-            resolvers: Default::default(),
+            subs: Default::default(),
             concurrency_manager: cm,
         }
     }
@@ -200,7 +199,7 @@ where
             engine: PhantomData,
             router,
             pd_client,
-            resolvers: Default::default(),
+            subs: Default::default(),
             concurrency_manager,
         }
     }
@@ -343,7 +342,7 @@ where
     fn backup_batch(&self, batch: CmdBatch) {
         let mut sw = StopWatch::new();
         let region_id = batch.region_id;
-        let mut resolver = match self.resolvers.as_ref().get_mut(&region_id) {
+        let mut resolver = match self.subs.get_subscription_of(region_id) {
             Some(rts) => rts,
             None => {
                 warn!("BUG: the region isn't registered (no resolver found) but sent to backup_batch."; "region_id" => %region_id);
@@ -351,7 +350,7 @@ where
             }
         };
 
-        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut());
+        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
         drop(resolver);
         if kvs.len() == 0 {
             return;
@@ -393,6 +392,7 @@ where
             self.router.clone(),
             self.regions.clone(),
             self.range_router.clone(),
+            self.subs.clone(),
         )
     }
 
@@ -422,15 +422,11 @@ where
     ) -> Result<()> {
         let start = Instant::now_coarse();
         let mut start_ts = task.info.get_start_ts();
-        let ob = self.observer.clone();
-        let rs = self.resolvers.clone();
-
         // Should scan from checkpoint_ts rather than start_ts if checkpoint_ts exists in Metadata.
         if let Some(cli) = &self.meta_client {
             let checkpoint_ts = cli.progress_of_task(task.info.get_name()).await?;
             start_ts = start_ts.max(checkpoint_ts);
         }
-
         let success = self
             .observer
             .ranges
@@ -443,31 +439,21 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-
         tokio::task::spawn_blocking(move || {
-            let range_init_result = init.initialize_range(
-                start_key.clone(),
-                end_key.clone(),
-                TimeStamp::new(start_ts),
-                |region_id, handle| {
-                    // Note: maybe we'd better schedule a "register region" here?
-                    ob.subs.register_region(region_id, handle);
-                    rs.insert(region_id, Resolver::new(region_id));
-                },
-            );
+            let range_init_result =
+                init.initialize_range(start_key.clone(), end_key.clone(), TimeStamp::new(start_ts));
             match range_init_result {
                 Ok(stat) => {
-                    info!("backup stream do initial scanning successfully"; "stat" => ?stat,
+                    info!("backup stream success to do initial scanning"; "stat" => ?stat,
                         "start_key" => utils::redact(&start_key),
                         "end_key" => utils::redact(&end_key),
                         "take" => ?start.saturating_elapsed(),)
                 }
                 Err(e) => {
-                    e.report("backup stream failed to initialize regions");
+                    e.report("backup stream do initial scanning failed");
                 }
             }
         });
-
         Ok(())
     }
 
@@ -512,6 +498,7 @@ where
 
                         for (start_key, end_key) in ranges {
                             let init = init.clone();
+
                             self.observe_and_scan_region(init, &task, start_key, end_key)
                                 .await
                                 .unwrap();
@@ -545,7 +532,7 @@ where
     async fn try_resolve(
         cm: &ConcurrencyManager,
         pd_client: Arc<PDC>,
-        resolvers: Arc<DashMap<u64, Resolver>>,
+        resolvers: SubscriptionTracer,
     ) -> TimeStamp {
         let pd_tso = pd_client
             .get_tso()
@@ -554,14 +541,9 @@ where
             .unwrap_or_default();
         let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
         let tso = Ord::min(pd_tso, min_ts);
-        info!("backup stream using tso for resolving"; "min_ts" => %min_ts, "pd_tso" => %pd_tso);
-        let new_tso = resolvers
-            .as_ref()
-            .iter_mut()
-            .map(|mut r| r.value_mut().resolve(tso))
-            .min();
-        debug!("try resolve resolved ts from PD"; "new_tso" => ?new_tso);
-        new_tso.unwrap_or_default()
+        let ts = resolvers.resolve_with(tso);
+        resolvers.warn_if_gap_too_huge(ts);
+        ts
     }
 
     async fn flush_for_task(
@@ -569,7 +551,7 @@ where
         store_id: u64,
         router: Router,
         pd_cli: Arc<PDC>,
-        resolvers: Arc<DashMap<u64, Resolver>>,
+        resolvers: SubscriptionTracer,
         meta_cli: MetadataClient<S>,
         concurrency_manager: ConcurrencyManager,
     ) {
@@ -581,7 +563,10 @@ where
             .with_label_values(&["resolve_by_now"])
             .observe(start.saturating_elapsed_secs());
         if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
-            info!("flushing and refreshing checkpoint ts."; "checkpoint_ts" => %rts, "task" => %task);
+            info!("flushing and refreshing checkpoint ts.";
+                "checkpoint_ts" => %rts,
+                "task" => %task,
+            );
             if rts == 0 {
                 // We cannot advance the resolved ts for now.
                 return;
@@ -620,7 +605,7 @@ where
             .expect("on_flush: executed from an endpoint without cli")
             .clone();
         let pd_cli = self.pd_client.clone();
-        let resolvers = self.resolvers.clone();
+        let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
         self.pool.spawn(async move {
             let info = router.get_task_info(&task).await;
@@ -638,7 +623,7 @@ where
             .expect("on_flush: executed from an endpoint without cli")
             .clone();
         let pd_cli = self.pd_client.clone();
-        let resolvers = self.resolvers.clone();
+        let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
         self.pool.spawn(Self::flush_for_task(
             task, store_id, router, pd_cli, resolvers, cli, cm,
@@ -651,10 +636,10 @@ where
         let init = self.make_initial_loader();
         let handle = ObserveHandle::new();
         let region_id = region.get_id();
-        let ob = ChangeObserver::from_cdc(region_id, handle.clone());
-        init.observe_over(region, ob)?;
-        self.observer.subs.register_region(region_id, handle);
-        self.resolvers.insert(region.id, Resolver::new(region.id));
+        self.subs.register_region(&region, handle.clone(), None);
+        init.observe_over_with_retry(region, || {
+            ChangeObserver::from_cdc(region_id, handle.clone())
+        })?;
         Ok(())
     }
 
@@ -664,32 +649,31 @@ where
         task: String,
     ) -> Result<()> {
         let init = self.make_initial_loader();
-        let handle = ObserveHandle::new();
-        let region_id = region.get_id();
-        let ob = ChangeObserver::from_cdc(region_id, handle.clone());
-        let snap = init.observe_over(region, ob)?;
-        let meta_cli = self.meta_client.as_ref().unwrap().clone();
-        self.observer.subs.register_region(region_id, handle);
-        self.resolvers.insert(region.id, Resolver::new(region.id));
 
+        let handle = ObserveHandle::new();
+        let meta_cli = self.meta_client.as_ref().unwrap().clone();
+        let last_checkpoint = TimeStamp::new(
+            self.pool
+                .block_on(meta_cli.global_progress_of_task(&task))?,
+        );
+        self.subs
+            .register_region(&region, handle.clone(), Some(last_checkpoint));
+
+        let region_id = region.get_id();
+        let snap = init.observe_over_with_retry(region, move || {
+            ChangeObserver::from_cdc(region_id, handle.clone())
+        })?;
         let region = region.clone();
+
         // Note: Even we did the initial scanning, if the next_backup_ts was updated by periodic flushing,
         //       before the initial scanning done, there is still possibility of losing data:
         //       if the server crashes immediately, and data of this scanning hasn't been sent to sink,
         //       those data would be permanently lost.
         // Maybe we need block the next_backup_ts from advancing before all initial scanning done(Or just for the region, via disabling the resolver)?
         self.pool.spawn_blocking(move || {
-            let from_ts = match block_on(meta_cli.global_progress_of_task(&task)) {
-                Ok(ts) => ts,
-                Err(err) => {
-                    err.report("failed to get global progress of task");
-                    return;
-                }
-            };
-
-            match init.do_initial_scan(&region, TimeStamp::new(from_ts), snap) {
+            match init.do_initial_scan(&region, last_checkpoint, snap) {
                 Ok(stat) => {
-                    info!("initial scanning of leader transforming finished!"; "statistics" => ?stat, "region" => %region.get_id(), "from_ts" => %from_ts);
+                    info!("initial scanning of leader transforming finished!"; "statistics" => ?stat, "region" => %region.get_id(), "from_ts" => %last_checkpoint);
                 }
                 Err(err) => err.report(format!("during initial scanning of region {:?}", region)),
             }
@@ -729,20 +713,42 @@ where
                     ));
                 }
             }
-            ObserveOp::Stop { region } => {
-                self.observer.subs.deregister_region(region.id);
-                self.resolvers.as_ref().remove(&region.id);
+            ObserveOp::Stop { ref region } => {
+                self.subs.deregister_region(region, |_, _| true);
             }
-            ObserveOp::RefreshResolver { region } => {
-                let canceled = self.observer.subs.deregister_region(region.id);
-                self.resolvers.as_ref().remove(&region.id);
+            ObserveOp::CheckEpochAndStop { ref region } => {
+                self.subs.deregister_region(region, |old, new| {
+                    raftstore::store::util::compare_region_epoch(
+                        old.get_region_epoch(),
+                        new,
+                        true,
+                        true,
+                        false,
+                    )
+                    .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
+                    .is_ok()
+                });
+            }
+            ObserveOp::RefreshResolver { ref region } => {
+                let need_refresh_all = !self.subs.try_update_region(&region);
 
-                if canceled {
-                    if let Err(e) = self.observe_over(&region) {
-                        e.report(format!(
-                            "register region {} to raftstore when refreshing",
-                            region.get_id()
-                        ));
+                if need_refresh_all {
+                    let canceled = self.subs.deregister_region(region, |_, _| true);
+                    if canceled {
+                        let for_task = self.find_task_by_region(&region).unwrap_or_else(|| {
+                            panic!(
+                                "BUG: the region {:?} is register to no task but being observed",
+                                region
+                            )
+                        });
+                        if let Err(e) =
+                            self.observe_over_with_initial_data_from_checkpoint(&region, for_task)
+                        {
+                            e.report(format!(
+                                "register region {} to raftstore when refreshing",
+                                region.get_id()
+                            ));
+                        }
                     }
                 }
             }
@@ -821,6 +827,9 @@ pub enum ObserveOp {
         needs_initial_scanning: bool,
     },
     Stop {
+        region: Region,
+    },
+    CheckEpochAndStop {
         region: Region,
     },
     RefreshResolver {

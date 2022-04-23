@@ -10,19 +10,22 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{fsm::ChangeObserver, Callback, SignificantMsg},
 };
+
 use tikv::storage::{
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
     txn::{EntryBatch, TxnEntry, TxnEntryScanner},
     Snapshot, Statistics,
 };
-use tikv_util::{box_err, info, warn};
-use txn_types::{Key, TimeStamp};
+use tikv_util::{box_err, time::Instant, warn};
+use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
+    annotate, debug,
     errors::{ContextualResultExt, Error, Result},
     router::ApplyEvent,
-    utils::RegionPager,
+    subscription_track::{SubscriptionTracer, TwoPhaseResolver},
+    utils::{self, RegionPager},
 };
 use crate::{
     metrics,
@@ -30,6 +33,8 @@ use crate::{
 };
 
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
+
+const MAX_GET_SNAPSHOT_RETRY: usize = 3;
 
 /// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
@@ -61,19 +66,23 @@ impl<S: Snapshot> EventLoader<S> {
         Ok(Self { scanner })
     }
 
-    /// scan a batch of events from the snapshot.
+    /// scan a batch of events from the snapshot. Tracking the locks at the same time.
     /// note: maybe make something like [`EntryBatch`] for reducing allocation.
-    fn scan_batch(&mut self, batch_size: usize, result: &mut ApplyEvents) -> Result<Statistics> {
+    fn scan_batch(
+        &mut self,
+        batch_size: usize,
+        result: &mut ApplyEvents,
+        resolver: &mut TwoPhaseResolver,
+    ) -> Result<Statistics> {
         let mut b = EntryBatch::with_capacity(batch_size);
         self.scanner.scan_entries(&mut b)?;
         for entry in b.drain() {
             match entry {
                 TxnEntry::Prewrite {
                     default: (key, value),
+                    lock: (lock_at, lock_value),
                     ..
                 } => {
-                    // FIXME: we also need to update the information for the `resolver` in the endpoint,
-                    //        otherwise we may advance the resolved ts too far in some conditions?
                     if !key.is_empty() {
                         result.push(ApplyEvent {
                             key,
@@ -82,6 +91,15 @@ impl<S: Snapshot> EventLoader<S> {
                             cmd_type: CmdType::Put,
                         });
                     }
+                    let lock = Lock::parse(&lock_value).map_err(|err| {
+                        annotate!(
+                            err,
+                            "BUG?: failed to parse ts from lock; key = {}",
+                            utils::redact(&lock_at)
+                        )
+                    })?;
+                    debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
+                    resolver.track_phase_one_lock(lock.ts, lock_at)
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     result.push(ApplyEvent {
@@ -116,6 +134,7 @@ pub struct InitialDataLoader<E, R, RT> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     sink: Router,
+    tracing: SubscriptionTracer,
 
     _engine: PhantomData<E>,
 }
@@ -126,19 +145,59 @@ where
     R: RegionInfoProvider + Clone + 'static,
     RT: RaftStoreRouter<E>,
 {
-    pub fn new(router: RT, regions: R, sink: Router) -> Self {
+    pub fn new(router: RT, regions: R, sink: Router, tracing: SubscriptionTracer) -> Self {
         Self {
             router,
             regions,
             sink,
+            tracing,
             _engine: PhantomData,
         }
+    }
+
+    pub fn observe_over_with_retry(
+        &self,
+        region: &Region,
+        mut cmd: impl FnMut() -> ChangeObserver,
+    ) -> Result<impl Snapshot> {
+        let mut last_err = None;
+        for _ in 0..MAX_GET_SNAPSHOT_RETRY {
+            let r = self.observe_over(region, cmd());
+            match r {
+                Ok(s) => {
+                    return Ok(s);
+                }
+                Err(e) => {
+                    let can_retry = match e.without_context() {
+                        Error::RaftRequest(pbe) => {
+                            !(pbe.has_epoch_not_match()
+                                || pbe.get_message().contains("stale observe id"))
+                        }
+                        Error::RaftStore(raftstore::Error::RegionNotFound(_)) => false,
+                        _ => true,
+                    };
+                    last_err = match last_err {
+                        None => Some(e),
+                        Some(err) => Some(Error::Contextual {
+                            context: format!("and error {}", e),
+                            inner_error: Box::new(err),
+                        }),
+                    };
+
+                    if !can_retry {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+        Err(last_err.expect("BUG: max retry time exceed but no error"))
     }
 
     /// Start observe over some region.
     /// This will register the region to the raftstore as observing,
     /// and return the current snapshot of that region.
-    pub fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
+    fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
         // There are 2 ways for getting the initial snapshot of a region:
         //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
         //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
@@ -156,7 +215,7 @@ where
                     region_epoch: region.get_region_epoch().clone(),
                     callback: Callback::Read(Box::new(|snapshot| {
                         if snapshot.response.get_header().has_error() {
-                            callback(Err(Error::RaftStore(
+                            callback(Err(Error::RaftRequest(
                                 snapshot.response.get_header().get_error().clone(),
                             )));
                             return;
@@ -171,7 +230,6 @@ where
                     })),
                 },
             )
-            .map_err(|err| Error::Other(Box::new(err)))
             .context(format_args!(
                 "failed to register the observer to region {}",
                 region.get_id()
@@ -186,6 +244,54 @@ where
         Ok(snap)
     }
 
+    pub fn with_resolver<T: 'static>(
+        &self,
+        region_id: u64,
+        f: impl FnOnce(&mut TwoPhaseResolver) -> Result<T>,
+    ) -> Result<T> {
+        Self::with_resolver_by(&self.tracing, region_id, f)
+    }
+
+    pub fn with_resolver_by<T: 'static>(
+        tracing: &SubscriptionTracer,
+        region_id: u64,
+        f: impl FnOnce(&mut TwoPhaseResolver) -> Result<T>,
+    ) -> Result<T> {
+        f(tracing
+            .get_subscription_of(region_id)
+            .ok_or_else(|| Error::Other(box_err!("observer for region {} canceled", region_id)))?
+            .value_mut()
+            .resolver())
+    }
+
+    fn scan_and_async_send(
+        &self,
+        region: &Region,
+        mut event_loader: EventLoader<impl Snapshot>,
+        join_handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    ) -> Result<Statistics> {
+        let mut stats = StatisticsSummary::default();
+        let start = Instant::now();
+        loop {
+            let mut events = ApplyEvents::with_capacity(1024, region.id);
+            let stat = self.with_resolver(region.get_id(), |r| {
+                event_loader.scan_batch(1024, &mut events, r)
+            })?;
+            if events.len() == 0 {
+                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
+                return Ok(stats.stat);
+            }
+            stats.add_statistics(&stat);
+            let sink = self.sink.clone();
+            metrics::INCREMENTAL_SCAN_SIZE.observe(events.size() as f64);
+            join_handles.push(tokio::spawn(async move {
+                if let Err(err) = sink.on_events(events).await {
+                    warn!("failed to send event to sink"; "err" => %err);
+                }
+            }));
+        }
+    }
+
     pub fn do_initial_scan(
         &self,
         region: &Region,
@@ -193,38 +299,30 @@ where
         snap: impl Snapshot,
     ) -> Result<Statistics> {
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
-        let mut event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
-        let mut stats = StatisticsSummary::default();
-        loop {
-            let mut events = ApplyEvents::with_capacity(1024, region.id);
-            let stat = event_loader.scan_batch(1024, &mut events)?;
-            if events.len() == 0 {
-                break;
-            }
-            stats.add_statistics(&stat);
-            let sink = self.sink.clone();
-            // Note: maybe we'd better don't spawn it to another thread for preventing OOM?
-            tokio::spawn(async move {
-                metrics::INCREMENTAL_SCAN_SIZE.observe(events.size() as f64);
-                if let Err(err) = sink.on_events(events).await {
-                    warn!("failed to send event to sink"; "err" => %err);
-                }
-            });
-        }
-        Ok(stats.stat)
-    }
+        let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
+        let tr = self.tracing.clone();
+        let region_id = region.get_id();
 
-    /// Initialize the region: register it to the raftstore and the observer.
-    /// At the same time, perform the initial scanning, (an incremental scanning from `start_ts`)
-    /// and generate the corresponding ApplyEvent to the sink directly.
-    pub fn initialize_region(
-        &self,
-        region: &Region,
-        start_ts: TimeStamp,
-        cmd: ChangeObserver,
-    ) -> Result<Statistics> {
-        let snap = self.observe_over(region, cmd)?;
-        self.do_initial_scan(region, start_ts, snap)
+        let mut join_handles = Vec::with_capacity(8);
+        let stats = self.scan_and_async_send(region, event_loader, &mut join_handles);
+
+        // we should mark phase one as finished whether scan successed.
+        // TODO: use an `WaitGroup` with asynchronous support.
+        tokio::spawn(async move {
+            for h in join_handles {
+                if let Err(err) = tokio::join!(h).0 {
+                    warn!("failed to join task."; "err" => %err);
+                }
+            }
+            if let Err(err) = Self::with_resolver_by(&tr, region_id, |r| Ok(r.phase_one_done())) {
+                err.report(format_args!(
+                    "failed to finish phase 1 for region {:?}",
+                    region_id
+                ));
+            }
+            debug!("phase one done."; "region_id" => %region_id);
+        });
+        stats
     }
 
     /// initialize a range: it simply scan the regions with leader role and send them to [`initialize_region`].
@@ -233,21 +331,24 @@ where
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         start_ts: TimeStamp,
-        mut on_register_range: impl FnMut(u64, ObserveHandle),
     ) -> Result<Statistics> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
         let mut total_stat = StatisticsSummary::default();
         loop {
             let regions = pager.next_page(8)?;
-            info!("scanning for entries in region."; "regions" => ?regions);
+            debug!("scanning for entries in region."; "regions" => ?regions);
             if regions.is_empty() {
                 break;
             }
             for r in regions {
                 let handle = ObserveHandle::new();
-                let ob = ChangeObserver::from_cdc(r.region.get_id(), handle.clone());
-                let stat = self.initialize_region(&r.region, start_ts, ob)?;
-                on_register_range(r.region.get_id(), handle);
+                self.tracing
+                    .register_region(&r.region, handle.clone(), Some(start_ts));
+                let region_id = r.region.get_id();
+                let snap = self.observe_over_with_retry(&r.region, move || {
+                    ChangeObserver::from_cdc(region_id, handle.clone())
+                })?;
+                let stat = self.do_initial_scan(&r.region, start_ts, snap)?;
                 total_stat.add_statistics(&stat);
             }
         }

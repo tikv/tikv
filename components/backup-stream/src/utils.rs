@@ -316,6 +316,20 @@ macro_rules! try_send {
     };
 }
 
+/// a hacky macro which allow us enable all debug log via the feature `backup_stream_debug`.
+/// because once we enable debug log for all crates, it would soon get too verbose to read.
+/// using this macro now we can enable debug log level for the crate only (even compile time...).
+#[macro_export(crate)]
+macro_rules! debug {
+    ($($t: tt)+) => {
+        if cfg!(feature = "backup-stream-debug") {
+            tikv_util::info!(#"backup-stream", $($t)+)
+        } else {
+            tikv_util::debug!(#"backup-stream", $($t)+)
+        }
+    };
+}
+
 #[cfg(test)]
 mod test {
     use crate::utils::SegmentMap;
