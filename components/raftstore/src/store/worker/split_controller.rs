@@ -82,13 +82,14 @@ where
 {
     let mut sampled_key_ranges = vec![];
     // Retain the non-empty key ranges.
+    // `key_ranges_provider` may return an empty key ranges vector, which will cause
+    // the later sampling to fall into a dead loop. So we need to filter it out here.
     key_ranges_providers
         .retain_mut(|key_ranges_provider| !key_ranges_getter(key_ranges_provider).is_empty());
     if key_ranges_providers.is_empty() {
         return sampled_key_ranges;
     }
     let prefix_sum = prefix_sum_mut(key_ranges_providers.iter_mut(), |key_ranges_provider| {
-        // NOTICE: `key_ranges_provider` may return an empty key range vector here.
         key_ranges_getter(key_ranges_provider).len()
     });
     // The last sum is the number of all the key ranges.
