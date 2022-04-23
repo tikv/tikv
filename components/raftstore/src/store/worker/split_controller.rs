@@ -525,10 +525,6 @@ impl AutoSplitController {
         let capacity = read_stats_vec.len();
         for read_stats in read_stats_vec {
             for (region_id, region_info) in read_stats.region_infos {
-                // Filter out the region info which has no key ranges to sample later.
-                if region_info.key_ranges.is_empty() {
-                    continue;
-                }
                 let region_infos = region_infos_map
                     .entry(region_id)
                     .or_insert_with(|| Vec::with_capacity(capacity));
