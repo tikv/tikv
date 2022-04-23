@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,7 +22,7 @@ pub struct RecoveryRunner {
     check_duration: Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct FileInfo {
     // Corrupted file name. example: /000033.sst
     name: String,
@@ -29,6 +30,19 @@ struct FileInfo {
     largest_key: Vec<u8>,
     // Time to generate recovery task, be used to record whether the timeout
     start_time: Instant,
+}
+
+impl Debug for FileInfo {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            fmt,
+            "name:{:?}, smallest_key:{:?}, largest_key:{:?}, elapsed_secs:{}",
+            self.name,
+            std::str::from_utf8(&self.smallest_key).unwrap(),
+            std::str::from_utf8(&self.largest_key).unwrap(),
+            self.start_time.elapsed().as_secs_f64(),
+        )
+    }
 }
 
 impl Runnable for RecoveryRunner {
@@ -155,8 +169,8 @@ impl RecoveryRunner {
             warn!(
                 "damaged file has been deleted";
                 "file" => &file.name,
-                "smallest_key" => ?&file.smallest_key,
-                "largest_key" => ?&file.largest_key,
+                "smallest_key" => std::str::from_utf8(&file.smallest_key).unwrap(),
+                "largest_key" => std::str::from_utf8(&file.largest_key).unwrap(),
             );
         }
 
