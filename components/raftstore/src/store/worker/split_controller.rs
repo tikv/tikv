@@ -917,26 +917,24 @@ mod tests {
         hub.flush(qps_stats_vec);
     }
 
-    fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
-        for _ in 0..100 {
-            let sampled_key_ranges = sample(sample_num, key_ranges.clone(), |x| x);
-            let all_key_ranges_num = *prefix_sum(key_ranges.iter(), Vec::len).last().unwrap();
-            assert_eq!(
-                sampled_key_ranges.len(),
-                std::cmp::min(sample_num, all_key_ranges_num)
-            );
+    fn check_sample_length(key_ranges: Vec<Vec<KeyRange>>) {
+        for sample_num in 0..=DEFAULT_SAMPLE_NUM {
+            for _ in 0..100 {
+                let sampled_key_ranges = sample(sample_num, key_ranges.clone(), |x| x);
+                let all_key_ranges_num = *prefix_sum(key_ranges.iter(), Vec::len).last().unwrap();
+                assert_eq!(
+                    sampled_key_ranges.len(),
+                    std::cmp::min(sample_num, all_key_ranges_num)
+                );
+            }
         }
     }
 
-    fn check_sample_length_with_timeout(
-        sample_num: usize,
-        key_ranges: Vec<Vec<KeyRange>>,
-        timeout: Duration,
-    ) {
+    fn check_sample_length_with_timeout(key_ranges: Vec<Vec<KeyRange>>, timeout: Duration) {
         let (done_tx, done_rx) = mpsc::channel();
         let key_ranges_to_check = key_ranges.clone();
         let handle = thread::spawn(move || {
-            check_sample_length(sample_num, key_ranges_to_check);
+            check_sample_length(key_ranges_to_check);
             done_tx
                 .send(())
                 .expect("Unable to send check_sample_length completion signal");
@@ -955,19 +953,18 @@ mod tests {
     #[test]
     fn test_sample_length() {
         // Test the sample_num = key range number.
-        let sample_num = 20;
         let mut key_ranges = vec![];
-        for _ in 0..sample_num {
+        for _ in 0..DEFAULT_SAMPLE_NUM {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         // Test the sample_num < key range number.
         let mut key_ranges = vec![];
-        for _ in 0..sample_num + 1 {
+        for _ in 0..DEFAULT_SAMPLE_NUM + 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         let mut key_ranges = vec![];
         let num = 100;
@@ -978,16 +975,16 @@ mod tests {
             }
             key_ranges.push(ranges);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         // Test the sample_num > key range number.
-        check_sample_length(sample_num, vec![vec![build_key_range(b"a", b"b", false)]]);
+        check_sample_length(vec![vec![build_key_range(b"a", b"b", false)]]);
 
         let mut key_ranges = vec![];
-        for _ in 0..sample_num - 1 {
+        for _ in 0..DEFAULT_SAMPLE_NUM - 1 {
             key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
-        check_sample_length(sample_num, key_ranges);
+        check_sample_length(key_ranges);
 
         // Test the empty key range gap.
         // See https://github.com/tikv/tikv/issues/12185 for more details.
@@ -1131,10 +1128,8 @@ mod tests {
                 vec![],
             ],
         ];
-        for sample_num in 0..=DEFAULT_SAMPLE_NUM {
-            for test_case in test_cases.iter() {
-                check_sample_length(sample_num, test_case.clone());
-            }
+        for test_case in test_cases.iter() {
+            check_sample_length(test_case.clone());
         }
     }
 
@@ -1153,13 +1148,7 @@ mod tests {
                     key_ranges.push(build_key_range(b"a", b"b", false));
                 }
             }
-            for sample_num in 0..=DEFAULT_SAMPLE_NUM {
-                check_sample_length_with_timeout(
-                    sample_num,
-                    test_case.clone(),
-                    Duration::from_secs(20),
-                );
-            }
+            check_sample_length_with_timeout(test_case.clone(), Duration::from_secs(3));
         }
     }
 
