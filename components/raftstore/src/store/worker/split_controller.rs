@@ -369,6 +369,12 @@ impl RegionInfo {
 #[derive(Clone, Debug)]
 pub struct ReadStats {
     // RegionID -> RegionInfo
+    // There're three methods could insert a `RegionInfo` into the map:
+    //   1. add_query_num
+    //   2. add_query_num_batch
+    //   3. add_flow
+    // Among these three methods, `add_flow` will not update `key_ranges` of `RegionInfo`,
+    // and due to this, an `RegionInfo` without `key_ranges` may occur. The caller should be aware of this.
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
     pub region_buckets: HashMap<u64, BucketStat>,
