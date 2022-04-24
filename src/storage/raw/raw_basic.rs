@@ -18,29 +18,6 @@ impl<S: Snapshot> RawBasicSnapshot<S> {
         RawBasicSnapshot { snap }
     }
 
-    pub fn seek_first_key_value_cf(
-        &self,
-        cf: Option<CfName>,
-        opts: Option<ReadOptions>,
-        key: &Key,
-    ) -> Result<Option<Value>> {
-        let mut iter_opt = IterOptions::default();
-        iter_opt.set_fill_cache(opts.map_or(true, |v| v.fill_cache()));
-        iter_opt.use_prefix_seek();
-        iter_opt.set_prefix_same_as_start(true);
-        let end_key = key.clone().append_ts(TimeStamp::zero());
-        iter_opt.set_upper_bound(end_key.as_encoded(), DATA_KEY_PREFIX_LEN);
-        let mut iter = match cf {
-            Some(cf_name) => self.iter_cf(cf_name, iter_opt)?,
-            None => self.iter(iter_opt)?,
-        };
-        if iter.seek(key)? {
-            Ok(Some(iter.value().to_owned()))
-        } else {
-            Ok(None)
-        }
-    }
-
 }
 
 pub struct MvccRaw {
@@ -73,18 +50,6 @@ impl<S: Snapshot> Snapshot for RawBasicSnapshot<S> {
         where
             S: 'a,
     = S::Ext<'a>;
-    //
-    // fn get(&self, key: &Key) -> Result<Option<Value>> {
-    //     self.seek_first_key_value_cf(None, None, key)
-    // }
-    //
-    // fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-    //     self.seek_first_key_value_cf(Some(cf), None, key)
-    // }
-    //
-    // fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
-    //     self.seek_first_key_value_cf(Some(cf), Some(opts), key)
-    // }
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         self.snap.get(key)
