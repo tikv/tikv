@@ -270,7 +270,8 @@ impl ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone(), Default::default());
+        let mut coprocessor_host =
+            CoprocessorHost::new(router.clone(), cfg.coprocessor.clone(), Default::default());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 

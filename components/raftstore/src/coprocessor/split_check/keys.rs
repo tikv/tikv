@@ -268,8 +268,11 @@ mod tests {
             ..Default::default()
         };
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg, Default::default()));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg, Default::default()),
+        );
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);

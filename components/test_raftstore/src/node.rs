@@ -260,7 +260,8 @@ impl Simulator for NodeCluster {
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone(), Default::default());
+        let mut coprocessor_host =
+            CoprocessorHost::new(router.clone(), cfg.coprocessor.clone(), Default::default());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);

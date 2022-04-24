@@ -153,8 +153,11 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut host =
-            CoprocessorHost::<KvTestEngine>::new(tx.clone(), crate::coprocessor::Config::default(), Default::default());
+        let mut host = CoprocessorHost::<KvTestEngine>::new(
+            tx.clone(),
+            crate::coprocessor::Config::default(),
+            Default::default(),
+        );
         host.registry.register_consistency_check_observer(
             100,
             BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),

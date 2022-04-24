@@ -169,8 +169,11 @@ mod tests {
             region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
             ..Default::default()
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg, Default::default()));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg, Default::default()),
+        );
 
         // so split key will be z0005
         for i in 0..11 {
@@ -224,8 +227,11 @@ mod tests {
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg, Default::default()));
+        let mut runnable = SplitCheckRunner::new(
+            engine.clone(),
+            tx.clone(),
+            CoprocessorHost::new(tx, cfg, Default::default()),
+        );
 
         // so bucket key will be all these keys
         let mut exp_bucket_keys = vec![];
