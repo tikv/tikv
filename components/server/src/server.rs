@@ -45,7 +45,7 @@ use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    resource_usage_agent::create_resource_metering_pub_sub,
+    kvrpcpb::ApiVersion, resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -381,6 +381,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let search_base = env::temp_dir().join(&lock_dir);
         file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
+        set_path_all_permission(&search_base);
 
         for entry in file_system::read_dir(&search_base).unwrap().flatten() {
             if !entry.file_type().unwrap().is_file() {
@@ -717,22 +718,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // Register causal observer for RawKV API V2
-        // TODO: uncomment after finish modification of Storage.
-        // if let ApiVersion::V2 = self.config.storage.api_version() {
-        //     let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
-        //         self.pd_client.clone(),
-        //         self.config.causal_ts.renew_interval.0,
-        //         self.config.causal_ts.renew_batch_min_size,
-        //     ));
-        //     if let Err(e) = tso {
-        //         panic!("Causal timestamp provider initialize failed: {:?}", e);
-        //     }
-        //     let causal_ts_provider = Arc::new(tso.unwrap());
-        //     info!("Causal timestamp provider startup.");
-        //
-        //     let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-        //     causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        // }
+        if let ApiVersion::V2 = Api::TAG {
+            let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
+                self.pd_client.clone(),
+                self.config.causal_ts.renew_interval.0,
+                self.config.causal_ts.renew_batch_min_size,
+            ));
+            if let Err(e) = tso {
+                panic!("Causal timestamp provider initialize failed: {:?}", e);
+            }
+            let causal_ts_provider = Arc::new(tso.unwrap());
+            info!("Causal timestamp provider startup.");
+
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        }
 
         // Register cdc.
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
@@ -1487,6 +1487,8 @@ fn try_lock_conflict_addr<P: AsRef<Path>>(path: P) -> File {
         )
     });
 
+    set_path_all_permission(&path);
+
     if f.try_lock_exclusive().is_err() {
         fatal!(
             "{} already in use, maybe another instance is binding with this address.",
@@ -1505,6 +1507,18 @@ fn get_lock_dir() -> String {
 fn get_lock_dir() -> String {
     "TIKV_LOCK_FILES".to_owned()
 }
+
+// Make the lock files be accessed by all users. Only support in unix platform.
+#[cfg(unix)]
+fn set_path_all_permission<P: AsRef<Path>>(path: P) {
+    use std::fs::{set_permissions, Permissions};
+    use std::os::unix::fs::PermissionsExt;
+    // this may failed when setting a file created by root.
+    let _ = set_permissions(path, Permissions::from_mode(0o777));
+}
+
+#[cfg(not(unix))]
+fn set_path_all_permission<P: AsRef<Path>>(path: P) {}
 
 /// A small trait for components which can be trivially stopped. Lets us keep
 /// a list of these in `TiKV`, rather than storing each component individually.
