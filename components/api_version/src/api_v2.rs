@@ -182,21 +182,9 @@ impl APIV2 {
 
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
-    assert!(APIV2::parse_key_mode(encoded_bytes) == KeyMode::Raw);
-    assert!(bytes::decode_bytes(&mut encoded_bytes, false).is_ok());
-    assert!(
-        encoded_bytes.len() == number::U64_SIZE * (with_ts as usize),
-        "left {}, right {}",
-        encoded_bytes.len(),
-        number::U64_SIZE * (with_ts as usize),
-    );
-    true
-
-    /*
     APIV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
         && bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
         && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
-        */
 }
 
 #[inline]

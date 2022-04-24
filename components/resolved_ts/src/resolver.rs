@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{APIVersion, KeyMode, APIV2};
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use std::cmp;
@@ -171,33 +170,6 @@ impl Resolver {
 
         self.resolved_ts
     }
-
-    pub fn untrack_locks_before(&mut self, ts: TimeStamp) {
-        let mut need_remove_ts = Vec::new();
-        let mut need_remove_key = Vec::new();
-
-        for iter in self.lock_ts_heap.iter_mut().filter(|t| *t.0 <= ts) {
-            iter.1.retain(|key| {
-                if APIV2::parse_key_mode(key.as_ref()) != KeyMode::Raw {
-                    return true;
-                }
-                need_remove_key.push(key.clone());
-                return false;
-            });
-
-            if iter.1.is_empty() {
-                need_remove_ts.push((*iter.0).clone());
-            }
-        }
-
-        for start_ts in need_remove_ts {
-            self.lock_ts_heap.remove(&start_ts);
-        }
-
-        for key in need_remove_key {
-            self.locks_by_key.remove(key.as_ref());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -213,8 +185,6 @@ mod tests {
         Unlock(Key),
         // min_ts, expect
         Resolve(u64, u64),
-        // ts,
-        UnlockBefore(u64),
     }
 
     #[test]
@@ -266,24 +236,6 @@ mod tests {
                 Event::Unlock(Key::from_raw(b"b")),
                 Event::Unlock(Key::from_raw(b"a")),
             ],
-            vec![
-                Event::Lock(1, Key::from_raw(b"ra")),
-                Event::Lock(1, Key::from_raw(b"rb")),
-                Event::Lock(2, Key::from_raw(b"rc")),
-                Event::Lock(3, Key::from_raw(b"rd")),
-                Event::UnlockBefore(2),
-                Event::Resolve(3, 3),
-            ],
-            vec![
-                Event::Lock(1, Key::from_raw(b"ra")),
-                Event::Lock(1, Key::from_raw(b"b")),
-                Event::Lock(2, Key::from_raw(b"rc")),
-                Event::Lock(3, Key::from_raw(b"rd")),
-                Event::UnlockBefore(2),
-                Event::Resolve(1, 1),
-                Event::Unlock(Key::from_raw(b"b")),
-                Event::Resolve(3, 3),
-            ],
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
@@ -294,7 +246,6 @@ mod tests {
                         resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
-                    Event::UnlockBefore(ts) => resolver.untrack_locks_before(ts.into()),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
