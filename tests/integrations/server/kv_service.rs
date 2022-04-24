@@ -955,7 +955,7 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default(), Default::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
