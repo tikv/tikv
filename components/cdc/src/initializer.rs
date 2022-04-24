@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use api_version::{APIVersion, APIV2};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
@@ -31,7 +32,6 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
-use api_version::{APIVersion, APIV2};
 
 use crate::channel::CdcEvent;
 use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
@@ -334,7 +334,8 @@ impl<E: KvEngine> Initializer<E> {
                 Scanner::RawKvScanner(iter) => {
                     if iter.valid()? {
                         let key = iter.key().to_vec();
-                        let (_, ts) = APIV2::decode_raw_key_owned(Key::from_encoded(key.clone()), true)?;
+                        let (_, ts) =
+                            APIV2::decode_raw_key_owned(Key::from_encoded(key.clone()), true)?;
                         if ts.unwrap() < self.checkpoint_ts {
                             continue;
                         }

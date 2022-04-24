@@ -601,8 +601,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
 
-        if (kv_api == ChangeDataRequestKvApi::RawKv && api_version != ApiVersion::V2) || 
-            (kv_api == ChangeDataRequestKvApi::TxnKv) {
+        if (kv_api == ChangeDataRequestKvApi::RawKv && api_version != ApiVersion::V2)
+            || (kv_api == ChangeDataRequestKvApi::TxnKv)
+        {
             error!("RawKv are supported by api-version 2 only, TxnKv aren't supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
@@ -1351,7 +1352,7 @@ mod tests {
         req.set_kv_api(ChangeDataRequestKvApi::TiDb);
         let region_epoch = req.get_region_epoch().clone();
         let version = FeatureGate::batch_resolved_ts();
-        
+
         // Compatibility error.
         let downstream = Downstream::new(
             "".to_string(),
