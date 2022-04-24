@@ -405,7 +405,7 @@ impl Delegate {
             send(downstream)?;
         }
         assert!(
-            !txnkv_downstreams.is_empty() || !rawkv_downstreams.is_empty(),
+            txnkv_downstreams.is_empty() && rawkv_downstreams.is_empty(),
             "region {} miss downstream",
             self.region_id
         );
