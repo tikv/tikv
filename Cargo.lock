@@ -5321,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.2.3"
+version = "5.2.4"
 dependencies = [
  "anyhow",
  "async-std",
