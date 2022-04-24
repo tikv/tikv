@@ -19,6 +19,10 @@ use engine_traits::{
 use file_system::{IOType, WithIOType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
+use api_version::{APIV2, APIVersion, KeyMode};
+use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
+use api_version::api_v2::RAW_KEY_PREFIX;
+use engine_traits::raw_ttl::ttl_current_ts;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::Instant;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -519,6 +523,284 @@ impl WriteCompactionFilter {
     }
 }
 
+pub struct RawCompactionFilterFactory;
+
+impl CompactionFilterFactory for RawCompactionFilterFactory {
+    fn create_compaction_filter(
+        &self,
+        context: &CompactionFilterContext,
+    ) -> *mut DBCompactionFilter {
+        //---------------- GC content --------------
+        let gc_context_option = GC_CONTEXT.lock().unwrap();
+        let gc_context = match *gc_context_option {
+            Some(ref ctx) => ctx,
+            None => return std::ptr::null_mut(),
+        };
+
+        //---------------- GC content END --------------
+        let db = gc_context.db.clone();
+        let gc_scheduler = gc_context.gc_scheduler.clone();
+        let current = ttl_current_ts();
+        let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
+        let filter = RawCompactionFilter::new(db,
+                                              safe_point,
+                                              gc_scheduler,
+                                              current,
+
+        );
+        let name = CString::new("raw_compaction_filter").unwrap();
+        unsafe { new_compaction_filter_raw(name, filter) }
+    }
+}
+
+struct RawCompactionFilter {
+    safe_point: u64,
+    engine: RocksEngine,
+    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+    current_ts: u64,
+    mvcc_key_prefix: Vec<u8>,
+    mvcc_deletions: Vec<Key>,
+
+    // Some metrics about implementation detail.
+    versions: usize,
+    filtered: usize,
+    total_versions: usize,
+    total_filtered: usize,
+    mvcc_rollback_and_locks: usize,
+    orphan_versions: usize,
+    versions_hist: LocalHistogram,
+    filtered_hist: LocalHistogram,
+
+}
+
+impl Drop for RawCompactionFilter {
+    // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
+    // becomes installed into the DB instance.
+    fn drop(&mut self) {
+
+        self.raw_gc_mvcc_deletions();
+
+        self.engine.sync_wal().unwrap();
+
+        self.switch_key_metrics();
+        self.flush_metrics();
+
+        // #[cfg(any(test, feature = "failpoints"))]
+        // for callback in &self.callbacks_on_drop {
+        //     callback(self);
+        // }
+    }
+}
+
+impl CompactionFilter for RawCompactionFilter {
+    fn featured_filter(
+        &mut self,
+        level: usize,
+        key: &[u8],
+        sequence: u64,
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
+
+        match self.do_filter(level, key, sequence, value, value_type) {
+            Ok(decision) => decision,
+            Err(e) => {
+                warn!("compaction filter meet error: {}", e);
+                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                CompactionFilterDecision::Keep
+            }
+        }
+    }
+}
+
+impl RawCompactionFilter {
+    fn new(
+        engine: RocksEngine,
+        safe_point: u64,
+        gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+        ts: u64,
+        // mvcc_key_prefix: Vec<u8>,
+        // mvcc_deletions: Vec<Key>,
+    ) -> Self {
+        // Safe point must have been initialized.
+        assert!(safe_point > 0);
+        debug!("gc in compaction filter"; "safe_point" => safe_point);
+        RawCompactionFilter {
+            safe_point,
+            engine,
+            gc_scheduler,
+            current_ts: ts,
+            mvcc_key_prefix: vec![],
+            mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
+
+            versions: 0,
+            filtered: 0,
+            total_versions: 0,
+            total_filtered: 0,
+            mvcc_rollback_and_locks: 0,
+            orphan_versions: 0,
+            versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
+            filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
+        }
+    }
+
+    fn print(key: &[u8]){
+        for i in 0..key.len(){
+            info!("key_{}:{}",i,key[i]);
+        }
+    }
+
+    fn print_array(&mut self,name : &str,arr: Vec<u8>) {
+        let space=" ";
+        for i in 0..arr.len(){
+            info!("arr {}:{}:{}", name, i, arr[i]);
+        }
+    }
+    fn do_filter(
+        &mut self,
+        _start_level: usize,
+        key: &[u8],
+        _sequence: u64,
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> Result<CompactionFilterDecision, String> {
+
+        info!("API V2 do_filter01");
+        if !key.starts_with(keys::DATA_PREFIX_KEY) {
+            return Ok(CompactionFilterDecision::Keep);
+        }
+
+        //remove prefix 'z'
+        let currentKey=keys::origin_key(key);
+        let key_mode = APIV2::parse_key_mode(currentKey);
+
+        // not RawKV or targetValue
+        if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
+            let is_mode=key_mode != KeyMode::Raw;
+            let is_value_type=value_type != CompactionFilterValueType::Value;
+
+            return Ok(CompactionFilterDecision::Keep);
+        }
+
+        let (mvcc_key_prefix_vec, commit_ts_opt) = APIV2::decode_raw_key(&Key::from_encoded_slice(currentKey), true).unwrap();
+        let mvcc_key_prefix = mvcc_key_prefix_vec.as_slice();
+        let commit_ts = commit_ts_opt.unwrap().into_inner();
+
+        // mvcc_key_prefix_vec = 'r'
+        if(mvcc_key_prefix_vec.clone().len()==1){
+            return Ok(CompactionFilterDecision::Keep);
+        }
+
+        let raw_value = APIV2::decode_raw_value(&value)?;
+        if self.mvcc_key_prefix != mvcc_key_prefix  {
+            self.switch_key_metrics();
+            self.mvcc_key_prefix.clear();
+            self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
+            if commit_ts >= self.safe_point {
+                return Ok(CompactionFilterDecision::Keep);
+            }
+            // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
+            if raw_value.is_delete || raw_value.expire_ts.unwrap() < self.current_ts {
+                self.raw_handle_bottommost_delete();
+                if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+                    self.raw_gc_mvcc_deletions();
+                }
+            } else {
+                // the lastest version ,and not deleted or expaired ttl , need to be retained
+                return Ok(CompactionFilterDecision::Keep);
+            }
+        }else{
+            if commit_ts >= self.safe_point {
+                return Ok(CompactionFilterDecision::Keep);
+            }
+
+            self.filtered +=1;
+            // ts < safepoint ,and it's not the lastest version need to be removed.
+            return Ok(CompactionFilterDecision::Remove);
+        }
+
+        self.raw_gc_mvcc_deletions();
+        // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
+        return Ok(CompactionFilterDecision::Keep);
+    }
+
+    fn raw_gc_mvcc_deletions(&mut self) {
+        info!("mvcc_deletions len:{}",self.mvcc_deletions.len());
+        if !self.mvcc_deletions.is_empty() {
+            let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
+            let task = GcTask::RawGcKeys {
+                keys: mem::replace(&mut self.mvcc_deletions, empty),//gc_keys->gc_key->gc->gc.run
+                safe_point: self.safe_point.into(),
+            };
+            self.schedule_gc_task(task, false);
+        }
+        self.mvcc_deletions.clear();
+        info!("self.mvcc_deletions.clear();,{}",self.mvcc_deletions.len());
+    }
+
+    // `log_on_error` indicates whether to print an error log on scheduling failures.
+    // It's only enabled for `GcTask::OrphanVersions`.
+    fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
+        match self.gc_scheduler.schedule(task) {
+            Ok(_) => {}
+            Err(e) => {
+                if log_on_error {
+                    error!("compaction filter schedule {} fail", e);
+                }
+                match e {
+                    ScheduleError::Full(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                    }
+                    ScheduleError::Stopped(_) => {
+                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                    }
+                }
+            }
+        }
+    }
+
+    fn raw_handle_bottommost_delete(&mut self) {
+        // Valid MVCC records should begin with `DATA_PREFIX`.
+        debug!("raw_handle_bottommost_delete:");
+        debug_assert_eq!(self.mvcc_key_prefix[0], RAW_KEY_PREFIX);
+        let key = Key::from_encoded_slice(&self.mvcc_key_prefix);
+        self.mvcc_deletions.push(key);// key= user key
+    }
+
+    fn switch_key_metrics(&mut self) {
+        if self.versions != 0 {
+            self.versions_hist.observe(self.versions as f64);
+            self.total_versions += self.versions;
+            self.versions = 0;
+        }
+        if self.filtered != 0 {
+            self.filtered_hist.observe(self.filtered as f64);
+            self.total_filtered += self.filtered;
+            self.filtered = 0;
+        }
+    }
+
+    fn flush_metrics(&self) {
+        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
+        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as u64);
+        GC_COMPACTION_FILTER_ORPHAN_VERSIONS
+            .with_label_values(&["generated"])
+            .inc_by(self.orphan_versions as u64);
+        if let Some((versions, filtered)) = STATS.with(|stats| {
+            stats.versions.update(|x| x + self.total_versions);
+            stats.filtered.update(|x| x + self.total_filtered);
+            if stats.need_report() {
+                return Some(stats.prepare_report());
+            }
+            None
+        }) {
+            if filtered > 0 {
+                info!("Compaction filter reports"; "total" => versions, "filtered" => filtered);
+            }
+        }
+    }
+}
+
 struct CompactionFilterStats {
     versions: Cell<usize>, // Total stale versions meet by compaction filters.
     filtered: Cell<usize>, // Filtered versions by compaction filters.
@@ -692,7 +974,7 @@ pub mod test_utils {
     use engine_rocks::raw::{CompactOptions, CompactionOptions};
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
-    use engine_traits::{SyncMutable, CF_WRITE};
+    use engine_traits::{SyncMutable, CF_WRITE, CF_DEFAULT};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::config::VersionTrack;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
@@ -803,6 +1085,21 @@ pub mod test_utils {
             self.post_gc();
         }
 
+        pub fn gcRaw(&mut self, engine: &RocksEngine) {
+            let _guard = LOCK.lock().unwrap();
+            self.prepare_gc(engine);
+
+            let db = engine.as_inner();
+            let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
+            let mut compact_opts = default_compact_options();
+            if let Some(target_level) = self.target_level {
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(target_level as i32);
+            }
+            db.compact_range_cf_opt(handle, &compact_opts, None, None);
+            self.post_gc();
+        }
+
         pub fn gc_on_files(&mut self, engine: &RocksEngine, input_files: &[String]) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(engine);
@@ -844,12 +1141,14 @@ pub mod test_utils {
 pub mod tests {
     use super::test_utils::*;
     use super::*;
+    use std::thread;
+    use api_version::RawValue;
 
     use crate::config::DbConfig;
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
+    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE, CF_DEFAULT};
 
     #[test]
     fn test_is_compaction_filter_allowed() {
@@ -900,6 +1199,108 @@ pub mod tests {
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
+    }
+
+    fn makeKey(key: &[u8], ts: i32) -> Vec<u8> {
+        let key1 = Key::from_raw(key).append_ts(TimeStamp::new(ts as u64)).as_encoded().to_vec();
+        let res = keys::data_key(key1.as_slice());
+        res
+    }
+
+    #[test]
+    fn test_raw_compaction_filter() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+
+        let engine = TestEngineBuilder::new().api_version(ApiVersion::V2).build_with_cfg(&cfg).unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::new(0);
+
+        let value1 = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(TimeStamp::max().physical()),
+            is_delete: false,
+        };
+
+        raw_engine.put_cf(CF_DEFAULT, makeKey(b"r\0a", 100).as_slice(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.put_cf(CF_DEFAULT, makeKey(b"r\0a", 90).as_slice(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.put_cf(CF_DEFAULT, makeKey(b"r\0a", 70).as_slice(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+
+        gc_runner.safe_point(80).gcRaw(&raw_engine);
+        //Wait gc  end
+        thread::sleep(Duration::from_millis(1000));
+
+        // 70 < safepoint(80), this version was removed
+        let isexit70 = raw_engine.get_value_cf(CF_DEFAULT, makeKey(b"r\0a", 70).as_slice()).unwrap().is_none();
+        assert_eq!(isexit70, true);
+
+        gc_runner.safe_point(90).gcRaw(&raw_engine);
+        // Wait gc end
+        thread::sleep(Duration::from_millis(1000));
+
+        let isexit100 = raw_engine.get_value_cf(CF_DEFAULT, makeKey(b"r\0a", 100).as_slice()).unwrap().is_none();
+        let isexit90 = raw_engine.get_value_cf(CF_DEFAULT, makeKey(b"r\0a", 90).as_slice()).unwrap().is_none();
+
+        // ts(100) > safepoint(80), need to be retained.
+        assert_eq!(isexit100, false);
+
+        // ts(90) == safepoint(90), need to be retained.
+        assert_eq!(isexit90, false);
+    }
+
+    #[test]
+    fn test_raw_call_gctask() {
+        let engine = TestEngineBuilder::new().api_version(ApiVersion::V2).build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::new(0);
+
+        let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
+            gc_runner.safe_point(500).gcRaw(&raw_engine);
+
+            // Wait up to 1 second, and treat as no task if timeout.
+            if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
+                assert!(expect_tasks, "a GC task is expected");
+                match task {
+                    GcTask::RawGcKeys { keys, .. } => {
+                        assert_eq!(keys.len(), 1);
+                        let got = keys[0].as_encoded();
+                        let expect = Key::from_raw(prefix).append_ts(9.into());
+                        let (usekey, userts) = APIV2::decode_raw_key(&expect, true).unwrap();
+                        assert_eq!(got, &usekey);
+                    }
+                    _ => unreachable!(),
+                }
+                return;
+            }
+            assert!(!expect_tasks, "no GC task is expected");
+        };
+
+        let value1 = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: false,
+        };
+
+        let value_is_delete = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: true,
+        };
+
+        raw_engine.put_cf(CF_DEFAULT, makeKey(b"r\0a", 9).as_slice(), &APIV2::encode_raw_value_owned(value_is_delete.clone()))
+            .unwrap();
+        raw_engine.put_cf(CF_DEFAULT, makeKey(b"r\0a", 5).as_slice(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+        raw_engine.put_cf(CF_DEFAULT, makeKey(b"r\0a", 1).as_slice(), &APIV2::encode_raw_value_owned(value1.clone()))
+            .unwrap();
+
+        gc_and_check(true, b"r\0a");
     }
 
     // Test dirty versions before a deletion mark can be handled correctly.
