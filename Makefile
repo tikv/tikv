@@ -55,7 +55,7 @@ ENABLE_FEATURES += mem-profiling
 endif
 endif
 
-# Disable portable on MacOS to sidestep the compiler bug in clang 4.9
+# Disable portable on macOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
