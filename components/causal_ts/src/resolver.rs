@@ -8,6 +8,7 @@ use txn_types::TimeStamp;
 
 pub struct Resolver {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
+    region_id: u64,
     lock_ts_heap: BinaryHeap<Reverse<TimeStamp>>,
     resolved_ts: TimeStamp,
 }
@@ -15,6 +16,7 @@ pub struct Resolver {
 impl Resolver {
     pub fn new(region_id: u64) -> Resolver {
         Resolver {
+            region_id,
             lock_ts_heap: BinaryHeap::new(),
             resolved_ts: TimeStamp::zero(),
         }
@@ -25,45 +27,70 @@ impl Resolver {
     }
 
     pub fn track_ts(&mut self, start_ts: TimeStamp) {
+        debug!("track ts {}, region {}", start_ts, self.region_id);
         self.lock_ts_heap.push(Reverse(start_ts));
     }
 
     pub fn untrack_ts_before(&mut self, ts: TimeStamp) {
+        let mut last_min_ts = None;
+        debug!("untrack ts before {}, region {}", ts, self.region_id);
         loop {
-            let min_lock_ts = self.lock_ts_heap.peek();
-            if min_lock_ts.is_none() {
+            let min_ts = self.lock_ts_heap.peek();
+            if min_ts.is_none() {
                 break;
             }
-            let min_lock_ts = min_lock_ts.unwrap();
-            if min_lock_ts.0 > ts {
+            let min_ts = min_ts.unwrap();
+            if min_ts.0 > ts {
                 break;
             }
-            self.lock_ts_heap.pop();
+            last_min_ts = self.lock_ts_heap.pop();
+        }
+        if last_min_ts.is_some() {
+            self.resolved_ts = last_min_ts.unwrap().0;
         }
     }
 
     /// Try to advance resolved ts.
-    ///
-    /// `min_ts` advances the resolver even if there is no write.
-    /// Return None means the resolver is not initialized.
     pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
-        let min_lock_ts = self.lock_ts_heap.peek();
+        let min_tracked_ts = self.lock_ts_heap.peek();
         let mut min_start_ts = min_ts;
-        if let Some(min_lock_ts) = min_lock_ts {
-            min_start_ts = min_lock_ts.0;
+        if let Some(min_tracked_ts) = min_tracked_ts {
+            min_start_ts = min_tracked_ts.0;
         }
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
 
-        assert!(
-            self.resolved_ts > new_resolved_ts,
-            "resolved ts should be incremented, old resolved ts {}, new resolved ts {}",
-            self.resolved_ts,
-            new_resolved_ts
-        );
-
-        self.resolved_ts = new_resolved_ts;
-        new_resolved_ts
+        self.resolved_ts = cmp::max(new_resolved_ts, self.resolved_ts);
+        self.resolved_ts
     }
 }
 
-// TODO: unit test
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolver() {
+        let test_cases = vec![
+            (vec![1, 3, 4], 4, 5, 5),
+            (vec![6, 8, 10], 8, 11, 10),
+            (vec![11, 12, 13], 13, 12, 13),
+        ];
+
+        for (i, (tracked_ts, untracked_ts, min_ts, expected)) in test_cases.into_iter().enumerate()
+        {
+            let mut resolver = Resolver::new(1);
+            for ts in tracked_ts {
+                resolver.track_ts(ts.into());
+            }
+            resolver.untrack_ts_before(untracked_ts.into());
+            let resolved_ts = resolver.resolve(min_ts.into());
+            assert!(
+                resolved_ts == expected.into(),
+                "case {} failed to resolve ts, resolved_ts {}, expected {}",
+                i,
+                resolved_ts,
+                expected
+            );
+        }
+    }
+}

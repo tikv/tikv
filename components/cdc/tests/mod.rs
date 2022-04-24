@@ -185,8 +185,6 @@ impl TestSuiteBuilder {
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
-
-            let cfg = CdcConfig::default();
             let mut causal_ob = None;
             if cluster.cfg.tikv.storage.api_version == 2 {
                 causal_ob = causal_obs.get(id).unwrap().clone();

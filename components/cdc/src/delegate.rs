@@ -204,6 +204,7 @@ impl Downstream {
 struct Pending {
     pub downstreams: Vec<Downstream>,
     pub locks: Vec<PendingLock>,
+    pub rawkv_resolved_ts: TimeStamp,
     pub pending_bytes: usize,
 }
 
@@ -238,6 +239,8 @@ pub struct Delegate {
     rawkv_pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
+
+    id_map: HashMap<DownstreamID, ChangeDataRequestKvApi>,
 }
 
 impl Delegate {
@@ -255,6 +258,7 @@ impl Delegate {
             rawkv_pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
+            id_map: HashMap::default(),
         }
     }
 
@@ -278,26 +282,30 @@ impl Delegate {
     }
 
     pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
-        let result = self
-            .txnkv_downstreams()
-            .iter()
-            .find(|d| d.id == downstream_id);
-        if result.is_some() {
-            return result;
+        let downstreams;
+        match self.id_map.get(&downstream_id) {
+            Some(kv_api) => {
+                if *kv_api == ChangeDataRequestKvApi::RawKv {
+                    downstreams = self.rawkv_downstreams();
+                } else {
+                    downstreams = self.txnkv_downstreams();
+                }
+            }
+            None => {
+                return None;
+            }
         }
-        self.rawkv_downstreams()
-            .iter()
-            .find(|d| d.id == downstream_id)
-    }
-
-    pub fn rawkv_downstreams(&self) -> &Vec<Downstream> {
-        self.rawkv_pending
-            .as_ref()
-            .map(|p| &p.downstreams)
-            .unwrap_or(&self.rawkv_resolved_downstreams)
+        downstreams.iter().find(|d| d.id == downstream_id)
     }
 
     pub fn txnkv_downstreams(&self) -> &Vec<Downstream> {
+        self.txnkv_pending
+            .as_ref()
+            .map(|p| &p.downstreams)
+            .unwrap_or(&self.txnkv_resolved_downstreams)
+    }
+
+    pub fn rawkv_downstreams(&self) -> &Vec<Downstream> {
         self.rawkv_pending
             .as_ref()
             .map(|p| &p.downstreams)
@@ -312,10 +320,10 @@ impl Delegate {
     }
 
     pub fn rawkv_downstreams_mut(&mut self) -> &mut Vec<Downstream> {
-        self.txnkv_pending
+        self.rawkv_pending
             .as_mut()
             .map(|p| &mut p.downstreams)
-            .unwrap_or(&mut self.txnkv_resolved_downstreams)
+            .unwrap_or(&mut self.rawkv_resolved_downstreams)
     }
 
     /// Let downstream unsubscribe the delegate.
@@ -392,7 +400,7 @@ impl Delegate {
             send(downstream)?;
         }
 
-        let txnkv_downstreams = self.rawkv_downstreams();
+        let txnkv_downstreams = self.txnkv_downstreams();
         for downstream in txnkv_downstreams {
             send(downstream)?;
         }
@@ -452,6 +460,12 @@ impl Delegate {
 
         // Mark the delegate as initialized.
         let mut pending = self.rawkv_pending.take().unwrap();
+        let resolved_ts = resolver.write().unwrap().resolve(pending.rawkv_resolved_ts);
+        assert!(
+            resolved_ts == pending.rawkv_resolved_ts,
+            "rawkv resolver has initialized"
+        );
+
         self.region = Some(region);
         info!("cdc rawkv region is ready"; "region_id" => self.region_id);
         self.rawkv_resolver = Some(resolver);
@@ -700,11 +714,18 @@ impl Delegate {
 
         if !raw_rows.is_empty() {
             self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
-            if let Some(resolver) = &self.rawkv_resolver {
-                resolver
-                    .write()
-                    .unwrap()
-                    .untrack_ts_before(rawkv_max_ts.into());
+            match self.rawkv_resolver {
+                Some(ref mut resolver) => {
+                    resolver
+                        .write()
+                        .unwrap()
+                        .untrack_ts_before(rawkv_max_ts.into());
+                }
+                None => {
+                    assert!(self.rawkv_pending.is_some(), "region resolver not ready");
+                    let pending = self.rawkv_pending.as_mut().unwrap();
+                    pending.rawkv_resolved_ts = rawkv_max_ts.into();
+                }
             }
         }
 
@@ -938,6 +959,7 @@ impl Delegate {
     }
 
     fn add_downstream(&mut self, downstream: Downstream) {
+        self.id_map.insert(downstream.id, downstream.kv_api);
         if downstream.kv_api == ChangeDataRequestKvApi::RawKv {
             self.rawkv_downstreams_mut().push(downstream);
         } else {
@@ -947,20 +969,22 @@ impl Delegate {
     }
 
     fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {
-        let downstreams = self.txnkv_downstreams_mut();
-        if let Some(index) = downstreams.iter().position(|x| x.id == id) {
-            let downstream = downstreams.swap_remove(index);
-            if downstreams.is_empty() && self.has_rawkv_downstream() {
-                // Stop observing when the last downstream is removed. Otherwise the observer
-                // will keep pushing events to the delegate.
-                self.stop_observing();
+        let downstreams;
+        match self.id_map.remove(&id) {
+            Some(kv_api) => {
+                if kv_api == ChangeDataRequestKvApi::RawKv {
+                    downstreams = self.rawkv_downstreams_mut();
+                } else {
+                    downstreams = self.txnkv_downstreams_mut();
+                }
             }
-            return Some(downstream);
+            None => {
+                return None;
+            }
         }
-        let downstreams = self.rawkv_downstreams_mut();
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
-            if downstreams.is_empty() && self.has_txnkv_downstream() {
+            if !self.has_txnkv_downstream() && !self.has_rawkv_downstream() {
                 // Stop observing when the last downstream is removed. Otherwise the observer
                 // will keep pushing events to the delegate.
                 self.stop_observing();
@@ -1261,12 +1285,12 @@ mod tests {
 
     #[test]
     fn test_delegate_subscribe_unsubscribe() {
-        let new_downstream = |id: u64, region_version: u64| {
+        let new_downstream = |id: u64, region_version: u64, kv_api: ChangeDataRequestKvApi| {
             let peer = format!("{}", id);
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiDb)
+            Downstream::new(peer, epoch, id, ConnID::new(), kv_api)
         };
 
         // Create a new delegate.
@@ -1276,22 +1300,24 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe once.
-        let downstream1 = new_downstream(1, 1);
+        let downstream1 = new_downstream(1, 1, ChangeDataRequestKvApi::TiDb);
         let downstream1_id = downstream1.id;
         delegate.subscribe(downstream1).unwrap();
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
-        let downstream2 = new_downstream(2, 1);
+        let downstream2 = new_downstream(2, 1, ChangeDataRequestKvApi::TiDb);
         let downstream2_id = downstream2.id;
         delegate.subscribe(downstream2).unwrap();
         assert!(!delegate.unsubscribe(downstream2_id, None));
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
-        // `on_region_ready` when the delegate isn't resolved.
-        delegate.subscribe(new_downstream(1, 2)).unwrap();
+        // `on_region_ready_for_txnkv` when the delegate isn't resolved.
+        delegate
+            .subscribe(new_downstream(1, 2, ChangeDataRequestKvApi::TiDb))
+            .unwrap();
         let mut region = Region::default();
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
@@ -1305,13 +1331,41 @@ mod tests {
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
+        // `on_region_ready_rawkv` when the delegate isn't resolved.
+        delegate.region = None;
+        let downstream3 = new_downstream(3, 1, ChangeDataRequestKvApi::RawKv);
+        let downstream3_id = downstream3.id;
+        delegate.subscribe(downstream3).unwrap();
+
+        delegate
+            .subscribe(new_downstream(4, 2, ChangeDataRequestKvApi::RawKv))
+            .unwrap();
+        let mut region = Region::default();
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(1);
+        {
+            let failures = delegate
+                .on_region_ready_for_rawkv(Arc::new(RwLock::new(RawKvResolver::new(1))), region);
+            assert_eq!(failures.len(), 1);
+            let id = failures[0].0.id;
+            delegate.unsubscribe(id, None);
+            assert_eq!(delegate.rawkv_downstreams().len(), 1);
+        }
+
         // Subscribe with an invalid epoch.
-        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+        assert!(
+            delegate
+                .subscribe(new_downstream(1, 2, ChangeDataRequestKvApi::TiDb))
+                .is_err()
+        );
         assert_eq!(delegate.txnkv_downstreams().len(), 1);
+        assert_eq!(delegate.rawkv_downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
-        assert!(delegate.unsubscribe(downstream1_id, None));
+        assert!(!delegate.unsubscribe(downstream1_id, None));
+        assert!(delegate.unsubscribe(downstream3_id, None));
         assert!(delegate.txnkv_downstreams().is_empty());
+        assert!(delegate.rawkv_downstreams().is_empty());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(!delegate.handle.is_observing());
     }

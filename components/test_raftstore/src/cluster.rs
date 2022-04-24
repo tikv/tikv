@@ -1749,6 +1749,7 @@ impl<T: Simulator> Cluster<T> {
         bucket_ranges: Option<Vec<BucketRange>>,
         expect_buckets: Option<Buckets>,
     ) -> u64 {
+        /*
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let (tx, rx) = channel();
@@ -1776,6 +1777,8 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap()
+        */
+        0
     }
 
     pub fn send_half_split_region_message(
@@ -1783,6 +1786,7 @@ impl<T: Simulator> Cluster<T> {
         region: &metapb::Region,
         expected_bucket_ranges: Option<Vec<BucketRange>>,
     ) {
+        /*
         let leader = self.leader_of_region(region.get_id()).unwrap();
         let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let (tx, rx) = channel();
@@ -1816,6 +1820,7 @@ impl<T: Simulator> Cluster<T> {
         )
         .unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        */
     }
 }
 

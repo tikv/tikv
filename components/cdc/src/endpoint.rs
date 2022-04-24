@@ -583,13 +583,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                     conn.take_downstreams().into_iter().for_each(
                         |(region_id, (downstream_id, _))| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                                delegate.unsubscribe(downstream_id, None);
+                                let is_last = delegate.unsubscribe(downstream_id, None);
                                 if !delegate.has_rawkv_downstream() && delegate.rawkv_resolver.is_some() {
                                     if let Some(causal_observer) = &self.causal_observer {
                                         causal_observer.unsubscribe_region(region_id);
                                     }
                                 }
-                                if delegate.txnkv_downstreams().is_empty() && delegate.rawkv_downstreams().is_empty() {
+                                if is_last {
                                     let delegate = self.capture_regions.remove(&region_id).unwrap();
                                     // Do not continue to observe the events of the region.
                                     let id = delegate.handle.id;
@@ -2147,6 +2147,7 @@ mod tests {
             vec![(3, ChangeDataRequestKvApi::RawKv), (4, ChangeDataRequestKvApi::RawKv)],
             vec![(5, ChangeDataRequestKvApi::TiDb)],
             vec![(6, ChangeDataRequestKvApi::RawKv)],
+            vec![(7, ChangeDataRequestKvApi::TiDb), (8, ChangeDataRequestKvApi::RawKv)],
         ];
 
         for cdc_req in cdc_reqs {
