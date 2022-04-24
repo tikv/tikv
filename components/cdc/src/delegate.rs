@@ -274,11 +274,11 @@ impl Delegate {
     }
 
     pub fn has_txnkv_downstream(&self) -> bool {
-        self.txnkv_downstreams().len() != 0
+        !self.txnkv_downstreams().is_empty()
     }
 
     pub fn has_rawkv_downstream(&self) -> bool {
-        self.rawkv_downstreams().len() != 0
+        !self.rawkv_downstreams().is_empty()
     }
 
     pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {

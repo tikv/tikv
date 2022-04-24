@@ -45,8 +45,8 @@ impl Resolver {
             }
             last_min_ts = self.lock_ts_heap.pop();
         }
-        if last_min_ts.is_some() {
-            self.resolved_ts = last_min_ts.unwrap().0;
+        if let Some(last_min_ts) = last_min_ts {
+            self.resolved_ts = last_min_ts.0;
         }
     }
 

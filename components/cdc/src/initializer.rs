@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use causal_ts::Resolver as RawKvResolver;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
@@ -18,7 +19,6 @@ use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::ChangeObserver;
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver as TxnKvResolver;
-use causal_ts::Resolver as RawKvResolver;
 use tikv::storage::kv::{Iterator, PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot};
@@ -36,12 +36,12 @@ use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 use crate::channel::CdcEvent;
 use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
 use crate::endpoint::Deregister;
+use crate::endpoint::Resolver;
 use crate::metrics::*;
 use crate::old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors};
 use crate::service::ConnID;
 use crate::Task;
 use crate::{Error, Result};
-use crate::endpoint::Resolver;
 
 struct ScanStat {
     // Fetched bytes to the scanner.
@@ -433,8 +433,8 @@ impl<E: KvEngine> Initializer<E> {
         let observe_id = self.observe_id;
         let mut locks_count = 0;
         let mut rts = TimeStamp::zero();
-        if let Resolver::TxnKvResolver(txnkv_resolver) = &mut resolver { 
-            rts = txnkv_resolver.resolve(TimeStamp::zero()); 
+        if let Resolver::TxnKvResolver(txnkv_resolver) = &mut resolver {
+            rts = txnkv_resolver.resolve(TimeStamp::zero());
             locks_count = txnkv_resolver.locks().len();
         }
         info!(

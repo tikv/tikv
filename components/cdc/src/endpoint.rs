@@ -7,6 +7,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Duration;
 
+use causal_ts::{CausalObserver, CausalTsProvider, Resolver as RawKvResolver};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
@@ -40,7 +41,6 @@ use tikv_util::{debug, error, impl_display_as_debug, info, warn};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::{Mutex, Semaphore};
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
-use causal_ts::{CausalObserver, CausalTsProvider, Resolver as RawKvResolver};
 
 use crate::channel::{CdcEvent, MemoryQuota, SendError};
 use crate::delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState};
@@ -196,7 +196,11 @@ impl fmt::Debug for Task {
                 .field("type", &"multi_batch")
                 .field("multi_batch", &multi.len())
                 .finish(),
-            Task::MinTS { ref txnkv_min_ts, ref rawkv_min_ts, .. } => de
+            Task::MinTS {
+                ref txnkv_min_ts,
+                ref rawkv_min_ts,
+                ..
+            } => de
                 .field("type", &"txnkv_min_ts")
                 .field("txnkv_min_ts", txnkv_min_ts)
                 .field("rawkv_min_ts", rawkv_min_ts)
@@ -356,7 +360,9 @@ pub struct Endpoint<T, E, Ts: CausalTsProvider> {
     warn_resolved_ts_repeat_count: usize,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> Endpoint<T, E, Ts> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider>
+    Endpoint<T, E, Ts>
+{
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
@@ -584,7 +590,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                         |(region_id, (downstream_id, _))| {
                             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                                 let is_last = delegate.unsubscribe(downstream_id, None);
-                                if !delegate.has_rawkv_downstream() && delegate.rawkv_resolver.is_some() {
+                                if !delegate.has_rawkv_downstream()
+                                    && delegate.rawkv_resolver.is_some()
+                                {
                                     if let Some(causal_observer) = &self.causal_observer {
                                         causal_observer.unsubscribe_region(region_id);
                                     }
@@ -715,8 +723,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
         let sched = self.scheduler.clone();
 
         let mut build_resolver = false;
-        if (kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_txnkv_downstream()) ||
-            (kv_api == ChangeDataRequestKvApi::RawKv && !delegate.has_rawkv_downstream()) {
+        if (kv_api == ChangeDataRequestKvApi::TiDb && !delegate.has_txnkv_downstream())
+            || (kv_api == ChangeDataRequestKvApi::RawKv && !delegate.has_rawkv_downstream())
+        {
             build_resolver = true;
         }
 
@@ -828,7 +837,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 match resolver {
                     Resolver::RawKvResolver(rawkv_resolver) => {
                         let rawkv_resolver = Arc::new(RwLock::new(rawkv_resolver));
-                        downstream = delegate.on_region_ready_for_rawkv(rawkv_resolver.clone(), region);
+                        downstream =
+                            delegate.on_region_ready_for_rawkv(rawkv_resolver.clone(), region);
                         if let Some(causal_observer) = &self.causal_observer {
                             causal_observer.subscribe_region(region_id, rawkv_resolver);
                         }
@@ -862,7 +872,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
         }
     }
 
-
     fn on_min_ts(&mut self, regions: Vec<u64>, txnkv_min_ts: TimeStamp, rawkv_min_ts: TimeStamp) {
         let mut txnkv_regions: Vec<u64> = Vec::new();
         let mut rawkv_regions: Vec<u64> = Vec::new();
@@ -878,27 +887,31 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
             }
         }
 
-        if txnkv_regions.len() != 0 {
-            ( self.txnkv_min_resolved_ts,
-              self.txnkv_min_ts_region_id,
-              self.txnkv_resolved_region_count,
-              self.txnkv_unresolved_region_count
+        if !txnkv_regions.is_empty() {
+            (
+                self.txnkv_min_resolved_ts,
+                self.txnkv_min_ts_region_id,
+                self.txnkv_resolved_region_count,
+                self.txnkv_unresolved_region_count,
             ) = self.min_ts(txnkv_regions, true, txnkv_min_ts);
         }
 
-        if rawkv_regions.len() != 0 {
-            ( self.rawkv_min_resolved_ts,
-              self.rawkv_min_ts_region_id,
-              self.rawkv_resolved_region_count,
-              self.rawkv_unresolved_region_count
+        if !rawkv_regions.is_empty(){
+            (
+                self.rawkv_min_resolved_ts,
+                self.rawkv_min_ts_region_id,
+                self.rawkv_resolved_region_count,
+                self.rawkv_unresolved_region_count,
             ) = self.min_ts(rawkv_regions, false, rawkv_min_ts);
         }
     }
 
-    fn min_ts(&mut self,
+    fn min_ts(
+        &mut self,
         regions: Vec<u64>,
         kv_type_flag: bool,
-        min_ts: TimeStamp) -> (TimeStamp, u64, usize, usize) {
+        min_ts: TimeStamp,
+    ) -> (TimeStamp, u64, usize, usize) {
         // Reset resolved_regions to empty.
         let mut resolved_regions = &mut self.rawkv_resolved_region_heap;
         if kv_type_flag {
@@ -917,31 +930,29 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
 
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                let old_resolved_ts;
-                if kv_type_flag { 
-                    old_resolved_ts = delegate
-                    .txnkv_resolver
-                    .as_ref()
-                    .map_or(TimeStamp::zero(), |r| r.resolved_ts());
+                let old_resolved_ts = if kv_type_flag {
+                    delegate
+                        .txnkv_resolver
+                        .as_ref()
+                        .map_or(TimeStamp::zero(), |r| r.resolved_ts())
                 } else {
-                    old_resolved_ts = delegate
-                    .rawkv_resolver
-                    .as_ref()
-                    .unwrap()
-                    .read()
-                    .map_or(TimeStamp::zero(), |r| r.resolved_ts());
-                }
+                    delegate
+                        .rawkv_resolver
+                        .as_ref()
+                        .unwrap()
+                        .read()
+                        .map_or(TimeStamp::zero(), |r| r.resolved_ts())
+                };
 
                 if old_resolved_ts > min_ts {
                     advance_failed_stale += 1;
                 }
 
-                let resolved_ts;
-                if kv_type_flag {
-                    resolved_ts = delegate.on_txnkv_min_ts(min_ts);
+                let resolved_ts = if kv_type_flag {
+                    delegate.on_txnkv_min_ts(min_ts)
                 } else {
-                    resolved_ts = delegate.on_rawkv_min_ts(min_ts);
-                }
+                    delegate.on_rawkv_min_ts(min_ts)
+                };
 
                 if let Some(resolved_ts) = resolved_ts {
                     if resolved_ts < min_resolved_ts {
@@ -960,9 +971,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
             }
         }
 
-        let lag_millis = min_ts
-            .physical()
-            .saturating_sub(min_resolved_ts.physical());
+        let lag_millis = min_ts.physical().saturating_sub(min_resolved_ts.physical());
 
         if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
             self.warn_resolved_ts_repeat_count += 1;
@@ -993,7 +1002,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
         self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
         self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
 
-        (min_resolved_ts, min_ts_region_id, resolved_region_count, unresolved_region_count)
+        (
+            min_resolved_ts,
+            min_ts_region_id,
+            resolved_region_count,
+            unresolved_region_count,
+        )
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1163,7 +1177,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
                 };
 
             if !regions.is_empty() {
-                match scheduler.schedule(Task::MinTS { regions, txnkv_min_ts: min_ts, rawkv_min_ts: min_ts_pd }) {
+                match scheduler.schedule(Task::MinTS {
+                    regions,
+                    txnkv_min_ts: min_ts,
+                    rawkv_min_ts: min_ts_pd,
+                }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                     // advance normally.
@@ -1234,14 +1252,16 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> Runnable for Endpoint<T, E, Ts> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> Runnable
+    for Endpoint<T, E, Ts>
+{
     type Task = Task;
 
     fn run(&mut self, task: Task) {
         debug!("cdc run task"; "task" => %task);
 
         match task {
-            Task::MinTS { 
+            Task::MinTS {
                 regions,
                 txnkv_min_ts,
                 rawkv_min_ts,
@@ -1307,7 +1327,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> RunnableWithTimer for Endpoint<T, E, Ts> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvider> RunnableWithTimer
+    for Endpoint<T, E, Ts>
+{
     fn on_timeout(&mut self) {
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
 
@@ -1377,6 +1399,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 mod tests {
     use std::ops::{Deref, DerefMut};
 
+    use causal_ts::tests::TestProvider;
     use engine_rocks::RocksEngine;
     use kvproto::cdcpb::{ChangeDataRequestKvApi, Header};
     use kvproto::errorpb::Error as ErrorHeader;
@@ -1389,7 +1412,6 @@ mod tests {
     use tikv::storage::TestEngineBuilder;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
-    use causal_ts::tests::TestProvider;
 
     use super::*;
     use crate::{channel, recv_timeout};
@@ -2143,11 +2165,20 @@ mod tests {
         let mut conn_rxs = vec![];
         let quota = channel::MemoryQuota::new(usize::MAX);
         let cdc_reqs = vec![
-            vec![(1, ChangeDataRequestKvApi::TiDb), (2, ChangeDataRequestKvApi::TiDb)],
-            vec![(3, ChangeDataRequestKvApi::RawKv), (4, ChangeDataRequestKvApi::RawKv)],
+            vec![
+                (1, ChangeDataRequestKvApi::TiDb),
+                (2, ChangeDataRequestKvApi::TiDb),
+            ],
+            vec![
+                (3, ChangeDataRequestKvApi::RawKv),
+                (4, ChangeDataRequestKvApi::RawKv),
+            ],
             vec![(5, ChangeDataRequestKvApi::TiDb)],
             vec![(6, ChangeDataRequestKvApi::RawKv)],
-            vec![(7, ChangeDataRequestKvApi::TiDb), (8, ChangeDataRequestKvApi::RawKv)],
+            vec![
+                (7, ChangeDataRequestKvApi::TiDb),
+                (8, ChangeDataRequestKvApi::RawKv),
+            ],
         ];
 
         for cdc_req in cdc_reqs {
@@ -2164,7 +2195,8 @@ mod tests {
                 let mut req = ChangeDataRequest::default();
                 req.set_region_id(region_id);
                 let region_epoch = req.get_region_epoch().clone();
-                let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, kv_api);
+                let downstream =
+                    Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, kv_api);
                 downstream.get_state().store(DownstreamState::Normal);
                 suite.run(Task::Register {
                     request: req.clone(),
@@ -2172,12 +2204,11 @@ mod tests {
                     conn_id,
                     version: FeatureGate::batch_resolved_ts(),
                 });
-                let resolver;
-                if kv_api == ChangeDataRequestKvApi::TiDb {
-                    resolver = Resolver::TxnKvResolver(TxnKvResolver::new(region_id));
+                let resolver = if kv_api == ChangeDataRequestKvApi::RawKv {
+                    Resolver::RawKvResolver(RawKvResolver::new(region_id))
                 } else {
-                    resolver = Resolver::RawKvResolver(RawKvResolver::new(region_id));
-                }
+                    Resolver::TxnKvResolver(TxnKvResolver::new(region_id))
+                };
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
