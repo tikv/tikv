@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use api_version::{APIVersion, APIV2};
+use api_version::{APIVersion, APIV2, RAW_KEY_PREFIX};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
@@ -242,8 +242,8 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
-            iter_opt.set_lower_bound(b"r", 1);
-            iter_opt.set_upper_bound(b"s", 1);
+            iter_opt.set_lower_bound(&[RAW_KEY_PREFIX], 1);
+            iter_opt.set_upper_bound(&[RAW_KEY_PREFIX + 1], 1);
             let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
 
             iter.seek_to_first().unwrap();

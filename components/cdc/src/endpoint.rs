@@ -1437,7 +1437,7 @@ mod tests {
             request: req,
             downstream,
             conn_id,
-            version: version.clone(),
+            version,
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
