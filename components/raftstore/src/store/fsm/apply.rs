@@ -2297,6 +2297,12 @@ where
             }
         }
 
+        fail_point!(
+            "on_handle_apply_split_2_after_mem_check",
+            self.id() == 2,
+            |_| unimplemented!()
+        );
+
         // region_id -> peer_id
         let mut already_exist_regions = Vec::new();
         for (region_id, new_split_peer) in new_split_regions.iter_mut() {
@@ -2308,12 +2314,12 @@ where
                 Ok(None) => (),
                 Ok(Some(state)) => {
                     if replace_regions.get(region_id).is_some() {
-                        // This peer must be the first one on local store. So if this peer is created on the other side,
-                        // it means no `RegionLocalState` in kv engine.
+                        // It's marked replaced, then further destroy will skip cleanup, so there
+                        // should be no region local state.
                         panic!(
                             "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
                             self.tag, region_id, new_split_peer.peer_id, state
-                        );
+                        )
                     }
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
