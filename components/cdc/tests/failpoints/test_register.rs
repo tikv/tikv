@@ -11,7 +11,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raft::StateRole;
-use raftstore::coprocessor::{ObserverContext, RoleChange, RoleObserver};
+use raftstore::coprocessor::{ObserverContext, RoleChange};
 use test_raftstore::sleep_ms;
 
 #[test]
@@ -88,7 +88,7 @@ fn test_region_ready_after_deregister() {
     let leader = suite.cluster.leader_of_region(region.get_id()).unwrap();
     let mut context = ObserverContext::new(&region);
     suite
-        .obs
+        .cdc_obs
         .get(&leader.get_store_id())
         .unwrap()
         .on_role_change(&mut context, &RoleChange::new(StateRole::Follower));
