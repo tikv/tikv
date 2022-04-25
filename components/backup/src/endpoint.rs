@@ -1506,12 +1506,20 @@ pub mod tests {
         }
     }
 
-    fn generate_test_raw_key(idx: i32) -> String {
-        format!("{}{:0>10}", RAW_KEY_PREFIX as char, idx)
+    fn generate_test_raw_key(idx: u64, api_ver: ApiVersion) -> String {
+        let mut key = if idx == 100 {
+            String::from("")
+        } else {
+            format!("k{:0>10}", idx)
+        };
+        if api_ver == ApiVersion::V2 {
+            key.insert(0, RAW_KEY_PREFIX as char);
+        }
+        key
     }
 
-    fn generate_test_raw_value(idx: i32) -> String {
-        format!("v_{}", generate_test_raw_key(idx))
+    fn generate_test_raw_value(idx: u64, api_ver: ApiVersion) -> String {
+        format!("v_{}", generate_test_raw_key(idx, api_ver))
     }
 
     fn generate_engine_test_key(
@@ -1572,8 +1580,8 @@ pub mod tests {
         let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true);
         let engine = endpoint.engine.clone();
 
-        let start_key_idx = 100;
-        let end_key_idx = 111;
+        let start_key_idx: u64 = 100;
+        let end_key_idx: u64 = 110;
         endpoint.region_info.set_regions(vec![(
             vec![], //generate_test_raw_key(start_key_idx).into_bytes(),
             vec![], //generate_test_raw_key(end_key_idx).into_bytes(),
@@ -1584,11 +1592,11 @@ pub mod tests {
         let digest = crc64fast::Digest::new();
         let mut checksum: u64 = 0;
         while i < end_key_idx {
-            let key_str = generate_test_raw_key(i);
-            let value_str = generate_test_raw_value(i);
+            let key_str = generate_test_raw_key(i, cur_api_ver);
+            let value_str = generate_test_raw_value(i, cur_api_ver);
             let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
-            let dst_key = convert_test_backup_raw_key(key_str, i as u64, cur_api_ver, dst_api_ver);
+            let dst_key = convert_test_backup_raw_key(key_str, i, cur_api_ver, dst_api_ver);
             let dst_value = convert_test_backup_raw_value(value_str, cur_api_ver, dst_api_ver);
             checksum =
                 checksum_crc64_xor(checksum, digest.clone(), dst_key.as_encoded(), &dst_value);
@@ -1606,22 +1614,22 @@ pub mod tests {
         stats.reset();
         let mut req = BackupRequest::default();
         let backup_start = if cur_api_ver == ApiVersion::V2 {
-            vec![b'r']
+            vec![RAW_KEY_PREFIX]
         } else {
             vec![]
         };
         let backup_end = if cur_api_ver == ApiVersion::V2 {
-            vec![b's']
+            vec![RAW_KEY_PREFIX + 1]
         } else {
             vec![]
         };
         let file_start = if dst_api_ver == ApiVersion::V2 {
-            vec![b'r']
+            vec![RAW_KEY_PREFIX]
         } else {
             vec![]
         };
         let file_end = if dst_api_ver == ApiVersion::V2 {
-            vec![b's']
+            vec![RAW_KEY_PREFIX + 1]
         } else {
             vec![]
         };
@@ -1651,21 +1659,29 @@ pub mod tests {
         let files = resp.get_files();
         info!("{:?}", files);
         assert_eq!(files.len(), file_len /* default cf*/, "{:?}", resp);
-        assert_eq!(files[0].total_kvs, (end_key_idx - start_key_idx) as u64);
+        assert_eq!(files[0].total_kvs, end_key_idx - start_key_idx);
         assert_eq!(files[0].crc64xor, checksum);
         assert_eq!(files[0].get_start_key(), file_start);
         assert_eq!(files[0].get_end_key(), file_end);
-        let kv_backup_size = {
-            let raw_key_str = generate_test_raw_key(0);
-            let raw_value_str = generate_test_raw_value(0);
+        let first_kv_backup_size = {
+            let raw_key_str = generate_test_raw_key(start_key_idx, cur_api_ver);
+            let raw_value_str = generate_test_raw_value(start_key_idx, cur_api_ver);
             let backup_key = convert_test_backup_raw_key(raw_key_str, 1, cur_api_ver, dst_api_ver);
             let backup_value =
                 convert_test_backup_raw_value(raw_value_str, cur_api_ver, dst_api_ver);
             backup_key.len() + backup_value.len()
-        };
+        } as u64;
+        let kv_backup_size = {
+            let raw_key_str = generate_test_raw_key(1, cur_api_ver);
+            let raw_value_str = generate_test_raw_value(1, cur_api_ver);
+            let backup_key = convert_test_backup_raw_key(raw_key_str, 1, cur_api_ver, dst_api_ver);
+            let backup_value =
+                convert_test_backup_raw_value(raw_value_str, cur_api_ver, dst_api_ver);
+            backup_key.len() + backup_value.len()
+        } as u64;
         assert_eq!(
             files[0].total_bytes,
-            (end_key_idx - start_key_idx) as u64 * kv_backup_size as u64
+            (end_key_idx - start_key_idx - 1) * kv_backup_size + first_kv_backup_size
         );
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
