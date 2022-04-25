@@ -303,6 +303,7 @@ mod tests {
     use tempfile::TempDir;
     use test_sst_importer::*;
     use uuid::Uuid;
+    use keys::DATA_PREFIX;
 
     use super::*;
     use crate::{Config, SSTImporter};
@@ -412,28 +413,28 @@ mod tests {
 
         match api_version {
             ApiVersion::V1ttl => {
-                let write_size = b"z".len()
+                let write_size = DATA_PREFIX.len()
                     + APIV1TTL::encode_raw_key(b"k1", None).len()
                     + APIV1TTL::encode_raw_value_owned(RawValue {
-                        user_value: b"short_value".to_vec(),
-                        expire_ts: Some(10),
-                        is_delete: false,
-                    })
+                    user_value: b"short_value".to_vec(),
+                    expire_ts: Some(10),
+                    is_delete: false,
+                })
                     .len()
-                    + b"z".len()
+                    + DATA_PREFIX.len()
                     + APIV1TTL::encode_raw_key(b"k2", None).len();
                 assert_eq!(write_size, w.default_bytes as usize);
             }
             ApiVersion::V2 => {
-                let write_size = b"z".len()
+                let write_size = DATA_PREFIX.len()
                     + APIV2::encode_raw_key(b"rk1", Some(TimeStamp::new(1))).len()
                     + APIV2::encode_raw_value_owned(RawValue {
-                        user_value: b"short_value".to_vec(),
-                        expire_ts: Some(10),
-                        is_delete: false,
-                    })
+                    user_value: b"short_value".to_vec(),
+                    expire_ts: Some(10),
+                    is_delete: false,
+                })
                     .len()
-                    + b"z".len()
+                    + DATA_PREFIX.len()
                     + APIV2::encode_raw_key(b"rk2", Some(TimeStamp::new(1))).len();
                 assert_eq!(write_size, w.default_bytes as usize);
             }
