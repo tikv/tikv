@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -15,13 +15,14 @@ use kvproto::metapb::{self, Peer};
 use kvproto::pdpb::QueryKind;
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use tikv_util::config::Tracker;
-use tikv_util::{debug, info};
+use tikv_util::{debug, info, warn};
 
 use crate::store::metrics::*;
 use crate::store::worker::query_stats::{is_read_query, QueryStats};
 use crate::store::worker::split_config::get_sample_num;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
+const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;
 pub const TOP_N: usize = 10;
 
 // LOAD_BASE_SPLIT_EVENT metrics label definitions.
@@ -107,10 +108,16 @@ where
             });
         return sampled_key_ranges;
     }
+    // To prevent the sampling from falling into a dead loop.
+    let mut sample_loop_count = min(
+        sample_num.saturating_mul(100),
+        DEFAULT_MAX_SAMPLE_LOOP_COUNT,
+    );
     let mut rng = rand::thread_rng();
     // If the number of key ranges is greater than the sample number,
     // we will randomly sample the key ranges.
-    while sampled_key_ranges.len() < sample_num {
+    while sampled_key_ranges.len() < sample_num && sample_loop_count > 0 {
+        sample_loop_count -= 1;
         // Generate a random number in [1, all_key_ranges_num].
         // Starting from 1 is to achieve equal probability.
         // For example, for a `prefix_sum` like [1, 2, 3, 4],
@@ -124,6 +131,12 @@ where
             let j = rng.gen_range(0..key_ranges.len());
             sampled_key_ranges.push(key_ranges.remove(j)); // Sampling without replacement
         }
+    }
+    if sample_loop_count == 0 {
+        warn!("The number of sampled key ranges could be less than the sample_num, the sampling may fall into a dead loop before";
+            "sampled_key_ranges_length" => sampled_key_ranges.len(),
+            "sample_num" => sample_num,
+        );
     }
     sampled_key_ranges
 }
