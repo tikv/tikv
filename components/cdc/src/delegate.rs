@@ -1202,27 +1202,14 @@ mod tests {
     #[test]
     fn test_decode_rawkv() {
         let cases = vec![
-            (
-                vec![b'r', 2, 3, 4],
-                vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb],
-                b"world1".to_vec(),
-                1,
-                Some(10),
-                false,
-            ),
-            (
-                vec![b'r', 3, 4, 5],
-                vec![b'r', 3, 4, 5, 0, 0, 0, 0, 0xfb],
-                b"world2".to_vec(),
-                2,
-                None,
-                true,
-            ),
+            (vec![b'r', 2, 3, 4], b"world1".to_vec(), 1, Some(10), false),
+            (vec![b'r', 3, 4, 5], b"world2".to_vec(), 2, None, true),
         ];
 
-        for (key, mut key_with_ts, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
+        for (key, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
             let mut row = EventRow::default();
-            APIV2::append_ts_on_encoded_bytes(&mut key_with_ts, start_ts.into());
+            // APIV2::append_ts_on_encoded_bytes(&mut key_with_ts, start_ts.into());
+            let key_with_ts = APIV2::encode_raw_key(&key, Some(start_ts.into())).into_encoded();
             let raw_value = RawValue {
                 user_value: value.to_vec(),
                 expire_ts,
