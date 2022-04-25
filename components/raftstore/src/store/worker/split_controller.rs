@@ -133,7 +133,7 @@ where
         }
     }
     if sample_loop_count == 0 {
-        warn!("The number of sampled key ranges could be less than the sample_num, the sampling may fall into a dead loop before";
+        warn!("the number of sampled key ranges could be less than the sample_num, the sampling may fall into a dead loop before";
             "sampled_key_ranges_length" => sampled_key_ranges.len(),
             "sample_num" => sample_num,
         );
@@ -654,10 +654,6 @@ impl AutoSplitController {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::sync::mpsc;
-    use std::thread;
-
     use txn_types::Key;
 
     use crate::store::util::build_key_range;
@@ -946,26 +942,6 @@ mod tests {
         }
     }
 
-    fn check_sample_length_with_timeout(key_ranges: Vec<Vec<KeyRange>>, timeout: Duration) {
-        let (done_tx, done_rx) = mpsc::channel();
-        let key_ranges_to_check = key_ranges.clone();
-        let handle = thread::spawn(move || {
-            check_sample_length(key_ranges_to_check);
-            done_tx
-                .send(())
-                .expect("Unable to send check_sample_length completion signal");
-        });
-
-        match done_rx.recv_timeout(timeout) {
-            Ok(_) => handle.join().expect("check_sample_length thread panicked"),
-            Err(_) => panic!(
-                "check_sample_length thread may fall into a dead loop with key_ranges: {:?}, prefix_sum: {:?}",
-                key_ranges,
-                prefix_sum(key_ranges.iter(), Vec::len),
-            ),
-        }
-    }
-
     #[test]
     fn test_sample_length() {
         // Test the sample_num = key range number.
@@ -1164,7 +1140,7 @@ mod tests {
                     key_ranges.push(build_key_range(b"a", b"b", false));
                 }
             }
-            check_sample_length_with_timeout(test_case.clone(), Duration::from_secs(3));
+            check_sample_length(test_case.clone());
         }
     }
 
