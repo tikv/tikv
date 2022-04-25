@@ -403,7 +403,6 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "test_util",
  "thiserror",
  "tidb_query_common",
  "tikv",

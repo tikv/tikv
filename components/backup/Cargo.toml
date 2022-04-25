@@ -68,8 +68,8 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-stream = "0.1"
 async-channel = "1.4"
 
+
 [dev-dependencies]
 rand = "0.8"
 tempfile = "3.0"
 tokio = { version = "1.5", features = ["time", "macros"] }
-test_util = { path = "../test_util" }
