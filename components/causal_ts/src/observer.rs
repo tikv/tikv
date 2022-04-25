@@ -54,6 +54,7 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
     }
 
     pub fn subscribe_region(&self, region_id: u64, resolver: Arc<RwLock<Resolver>>) {
+        debug!("causal ob subscribe region"; "region_id" => region_id);
         self.subscribed_regions
             .write()
             .unwrap()
@@ -61,6 +62,7 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
     }
 
     pub fn unsubscribe_region(&self, region_id: u64) {
+        debug!("causal ob unsubscribe region"; "region_id" => region_id);
         let mut regions = self.subscribed_regions.write().unwrap();
         regions.remove(&region_id);
     }

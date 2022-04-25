@@ -221,7 +221,6 @@ fn test_cdc_rawkv_basic() {
     suite.must_kv_raw_v2(1, k, v);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
-
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(entries) => {
             assert_eq!(entries.entries.len(), 1);
@@ -229,6 +228,8 @@ fn test_cdc_rawkv_basic() {
         }
         other => panic!("unknown event {:?}", other),
     }
+
+    suite.stop();
 }
 
 #[test]
@@ -1345,6 +1346,7 @@ fn test_cdc_rawkv_resolve_ts() {
         }
         other => panic!("unknown event {:?}", other),
     }
+    suite.set_tso(100);
 
     let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
     suite.must_kv_raw_v2(1, k, v);
@@ -1363,7 +1365,7 @@ fn test_cdc_rawkv_resolve_ts() {
         let mut current_rts = 0;
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             current_rts = resolved_ts.ts;
-            if resolved_ts.ts < 100 {
+            if resolved_ts.ts < 200 {
                 break;
             }
         }
@@ -1375,7 +1377,7 @@ fn test_cdc_rawkv_resolve_ts() {
         }
     }
 
-    suite.set_tso(100);
+    suite.set_tso(200);
     let (k, v) = (b"rkey2".to_vec(), b"value".to_vec());
     suite.must_kv_raw_v2(1, k, v);
     let mut events = receive_event(false).events.to_vec();
@@ -1393,7 +1395,7 @@ fn test_cdc_rawkv_resolve_ts() {
         let mut current_rts = 0;
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             current_rts = resolved_ts.ts;
-            if resolved_ts.ts >= 100 {
+            if resolved_ts.ts >= 200 {
                 break;
             }
         }

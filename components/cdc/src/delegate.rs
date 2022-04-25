@@ -405,7 +405,7 @@ impl Delegate {
             send(downstream)?;
         }
         assert!(
-            txnkv_downstreams.is_empty() && rawkv_downstreams.is_empty(),
+            !txnkv_downstreams.is_empty() || !rawkv_downstreams.is_empty(),
             "region {} miss downstream",
             self.region_id
         );
@@ -964,8 +964,8 @@ impl Delegate {
             self.rawkv_downstreams_mut().push(downstream);
         } else {
             self.txnkv_downstreams_mut().push(downstream);
-            self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
         }
+        self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
     }
 
     fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {

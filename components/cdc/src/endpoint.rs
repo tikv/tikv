@@ -896,7 +896,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, Ts: 'static + CausalTsProvide
             ) = self.min_ts(txnkv_regions, true, txnkv_min_ts);
         }
 
-        if !rawkv_regions.is_empty(){
+        if !rawkv_regions.is_empty() {
             (
                 self.rawkv_min_resolved_ts,
                 self.rawkv_min_ts_region_id,
