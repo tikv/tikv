@@ -346,7 +346,7 @@ where
                     .register_region(&r.region, handle.clone(), Some(start_ts));
                 let region_id = r.region.get_id();
                 let snap = self.observe_over_with_retry(&r.region, move || {
-                    ChangeObserver::from_cdc(region_id, handle.clone())
+                    ChangeObserver::from_pitr(region_id, handle.clone())
                 })?;
                 let stat = self.do_initial_scan(&r.region, start_ts, snap)?;
                 total_stat.add_statistics(&stat);

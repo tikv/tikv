@@ -252,7 +252,8 @@ mod tests {
         }
 
         // Test events with key in the range can be observed.
-        let observe_info = CmdObserveInfo::from_handle(handle.clone(), ObserveHandle::new());
+        let observe_info =
+            CmdObserveInfo::from_handle(handle.clone(), ObserveHandle::new(), ObserveHandle::new());
         let mut cb = CmdBatch::new(&observe_info, 42);
         cb.push(&observe_info, 42, Cmd::default());
         let mut cmd_batches = vec![cb];
@@ -263,7 +264,11 @@ mod tests {
         );
 
         // Test event from other region should not be send.
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
         let mut cb = CmdBatch::new(&observe_info, 43);
         cb.push(&observe_info, 43, Cmd::default());
         cb.level = ObserveLevel::None;

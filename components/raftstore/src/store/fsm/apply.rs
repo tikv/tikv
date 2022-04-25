@@ -3064,25 +3064,46 @@ impl Debug for GenSnapTask {
 }
 
 #[derive(Debug)]
+enum ObserverType {
+    Cdc(ObserveHandle),
+    Rts(ObserveHandle),
+    Pitr(ObserveHandle),
+}
+
+impl ObserverType {
+    fn handle(&self) -> &ObserveHandle {
+        match self {
+            ObserverType::Cdc(h) => h,
+            ObserverType::Rts(h) => h,
+            ObserverType::Pitr(h) => h,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ChangeObserver {
-    cdc_id: Option<ObserveHandle>,
-    rts_id: Option<ObserveHandle>,
+    ty: ObserverType,
     region_id: u64,
 }
 
 impl ChangeObserver {
     pub fn from_cdc(region_id: u64, id: ObserveHandle) -> Self {
         Self {
-            cdc_id: Some(id),
-            rts_id: None,
+            ty: ObserverType::Cdc(id),
             region_id,
         }
     }
 
     pub fn from_rts(region_id: u64, id: ObserveHandle) -> Self {
         Self {
-            cdc_id: None,
-            rts_id: Some(id),
+            ty: ObserverType::Rts(id),
+            region_id,
+        }
+    }
+
+    pub fn from_pitr(region_id: u64, id: ObserveHandle) -> Self {
+        Self {
+            ty: ObserverType::Pitr(id),
             region_id,
         }
     }
@@ -3517,38 +3538,30 @@ where
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let ChangeObserver {
-            cdc_id,
-            rts_id,
-            region_id,
-        } = cmd;
+        let ChangeObserver { region_id, ty } = cmd;
 
-        if let Some(ObserveHandle { id, .. }) = cdc_id {
-            if self.delegate.observe_info.cdc_id.id > id {
-                notify_stale_req_with_msg(
-                    self.delegate.term,
-                    format!(
-                        "stale observe id {:?}, current id: {:?}",
-                        id, self.delegate.observe_info.cdc_id.id
-                    ),
-                    cb,
-                );
-                return;
+        let is_stale_cmd = match ty {
+            ObserverType::Cdc(ObserveHandle { id, .. }) => {
+                self.delegate.observe_info.cdc_id.id > id
             }
-        }
-
-        if let Some(ObserveHandle { id, .. }) = rts_id {
-            if self.delegate.observe_info.rts_id.id > id {
-                notify_stale_req_with_msg(
-                    self.delegate.term,
-                    format!(
-                        "stale observe id {:?}, current id: {:?}",
-                        id, self.delegate.observe_info.rts_id.id
-                    ),
-                    cb,
-                );
-                return;
+            ObserverType::Rts(ObserveHandle { id, .. }) => {
+                self.delegate.observe_info.rts_id.id > id
             }
+            ObserverType::Pitr(ObserveHandle { id, .. }) => {
+                self.delegate.observe_info.pitr_id.id > id
+            }
+        };
+        if is_stale_cmd {
+            notify_stale_req_with_msg(
+                self.delegate.term,
+                format!(
+                    "stale observe id {:?}, current id: {:?}",
+                    ty.handle().id,
+                    self.delegate.observe_info.pitr_id.id
+                ),
+                cb,
+            );
+            return;
         }
 
         assert_eq!(self.delegate.region_id(), region_id);
@@ -3584,13 +3597,17 @@ where
             }
         };
 
-        if let Some(id) = cdc_id {
-            self.delegate.observe_info.cdc_id = id;
+        match ty {
+            ObserverType::Cdc(id) => {
+                self.delegate.observe_info.cdc_id = id;
+            }
+            ObserverType::Rts(id) => {
+                self.delegate.observe_info.rts_id = id;
+            }
+            ObserverType::Pitr(id) => {
+                self.delegate.observe_info.pitr_id = id;
+            }
         }
-        if let Some(id) = rts_id {
-            self.delegate.observe_info.rts_id = id;
-        }
-
         cb.invoke_read(resp);
     }
 
@@ -5422,11 +5439,7 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeObserver {
-                    cdc_id: Some(observe_handle.clone()),
-                    rts_id: Some(observe_handle.clone()),
-                    region_id: 1,
-                },
+                cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
@@ -5441,6 +5454,7 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(cmd_batch.cdc_id, ObserveHandle::with_id(0).id);
         assert_eq!(cmd_batch.rts_id, ObserveHandle::with_id(0).id);
+        assert_eq!(cmd_batch.pitr_id, ObserveHandle::with_id(0).id);
 
         let (capture_tx, capture_rx) = mpsc::channel();
         let put_entry = EntryBuilder::new(3, 2)
@@ -5462,7 +5476,6 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(cmd_batch.cdc_id, observe_handle.id);
-        assert_eq!(cmd_batch.rts_id, observe_handle.id);
         assert_eq!(resp, cmd_batch.into_iter(1).next().unwrap().response);
 
         let put_entry1 = EntryBuilder::new(4, 2)
@@ -5495,11 +5508,7 @@ mod tests {
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeObserver {
-                    cdc_id: Some(observe_handle.clone()),
-                    rts_id: Some(observe_handle),
-                    region_id: 2,
-                },
+                cmd: ChangeObserver::from_cdc(2, observe_handle),
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(
                         resp.response
@@ -5671,11 +5680,7 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeObserver {
-                    cdc_id: Some(observe_handle.clone()),
-                    rts_id: Some(observe_handle.clone()),
-                    region_id: 1,
-                },
+                cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
                     assert!(resp.snapshot.is_some());
@@ -5830,11 +5835,7 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeObserver {
-                    cdc_id: Some(observe_handle.clone()),
-                    rts_id: Some(observe_handle),
-                    region_id: 1,
-                },
+                cmd: ChangeObserver::from_cdc(1, observe_handle),
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(
                         resp.response.get_header().get_error().has_epoch_not_match(),
