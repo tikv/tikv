@@ -58,7 +58,7 @@ impl APIVersion for APIV1TTL {
         value.user_value
     }
 
-    fn convert_raw_key_from(
+    fn convert_encoded_key_version_from(
         src_api: ApiVersion,
         key: &[u8],
         _ts: Option<TimeStamp>,
@@ -74,16 +74,17 @@ impl APIVersion for APIV1TTL {
         }
     }
 
-    fn convert_user_key_from(
+    fn convert_user_key_range_version_from(
         src_api: ApiVersion,
-        mut key: Vec<u8>,
-        _is_range_end: bool,
-    ) -> Vec<u8> {
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
         match src_api {
-            ApiVersion::V1 | ApiVersion::V1ttl => key,
+            ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
             ApiVersion::V2 => {
-                key.remove(0);
-                key
+                start_key.remove(0);
+                end_key.remove(0);
+                (start_key, end_key)
             }
         }
     }

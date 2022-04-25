@@ -202,10 +202,15 @@ async fn save_backup_file_worker(
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
                     for file in split_files.iter_mut() {
-                        file.set_start_key(
-                            codec.convert_to_dst_user_key(msg.start_key.clone(), false),
+                        // In the case that backup from v1 and restore to v2,
+                        // the file range need be encoded as v2 format.
+                        // And range in response keep in v1 format.
+                        let (start, end) = codec.convert_key_range_to_dst_version(
+                            msg.start_key.clone(),
+                            msg.end_key.clone(),
                         );
-                        file.set_end_key(codec.convert_to_dst_user_key(msg.end_key.clone(), true));
+                        file.set_start_key(start);
+                        file.set_end_key(end);
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
@@ -442,21 +447,23 @@ impl BackupRange {
             return Ok(statistics);
         }
         let mut batch = vec![];
-        let cur_ts = ttl_current_ts();
+        let current_ts = ttl_current_ts();
         loop {
             while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
                 let key = cursor.key(cfstatistics);
                 let value = cursor.value(cfstatistics);
-                let is_valid = self.codec.is_valid_raw_value(key, value, cur_ts)?;
+                let is_valid = self.codec.is_valid_raw_value(key, value, current_ts)?;
                 if is_valid {
                     batch.push(Ok((
-                        self.codec.convert_to_dst_raw_key(key)?.into_encoded(),
-                        self.codec.convert_to_dst_raw_value(value)?,
+                        self.codec
+                            .convert_encoded_key_to_dst_version(key)?
+                            .into_encoded(),
+                        self.codec.convert_encoded_value_to_dst_version(value)?,
                     )));
                 };
                 debug!("backup raw key";
-                    "key" => &log_wrappers::Value::key(&self.codec.convert_to_dst_raw_key(key)?.into_encoded()),
-                    "value" => &log_wrappers::Value::value(&self.codec.convert_to_dst_raw_value(value)?),
+                    "key" => &log_wrappers::Value::key(&self.codec.convert_encoded_key_to_dst_version(key)?.into_encoded()),
+                    "value" => &log_wrappers::Value::value(&self.codec.convert_encoded_value_to_dst_version(value)?),
                     "valid" => is_valid,
                 );
                 cursor.next(cfstatistics);
@@ -925,23 +932,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         });
     }
 
-    // only support conversion from non-apiv2 to apiv2.
-    fn check_backup_api_version(&self, request: &Request) -> bool {
-        if request.is_raw_kv
-            && self.api_version != request.dst_api_ver
-            && request.dst_api_ver != ApiVersion::V2
-        {
-            return false;
-        }
-        true
-    }
-
     pub fn handle_backup_task(&self, task: Task) {
         let Task { request, resp } = task;
-        if !self.check_backup_api_version(&request) {
+        let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
+        if !codec.check_backup_api_version(&request.start_key, &request.end_key) {
             let mut response = BackupResponse::default();
             let err_msg = format!(
-                "invalid backup version cur{:?}, dst{:?}",
+                "invalid backup version, cur: {:?}, dst: {:?}",
                 self.api_version, request.dst_api_ver
             );
             response.set_error(crate::Error::Other(box_err!(err_msg)).into());
@@ -950,7 +947,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
             return;
         }
-        let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
         let start_key = codec.encode_backup_key(request.start_key.clone());
         let end_key = codec.encode_backup_key(request.end_key.clone());
 
@@ -1566,7 +1562,7 @@ pub mod tests {
     ) -> Vec<u8> {
         let value = generate_engine_test_value(value, cur_ver);
         dispatch_api_version!(dst_ver, {
-            API::convert_raw_value_from(cur_ver, &value).unwrap()
+            API::convert_encoded_value_version_from(cur_ver, &value).unwrap()
         })
     }
 

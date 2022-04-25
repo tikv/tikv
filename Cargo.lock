@@ -394,7 +394,6 @@ dependencies = [
  "online_config",
  "pd_client",
  "prometheus",
- "protobuf",
  "raft",
  "raftstore",
  "rand 0.8.3",

@@ -2,7 +2,6 @@
 
 use std::{fs::File, time::Duration};
 
-use api_version::{dispatch_api_version, APIVersion};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use external_storage_export::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
@@ -265,7 +264,7 @@ fn test_backup_huge_range_and_import() {
     suite.stop();
 }
 
-fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) {
+fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) {
     let suite = TestSuite::new(3, 144 * 1024 * 1024, cur_api_ver);
     let key_count = 60;
 
@@ -294,11 +293,11 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
     let files1 = resps1[0].files.clone();
     assert!(!resps1[0].get_files().is_empty());
 
-    let mut target_suit = TestSuite::new(3, 144 * 1024 * 1024, dst_api_ver);
+    let mut target_suite = TestSuite::new(3, 144 * 1024 * 1024, dst_api_ver);
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
     let storage = create_storage(&backend, Default::default()).unwrap();
-    let region = target_suit.cluster.get_region(b"");
+    let region = target_suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
     sst_meta.set_region_epoch(region.get_region_epoch().clone());
@@ -317,7 +316,7 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
     }
 
     for (m, c) in &metas {
-        for importer in target_suit.cluster.sim.rl().importers.values() {
+        for importer in target_suite.cluster.sim.rl().importers.values() {
             let mut f = importer.create(m).unwrap();
             f.append(c).unwrap();
             f.finish().unwrap();
@@ -328,14 +327,14 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
         ingest.set_cmd_type(CmdType::IngestSst);
         ingest.mut_ingest_sst().set_sst(m.clone());
         let mut header = RaftRequestHeader::default();
-        let leader = target_suit.context.get_peer().clone();
+        let leader = target_suite.context.get_peer().clone();
         header.set_peer(leader);
-        header.set_region_id(target_suit.context.get_region_id());
-        header.set_region_epoch(target_suit.context.get_region_epoch().clone());
+        header.set_region_id(target_suite.context.get_region_id());
+        header.set_region_epoch(target_suite.context.get_region_epoch().clone());
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.mut_requests().push(ingest);
-        let resp = target_suit
+        let resp = target_suite
             .cluster
             .call_command_on_leader(cmd, Duration::from_secs(5))
             .unwrap();
@@ -347,18 +346,21 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
         _ => String::from(CF_DEFAULT),
     };
     for i in 0..key_count {
-        let (mut k, v) = target_suit.gen_raw_kv(i);
-        dispatch_api_version!(dst_api_ver, {
-            let key = API::convert_user_key_from(cur_api_ver, k.into_bytes(), false);
-            k = String::from_utf8(key).expect("failed to convert user key")
-        });
-        let ret_val = target_suit.must_raw_get(k.clone().into_bytes(), cf.clone());
+        let (k, v) = target_suite.gen_raw_kv(i);
+        let key = {
+            let mut key = k.into_bytes();
+            if cur_api_ver != ApiVersion::V2 && dst_api_ver == ApiVersion::V2 {
+                key.insert(0, b'r')
+            }
+            key
+        };
+        let ret_val = target_suite.must_raw_get(key, cf.clone());
         assert_eq!(v.clone().into_bytes(), ret_val);
     }
 
     // Backup file should have same contents.
     // Set non-empty range to check if it's incorrectly encoded.
-    let rx = target_suit.backup_raw(
+    let rx = target_suite.backup_raw(
         vec![b'r', b'a'], // start
         vec![b'r', b'z'], // end
         cf,
@@ -376,7 +378,7 @@ fn test_backup_rawkv_convert_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersi
     assert_eq!(files1[0].total_bytes, files3[0].total_bytes);
     assert_eq!(files1[0].total_kvs, files3[0].total_kvs);
     suite.stop();
-    target_suit.stop();
+    target_suite.stop();
 }
 
 #[test]
@@ -389,7 +391,7 @@ fn test_backup_rawkv_convert() {
         (ApiVersion::V1ttl, ApiVersion::V2),
     ];
     for (cur_api_ver, dst_api_ver) in raw_test_cases {
-        test_backup_rawkv_convert_impl(cur_api_ver, dst_api_ver);
+        test_backup_rawkv_cross_version_impl(cur_api_ver, dst_api_ver);
     }
 }
 

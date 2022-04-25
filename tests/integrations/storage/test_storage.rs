@@ -1100,7 +1100,7 @@ fn test_txn_store_rawkv_api_version() {
                 } else {
                     None
                 };
-                let (engine_key, engine_value) = dispatch_api_version!(storage_api_version, {
+                let (encoded_key, encoded_value) = dispatch_api_version!(storage_api_version, {
                     let raw_key =
                         API::encode_raw_key(key, Some(TimeStamp::from(106))).into_encoded();
                     let raw_value = RawValue {
@@ -1110,10 +1110,14 @@ fn test_txn_store_rawkv_api_version() {
                     };
                     (raw_key, API::encode_raw_value(raw_value))
                 });
-                let checksum = checksum_crc64_xor(0, digest.clone(), &engine_key, &engine_value);
+                let checksum = checksum_crc64_xor(0, digest.clone(), &encoded_key, &encoded_value);
                 store.raw_checksum_ok(
                     vec![range_bounded.clone()],
-                    (checksum, 1, (engine_key.len() + engine_value.len()) as u64),
+                    (
+                        checksum,
+                        1,
+                        (encoded_key.len() + encoded_value.len()) as u64,
+                    ),
                 );
             } else {
                 store.raw_get_err(cf.to_owned(), key.to_vec());

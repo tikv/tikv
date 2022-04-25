@@ -69,36 +69,29 @@ pub trait APIVersion: Clone + Copy + 'static + Send + Sync {
         Key::from_encoded(user_key)
     }
 
-    fn convert_raw_key_from(
-        _src_api: ApiVersion,
+    // Convert the encoded key from src_api version to Self::TAG version
+    fn convert_encoded_key_version_from(
+        src_api: ApiVersion,
         key: &[u8],
-        _ts: Option<TimeStamp>,
-    ) -> Result<Key> {
-        Ok(Key::from_encoded_slice(key))
-    }
+        ts: Option<TimeStamp>,
+    ) -> Result<Key>;
 
-    fn convert_user_key_from(
-        _src_api: ApiVersion,
-        user_key: Vec<u8>,
-        _is_range_end: bool,
-    ) -> Vec<u8> {
-        user_key
-    }
+    // Convert the user key range from src_api version to Self::TAG version
+    fn convert_user_key_range_version_from(
+        src_api: ApiVersion,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>);
 
-    /// conversion between different ApiVersion encoded values.
-    fn convert_raw_value_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
+    /// Convert the encoded value from src_api version to Self::TAG version
+    fn convert_encoded_value_version_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
         if src_api == Self::TAG {
             return Ok(value.to_owned());
         }
-        match_template_api_version!(
-            API,
-            match src_api {
-                ApiVersion::API => {
-                    let raw_value = API::decode_raw_value(value)?;
-                    return Ok(Self::encode_raw_value(raw_value));
-                }
-            }
-        )
+        dispatch_api_version!(src_api, {
+            let raw_value = API::decode_raw_value(value)?;
+            Ok(Self::encode_raw_value(raw_value))
+        })
     }
 }
 
@@ -649,7 +642,11 @@ mod tests {
         for i in 0..apiv1_keys.len() {
             for case in &test_cases {
                 let dst_key = dispatch_api_version!(case.1, {
-                    API::convert_raw_key_from(case.0, &case.2[i], Some(TimeStamp::from(timestamp)))
+                    API::convert_encoded_key_version_from(
+                        case.0,
+                        &case.2[i],
+                        Some(TimeStamp::from(timestamp)),
+                    )
                 });
                 assert_eq!(dst_key.unwrap().into_encoded(), case.3[i]);
             }
@@ -707,7 +704,7 @@ mod tests {
         for i in 0..apiv1_values.len() {
             for case in &test_cases {
                 let dst_value = dispatch_api_version!(case.1, {
-                    API::convert_raw_value_from(case.0, &case.2[i])
+                    API::convert_encoded_value_version_from(case.0, &case.2[i])
                 });
                 assert_eq!(dst_value.unwrap(), case.3[i]);
             }
@@ -715,42 +712,64 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_user_key() {
-        let apiv1_keys = vec![
-            b""[..].to_owned(),
-            b"abc"[..].to_owned(),
-            b"api_ver_test"[..].to_owned(),
+    fn test_convert_user_key_range() {
+        let apiv1_key_ranges = vec![
+            (b""[..].to_owned(), b""[..].to_owned()),
+            (b"abc"[..].to_owned(), b"abz"[..].to_owned()),
+            (
+                b"api_ver_test"[..].to_owned(),
+                b"bpi_ver_test"[..].to_owned(),
+            ),
         ];
-        let mut is_end = false;
-        let apiv2_keys: Vec<Vec<u8>> = apiv1_keys
+        let apiv2_key_ranges: Vec<(Vec<u8>, Vec<u8>)> = apiv1_key_ranges
             .clone()
             .into_iter()
-            .map(|key| {
-                let mut v2_key = key;
-                if is_end && v2_key.is_empty() {
-                    v2_key.insert(0, RAW_KEY_PREFIX_END);
+            .map(|(start_key, end_key)| {
+                let mut v2_start_key = start_key;
+                let mut v2_end_key = end_key;
+                v2_start_key.insert(0, RAW_KEY_PREFIX);
+                if v2_end_key.is_empty() {
+                    v2_end_key.insert(0, RAW_KEY_PREFIX_END);
                 } else {
-                    v2_key.insert(0, RAW_KEY_PREFIX);
+                    v2_end_key.insert(0, RAW_KEY_PREFIX);
                 }
-                is_end = !is_end;
-                v2_key
+                (v2_start_key, v2_end_key)
             })
             .collect();
         // src_api_ver, dst_api_ver, src_data, dst_data
         let test_cases = vec![
-            (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
-            (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
-            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
-            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
+            (
+                ApiVersion::V1,
+                ApiVersion::V2,
+                &apiv1_key_ranges,
+                &apiv2_key_ranges,
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                &apiv1_key_ranges,
+                &apiv2_key_ranges,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1,
+                &apiv2_key_ranges,
+                &apiv1_key_ranges,
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V1ttl,
+                &apiv2_key_ranges,
+                &apiv1_key_ranges,
+            ),
         ];
         for case in &test_cases {
-            is_end = false;
-            for i in 0..apiv1_keys.len() {
-                let dst_key = dispatch_api_version!(case.1, {
-                    API::convert_user_key_from(case.0, case.2[i].clone(), is_end)
+            for i in 0..apiv1_key_ranges.len() {
+                let dst_key_range = dispatch_api_version!(case.1, {
+                    let (src_start, src_end) = case.2[i].clone();
+                    API::convert_user_key_range_version_from(case.0, src_start, src_end)
                 });
-                assert_eq!(dst_key, case.3[i]);
-                is_end = !is_end;
+                assert_eq!(dst_key_range, case.3[i]);
             }
         }
     }

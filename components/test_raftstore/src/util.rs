@@ -153,20 +153,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
 pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TiKvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
-    match api_ver {
-        ApiVersion::V1 => {
-            cfg.storage.api_version = 1;
-            cfg.storage.enable_ttl = false;
-        }
-        ApiVersion::V1ttl => {
-            cfg.storage.api_version = 1;
-            cfg.storage.enable_ttl = true;
-        }
-        ApiVersion::V2 => {
-            cfg.storage.api_version = 2;
-            cfg.storage.enable_ttl = true;
-        }
-    };
+    cfg.storage.set_api_version(api_ver);
     cfg
 }
 

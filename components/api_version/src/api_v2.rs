@@ -42,7 +42,7 @@ impl APIVersion for APIV2 {
         }
 
         match key[0] {
-            RAW_KEY_PREFIX | RAW_KEY_PREFIX_END => KeyMode::Raw,
+            RAW_KEY_PREFIX => KeyMode::Raw,
             TXN_KEY_PREFIX => KeyMode::Txn,
             TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDB,
             _ => KeyMode::Unknown,
@@ -171,7 +171,11 @@ impl APIVersion for APIV2 {
     }
 
     // add prefix RAW_KEY_PREFIX
-    fn convert_raw_key_from(src_api: ApiVersion, key: &[u8], ts: Option<TimeStamp>) -> Result<Key> {
+    fn convert_encoded_key_version_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        ts: Option<TimeStamp>,
+    ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
                 let mut apiv2_key = Vec::with_capacity(APIV2::get_encode_len(key.len() + 1));
@@ -183,18 +187,22 @@ impl APIVersion for APIV2 {
         }
     }
 
-    fn convert_user_key_from(src_api: ApiVersion, mut key: Vec<u8>, is_range_end: bool) -> Vec<u8> {
+    fn convert_user_key_range_version_from(
+        src_api: ApiVersion,
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                let prefix = if is_range_end && key.is_empty() {
-                    RAW_KEY_PREFIX_END
+                start_key.insert(0, RAW_KEY_PREFIX);
+                if end_key.is_empty() {
+                    end_key.insert(0, RAW_KEY_PREFIX_END);
                 } else {
-                    RAW_KEY_PREFIX
-                };
-                key.insert(0, prefix);
-                key
+                    end_key.insert(0, RAW_KEY_PREFIX);
+                }
+                (start_key, end_key)
             }
-            ApiVersion::V2 => key,
+            ApiVersion::V2 => (start_key, end_key),
         }
     }
 }
@@ -213,10 +221,12 @@ impl APIV2 {
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
+// Note: `encoded_bytes` may not be `KeyMode::Raw`.
+// E.g., backup service accept an exclusive end key just beyond the scope of raw keys.
+// The validity is ensured by client & Storage interfaces.
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
-    APIV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
-        && bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
+    bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
         && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
 }
 

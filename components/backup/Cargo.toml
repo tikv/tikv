@@ -67,8 +67,6 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-stream = "0.1"
 async-channel = "1.4"
-protobuf = { version = "2.8", features = ["bytes"] }
-
 
 [dev-dependencies]
 rand = "0.8"
