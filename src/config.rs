@@ -58,8 +58,8 @@ use tikv_util::yatp_pool;
 
 use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
-use crate::server::gc_worker::WriteCompactionFilterFactory;
-use crate::server::gc_worker::{GcConfig, RawCompactionFilterFactory};
+use crate::server::gc_worker::{RawCompactionFilterFactory, WriteCompactionFilterFactory};
+use crate::server::gc_worker::{GcConfig};
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
