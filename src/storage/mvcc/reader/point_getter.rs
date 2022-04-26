@@ -692,19 +692,19 @@ mod tests {
         let mut getter = new_point_getter(&engine, TimeStamp::max());
         let perf_statistics = PerfStatisticsInstant::new();
         must_get_value(&mut getter, b"foo", b"bar");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
         let perf_statistics = PerfStatisticsInstant::new();
         must_get_none(&mut getter, b"foo1");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
         must_get_none(&mut getter, b"foo2");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
         must_get_value(&mut getter, b"foo3", b"bar3");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
     }
 
     #[test]

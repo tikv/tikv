@@ -997,7 +997,7 @@ mod tests {
                 TxnEntry::Prewrite { old_value, .. } => assert_eq!(old_value, expected_old_value),
                 TxnEntry::Commit { .. } => unreachable!(),
             }
-            let delta = perf_instant.delta().0;
+            let delta = perf_instant.delta();
             assert_eq!(delta.block_read_count, block_reads);
         }
 
@@ -1022,7 +1022,7 @@ mod tests {
                 TxnEntry::Prewrite { .. } => unreachable!(),
                 TxnEntry::Commit { old_value, .. } => assert_eq!(old_value, expected_old_value),
             }
-            let delta = perf_instant.delta().0;
+            let delta = perf_instant.delta();
             assert_eq!(delta.block_read_count, block_reads);
         }
     }

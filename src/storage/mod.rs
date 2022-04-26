@@ -54,8 +54,8 @@ pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
-        StageLatencyStats, Statistics, TestEngineBuilder,
+        PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, StageLatencyStats, Statistics,
+        TestEngineBuilder,
     },
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
@@ -83,6 +83,7 @@ use crate::storage::{
 
 use api_version::{APIVersion, KeyMode, RawValue, APIV1, APIV2};
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::ReadPerfContextFields;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::ApiVersion;
@@ -694,7 +695,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command<
-        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+        P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContextFields)>,
     >(
         &self,
         requests: Vec<GetRequest>,
@@ -3033,11 +3034,11 @@ pub mod test_util {
         }
     }
 
-    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)> for GetConsumer {
+    impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics, ReadPerfContextFields)> for GetConsumer {
         fn consume(
             &self,
             id: u64,
-            res: Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>,
+            res: Result<(Option<Vec<u8>>, Statistics, ReadPerfContextFields)>,
             _: tikv_util::time::Instant,
         ) {
             self.data.lock().unwrap().push(GetResult {
@@ -3064,7 +3065,7 @@ pub mod test_util {
 #[derive(Debug, Default, Clone)]
 pub struct KvGetStatistics {
     pub stats: Statistics,
-    pub perf_stats: PerfStatisticsDelta,
+    pub perf_stats: ReadPerfContextFields,
     pub latency_stats: StageLatencyStats,
 }
 

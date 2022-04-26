@@ -8,12 +8,8 @@
 #![feature(negative_impls)]
 #![feature(generic_associated_types)]
 
-#[macro_use]
-extern crate derive_more;
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate slog_derive;
 #[macro_use]
 extern crate tikv_util;
 
@@ -49,7 +45,7 @@ use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
-pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+pub use self::perf_context::PerfStatisticsInstant;
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,

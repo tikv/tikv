@@ -608,6 +608,6 @@ mod tests {
         // block read count should be 1 instead of 4 because some of them
         // are filtered by `prefix_seek`.
         let perf_delta = perf_instant.delta();
-        assert_eq!(perf_delta.0.block_read_count, 1);
+        assert_eq!(perf_delta.block_read_count, 1);
     }
 }

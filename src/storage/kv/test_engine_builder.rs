@@ -141,14 +141,13 @@ impl Default for TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::PerfStatisticsInstant;
     use super::super::{CfStatistics, TEST_ENGINE_CFS};
     use super::super::{Engine, Snapshot};
     use super::*;
     use crate::storage::{Cursor, CursorBuilder, ScanMode};
     use engine_traits::IterOptions;
     use kvproto::kvrpcpb::Context;
-    use tikv_kv::tests::*;
+    use tikv_kv::{tests::*, PerfStatisticsInstant};
     use txn_types::Key;
     use txn_types::TimeStamp;
 
@@ -260,22 +259,22 @@ mod tests {
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
 
     #[test]
@@ -336,7 +335,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), true);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(
@@ -345,7 +344,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), false);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(
             &Key::from_raw(b"foo1").append_ts(TimeStamp::zero()),
@@ -353,7 +352,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), false);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(
             &Key::from_raw(b"foo2").append_ts(TimeStamp::zero()),
@@ -361,7 +360,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(iter.valid().unwrap(), false);
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 1);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 1);
         let perf_statistics = PerfStatisticsInstant::new();
         assert_eq!(
             iter.seek(
@@ -379,6 +378,6 @@ mod tests {
                 .as_encoded()
                 .as_slice()
         );
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
     }
 }

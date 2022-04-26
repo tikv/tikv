@@ -7,8 +7,11 @@ use crate::{
     raw_util, set_perf_flags, set_perf_level, PerfContext as RawPerfContext, PerfFlag, PerfFlags,
 };
 
+use derive_more::{Add, AddAssign, Sub, SubAssign};
 use engine_traits::{PerfContextKind, PerfLevel};
+use kvproto::kvrpcpb::ScanDetailV2;
 use lazy_static::lazy_static;
+use slog_derive::KV;
 
 #[macro_export]
 macro_rules! report_perf_context {
@@ -37,19 +40,20 @@ macro_rules! report_perf_context {
 #[macro_export]
 macro_rules! observe_perf_context_type {
     ($s:expr, $metric: expr, $v:ident) => {
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
-        $s.$v = $v;
+        $metric.$v.observe((($v) - $s.write_fields.$v) as f64 / 1e9);
+        $s.write_fields.$v = $v;
     };
     ($s:expr, $context: expr, $metric: expr, $v:ident) => {
         let $v = $context.$v();
-        $metric.$v.observe((($v) - $s.$v) as f64 / 1_000_000_000.0);
-        $s.$v = $v;
+        $metric.$v.observe((($v) - $s.write_fields.$v) as f64 / 1e9);
+        $s.write_fields.$v = $v;
     };
 }
 
 lazy_static! {
     /// Default perf flags for a write operation.
-    pub static ref DEFAULT_WRITE_PERF_FLAGS: PerfFlags = PerfFlag::WriteWalTime
+    pub static ref DEFAULT_WRITE_PERF_FLAGS: PerfFlags =
+          PerfFlag::WriteWalTime
         | PerfFlag::WritePreAndPostProcessTime
         | PerfFlag::WriteMemtableTime
         | PerfFlag::WriteThreadWaitNanos
@@ -59,7 +63,9 @@ lazy_static! {
         | PerfFlag::WriteDelayTime;
 
     /// Default perf flags for read operations.
-    pub static ref DEFAULT_READ_PERF_FLAGS: PerfFlags = PerfFlag::BlockCacheHitCount
+    pub static ref DEFAULT_READ_PERF_FLAGS: PerfFlags =
+          PerfFlag::UserKeyComparisonCount
+        | PerfFlag::BlockCacheHitCount
         | PerfFlag::BlockReadCount
         | PerfFlag::BlockReadByte
         | PerfFlag::BlockReadTime
@@ -92,9 +98,70 @@ lazy_static! {
         | PerfFlag::BytesRead;
 }
 
-pub struct PerfContextStatistics {
-    pub perf_level: PerfLevel,
-    pub kind: PerfContextKind,
+#[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
+pub struct ReadPerfContextFields {
+    pub user_key_comparison_count: u64,
+    pub block_cache_hit_count: u64,
+    pub block_read_count: u64,
+    pub block_read_byte: u64,
+    pub block_read_time: u64,
+    pub block_cache_index_hit_count: u64,
+    pub index_block_read_count: u64,
+    pub block_cache_filter_hit_count: u64,
+    pub filter_block_read_count: u64,
+    pub block_checksum_time: u64,
+    pub block_decompress_time: u64,
+    pub get_read_bytes: u64,
+    pub iter_read_bytes: u64,
+    pub internal_key_skipped_count: u64,
+    pub internal_delete_skipped_count: u64,
+    pub internal_recent_skipped_count: u64,
+    pub get_snapshot_time: u64,
+    pub get_from_memtable_time: u64,
+    pub get_from_memtable_count: u64,
+    pub get_post_process_time: u64,
+    pub get_from_output_files_time: u64,
+    pub seek_on_memtable_time: u64,
+    pub seek_on_memtable_count: u64,
+    pub next_on_memtable_count: u64,
+    pub prev_on_memtable_count: u64,
+    pub seek_child_seek_time: u64,
+    pub seek_child_seek_count: u64,
+    pub seek_min_heap_time: u64,
+    pub seek_max_heap_time: u64,
+    pub seek_internal_seek_time: u64,
+    pub db_mutex_lock_nanos: u64,
+    pub db_condition_wait_nanos: u64,
+    pub read_index_block_nanos: u64,
+    pub read_filter_block_nanos: u64,
+    pub new_table_block_iter_nanos: u64,
+    pub new_table_iterator_nanos: u64,
+    pub block_seek_nanos: u64,
+    pub find_table_nanos: u64,
+    pub bloom_memtable_hit_count: u64,
+    pub bloom_memtable_miss_count: u64,
+    pub bloom_sst_hit_count: u64,
+    pub bloom_sst_miss_count: u64,
+    pub get_cpu_nanos: u64,
+    pub iter_next_cpu_nanos: u64,
+    pub iter_prev_cpu_nanos: u64,
+    pub iter_seek_cpu_nanos: u64,
+    pub encrypt_data_nanos: u64,
+    pub decrypt_data_nanos: u64,
+}
+
+impl ReadPerfContextFields {
+    pub fn write_scan_detail(&self, detail_v2: &mut ScanDetailV2) {
+        detail_v2.set_rocksdb_delete_skipped_count(self.internal_delete_skipped_count);
+        detail_v2.set_rocksdb_key_skipped_count(self.internal_key_skipped_count);
+        detail_v2.set_rocksdb_block_cache_hit_count(self.block_cache_hit_count);
+        detail_v2.set_rocksdb_block_read_count(self.block_read_count);
+        detail_v2.set_rocksdb_block_read_byte(self.block_read_byte);
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct WritePerfContextFields {
     pub write_wal_time: u64,
     pub pre_and_post_process: u64,
     pub write_memtable_time: u64,
@@ -105,28 +172,89 @@ pub struct PerfContextStatistics {
     pub write_delay_time: u64,
 }
 
+#[derive(Debug)]
+pub struct PerfContextStatistics {
+    pub perf_level: PerfLevel,
+    pub kind: PerfContextKind,
+    pub read_fields: ReadPerfContextFields,
+    pub write_fields: WritePerfContextFields,
+}
+
 impl PerfContextStatistics {
     /// Create an instance which stores instant statistics values, retrieved at creation.
     pub fn new(perf_level: PerfLevel, kind: PerfContextKind) -> Self {
         PerfContextStatistics {
             perf_level,
             kind,
-            write_wal_time: 0,
-            pre_and_post_process: 0,
-            write_thread_wait: 0,
-            write_memtable_time: 0,
-            db_mutex_lock_nanos: 0,
-            write_scheduling_flushes_compactions_time: 0,
-            db_condition_wait_nanos: 0,
-            write_delay_time: 0,
+            read_fields: Default::default(),
+            write_fields: Default::default(),
         }
     }
 
-    fn apply_write_perf_settings(&self) {
+    fn apply_perf_settings(&self) {
         if self.perf_level == PerfLevel::Uninitialized {
-            set_perf_flags(&*DEFAULT_WRITE_PERF_FLAGS);
+            match self.kind {
+                PerfContextKind::GenericRead => set_perf_flags(&*DEFAULT_READ_PERF_FLAGS),
+                PerfContextKind::RaftstoreStore | PerfContextKind::RaftstoreApply => {
+                    set_perf_flags(&*DEFAULT_WRITE_PERF_FLAGS)
+                }
+            }
         } else {
             set_perf_level(raw_util::to_raw_perf_level(self.perf_level));
+        }
+    }
+
+    fn record_read_perf_context(&mut self) {
+        let perf_context = RawPerfContext::get();
+        self.read_fields = ReadPerfContextFields {
+            user_key_comparison_count: perf_context.user_key_comparison_count(),
+            block_cache_hit_count: perf_context.block_cache_hit_count(),
+            block_read_count: perf_context.block_read_count(),
+            block_read_byte: perf_context.block_read_byte(),
+            block_read_time: perf_context.block_read_time(),
+            block_cache_index_hit_count: perf_context.block_cache_index_hit_count(),
+            index_block_read_count: perf_context.index_block_read_count(),
+            block_cache_filter_hit_count: perf_context.block_cache_filter_hit_count(),
+            filter_block_read_count: perf_context.filter_block_read_count(),
+            block_checksum_time: perf_context.block_checksum_time(),
+            block_decompress_time: perf_context.block_decompress_time(),
+            get_read_bytes: perf_context.get_read_bytes(),
+            iter_read_bytes: perf_context.iter_read_bytes(),
+            internal_key_skipped_count: perf_context.internal_key_skipped_count(),
+            internal_delete_skipped_count: perf_context.internal_delete_skipped_count(),
+            internal_recent_skipped_count: perf_context.internal_recent_skipped_count(),
+            get_snapshot_time: perf_context.get_snapshot_time(),
+            get_from_memtable_time: perf_context.get_from_memtable_time(),
+            get_from_memtable_count: perf_context.get_from_memtable_count(),
+            get_post_process_time: perf_context.get_post_process_time(),
+            get_from_output_files_time: perf_context.get_from_output_files_time(),
+            seek_on_memtable_time: perf_context.seek_on_memtable_time(),
+            seek_on_memtable_count: perf_context.seek_on_memtable_count(),
+            next_on_memtable_count: perf_context.next_on_memtable_count(),
+            prev_on_memtable_count: perf_context.prev_on_memtable_count(),
+            seek_child_seek_time: perf_context.seek_child_seek_time(),
+            seek_child_seek_count: perf_context.seek_child_seek_count(),
+            seek_min_heap_time: perf_context.seek_min_heap_time(),
+            seek_max_heap_time: perf_context.seek_max_heap_time(),
+            seek_internal_seek_time: perf_context.seek_internal_seek_time(),
+            db_mutex_lock_nanos: perf_context.db_mutex_lock_nanos(),
+            db_condition_wait_nanos: perf_context.db_condition_wait_nanos(),
+            read_index_block_nanos: perf_context.read_index_block_nanos(),
+            read_filter_block_nanos: perf_context.read_filter_block_nanos(),
+            new_table_block_iter_nanos: perf_context.new_table_block_iter_nanos(),
+            new_table_iterator_nanos: perf_context.new_table_iterator_nanos(),
+            block_seek_nanos: perf_context.block_seek_nanos(),
+            find_table_nanos: perf_context.find_table_nanos(),
+            bloom_memtable_hit_count: perf_context.bloom_memtable_hit_count(),
+            bloom_memtable_miss_count: perf_context.bloom_memtable_miss_count(),
+            bloom_sst_hit_count: perf_context.bloom_sst_hit_count(),
+            bloom_sst_miss_count: perf_context.bloom_sst_miss_count(),
+            get_cpu_nanos: perf_context.get_cpu_nanos(),
+            iter_next_cpu_nanos: perf_context.iter_next_cpu_nanos(),
+            iter_prev_cpu_nanos: perf_context.iter_prev_cpu_nanos(),
+            iter_seek_cpu_nanos: perf_context.iter_seek_cpu_nanos(),
+            encrypt_data_nanos: perf_context.encrypt_data_nanos(),
+            decrypt_data_nanos: perf_context.decrypt_data_nanos(),
         }
     }
 
@@ -136,15 +264,7 @@ impl PerfContextStatistics {
         }
         let mut ctx = RawPerfContext::get();
         ctx.reset();
-        self.apply_write_perf_settings();
-        self.write_wal_time = 0;
-        self.pre_and_post_process = 0;
-        self.db_mutex_lock_nanos = 0;
-        self.write_thread_wait = 0;
-        self.write_memtable_time = 0;
-        self.write_scheduling_flushes_compactions_time = 0;
-        self.db_condition_wait_nanos = 0;
-        self.write_delay_time = 0;
+        self.apply_perf_settings();
     }
 
     pub fn report(&mut self) {
@@ -154,6 +274,13 @@ impl PerfContextStatistics {
             }
             PerfContextKind::RaftstoreStore => {
                 report_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
+            }
+            PerfContextKind::GenericRead => {
+                // TODO: Currently, metrics about reading is reported in other ways.
+                // It is better to unify how to report the perf metrics.
+                //
+                // Here we only record the PerfContext data into the fields.
+                self.record_read_perf_context();
             }
         }
     }

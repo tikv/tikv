@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::PROP_MAX_TS;
+use engine_rocks::{ReadPerfContextFields, PROP_MAX_TS};
 use engine_traits::{
     KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection, TablePropertiesExt,
     UserCollectedProperties, CF_DEFAULT, CF_WRITE,
@@ -21,7 +21,6 @@ use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv::storage::Statistics;
-use tikv_kv::PerfStatisticsDelta;
 use tikv_util::codec::number;
 use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
 use tikv_util::time::{Instant, Limiter};
@@ -46,7 +45,7 @@ struct ScanStat {
     // Bytes from the device, `None` if not possible to get it.
     disk_read: Option<usize>,
     // Perf delta for RocksDB.
-    perf_delta: PerfStatisticsDelta,
+    perf_delta: ReadPerfContextFields,
 }
 
 pub(crate) struct Initializer<E> {
@@ -339,7 +338,7 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
             bytes
         } else {
-            perf_delta.0.block_read_byte
+            perf_delta.block_read_byte as usize
         };
         self.speed_limiter.consume(require).await;
 

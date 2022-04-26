@@ -18,7 +18,6 @@ use tikv_kv::SnapshotExt;
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 
 use crate::server::Config;
-use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{
@@ -32,7 +31,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::PerfLevel;
+use engine_traits::PerfLevel;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
@@ -98,7 +97,7 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             semaphore,
             concurrency_manager,
-            perf_level: engine_rocks::raw_util::to_raw_perf_level(cfg.end_point_perf_level),
+            perf_level: cfg.end_point_perf_level,
             resource_tag_factory,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
@@ -530,14 +529,12 @@ impl<E: Engine> Endpoint<E> {
             loop {
                 let result = {
                     tracker.on_begin_item();
-                    let perf_statistics_instant = PerfStatisticsInstant::new();
 
                     let result = handler.handle_streaming_request();
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
-                    let perf_statistics = perf_statistics_instant.delta();
-                    tracker.on_finish_item(Some(storage_stats), perf_statistics);
+                    tracker.on_finish_item(Some(storage_stats));
 
                     result
                 };
@@ -685,7 +682,6 @@ mod tests {
     use crate::read_pool::ReadPool;
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
-    use engine_rocks::PerfLevel;
     use protobuf::Message;
     use txn_types::{Key, LockType};
 

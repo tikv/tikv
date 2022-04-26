@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{set_perf_flags, set_perf_level, DEFAULT_READ_PERF_FLAGS};
+use engine_rocks::{ReadPerfContextFields, RocksPerfContext};
+use engine_traits::{PerfContext, PerfContextKind};
 use kvproto::kvrpcpb;
 use kvproto::kvrpcpb::ScanDetailV2;
 use pd_client::BucketMeta;
@@ -9,7 +10,6 @@ use txn_types::Key;
 
 use super::metrics::*;
 use crate::coprocessor::*;
-use crate::storage::kv::PerfStatisticsDelta;
 use crate::storage::Statistics;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,7 +62,10 @@ pub struct Tracker {
     item_process_time: Duration,
     total_process_time: Duration,
     total_storage_stats: Statistics,
-    total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
+    // TODO: This leaks the RocksDB engine from abstraction, try to use the PerfContext
+    // in engine_trait instead.
+    perf_context: RocksPerfContext,
+    total_perf_stats: ReadPerfContextFields, // Accumulated perf statistics
     slow_log_threshold: Duration,
     scan_process_time_ms: u64,
 
@@ -91,7 +94,8 @@ impl Tracker {
             total_suspend_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
-            total_perf_stats: PerfStatisticsDelta::default(),
+            perf_context: RocksPerfContext::new(req_ctx.perf_level, PerfContextKind::GenericRead),
+            total_perf_stats: ReadPerfContextFields::default(),
             scan_process_time_ms: 0,
             slow_log_threshold,
             req_ctx,
@@ -138,15 +142,11 @@ impl Tracker {
             _ => unreachable!(),
         }
 
-        self.apply_perf_settings();
+        self.perf_context.start_observe();
         self.current_stage = TrackerState::ItemBegan(now);
     }
 
-    pub fn on_finish_item(
-        &mut self,
-        some_storage_stats: Option<Statistics>,
-        perf_statistics: PerfStatisticsDelta,
-    ) {
+    pub fn on_finish_item(&mut self, some_storage_stats: Option<Statistics>) {
         if let TrackerState::ItemBegan(at) = self.current_stage {
             let now = Instant::now_coarse();
             self.item_process_time = now - at;
@@ -155,6 +155,8 @@ impl Tracker {
                 self.total_storage_stats.add(&storage_stats);
             }
             // Record delta perf statistics
+            self.perf_context.report_metrics();
+            let perf_statistics = self.perf_context.stats.read_fields;
             self.total_perf_stats += perf_statistics;
             self.current_stage = TrackerState::ItemFinished(now);
         } else {
@@ -192,14 +194,6 @@ impl Tracker {
         }
     }
 
-    fn apply_perf_settings(&self) {
-        if self.req_ctx.perf_level == PerfLevel::Uninitialized {
-            set_perf_flags(&*DEFAULT_READ_PERF_FLAGS);
-        } else {
-            set_perf_level(self.req_ctx.perf_level);
-        }
-    }
-
     fn exec_details(&self, measure: Duration) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         // For compatibility, ExecDetails field is still filled.
         let mut exec_details = kvrpcpb::ExecDetails::default();
@@ -221,16 +215,14 @@ impl Tracker {
         detail_v2.set_processed_versions_size(self.total_storage_stats.processed_size as u64);
         detail_v2.set_total_versions(self.total_storage_stats.write.total_op_count() as u64);
         detail_v2.set_rocksdb_delete_skipped_count(
-            self.total_perf_stats.0.internal_delete_skipped_count as u64,
+            self.total_perf_stats.internal_delete_skipped_count as u64,
         );
-        detail_v2.set_rocksdb_key_skipped_count(
-            self.total_perf_stats.0.internal_key_skipped_count as u64,
-        );
-        detail_v2.set_rocksdb_block_cache_hit_count(
-            self.total_perf_stats.0.block_cache_hit_count as u64,
-        );
-        detail_v2.set_rocksdb_block_read_count(self.total_perf_stats.0.block_read_count as u64);
-        detail_v2.set_rocksdb_block_read_byte(self.total_perf_stats.0.block_read_byte as u64);
+        detail_v2
+            .set_rocksdb_key_skipped_count(self.total_perf_stats.internal_key_skipped_count as u64);
+        detail_v2
+            .set_rocksdb_block_cache_hit_count(self.total_perf_stats.block_cache_hit_count as u64);
+        detail_v2.set_rocksdb_block_read_count(self.total_perf_stats.block_read_count as u64);
+        detail_v2.set_rocksdb_block_read_byte(self.total_perf_stats.block_read_byte as u64);
         exec_details_v2.set_scan_detail_v2(detail_v2);
 
         (exec_details, exec_details_v2)
@@ -281,13 +273,13 @@ impl Tracker {
                 "scan.total" => total_storage_stats.write.total_op_count(),
                 "scan.ranges" => self.req_ctx.ranges.len(),
                 "scan.range.first" => ?first_range,
-                "perf_stats.block_cache_hit_count" => self.total_perf_stats.0.block_cache_hit_count,
-                "perf_stats.block_read_count" => self.total_perf_stats.0.block_read_count,
-                "perf_stats.block_read_byte" => self.total_perf_stats.0.block_read_byte,
+                "perf_stats.block_cache_hit_count" => self.total_perf_stats.block_cache_hit_count,
+                "perf_stats.block_read_count" => self.total_perf_stats.block_read_count,
+                "perf_stats.block_read_byte" => self.total_perf_stats.block_read_byte,
                 "perf_stats.internal_key_skipped_count"
-                    => self.total_perf_stats.0.internal_key_skipped_count,
+                    => self.total_perf_stats.internal_key_skipped_count,
                 "perf_stats.internal_delete_skipped_count"
-                    => self.total_perf_stats.0.internal_delete_skipped_count,
+                    => self.total_perf_stats.internal_delete_skipped_count,
             );
         }
 
@@ -379,7 +371,7 @@ impl Drop for Tracker {
             self.on_begin_all_items();
         }
         if let TrackerState::ItemBegan(_) = self.current_stage {
-            self.on_finish_item(None, PerfStatisticsDelta::default());
+            self.on_finish_item(None);
         }
         if self.current_stage == TrackerState::AllItemsBegan {
             self.on_finish_all_items();
