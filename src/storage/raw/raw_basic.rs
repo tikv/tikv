@@ -1,12 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{APIV2, APIVersion};
 use crate::storage::kv::{Iterator, Result, Snapshot};
+use api_version::{APIVersion, APIV2};
 
-use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
+use engine_traits::CfName;
 use engine_traits::{IterOptions, ReadOptions};
 use tikv_kv::Modify;
-use txn_types::{Key, TimeStamp, Value};
+use txn_types::{Key, Value};
 
 #[derive(Clone)]
 pub struct RawBasicSnapshot<S: Snapshot> {
@@ -17,11 +17,9 @@ impl<S: Snapshot> RawBasicSnapshot<S> {
     pub fn from_snapshot(snap: S) -> Self {
         RawBasicSnapshot { snap }
     }
-
 }
 
 pub struct MvccRaw {
-
     pub(crate) write_size: usize,
     pub(crate) modifies: Vec<Modify>,
 }
@@ -47,8 +45,8 @@ impl MvccRaw {
 impl<S: Snapshot> Snapshot for RawBasicSnapshot<S> {
     type Iter = RawBasicIterator<S::Iter>;
     type Ext<'a>
-        where
-            S: 'a,
+    where
+        S: 'a,
     = S::Ext<'a>;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
@@ -84,7 +82,6 @@ impl<S: Snapshot> Snapshot for RawBasicSnapshot<S> {
     fn ext(&self) -> S::Ext<'_> {
         self.snap.ext()
     }
-
 }
 
 pub struct RawBasicIterator<I: Iterator> {
@@ -93,9 +90,7 @@ pub struct RawBasicIterator<I: Iterator> {
 
 impl<I: Iterator> RawBasicIterator<I> {
     fn new(inner: I) -> Self {
-        RawBasicIterator {
-            inner,
-        }
+        RawBasicIterator { inner }
     }
 }
 

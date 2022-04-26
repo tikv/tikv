@@ -8,8 +8,8 @@ mod gc_worker;
 
 // TODO: Use separated error type for GCWorker instead.
 pub use crate::storage::{Callback, Error, ErrorInner, Result};
-pub use compaction_filter::WriteCompactionFilterFactory;
 pub use compaction_filter::RawCompactionFilterFactory;
+pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;

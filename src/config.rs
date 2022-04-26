@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use api_version::{APIVersion, APIV1TTL};
+use api_version::APIV1TTL;
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
@@ -58,8 +58,8 @@ use tikv_util::yatp_pool;
 
 use crate::coprocessor_v2::Config as CoprocessorV2Config;
 use crate::import::Config as ImportConfig;
-use crate::server::gc_worker::{GcConfig, RawCompactionFilterFactory};
 use crate::server::gc_worker::WriteCompactionFilterFactory;
+use crate::server::gc_worker::{GcConfig, RawCompactionFilterFactory};
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;

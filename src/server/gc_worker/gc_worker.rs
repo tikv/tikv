@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::iter::Peekable;
 use std::mem;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -8,6 +8,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
+use api_version::{APIVersion, APIV2};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
@@ -18,13 +19,12 @@ use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, LockInfo};
 use kvproto::metapb::Region;
-use api_version::{APIV2, APIVersion};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
 use raftstore::store::util::find_peer;
-use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
+use tikv_kv::{CfStatistics, CursorBuilder, Modify};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::time::{duration_to_sec, Instant, Limiter, SlowTimer};
 use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler};
@@ -431,30 +431,14 @@ where
         Ok((handled_keys, wasted_keys))
     }
 
-    fn raw_gc_keys(
-        &mut self,
-        keys: Vec<Key>,
-        safe_point: TimeStamp,
-        //      regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-    ) -> Result<(usize, usize)> {
-        let tempobj = self.engine.clone();
-
+    fn raw_gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<(usize, usize)> {
         let first_key_vec = keys.first().unwrap().as_encoded();
-
         let first_raw_key = Key::from_raw(first_key_vec.as_slice()).append_ts(TimeStamp::max());
-        //let range_start_key = keys::data_key(first_raw_key.as_encoded().as_slice());
         let range_start_key = first_raw_key.as_encoded();
 
-        let last_key_vec = keys.last().unwrap().as_encoded();
-        let last_raw_key = Key::from_raw(last_key_vec.as_slice()).append_ts(TimeStamp::new(0));
-        //let range_end_key=keys::data_key(last_raw_key.as_encoded().as_slice());
-        let range_end_key = last_raw_key.as_encoded();
-        let snapshot = self
-            .engine
-            .snapshot_on_kv_engine(&range_start_key, &[])?;
+        let snapshot = self.engine.snapshot_on_kv_engine(&range_start_key, &[])?;
 
-        let mut mvcc_snapshot
-            = RawBasicSnapshot::from_snapshot(snapshot);
+        let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
 
         let mut raw_modifys = MvccRaw::new();
 
@@ -467,25 +451,19 @@ where
                 // Switch to the next key if meets failure.
             }
 
-            //flush_raw_gc;
+            // flush_raw_gc;
             Self::flush_raw_gc(raw_modifys, &self.limiter, &self.engine)?;
-            //flush 之后重置rwModify=let RawModify=MvccRaw::new();
+            // after flush, reset rwModify=let RawModify=MvccRaw::new();
             raw_modifys = MvccRaw::new();
             next_gc_key = keys_iter.next();
         }
         Ok((0, 0))
     }
 
-    fn print_array(&mut self, name: &str, arr: Vec<u8>) {
-        let mut resstr = String::new();
-        let space = " ";
-    }
-
     fn raw_gc_key(
         &mut self,
         safe_point: TimeStamp,
         key: &Key,
-        //  gc_info: &mut GcInfo,
         raw_modifys: &mut MvccRaw,
         snapshot: &mut RawBasicSnapshot<E::Snap>,
     ) -> Result<()> {
@@ -493,14 +471,11 @@ where
         let start_key_arr = start_key.as_encoded();
         let start_seek_key = Key::from_encoded_slice(&start_key_arr);
 
-        let mut cursor = CursorBuilder::new(snapshot, CF_DEFAULT)
-            .build()?;
+        let mut cursor = CursorBuilder::new(snapshot, CF_DEFAULT).build()?;
 
         let mut statistics = CfStatistics::default();
 
         cursor.seek(&start_seek_key, &mut statistics)?;
-
-        let temp = cursor.valid()?;
 
         while cursor.valid()? {
             let engine_key = Key::from_encoded_slice(cursor.key(&mut statistics));
@@ -754,10 +729,7 @@ where
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
                 self.update_statistics_metrics();
             }
-            GcTask::RawGcKeys {
-                keys,
-                safe_point,
-            } => {
+            GcTask::RawGcKeys { keys, safe_point } => {
                 match self.raw_gc_keys(keys, safe_point) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
@@ -1167,8 +1139,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::mpsc::{self, channel};
     use std::{thread, time::Duration};
-    use std::sync::RwLock;
 
+    use crate::config::DbConfig;
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
         SnapContext, TestEngineBuilder, WriteData,
@@ -1180,9 +1152,9 @@ mod tests {
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilderApiV1};
-    use api_version::{APIV2, APIVersion, RawValue};
+    use api_version::{APIVersion, RawValue, APIV2};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
-    use engine_traits::{KvEngine, Peekable, SyncMutable};
+    use engine_traits::KvEngine;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{ApiVersion, Op};
     use kvproto::metapb::Peer;
@@ -1191,12 +1163,10 @@ mod tests {
     use raftstore::coprocessor::RegionChangeEvent;
     use raftstore::router::RaftStoreBlackHole;
     use raftstore::store::RegionSnapshot;
-    use tidb_query_datatype::codec::Datum::Time;
     use tikv_kv::Snapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
-    use crate::config::DbConfig;
 
     use super::*;
 
@@ -1726,7 +1696,10 @@ mod tests {
     }
 
     fn makeKey(key: &[u8], ts: u64) -> Vec<u8> {
-        let res = Key::from_raw(key).append_ts(TimeStamp::new(ts)).as_encoded().to_vec();
+        let res = Key::from_raw(key)
+            .append_ts(TimeStamp::new(ts))
+            .as_encoded()
+            .to_vec();
         res
     }
 
@@ -1789,8 +1762,10 @@ mod tests {
         let currentKeyA = engineKeyA.as_slice();
         let currentKeyB = engineKeyB.as_slice();
 
-        let (mvcc_key_prefix_vecA, commit_ts_optA) = APIV2::decode_raw_key(&Key::from_encoded_slice(currentKeyA), true).unwrap();
-        let (mvcc_key_prefix_vecB, commit_ts_optB) = APIV2::decode_raw_key(&Key::from_encoded_slice(currentKeyB), true).unwrap();
+        let (mvcc_key_prefix_vecA, commit_ts_optA) =
+            APIV2::decode_raw_key(&Key::from_encoded_slice(currentKeyA), true).unwrap();
+        let (mvcc_key_prefix_vecB, commit_ts_optB) =
+            APIV2::decode_raw_key(&Key::from_encoded_slice(currentKeyB), true).unwrap();
 
         let toGCkeyA = Key::from_encoded_slice(&mvcc_key_prefix_vecA);
         let toGCkeyB = Key::from_encoded_slice(&mvcc_key_prefix_vecB);
@@ -1808,32 +1783,26 @@ mod tests {
             let raw_key = rawkeyVec.to_vec();
             let valueVecobj = valueVec.clone();
             let tt = APIV2::encode_raw_value_owned(valueVecobj);
-            let m = Modify::Put(
-                CF_DEFAULT,
-                key,
-                tt,
-            );
+            let m = Modify::Put(CF_DEFAULT, key, tt);
             let batch = WriteData::from_modifies(vec![m]);
             prefixed_engine.write(&ctx, batch);
         }
 
         runner.raw_gc_keys(keys.clone(), TimeStamp::new(100));
 
-        let snapshot = prefixed_engine
-            .snapshot_on_kv_engine(&[], &[]).unwrap();
-        let mut mvcc_snapshot
-            = RawBasicSnapshot::from_snapshot(snapshot);
+        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
+        let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
         let res02 = mvcc_snapshot.get(&Key::from_encoded_slice(&*engineKeyA));
 
         assert_eq!(6, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
         // if raw.ts == safepoint , it will not be delete; we just delete the raw.ts < safepoint
         assert_eq!(res02.unwrap().is_none(), false);
-        runner.raw_gc_keys(keys.clone(), TimeStamp::new(120)).unwrap();
-        let snapshot = prefixed_engine
-            .snapshot_on_kv_engine(&[], &[]).unwrap();
-        let mut mvcc_snapshot
-            = RawBasicSnapshot::from_snapshot(snapshot);
+        runner
+            .raw_gc_keys(keys.clone(), TimeStamp::new(120))
+            .unwrap();
+        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
+        let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
         let res02 = mvcc_snapshot.get(&Key::from_encoded_slice(&*engineKeyA));
 
         assert_eq!(7, runner.stats.data.next);
