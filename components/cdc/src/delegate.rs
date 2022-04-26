@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::mem;
 use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use api_version::{APIVersion, KeyMode, APIV2};
+use api_version::{ApiV2, KeyMode, KvFormat};
 use causal_ts::Resolver as RawKvResolver;
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
@@ -12,6 +13,7 @@ use kvproto::cdcpb::{
     ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
     EventRowOpType, Event_oneof_event,
 };
+use kvproto::kvrpcpb::ApiVersion;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{
@@ -241,11 +243,16 @@ pub struct Delegate {
     failed: bool,
 
     id_map: HashMap<DownstreamID, ChangeDataRequestKvApi>,
+    api_version: ApiVersion,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64, txn_extra_op: Arc<AtomicCell<TxnExtraOp>>) -> Delegate {
+    pub fn new(
+        region_id: u64,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+        api_version: ApiVersion,
+    ) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
@@ -259,6 +266,7 @@ impl Delegate {
             txn_extra_op,
             failed: false,
             id_map: HashMap::default(),
+            api_version,
         }
     }
 
@@ -753,6 +761,7 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
+            // No ready downstream or a dowsream that does not match the kv_api type, will be ignored.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
@@ -779,8 +788,8 @@ impl Delegate {
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
         rawkv_max_ts: &mut u64,
     ) -> Result<()> {
-        let key_mode = APIV2::parse_key_mode(put.get_key());
-        if key_mode == KeyMode::Raw {
+        let key_mode = ApiV2::parse_key_mode(put.get_key());
+        if self.api_version == ApiVersion::V2 && key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows, rawkv_max_ts)
         } else {
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
@@ -1111,8 +1120,8 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
 }
 
 fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
-    let (decoded_key, ts) = APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
-    let decoded_value = APIV2::decode_raw_value_owned(value).unwrap();
+    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
+    let decoded_value = ApiV2::decode_raw_value_owned(value).unwrap();
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
@@ -1121,8 +1130,6 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
 
     if let Some(expire_ts) = decoded_value.expire_ts {
         row.expire_ts_unix_secs = expire_ts;
-    } else {
-        row.expire_ts_unix_secs = u64::max_value();
     }
 
     if decoded_value.is_delete {
@@ -1171,7 +1178,7 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id, Default::default());
+        let mut delegate = Delegate::new(region_id, Default::default(), ApiVersion::V2);
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
         let resolver = TxnKvResolver::new(region_id);
@@ -1295,7 +1302,7 @@ mod tests {
 
         // Create a new delegate.
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, txn_extra_op.clone());
+        let mut delegate = Delegate::new(1, txn_extra_op.clone(), ApiVersion::V2);
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
@@ -1373,33 +1380,19 @@ mod tests {
     #[test]
     fn test_decode_rawkv() {
         let cases = vec![
-            (
-                vec![b'r', 2, 3, 4],
-                vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb],
-                vec![b'w', b'o', b'r', b'l', b'd', b'1'],
-                1,
-                Some(10),
-                false,
-            ),
-            (
-                vec![b'r', 3, 4, 5],
-                vec![b'r', 3, 4, 5, 0, 0, 0, 0, 0xfb],
-                vec![b'w', b'o', b'r', b'l', b'd', b'2'],
-                2,
-                None,
-                true,
-            ),
+            (vec![b'r', 2, 3, 4], b"world1".to_vec(), 1, Some(10), false),
+            (vec![b'r', 3, 4, 5], b"world2".to_vec(), 2, None, true),
         ];
 
-        for (key, mut key_with_ts, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
+        for (key, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
             let mut row = EventRow::default();
-            APIV2::append_ts_on_encoded_bytes(&mut key_with_ts, start_ts.into());
+            let key_with_ts = ApiV2::encode_raw_key(&key, Some(start_ts.into())).into_encoded();
             let raw_value = RawValue {
                 user_value: value.to_vec(),
                 expire_ts,
                 is_delete,
             };
-            let encoded_value = APIV2::encode_raw_value_owned(raw_value);
+            let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
             decode_rawkv(key_with_ts, encoded_value, &mut row);
 
             assert_eq!(row.start_ts, start_ts);
@@ -1415,7 +1408,7 @@ mod tests {
             if let Some(expire_ts) = expire_ts {
                 assert_eq!(row.expire_ts_unix_secs, expire_ts);
             } else {
-                assert_eq!(row.expire_ts_unix_secs, u64::max_value());
+                assert_eq!(row.expire_ts_unix_secs, 0);
             }
         }
     }

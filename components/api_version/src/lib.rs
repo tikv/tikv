@@ -6,6 +6,8 @@ mod api_v1;
 mod api_v1ttl;
 pub mod api_v2;
 
+pub use api_v2::RAW_KEY_PREFIX;
+
 use engine_traits::Result;
 use kvproto::kvrpcpb::ApiVersion;
 

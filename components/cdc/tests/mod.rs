@@ -192,7 +192,7 @@ impl TestSuiteBuilder {
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
-                cluster.cfg.storage.api_version,
+                cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
                 worker.scheduler(),
                 raft_router,
