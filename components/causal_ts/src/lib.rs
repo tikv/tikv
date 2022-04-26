@@ -41,7 +41,7 @@ pub mod tests {
     impl Default for TestProvider {
         fn default() -> Self {
             Self {
-                // Note that `ts` should not start from 0. See `APIV2::encode_raw_key`.
+                // Note that `ts` should not start from 0. See `ApiV2::encode_raw_key`.
                 ts: Arc::new(AtomicU64::new(100)),
             }
         }

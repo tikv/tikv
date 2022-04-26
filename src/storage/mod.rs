@@ -81,7 +81,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 
-use api_version::{APIVersion, KeyMode, RawValue, APIV1, APIV2};
+use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -134,7 +134,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager, Api: APIVersion> {
+pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -159,14 +159,14 @@ pub struct Storage<E: Engine, L: LockManager, Api: APIVersion> {
 
     quota_limiter: Arc<QuotaLimiter>,
 
-    _phantom: PhantomData<Api>,
+    _phantom: PhantomData<F>,
 }
 
 /// Storage for Api V1
 /// To be convenience for test cases unrelated to RawKV.
-pub type StorageApiV1<E, L> = Storage<E, L, APIV1>;
+pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
 
-impl<E: Engine, L: LockManager, Api: APIVersion> Clone for Storage<E, L, Api> {
+impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -190,7 +190,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Clone for Storage<E, L, Api> {
     }
 }
 
-impl<E: Engine, L: LockManager, Api: APIVersion> Drop for Storage<E, L, Api> {
+impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -222,7 +222,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
+impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -237,7 +237,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
     ) -> Result<Self> {
-        assert_eq!(config.api_version(), Api::TAG, "Api version not match");
+        assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -313,10 +313,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
     }
 
     #[inline]
-    fn with_tls_engine<F, R>(f: F) -> R
-    where
-        F: FnOnce(&E) -> R,
-    {
+    fn with_tls_engine<R>(f: impl FnOnce(&E) -> R) -> R {
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
     }
@@ -420,7 +417,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
                 for key in keys {
-                    if APIV2::parse_key_mode(key.as_ref()) != KeyMode::TiDB {
+                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::TiDB {
                         return Err(ErrorInner::invalid_key_mode(
                             cmd,
                             storage_api_version,
@@ -432,7 +429,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_raw_command(cmd) => {
                 for key in keys {
-                    if APIV2::parse_key_mode(key.as_ref()) != KeyMode::Raw {
+                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::Raw {
                         return Err(ErrorInner::invalid_key_mode(
                             cmd,
                             storage_api_version,
@@ -444,7 +441,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
             }
             (ApiVersion::V2, ApiVersion::V2) if Self::is_txn_command(cmd) => {
                 for key in keys {
-                    if APIV2::parse_key_mode(key.as_ref()) != KeyMode::Txn {
+                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::Txn {
                         return Err(ErrorInner::invalid_key_mode(
                             cmd,
                             storage_api_version,
@@ -484,7 +481,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if APIV2::parse_range_mode(range) != KeyMode::TiDB {
+                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
@@ -500,7 +497,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if APIV2::parse_range_mode(range) != KeyMode::Raw {
+                    if ApiV2::parse_range_mode(range) != KeyMode::Raw {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
@@ -516,7 +513,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if APIV2::parse_range_mode(range) != KeyMode::Txn {
+                    if ApiV2::parse_range_mode(range) != KeyMode::Txn {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
@@ -1501,7 +1498,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let key = Api::encode_raw_key_owned(key, None);
+                    let key = F::encode_raw_key_owned(key, None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
                     tls_collect_query(
                         ctx.get_region_id(),
@@ -1589,7 +1586,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                 let mut snaps = vec![];
                 for (mut req, id) in gets.into_iter().zip(ids) {
                     let ctx = req.take_context();
-                    let key = Api::encode_raw_key_owned(req.take_key(), None);
+                    let key = F::encode_raw_key_owned(req.take_key(), None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
                     // Don't place in loop of `snaps`, otherwise `snap.wait` may run in another thread,
                     // and cause the `thread-local` statistics unstable for test.
@@ -1709,7 +1706,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
                         .map(|k| {
-                            let k = Api::encode_raw_key_owned(k, None);
+                            let k = F::encode_raw_key_owned(k, None);
                             let mut s = Statistics::default();
                             let v = store.raw_get_key_value(cf, &k, &mut s).map_err(Error::from);
                             tls_collect_read_flow(
@@ -1726,7 +1723,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(v) => {
-                                let (user_key, _) = Api::decode_raw_key_owned(k, false).unwrap();
+                                let (user_key, _) = F::decode_raw_key_owned(k, false).unwrap();
                                 Ok((user_key, v.unwrap()))
                             }
                             Err(v) => Err(v),
@@ -1779,8 +1776,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
-        if !Api::IS_TTL_ENABLED && ttl != 0 {
-            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        if !F::IS_TTL_ENABLED && ttl != 0 {
+            return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
 
         let raw_value = RawValue {
@@ -1790,8 +1787,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         };
         let m = Modify::Put(
             Self::rawkv_cf(&cf, self.api_version)?,
-            Api::encode_raw_key_owned(key, None),
-            Api::encode_raw_value_owned(raw_value),
+            F::encode_raw_key_owned(key, None),
+            F::encode_raw_value_owned(raw_value),
         );
 
         let mut batch = WriteData::from_modifies(vec![m]);
@@ -1811,12 +1808,12 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
     ) -> Result<Vec<Modify>> {
-        if !Api::IS_TTL_ENABLED {
+        if !F::IS_TTL_ENABLED {
             if ttls.iter().any(|&x| x != 0) {
-                return Err(Error::from(ErrorInner::TTLNotEnabled));
+                return Err(Error::from(ErrorInner::TtlNotEnabled));
             }
         } else if ttls.len() != pairs.len() {
-            return Err(Error::from(ErrorInner::TTLsLenNotEqualsToPairs));
+            return Err(Error::from(ErrorInner::TtlLenNotEqualsToPairs));
         }
 
         let modifies = pairs
@@ -1830,8 +1827,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                 };
                 Modify::Put(
                     cf,
-                    Api::encode_raw_key_owned(k, None),
-                    Api::encode_raw_value_owned(raw_value),
+                    F::encode_raw_key_owned(k, None),
+                    F::encode_raw_value_owned(raw_value),
                 )
             })
             .collect();
@@ -1876,9 +1873,9 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
     }
 
     fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>) -> Modify {
-        let key = Api::encode_raw_key_owned(key, None);
-        match Api::TAG {
-            ApiVersion::V2 => Modify::Put(cf, key, APIV2::ENCODED_LOGICAL_DELETE.to_vec()),
+        let key = F::encode_raw_key_owned(key, None);
+        match F::TAG {
+            ApiVersion::V2 => Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec()),
             _ => Modify::Delete(cf, key),
         }
     }
@@ -1934,8 +1931,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let start_key = Api::encode_raw_key_owned(start_key, None);
-        let end_key = Api::encode_raw_key_owned(end_key, None);
+        let start_key = F::encode_raw_key_owned(start_key, None);
+        let end_key = F::encode_raw_key_owned(end_key, None);
 
         let mut batch =
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
@@ -2040,8 +2037,8 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                     let store = RawStore::new(snapshot, api_version);
                     let begin_instant = Instant::now_coarse();
 
-                    let start_key = Api::encode_raw_key_owned(start_key, None);
-                    let end_key = end_key.map(|k| Api::encode_raw_key_owned(k, None));
+                    let start_key = F::encode_raw_key_owned(start_key, None);
+                    let end_key = end_key.map(|k| F::encode_raw_key_owned(k, None));
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
                     tls_collect_query(
                         ctx.get_region_id(),
@@ -2082,7 +2079,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                             .map(|pair| {
                                 pair.map(|(k, v)| {
                                     let (user_key, _) =
-                                        Api::decode_raw_key_owned(Key::from_encoded(k), true)
+                                        F::decode_raw_key_owned(Key::from_encoded(k), true)
                                             .unwrap();
                                     (user_key, v)
                                 })
@@ -2183,16 +2180,16 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                     let ranges_len = ranges.len();
 
                     for i in 0..ranges_len {
-                        let start_key = Api::encode_raw_key_owned(ranges[i].take_start_key(), None);
+                        let start_key = F::encode_raw_key_owned(ranges[i].take_start_key(), None);
                         let end_key = ranges[i].take_end_key();
                         let end_key = if end_key.is_empty() {
                             if i + 1 == ranges_len {
                                 None
                             } else {
-                                Some(Api::encode_raw_key(ranges[i + 1].get_start_key(), None))
+                                Some(F::encode_raw_key(ranges[i + 1].get_start_key(), None))
                             }
                         } else {
-                            Some(Api::encode_raw_key_owned(end_key, None))
+                            Some(F::encode_raw_key_owned(end_key, None))
                         };
                         let mut stats = Statistics::default();
                         let pairs: Vec<Result<KvPair>> = if reverse_scan {
@@ -2224,7 +2221,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                                 .map(|pair| {
                                     pair.map(|(k, v)| {
                                         let (user_key, _) =
-                                            Api::decode_raw_key_owned(Key::from_encoded(k), true)
+                                            F::decode_raw_key_owned(Key::from_encoded(k), true)
                                                 .unwrap();
                                         (user_key, v)
                                     })
@@ -2317,7 +2314,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let key = Api::encode_raw_key_owned(key, None);
+                    let key = F::encode_raw_key_owned(key, None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
                     tls_collect_query(
                         ctx.get_region_id(),
@@ -2376,11 +2373,11 @@ impl<E: Engine, L: LockManager, Api: APIVersion> Storage<E, L, Api> {
         )?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
-        if !Api::IS_TTL_ENABLED && ttl != 0 {
-            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        if !F::IS_TTL_ENABLED && ttl != 0 {
+            return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
 
-        let key = Api::encode_raw_key_owned(key, None);
+        let key = F::encode_raw_key_owned(key, None);
         let cmd =
             RawCompareAndSwap::new(cf, key, previous_value, value, ttl, self.api_version, ctx);
         self.sched_txn_command(cmd, cb)
@@ -2609,25 +2606,25 @@ pub fn point_key_range(key: Key) -> KeyRange {
 ///
 /// Only used for test purpose.
 #[must_use]
-pub struct TestStorageBuilder<E: Engine, L: LockManager, Api: APIVersion> {
+pub struct TestStorageBuilder<E: Engine, L: LockManager, F: KvFormat> {
     engine: E,
     config: Config,
     pipelined_pessimistic_lock: Arc<AtomicBool>,
     in_memory_pessimistic_lock: Arc<AtomicBool>,
     lock_mgr: L,
     resource_tag_factory: ResourceTagFactory,
-    _phantom: PhantomData<Api>,
+    _phantom: PhantomData<F>,
 }
 
 /// TestStorageBuilder for Api V1
 /// To be convenience for test cases unrelated to RawKV.
-pub type TestStorageBuilderApiV1<E, L> = TestStorageBuilder<E, L, APIV1>;
+pub type TestStorageBuilderApiV1<E, L> = TestStorageBuilder<E, L, ApiV1>;
 
-impl<Api: APIVersion> TestStorageBuilder<RocksEngine, DummyLockManager, Api> {
+impl<F: KvFormat> TestStorageBuilder<RocksEngine, DummyLockManager, F> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager) -> Self {
         let engine = TestEngineBuilder::new()
-            .api_version(Api::TAG)
+            .api_version(F::TAG)
             .build()
             .unwrap();
 
@@ -2753,10 +2750,10 @@ impl FlowStatsReporter for DummyReporter {
     fn report_write_stats(&self, _write_stats: WriteStats) {}
 }
 
-impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
+impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
         let mut config = Config::default();
-        config.set_api_version(Api::TAG);
+        config.set_api_version(F::TAG);
         Self {
             engine,
             config,
@@ -2804,7 +2801,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, L, Api>> {
+    pub fn build(self) -> Result<Storage<E, L, F>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -2828,7 +2825,7 @@ impl<E: Engine, L: LockManager, Api: APIVersion> TestStorageBuilder<E, L, Api> {
         )
     }
 
-    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, Api>> {
+    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, F>> {
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -2981,8 +2978,8 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -3088,7 +3085,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
-    use api_version::{APIV1, APIV1TTL, APIV2};
+    use api_version::{test_kv_format_impl, ApiV2};
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -4462,18 +4459,16 @@ mod tests {
 
     #[test]
     fn test_raw_get_put() {
-        test_raw_get_put_impl::<APIV1>();
-        test_raw_get_put_impl::<APIV1TTL>();
-        test_raw_get_put_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_get_put_impl);
     }
 
-    fn test_raw_get_put_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_get_put_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4515,7 +4510,7 @@ mod tests {
         let test_data = vec![Some(b"v1"), Some(b"v2"), None, Some(b"v3")];
         let k = b"r\0k".to_vec();
 
-        let storage = TestStorageBuilder::<_, _, APIV2>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4577,18 +4572,16 @@ mod tests {
 
     #[test]
     fn test_raw_delete() {
-        test_raw_delete_impl::<APIV1>();
-        test_raw_delete_impl::<APIV1TTL>();
-        test_raw_delete_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_delete_impl);
     }
 
-    fn test_raw_delete_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_delete_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4608,7 +4601,7 @@ mod tests {
                     "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
-                    if !Api::IS_TTL_ENABLED { 0 } else { 30 },
+                    if !F::IS_TTL_ENABLED { 0 } else { 30 },
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -4659,18 +4652,16 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        test_raw_delete_range_impl::<APIV1>();
-        test_raw_delete_range_impl::<APIV1TTL>();
-        test_raw_delete_range_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_delete_range_impl);
     }
 
-    fn test_raw_delete_range_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_delete_range_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4772,15 +4763,13 @@ mod tests {
     #[test]
     fn test_raw_batch_put() {
         for for_cas in vec![false, true].into_iter() {
-            test_raw_batch_put_impl::<APIV1>(for_cas);
-            test_raw_batch_put_impl::<APIV1TTL>(for_cas);
-            test_raw_batch_put_impl::<APIV2>(for_cas);
+            test_kv_format_impl!(test_raw_batch_put_impl(for_cas));
         }
     }
 
-    fn run_raw_batch_put<Api: APIVersion>(
+    fn run_raw_batch_put<F: KvFormat>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, Api>,
+        storage: &Storage<RocksEngine, DummyLockManager, F>,
         ctx: Context,
         kvpairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -4793,13 +4782,13 @@ mod tests {
         }
     }
 
-    fn test_raw_batch_put_impl<Api: APIVersion>(for_cas: bool) {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_batch_put_impl<F: KvFormat>(for_cas: bool) {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4816,7 +4805,7 @@ mod tests {
             .into_iter()
             .map(|(key, value, _)| (key, value))
             .collect();
-        let ttls = if Api::IS_TTL_ENABLED {
+        let ttls = if F::IS_TTL_ENABLED {
             test_data
                 .clone()
                 .into_iter()
@@ -4866,18 +4855,16 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        test_raw_batch_get_impl::<APIV1>();
-        test_raw_batch_get_impl::<APIV1TTL>();
-        test_raw_batch_get_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_batch_get_impl);
     }
 
-    fn test_raw_batch_get_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_batch_get_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4915,18 +4902,16 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get_command() {
-        test_raw_batch_get_command_impl::<APIV1>();
-        test_raw_batch_get_command_impl::<APIV1TTL>();
-        test_raw_batch_get_command_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_batch_get_command_impl);
     }
 
-    fn test_raw_batch_get_command_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_batch_get_command_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4979,15 +4964,13 @@ mod tests {
     #[test]
     fn test_raw_batch_delete() {
         for for_cas in vec![false, true].into_iter() {
-            test_raw_batch_delete_impl::<APIV1>(for_cas);
-            test_raw_batch_delete_impl::<APIV1TTL>(for_cas);
-            test_raw_batch_delete_impl::<APIV2>(for_cas);
+            test_kv_format_impl!(test_raw_batch_delete_impl(for_cas));
         }
     }
 
-    fn run_raw_batch_delete<Api: APIVersion>(
+    fn run_raw_batch_delete<F: KvFormat>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, Api>,
+        storage: &Storage<RocksEngine, DummyLockManager, F>,
         ctx: Context,
         keys: Vec<Vec<u8>>,
         cb: Callback<()>,
@@ -4999,13 +4982,13 @@ mod tests {
         }
     }
 
-    fn test_raw_batch_delete_impl<Api: APIVersion>(for_cas: bool) {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_batch_delete_impl<F: KvFormat>(for_cas: bool) {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5090,24 +5073,22 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        test_raw_scan_impl::<APIV1>();
-        test_raw_scan_impl::<APIV1TTL>();
-        test_raw_scan_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_scan_impl);
     }
 
-    fn test_raw_scan_impl<Api: APIVersion>() {
-        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = Api::TAG {
+    fn test_raw_scan_impl<F: KvFormat>() {
+        let (end_key, end_key_reverse_scan) = if let ApiVersion::V2 = F::TAG {
             (Some(b"r\0z".to_vec()), Some(b"r\0\0".to_vec()))
         } else {
             (None, None)
         };
 
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5482,19 +5463,17 @@ mod tests {
 
     #[test]
     fn test_raw_batch_scan() {
-        test_raw_batch_scan_impl::<APIV1>();
-        test_raw_batch_scan_impl::<APIV1TTL>();
-        test_raw_batch_scan_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_batch_scan_impl);
     }
 
-    fn test_raw_batch_scan_impl<Api: APIVersion>() {
+    fn test_raw_batch_scan_impl<F: KvFormat>() {
         let make_ranges = |delimiters: Vec<Vec<u8>>| -> Vec<KeyRange> {
             delimiters
                 .windows(2)
                 .map(|key_pair| {
                     let mut range = KeyRange::default();
                     range.set_start_key(key_pair[0].clone());
-                    if let ApiVersion::V2 = Api::TAG {
+                    if let ApiVersion::V2 = F::TAG {
                         range.set_end_key(key_pair[1].clone());
                     };
                     range
@@ -5502,12 +5481,12 @@ mod tests {
                 .collect()
         };
 
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5739,17 +5718,16 @@ mod tests {
 
     #[test]
     fn test_raw_get_key_ttl() {
-        test_raw_get_key_ttl_impl::<APIV1TTL>();
-        test_raw_get_key_ttl_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_get_key_ttl_impl<ApiV1Ttl ApiV2>());
     }
 
-    fn test_raw_get_key_ttl_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_get_key_ttl_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -5799,18 +5777,16 @@ mod tests {
 
     #[test]
     fn test_raw_compare_and_swap() {
-        test_raw_compare_and_swap_impl::<APIV1>();
-        test_raw_compare_and_swap_impl::<APIV1TTL>();
-        test_raw_compare_and_swap_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_compare_and_swap_impl);
     }
 
-    fn test_raw_compare_and_swap_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_compare_and_swap_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
