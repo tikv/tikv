@@ -98,7 +98,7 @@ pub fn commit<S: Snapshot>(
     }
 
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-    Ok(txn.unlock_key(key, lock.is_pessimistic_txn()))
+    Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), Some(commit_ts)))
 }
 
 pub mod tests {

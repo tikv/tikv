@@ -344,12 +344,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 }
 
 #[derive(Default)]
-pub(super) struct ReleasedLocks {
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
-    hashes: Vec<u64>,
-    pessimistic: bool,
-}
+pub(super) struct ReleasedLocks(Vec<ReleasedLock>);
 
 /// Represents for a scheduler command, when should the response sent to the client.
 /// For most cases, the response should be sent after the result being successfully applied to
@@ -374,74 +369,74 @@ pub struct WriteResult {
     pub rows: usize,
     pub pr: ProcessResult,
     pub encountered_locks: Option<Vec<WriteResultLockInfo>>,
+    pub released_locks: Option<ReleasedLocks>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
+}
+
+#[derive(Clone)]
+pub struct PessimisticLockParameters {
+    pub pb_ctx: Context,
+    pub primary: Vec<u8>,
+    pub start_ts: TimeStamp,
+    pub lock_ttl: u64,
+    pub for_update_ts: TimeStamp,
+    pub wait_timeout: Option<WaitTimeout>,
+    pub return_values: bool,
+    pub min_commit_ts: TimeStamp,
+    pub check_existence: bool,
 }
 
 pub struct WriteResultLockInfo {
     pub index_in_request: usize,
     pub key: Key,
+    pub should_not_exist: bool,
     pub last_found_lock: LockInfo,
     pub lock_digest: lock_manager::LockDigest,
     pub hash_for_latch: u64,
     pub key_cb: Option<Callback<PessimisticLockResults>>,
     // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
-    pub is_first_lock: bool,
-    pub pb_ctx: Context,
     pub term: Option<NonZeroU64>,
-    pub start_ts: TimeStamp,
-    pub for_update_ts: TimeStamp,
-    pub wait_timeout: Option<WaitTimeout>,
+    pub is_first_lock: bool,
+    pub parameters: PessimisticLockParameters,
 }
 
 impl WriteResultLockInfo {
     pub fn new(
         index_in_request: usize,
         key: Key,
+        should_not_exist: bool,
         last_found_lock: LockInfo,
-        is_first_lock: bool,
-        ctx: Context,
         term: Option<NonZeroU64>,
-        start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
-        wait_timeout: Option<WaitTimeout>,
+        is_first_lock: bool,
+        parameters: PessimisticLockParameters,
+        lock_digest: lock_manager::LockDigest,
+        hash_for_latch: u64,
+        key_cb: Option<Callback<PessimisticLockResults>>,
     ) -> Self {
-        let lock_digest = lock_manager::LockDigest::from_lock_info_pb(last_found_lock);
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash_for_latch = hasher.finish();
         Self {
             index_in_request,
             key,
+            should_not_exist,
             last_found_lock,
             lock_digest,
             hash_for_latch,
-            key_cb: None,
-            is_first_lock,
-            pb_ctx: ctx,
+            key_cb,
             term,
-            start_ts,
-            for_update_ts,
-            wait_timeout,
+            is_first_lock,
+            parameters,
         }
     }
 }
 
 impl ReleasedLocks {
-    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp) -> Self {
-        Self {
-            start_ts,
-            commit_ts,
-            ..Default::default()
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn push(&mut self, lock: Option<ReleasedLock>) {
         if let Some(lock) = lock {
-            self.hashes.push(lock.hash);
-            if !self.pessimistic {
-                self.pessimistic = lock.pessimistic;
-            }
+            self.0.push(lock);
         }
     }
 

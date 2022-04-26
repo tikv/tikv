@@ -10,17 +10,27 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
 };
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult, WriteResultLockInfo,
+    Command, CommandExt, PessimisticLockParameters, ReaderWithStats, ResponsePolicy, TypedCommand,
+    WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::{acquire_pessimistic_lock, Error, ErrorInner, Result};
 use crate::storage::types::PessimisticLockKeyResult;
 use crate::storage::{
-    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockResults, ProcessResult,
-    Result as StorageResult, Snapshot,
+    Callback, Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockResults,
+    ProcessResult, Result as StorageResult, Snapshot,
 };
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 // TODO: Support multi keys from different requests and has different start_ts and for_update_ts.
+
+pub enum PessimisticLockCmdInner {
+    SingleRequest {
+        params: PessimisticLockParameters,
+        keys: Vec<(Key, bool)>,
+    },
+    BatchResumedRequests(Vec<WriteResultLockInfo>),
+}
 
 command! {
     /// Acquire a Pessimistic lock on the keys.
@@ -30,41 +40,86 @@ command! {
         cmd_ty => StorageResult<PessimisticLockResults>,
         display => "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
         content => {
-            /// The set of keys to lock.
-            keys: Vec<(Key, bool)>,
-            /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
-            primary: Vec<u8>,
-            /// The transaction timestamp.
-            start_ts: TimeStamp,
-            /// The Time To Live of the lock, in milliseconds
-            lock_ttl: u64,
+            // /// The set of keys to lock.
+            // keys: Vec<(Key, bool)>,
+            // /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
+            // primary: Vec<u8>,
+            // /// The transaction timestamp.
+            // start_ts: TimeStamp,
+            // /// The Time To Live of the lock, in milliseconds
+            // lock_ttl: u64,
+            // for_update_ts: TimeStamp,
+            // /// Time to wait for lock released in milliseconds when encountering locks.
+            // wait_timeout: Option<WaitTimeout>,
+            // /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
+            // /// later read in the same transaction.
+            // return_values: bool,
+            // min_commit_ts: TimeStamp,
+            // check_existence: bool,
+
+            inner: PessimisticLockCmdInner,
             is_first_lock: bool,
-            for_update_ts: TimeStamp,
-            /// Time to wait for lock released in milliseconds when encountering locks.
-            wait_timeout: Option<WaitTimeout>,
-            /// If it is true, TiKV will return values of the keys if no error, so TiDB can cache the values for
-            /// later read in the same transaction.
-            return_values: bool,
-            min_commit_ts: TimeStamp,
-            old_values: OldValues,
-            check_existence: bool,
         }
+}
+
+struct PessimisticLockKeyContext {
+    index_in_request: usize,
+    lock_digest: LockDigest,
+    hash_for_latch: u64,
+    key_cb: Option<Callback<PessimisticLockResults>>,
+}
+
+impl PessimisticLockKeyContext {
+    fn from_key(
+        index: usize,
+        key: &Key,
+        ts: TimeStamp,
+        key_cb: Option<Callback<PessimisticLockResults>>,
+    ) -> Self {
+        let lock_digest = LockDigest {
+            hash: key.gen_hash(),
+            ts,
+        };
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let hash_for_latch = hasher.finish();
+        Self {
+            index_in_request: index,
+            lock_digest,
+            hash_for_latch,
+            key_cb,
+        }
+    }
 }
 
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
-    ts!(start_ts);
+    // ts!(start_ts);
     property!(can_be_pipelined);
 
-    fn write_bytes(&self) -> usize {
-        self.keys
-            .iter()
-            .map(|(key, _)| key.as_encoded().len())
-            .sum()
+    fn ts(&self) -> TimeStamp {
+        match &self.inner {
+            PessimisticLockCmdInner::SingleRequest { params, .. } => params.start_ts,
+            PessimisticLockCmdInner::BatchResumedRequests(_) => TimeStamp::zero(),
+        }
     }
 
-    gen_lock!(keys: multiple(|x| &x.0));
+    fn write_bytes(&self) -> usize {
+        match &self.inner {
+            PessimisticLockCmdInner::SingleRequest { params: _, keys } => {
+                keys.iter().map(|(key, _)| key.as_encoded().len()).sum()
+            }
+            PessimisticLockCmdInner::BatchResumedRequests(v) => {
+                v.iter().map(|item| item.key.as_encoded().len()).sum()
+            }
+        }
+    }
+
+    gen_lock!(inner: matching {
+        PessimisticLockCmdInner::SingleRequest { params: _, keys } => keys.iter().map(|k| k.0),
+        PessimisticLockCmdInner::BatchResumedRequests(v) => v.iter().map(|item| item.key)
+    });
 }
 
 fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
@@ -77,13 +132,69 @@ fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
-        let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
-            context.statistics,
-        );
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        match self.inner {
+            PessimisticLockCmdInner::SingleRequest { params, keys } => {
+                let iter = std::iter::repeat(params)
+                    .take(keys.len())
+                    .zip(keys)
+                    .enumerate()
+                    .map(|(index, (params, (key, should_not_exist)))| {
+                        let lock_key_ctx =
+                            PessimisticLockKeyContext::from_key(index, &key, params.start_ts, None);
+                        (key, should_not_exist, params, lock_key_ctx)
+                    });
+                Self::process_write_impl(snapshot, context, self.ctx, iter, self.is_first_lock)
+            }
+            PessimisticLockCmdInner::BatchResumedRequests(items) => {
+                let iter = items.into_iter().map(|item| {
+                    let lock_key_ctx = PessimisticLockKeyContext::from_key(
+                        item.index_in_request,
+                        &item.key,
+                        item.parameters.start_ts,
+                        item.key_cb,
+                    );
+                    (
+                        item.key,
+                        item.should_not_exist,
+                        item.parameters,
+                        lock_key_ctx,
+                    )
+                });
+                Self::process_write_impl(snapshot, context, self.ctx, iter, false)
+            }
+        }
+    }
+}
+
+impl AcquirePessimisticLock {
+    fn process_write_impl<S, L, I>(
+        snapshot: S,
+        context: WriteContext<'_, L>,
+        pb_ctx: Context,
+        items: I,
+        is_first_lock: bool,
+    ) -> Result<WriteResult>
+    where
+        S: Snapshot,
+        L: LockManager,
+        I: Iterator<
+            Item = (
+                Key,
+                bool,
+                PessimisticLockParameters,
+                PessimisticLockKeyContext,
+            ),
+        >,
+    {
+        // let (start_ts, ctx, keys) = (self.start_ts, pb_ctx, self.keys);
+        let mut modifies = vec![];
+        let mut txn = None; // MvccTxn::new(start_ts, context.concurrency_manager);
+        let mut reader = None;
+        // ReaderWithStats::new(
+        // SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
+        // context.statistics,
+        // );
 
         let mut rows = 0;
         // let mut res = if self.return_values {
@@ -98,18 +209,43 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut res = PessimisticLockResults::with_capacity(keys.len());
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
-        for (index, (k, should_not_exist)) in keys.into_iter().enumerate() {
+        let mut old_values = OldValues::default();
+        // for (index, (k, should_not_exist)) in keys.into_iter().enumerate() {
+        for (key, should_not_exist, params, lock_key_ctx) in items.map(|x| x) {
+            // TODO: Refine the code for rebuilding txn state.
+            if txn
+                .as_ref()
+                .map_or(true, |t: &MvccTxn| t.start_ts != params.start_ts)
+            {
+                if let Some(txn) = txn {
+                    if txn.write_size() > 0 {
+                        modifies.extend(txn.into_modifies());
+                    }
+                }
+                txn = Some(MvccTxn::new(
+                    params.start_ts,
+                    context.concurrency_manager.clone(),
+                ));
+                // TODO: Is it possible to reuse the same reader but change the start_ts stored in it?
+                reader = Some(ReaderWithStats::new(
+                    SnapshotReader::new_with_ctx(params.start_ts, snapshot.clone(), &pb_ctx),
+                    context.statistics,
+                ));
+            }
+            let txn = txn.as_mut().unwrap();
+            let reader = reader.as_mut().unwrap();
+
             match acquire_pessimistic_lock(
-                &mut txn,
-                &mut reader,
+                txn,
+                reader,
                 k.clone(),
-                &self.primary,
+                &params.primary,
                 should_not_exist,
-                self.lock_ttl,
-                self.for_update_ts,
-                self.return_values,
-                self.check_existence,
-                self.min_commit_ts,
+                params.lock_ttl,
+                params.for_update_ts,
+                params.return_values,
+                params.check_existence,
+                params.min_commit_ts,
                 need_old_value,
             ) {
                 Ok((key_res, old_value)) => {
@@ -118,33 +254,39 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;
-                        self.old_values.insert(key, (old_value, mutation_type));
+                        old_values.insert(key, (old_value, mutation_type));
                     }
                     rows += 1;
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     res.push(PessimisticLockKeyResult::Waiting);
-                    let lock_digest = LockDigest::from_lock_info_pb(&lock_info);
                     encountered_locks.push(WriteResultLockInfo::new(
-                        index,
+                        lock_key_ctx.index_in_request,
                         key,
+                        should_not_exist,
                         lock_info,
-                        self.is_first_lock,
-                        ctx.clone(),
                         snapshot.ext().get_term(),
-                        self.start_ts,
-                        self.for_update_ts,
-                        self.wait_timeout,
+                        is_first_lock,
+                        parameters: params,
+                        lock_key_ctx.lock_digest,
+                        lock_key_ctx.hash_for_latch,
+                        lock_key_ctx.key_cb,
                     ));
                 }
                 Err(e) => return Err(Error::from(e)),
             }
         }
 
-        // Some values may be read, update max_ts
-        if self.return_values || self.check_existence {
-            txn.concurrency_manager.update_max_ts(self.for_update_ts);
+        if let Sme(txn) = txn {
+            if txn.write_size() > 0 {
+                modifies.extend(txn.into_modifies());
+            }
         }
+
+        // // Some values may be read, update max_ts
+        // if self.return_values || self.check_existence {
+        //     txn.concurrency_manager.update_max_ts(self.for_update_ts);
+        // }
 
         // no conflict
         // let (pr, to_be_write, rows, ctx, lock_info) =
@@ -171,11 +313,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
         let to_be_write = if rows > 0 {
             let extra = TxnExtra {
-                old_values: self.old_values,
+                old_values,
                 // One pc status is unknown in AcquirePessimisticLock stage.
                 one_pc: false,
             };
-            WriteData::new(txn.into_modifies(), extra)
+            WriteData::new(modifies, extra)
         } else {
             WriteData::default()
         };
@@ -191,6 +333,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             rows,
             pr,
             encountered_locks,
+            released_locks: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })
@@ -199,7 +342,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
 
 impl AcquirePessimisticLock {
     pub fn is_resumed_after_waiting(&self) -> bool {
-        false
+        match &self.inner {
+            PessimisticLockCmdInner::SingleRequest { .. } => false,
+            PessimisticLockCmdInner::BatchResumedRequests(_) => true,
+        }
     }
 }
 

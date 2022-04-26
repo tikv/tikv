@@ -46,12 +46,13 @@ use txn_types::TimeStamp;
 use crate::server::lock_manager::waiter_manager;
 use crate::storage::config::Config;
 use crate::storage::kv::{
-    self, with_tls_engine, Engine, ExtCallback, Result as EngineResult, SnapContext, Statistics,
+    self, with_tls_engine, Engine, Error as EngineError, ExtCallback, Result as EngineResult,
+    SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
 use crate::storage::txn::commands::{
-    self, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+    self, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
 };
 use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
@@ -403,10 +404,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock: &Lock,
         cid: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
+        released_locks: Option<ReleasedLocks>,
     ) {
-        let wakeup_list = self.inner.latches.release(lock, cid, wait_for_locks);
-        for wcid in wakeup_list {
+        let (latch_wakeup_list, txn_lock_wakeup_list) =
+            self.inner
+                .latches
+                .release(lock, cid, wait_for_locks, released_locks);
+        for wcid in latch_wakeup_list {
             self.try_to_wake_up(wcid);
+        }
+
+        if !txn_lock_wakeup_list.is_empty() {
+            self.schedule_awakened_pessimistic_locks(txn_lock_wakeup_list);
         }
     }
 
@@ -483,6 +492,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
         }
     }
+
+    fn schedule_awakened_pessimistic_locks(&self, awakened_locks_info: Vec<WriteResultLockInfo>) {}
 
     // pub for test
     pub fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
@@ -569,7 +580,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid, None);
     }
 
     /// Event handler for the success of read.
@@ -588,7 +599,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_latches(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid, None);
     }
 
     /// Event handler for the success of write.
@@ -599,10 +610,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         result: EngineResult<()>,
         lock_guards: Vec<KeyHandleGuard>,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
+        mut released_locks: Option<ReleasedLocks>,
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: metrics::CommandKind,
     ) {
+        assert!(!(wait_for_locks.is_some() && released_locks.is_some()));
+
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
             SCHED_STAGE_COUNTER_VEC
@@ -629,9 +643,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr.or(tctx.pr).unwrap(),
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
+                Err(e) => {
+                    if !Self::need_wake_up_pessimistic_lock_on_error(&e) {
+                        released_locks = None;
+                    }
+                    ProcessResult::Failed {
+                        err: StorageError::from(e),
+                    }
+                }
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
@@ -642,34 +661,41 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
-
-        self.release_latches(&tctx.lock, cid);
+        self.release_latches(&tctx.lock, cid, wait_for_locks, released_locks);
     }
 
-    /// Event handler for the request of waiting for lock
-    fn on_wait_for_lock(
-        &self,
-        cid: u64,
-        start_ts: TimeStamp,
-        pr: ProcessResult,
-        lock: lock_manager::LockDigest,
-        is_first_lock: bool,
-        wait_timeout: Option<WaitTimeout>,
-        diag_ctx: DiagnosticContext,
-    ) {
-        debug!("command waits for lock released"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
-        SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
-        self.inner.lock_mgr.wait_for(
-            start_ts,
-            tctx.cb.unwrap(),
-            pr,
-            lock,
-            is_first_lock,
-            wait_timeout,
-            diag_ctx,
-        );
-        self.release_latches(&tctx.lock, cid);
+    // /// Event handler for the request of waiting for lock
+    // fn on_wait_for_lock(
+    //     &self,
+    //     cid: u64,
+    //     start_ts: TimeStamp,
+    //     pr: ProcessResult,
+    //     lock: lock_manager::LockDigest,
+    //     is_first_lock: bool,
+    //     wait_timeout: Option<WaitTimeout>,
+    //     diag_ctx: DiagnosticContext,
+    // ) {
+    //     debug!("command waits for lock released"; "cid" => cid);
+    //     let tctx = self.inner.dequeue_task_context(cid);
+    //     SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
+    //     self.inner.lock_mgr.wait_for(
+    //         start_ts,
+    //         tctx.cb.unwrap(),
+    //         pr,
+    //         lock,
+    //         is_first_lock,
+    //         wait_timeout,
+    //         diag_ctx,
+    //     );
+    //     self.release_latches(&tctx.lock, cid);
+    // }
+
+    fn need_wake_up_pessimistic_lock_on_error(_e: &EngineError) -> bool {
+        // TODO: If there's some cases that `engine.async_write` returns error but it's still
+        // possible that the data is successfully written, return true.
+        // However if it's caused by region leader transferring or epoch change, it doesn't need
+        // to return true because we'll have other way to cancel the waiting request.
+        false
     }
 
     fn early_response(
@@ -809,6 +835,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             rows,
             pr,
             encountered_locks: mut lock_info,
+            released_locks,
             lock_guards,
             response_policy,
         } = match deadline
@@ -858,6 +885,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     );
                     for (index, _, _, ref mut cb) in l.locks {
                         assert!(cb.is_none());
+                        // TODO: Check if there are paths that the cb is never invoked.
                         *cb = Some(Box::new(ctx.get_callback_for_blocked_key(index)));
                     }
                 }
@@ -865,7 +893,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         if to_be_write.modifies.is_empty() {
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, lock_info, false, false, tag);
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                lock_info,
+                released_locks,
+                false,
+                false,
+                tag,
+            );
             return;
         }
 
@@ -885,7 +923,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
-            scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, lock_info, false, false, tag);
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                lock_info,
+                released_locks,
+                false,
+                false,
+                tag,
+            );
             return;
         }
 
@@ -1065,6 +1113,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         result,
                         lock_guards,
                         lock_info,
+                        released_locks,
                         pipelined,
                         is_async_apply_prewrite,
                         tag,
@@ -1493,7 +1542,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_latches(&lock, cid);
+        scheduler.release_latches(&lock, cid, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -1675,7 +1724,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
-        scheduler.release_latches(&lock, cid);
+        scheduler.release_latches(&lock, cid, None);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

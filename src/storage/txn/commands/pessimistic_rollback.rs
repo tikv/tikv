@@ -65,7 +65,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts
                 {
-                    Ok(txn.unlock_key(key, true))
+                    Ok(txn.unlock_key(key, true, None))
                 } else {
                     Ok(None)
                 }

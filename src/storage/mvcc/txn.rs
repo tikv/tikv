@@ -5,7 +5,9 @@ use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -30,16 +32,28 @@ impl GcInfo {
 /// It's used by `LockManager` to wake up transactions waiting for locks.
 #[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
+    pub start_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub key: Key,
     /// The hash value of the lock.
     pub hash: u64,
+    pub hash_for_latch: u64,
     /// Whether it is a pessimistic lock.
     pub pessimistic: bool,
 }
 
 impl ReleasedLock {
-    fn new(key: &Key, pessimistic: bool) -> Self {
+    fn new(start_ts: TimeStamp, commit_ts: Option<TimeStamp>, key: Key, pessimistic: bool) -> Self {
+        let hash = key.gen_hash();
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let hash_for_latch = hasher.finish();
         Self {
-            hash: key.gen_hash(),
+            start_ts,
+            commit_ts: commit_ts.unwrap_or(TimeStamp::zero()),
+            key,
+            hash,
+            hash_for_latch,
             pessimistic,
         }
     }
@@ -107,9 +121,14 @@ impl MvccTxn {
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
-    pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
-        let released = ReleasedLock::new(&key, pessimistic);
-        let write = Modify::Delete(CF_LOCK, key);
+    pub(crate) fn unlock_key(
+        &mut self,
+        key: Key,
+        pessimistic: bool,
+        commit_ts: Option<TimeStamp>,
+    ) -> Option<ReleasedLock> {
+        let released = ReleasedLock::new(self.start_ts, commit_ts, key, pessimistic);
+        let write = Modify::Delete(CF_LOCK, key.clone());
         self.write_size += write.size();
         self.modifies.push(write);
         Some(released)

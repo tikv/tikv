@@ -73,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 // The lock exists, the lock information is returned.
                 Some(lock) if lock.ts == self.start_ts => {
                     if lock.lock_type == LockType::Pessimistic {
-                        released_lock = txn.unlock_key(key.clone(), true);
+                        released_lock = txn.unlock_key(key.clone(), true, None);
                         let overlapped_write = reader.get_txn_commit_record(&key)?.unwrap_none();
                         (SecondaryLockStatus::RolledBack, true, overlapped_write)
                     } else {

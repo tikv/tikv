@@ -140,6 +140,13 @@ macro_rules! gen_lock {
             crate::storage::txn::latch::Lock::new(keys)
         }
     };
+    ($field: ident: matching { $( $arm: pat => $expr: expr ), * }) => {
+        fn gen_lock(&self) -> crate::storage::txn::latch::Lock {
+            match &self.$field {
+                $( $arm => crate::storage::txn::latch::Lock::new($expr) ),*
+            }
+        }
+    }
 }
 
 macro_rules! property {

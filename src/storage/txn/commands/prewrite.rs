@@ -776,7 +776,7 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
         // Transactions committed with 1PC should be impossible to overwrite rollback records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
         if delete_pessimistic_lock {
-            released_locks.push(txn.unlock_key(key, true));
+            released_locks.push(txn.unlock_key(key, true, Some(commit_ts)));
         }
     }
 

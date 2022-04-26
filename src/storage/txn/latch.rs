@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 use std::usize;
 
-use crate::storage::txn::commands::WriteResultLockInfo;
+use crate::storage::txn::commands::{ReleasedLocks, WriteResultLockInfo};
 use collections::HashMap;
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
@@ -231,30 +231,47 @@ impl Latches {
         lock: &Lock,
         who: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
-    ) -> Vec<u64> {
-        let mut wakeup_list: Vec<u64> = vec![];
+        released_locks: Option<ReleasedLocks>,
+    ) -> (Vec<u64>, Vec<WriteResultLockInfo>) {
         let mut wait_for_locks = if let Some(mut v) = wait_for_locks {
             v.sort_unstable_by_key(|x| x.hash_for_latch);
             v.into_iter().peekable()
         } else {
             vec![].into_iter().peekable()
         };
+        let mut released_locks = if let Some(ReleasedLocks(mut v)) = released_locks {
+            v.sort_unstable_by_key(|x| x.hash_for_latch);
+            v.into_iter().peekable()
+        } else {
+            vec![].into_iter().peekable()
+        };
+
+        let mut latch_wakeup_list: Vec<u64> = vec![];
+        let mut txn_lock_wakeup_list = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
             let (v, front) = latch.pop_front(key_hash).unwrap();
             assert_eq!(front, who);
             assert_eq!(v, key_hash);
             if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
-                wakeup_list.push(wakeup);
+                latch_wakeup_list.push(wakeup);
             }
 
             while let Some(next_lock) = wait_for_locks.next_if(|v| v.hash_for_latch <= key_hash) {
                 assert!(next_lock.hash_for_latch == *key_hash);
                 latch.push_lock_waiting(next_lock);
             }
+
+            while let Some(next_lock) = released_locks.next_if(|v| v.hash_for_latch <= key_hash) {
+                assert!(next_lock.hash_for_latch == *key_hash);
+                // TODO: Pass term here
+                if let Some(lock_wait) = latch.pop_lock_waiting(&next_lock.key, None) {
+                    txn_lock_wakeup_list.push(lock_wait);
+                }
+            }
         }
         assert!(wait_for_locks.peek().is_none());
-        wakeup_list
+        (latch_wakeup_list, txn_lock_wakeup_list)
     }
 
     #[inline]
