@@ -110,7 +110,7 @@ pub struct KeyValueCodec {
     pub dst_api_ver: ApiVersion,
 }
 
-// Usage of the KeyValueCodec in ackup process is following
+// Usage of the KeyValueCodec in backup process is as following:
 // `new` -> `check_backup_api_version`, return false if not supported or input invalid.
 // encode the backup range with `encode_backup_key`
 // In `backup_raw` process -> use `is_valid_raw_value` &
@@ -233,5 +233,300 @@ impl KeyValueCodec {
         dispatch_api_version!(self.dst_api_ver, {
             API::convert_user_key_range_version_from(self.cur_api_ver, start_key, end_key)
         })
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use api_version::{APIVersion, RawValue};
+    use txn_types::TimeStamp;
+
+    #[test]
+    fn test_key_value_codec() {
+        // is_raw, cur_api, dst_api, start_key, end_key, expect_ret, use_raw_mvcc
+        let test_cases = vec![
+            (
+                false,
+                ApiVersion::V1,
+                ApiVersion::V1,
+                b"ma".to_vec(),
+                b"mz".to_vec(),
+                true,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V1,
+                ApiVersion::V1,
+                b"".to_vec(),
+                b"".to_vec(),
+                true,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V1,
+                ApiVersion::V1,
+                b"a".to_vec(),
+                b"z".to_vec(),
+                true,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V1ttl,
+                ApiVersion::V1ttl,
+                b"".to_vec(),
+                b"".to_vec(),
+                true,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V1ttl,
+                ApiVersion::V1ttl,
+                b"a".to_vec(),
+                b"z".to_vec(),
+                true,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V2,
+                ApiVersion::V2,
+                b"r".to_vec(),
+                b"s".to_vec(),
+                true,
+                true,
+            ),
+            (
+                true,
+                ApiVersion::V2,
+                ApiVersion::V2,
+                b"ra".to_vec(),
+                b"rz".to_vec(),
+                true,
+                true,
+            ),
+            (
+                true,
+                ApiVersion::V1,
+                ApiVersion::V2,
+                b"".to_vec(),
+                b"".to_vec(),
+                true,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                b"a".to_vec(),
+                b"z".to_vec(),
+                true,
+                false,
+            ),
+            // invalid cases
+            (
+                true,
+                ApiVersion::V2,
+                ApiVersion::V2,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                true,
+            ),
+            (
+                true,
+                ApiVersion::V2,
+                ApiVersion::V2,
+                b"a".to_vec(),
+                b"z".to_vec(),
+                false,
+                true,
+            ),
+            (
+                true,
+                ApiVersion::V1,
+                ApiVersion::V1ttl,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                false,
+            ),
+            (
+                true,
+                ApiVersion::V2,
+                ApiVersion::V1,
+                b"".to_vec(),
+                b"".to_vec(),
+                false,
+                true,
+            ),
+        ];
+        for (is_raw, cur_api, dst_api, ref start_key, ref end_key, expect_ret, use_mvcc) in
+            test_cases
+        {
+            let codec = KeyValueCodec::new(is_raw, cur_api, dst_api);
+            assert_eq!(
+                codec.check_backup_api_version(start_key, end_key),
+                expect_ret
+            );
+            assert_eq!(codec.use_raw_mvcc_snapshot(), use_mvcc);
+        }
+
+        // is_raw, apiver, raw_key, encoded_key
+        let backup_keys = vec![
+            // txn keys
+            (false, ApiVersion::V1, b"".to_vec(), None),
+            (
+                false,
+                ApiVersion::V1ttl,
+                b"ma".to_vec(),
+                Some(Key::from_raw(b"ma".as_ref())),
+            ),
+            (
+                false,
+                ApiVersion::V2,
+                b"ta".to_vec(),
+                Some(Key::from_raw(b"ta".as_ref())),
+            ),
+            // raw_keys
+            (true, ApiVersion::V1, b"".to_vec(), None),
+            (
+                true,
+                ApiVersion::V1,
+                b"ma".to_vec(),
+                Some(Key::from_encoded(b"ma".to_vec())),
+            ),
+            (
+                true,
+                ApiVersion::V1ttl,
+                b"ma".to_vec(),
+                Some(Key::from_encoded(b"ma".to_vec())),
+            ),
+            (
+                true,
+                ApiVersion::V2,
+                b"ra".to_vec(),
+                Some(Key::from_raw(b"ra".as_ref())),
+            ),
+        ];
+        for (is_raw, api_ver, ref raw_key, ref encoded_key) in backup_keys {
+            let codec = KeyValueCodec::new(is_raw, api_ver, api_ver);
+            assert_eq!(
+                encoded_key.to_owned(),
+                codec.encode_backup_key(raw_key.to_owned())
+            );
+            assert_eq!(
+                raw_key.to_owned(),
+                codec.decode_backup_key(encoded_key.to_owned()).unwrap()
+            );
+        }
+
+        let raw_values = vec![
+            RawValue {
+                user_value: b"".to_vec(),
+                expire_ts: None,
+                is_delete: false,
+            },
+            RawValue {
+                user_value: b"abc".to_vec(),
+                expire_ts: None,
+                is_delete: false,
+            },
+        ];
+        let deleted_value = RawValue {
+            user_value: b"abc".to_vec(),
+            expire_ts: Some(u64::MAX),
+            is_delete: true,
+        };
+
+        // src api, dst api, src encoded_key, dst encoded_key
+        let ts = Some(TimeStamp::from(BACKUP_V1_TO_V2_TS));
+        let rawkv_encoded_keys = vec![
+            (
+                ApiVersion::V1,
+                ApiVersion::V1,
+                b"".to_vec(),
+                Key::from_encoded(b"".to_vec()),
+            ),
+            (
+                ApiVersion::V1,
+                ApiVersion::V1,
+                b"a".to_vec(),
+                Key::from_encoded(b"a".to_vec()),
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V1ttl,
+                b"".to_vec(),
+                Key::from_encoded(b"".to_vec()),
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V1ttl,
+                b"z".to_vec(),
+                Key::from_encoded(b"z".to_vec()),
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                APIV2::encode_raw_key_owned(b"r".to_vec(), ts).into_encoded(),
+                APIV2::encode_raw_key_owned(b"r".to_vec(), ts),
+            ),
+            (
+                ApiVersion::V2,
+                ApiVersion::V2,
+                APIV2::encode_raw_key_owned(b"rabc".to_vec(), ts).into_encoded(),
+                APIV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
+            ),
+            (
+                ApiVersion::V1,
+                ApiVersion::V2,
+                b"abc".to_vec(),
+                APIV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
+            ),
+            (
+                ApiVersion::V1ttl,
+                ApiVersion::V2,
+                b"".to_vec(),
+                APIV2::encode_raw_key_owned(b"r".to_vec(), ts),
+            ),
+        ];
+
+        for (src_api, dst_api, ref src_key, ref dst_key) in rawkv_encoded_keys {
+            let codec = KeyValueCodec::new(true, src_api, dst_api);
+            assert_eq!(
+                codec.convert_encoded_key_to_dst_version(src_key).unwrap(),
+                dst_key.to_owned()
+            );
+
+            let deleted_encoded_value = dispatch_api_version!(src_api, {
+                API::encode_raw_value_owned(deleted_value.clone())
+            });
+            if src_api == ApiVersion::V2 {
+                assert!(
+                    !codec
+                        .is_valid_raw_value(src_key, &deleted_encoded_value, 0)
+                        .unwrap()
+                );
+            }
+            for raw_value in &raw_values {
+                let src_value = dispatch_api_version!(src_api, {
+                    API::encode_raw_value_owned(raw_value.to_owned())
+                });
+                let dst_value = dispatch_api_version!(dst_api, {
+                    API::encode_raw_value_owned(raw_value.to_owned())
+                });
+                assert_eq!(
+                    codec
+                        .convert_encoded_value_to_dst_version(&src_value)
+                        .unwrap(),
+                    dst_value
+                );
+            }
+        }
     }
 }
