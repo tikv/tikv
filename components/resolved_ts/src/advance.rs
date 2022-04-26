@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ffi::CString;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -18,6 +20,7 @@ use protobuf::Message;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::util::RegionReadProgressRegistry;
 use security::SecurityManager;
+use tikv_util::info;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::Scheduler;
@@ -327,6 +330,8 @@ fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
     has_incoming_majority && has_demoting_majority
 }
 
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
+
 async fn get_tikv_client(
     store_id: u64,
     pd_client: Arc<dyn PdClient>,
@@ -340,7 +345,11 @@ async fn get_tikv_client(
         None => {
             let start = Instant::now_coarse();
             let store = box_try!(pd_client.get_store_async(store_id).await);
-            let cb = ChannelBuilder::new(env.clone());
+            // hack: so it's different args, grpc will always create a new connection.
+            let cb = ChannelBuilder::new(env.clone()).raw_cfg_int(
+                CString::new("random id").unwrap(),
+                CONN_ID.fetch_add(1, Ordering::SeqCst),
+            );
             let channel = security_mgr.connect(cb, &store.address);
             let client = TikvClient::new(channel);
             clients.insert(store_id, client.clone());
