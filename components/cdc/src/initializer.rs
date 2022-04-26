@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use api_version::{KvFormat, ApiV2, RAW_KEY_PREFIX};
+use api_version::{ApiV2, KvFormat, RAW_KEY_PREFIX};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
