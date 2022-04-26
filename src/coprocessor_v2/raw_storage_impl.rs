@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::APIVersion;
+use api_version::KvFormat;
 use async_trait::async_trait;
 use coprocessor_plugin_api::*;
 use futures::channel::oneshot::Canceled;
@@ -17,20 +17,20 @@ use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 /// It wraps TiKV's [`Storage`] into an API that is exposed to coprocessor plugins.
 /// The `RawStorageImpl` should be constructed for every invocation of a [`CoprocessorPlugin`] as
 /// it wraps a [`Context`] that is unique for every request.
-pub struct RawStorageImpl<'a, E: Engine, L: LockManager, Api: APIVersion> {
+pub struct RawStorageImpl<'a, E: Engine, L: LockManager, F: KvFormat> {
     context: Context,
-    storage: &'a Storage<E, L, Api>,
+    storage: &'a Storage<E, L, F>,
 }
 
-impl<'a, E: Engine, L: LockManager, Api: APIVersion> RawStorageImpl<'a, E, L, Api> {
+impl<'a, E: Engine, L: LockManager, F: KvFormat> RawStorageImpl<'a, E, L, F> {
     /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and [`Storage`].
-    pub fn new(context: Context, storage: &'a Storage<E, L, Api>) -> Self {
+    pub fn new(context: Context, storage: &'a Storage<E, L, F>) -> Self {
         RawStorageImpl { context, storage }
     }
 }
 
 #[async_trait(?Send)]
-impl<E: Engine, L: LockManager, Api: APIVersion> RawStorage for RawStorageImpl<'_, E, L, Api> {
+impl<E: Engine, L: LockManager, F: KvFormat> RawStorage for RawStorageImpl<'_, E, L, F> {
     async fn get(&self, key: Key) -> PluginResult<Option<Value>> {
         let ctx = self.context.clone();
 
@@ -205,12 +205,12 @@ impl From<Canceled> for PluginErrorShim {
 mod test {
     use super::*;
     use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
-    use api_version::APIV2;
+    use api_version::ApiV2;
     use kvproto::kvrpcpb::{ApiVersion, Context};
 
     #[tokio::test]
     async fn test_storage_api() {
-        let storage = TestStorageBuilder::<_, _, APIV2>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
             .build()
             .unwrap();
         let ctx = Context {
@@ -246,7 +246,7 @@ mod test {
 
     #[tokio::test]
     async fn test_storage_api_batch() {
-        let storage = TestStorageBuilder::<_, _, APIV2>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
             .build()
             .unwrap();
         let ctx = Context {
