@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use causal_ts::Resolver as RawKvResolver;
 use api_version::{ApiV2, KvFormat, RAW_KEY_PREFIX};
+use causal_ts::Resolver as RawKvResolver;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{

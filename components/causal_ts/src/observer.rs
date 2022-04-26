@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use std::sync::{Arc, RwLock};
 
-use collections::HashMap;
 use api_version::{ApiV2, KeyMode, KvFormat};
+use collections::HashMap;
 use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
@@ -86,7 +86,7 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
             let mut need_track = false;
             for req in requests.iter() {
                 if req.get_cmd_type() == CmdType::Put
-                    && APIV2::parse_key_mode(req.get_put().get_key()) == KeyMode::Raw
+                    && ApiV2::parse_key_mode(req.get_put().get_key()) == KeyMode::Raw
                 {
                     need_track = true;
                     break;

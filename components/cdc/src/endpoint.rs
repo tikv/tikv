@@ -1503,7 +1503,7 @@ mod tests {
     #[test]
     fn test_api_version_check() {
         let cfg = CdcConfig::default();
-        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        let mut suite = mock_endpoint(&cfg, None, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
