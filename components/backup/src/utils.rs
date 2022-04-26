@@ -542,6 +542,12 @@ pub mod tests {
                         .unwrap(),
                     dst_value
                 );
+                if src_api == ApiVersion::V1 && dst_api == ApiVersion::V2 {
+                    assert_eq!(
+                        src_value,
+                        codec.decode_dst_encoded_value(&dst_value).unwrap()
+                    );
+                }
             }
         }
     }

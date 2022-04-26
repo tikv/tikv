@@ -1507,6 +1507,7 @@ pub mod tests {
     }
 
     fn generate_test_raw_key(idx: u64, api_ver: ApiVersion) -> String {
+        // first key is an empty key for testing purposes
         let mut key = if idx == 0 {
             String::from("")
         } else {
