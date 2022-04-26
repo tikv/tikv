@@ -370,8 +370,7 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
             .next_tombstone,
             .prev_tombstone,
             .seek_tombstone,
-            .seek_for_prev_tombstone,
-            .ttl_tombstone
+            .seek_for_prev_tombstone
         ]
     );
 }
