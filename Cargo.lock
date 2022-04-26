@@ -1508,9 +1508,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "bitflags",
  "case_macros",
- "codec",
  "error_code",
  "fail 0.5.0",
  "file_system",
