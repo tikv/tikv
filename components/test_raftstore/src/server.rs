@@ -21,6 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
 use crate::Config;
+use api_version::{dispatch_api_version, KvFormat};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -47,7 +48,7 @@ use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
-use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::import::{ImportSstService, SstImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoadPool;
@@ -129,7 +130,7 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
-    pub importers: HashMap<u64, Arc<SSTImporter>>,
+    pub importers: HashMap<u64, Arc<SstImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
@@ -231,10 +232,8 @@ impl ServerCluster {
             }),
         )
     }
-}
 
-impl Simulator for ServerCluster {
-    fn run_node(
+    fn run_node_impl<F: KvFormat>(
         &mut self,
         node_id: u64,
         mut cfg: Config,
@@ -350,7 +349,7 @@ impl Simulator for ServerCluster {
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-        let store = create_raft_storage(
+        let store = create_raft_storage::<_, _, _, F>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -371,7 +370,7 @@ impl Simulator for ServerCluster {
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(
-                SSTImporter::new(
+                SstImporter::new(
                     &cfg.import,
                     dir,
                     key_manager.clone(),
@@ -380,7 +379,7 @@ impl Simulator for ServerCluster {
                 .unwrap(),
             )
         };
-        let import_service = ImportSSTService::new(
+        let import_service = ImportSstService::new(
             cfg.import.clone(),
             sim_router.clone(),
             engines.kv.clone(),
@@ -502,7 +501,8 @@ impl Simulator for ServerCluster {
         let split_check_runner =
             SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
-        let split_config_manager = SplitConfigManager(Arc::new(VersionTrack::new(cfg.tikv.split)));
+        let split_config_manager =
+            SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
         let auto_split_controller = AutoSplitController::new(split_config_manager);
         node.start(
             engines,
@@ -557,6 +557,32 @@ impl Simulator for ServerCluster {
             .insert(node_id, concurrency_manager);
 
         Ok(node_id)
+    }
+}
+
+impl Simulator for ServerCluster {
+    fn run_node(
+        &mut self,
+        node_id: u64,
+        cfg: Config,
+        engines: Engines<RocksEngine, RocksEngine>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        key_manager: Option<Arc<DataKeyManager>>,
+        router: RaftRouter<RocksEngine, RocksEngine>,
+        system: RaftBatchSystem<RocksEngine, RocksEngine>,
+    ) -> ServerResult<u64> {
+        dispatch_api_version!(
+            cfg.storage.api_version(),
+            self.run_node_impl::<API>(
+                node_id,
+                cfg,
+                engines,
+                store_meta,
+                key_manager,
+                router,
+                system,
+            )
+        )
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {

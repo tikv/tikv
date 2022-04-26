@@ -10,6 +10,7 @@ use tipb::{
     ScalarFuncSig, SelectResponse,
 };
 
+use raftstore::store::Bucket;
 use test_coprocessor::*;
 use test_storage::*;
 use tidb_query_datatype::codec::{datum, Datum};
@@ -1972,7 +1973,11 @@ fn test_buckets() {
     let mut bucket_key = product.get_record_range_all().get_start().to_owned();
     bucket_key.push(0);
     let region = cluster.get_region(&bucket_key);
-    cluster.refresh_region_bucket_keys(&region, vec![bucket_key]);
+    let bucket = Bucket {
+        keys: vec![bucket_key],
+        size: 1024,
+    };
+    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
 
     let wait_refresh_buckets = |old_buckets_ver| {
         let mut resp = Default::default();

@@ -4,10 +4,10 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use kvproto::kvrpcpb::{ApiVersion, Context, IsolationLevel};
+use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use collections::HashMap;
-use test_storage::SyncTestStorage;
+use test_storage::SyncTestStorageApiV1;
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::EvalContext;
 use tikv::server::gc_worker::GcConfig;
@@ -15,7 +15,7 @@ use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
     kv::{Engine, RocksEngine},
     txn::FixtureStore,
-    SnapshotStore, Storage, TestStorageBuilder,
+    SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
 };
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -105,7 +105,7 @@ impl<'a, E: Engine> Delete<'a, E> {
 
 /// A store that operates over MVCC and support transactions.
 pub struct Store<E: Engine> {
-    store: SyncTestStorage<E>,
+    store: SyncTestStorageApiV1<E>,
     current_ts: TimeStamp,
     last_committed_ts: TimeStamp,
     handles: Vec<Vec<u8>>,
@@ -113,7 +113,7 @@ pub struct Store<E: Engine> {
 
 impl Store<RocksEngine> {
     pub fn new() -> Self {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         Self::from_storage(storage)
@@ -127,9 +127,9 @@ impl Default for Store<RocksEngine> {
 }
 
 impl<E: Engine> Store<E> {
-    pub fn from_storage(storage: Storage<E, DummyLockManager>) -> Self {
+    pub fn from_storage(storage: StorageApiV1<E, DummyLockManager>) -> Self {
         Self {
-            store: SyncTestStorage::from_storage(storage, GcConfig::default()).unwrap(),
+            store: SyncTestStorageApiV1::from_storage(storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],
@@ -194,7 +194,7 @@ impl<E: Engine> Store<E> {
         self.store.get_engine()
     }
 
-    pub fn get_storage(&self) -> SyncTestStorage<E> {
+    pub fn get_storage(&self) -> SyncTestStorageApiV1<E> {
         self.store.clone()
     }
 

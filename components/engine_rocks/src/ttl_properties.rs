@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use crate::decode_properties::DecodeProperties;
 use crate::{RocksEngine, UserProperties};
-use api_version::{APIVersion, KeyMode, RawValue};
+use api_version::{KeyMode, KvFormat, RawValue};
 use engine_traits::{Range, Result, TtlProperties, TtlPropertiesExt};
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 use tikv_util::error;
@@ -58,12 +58,12 @@ impl TtlPropertiesExt for RocksEngine {
 }
 
 /// Can only be used for default CF.
-pub struct TtlPropertiesCollector<API: APIVersion> {
+pub struct TtlPropertiesCollector<F: KvFormat> {
     prop: TtlProperties,
-    _phantom: PhantomData<API>,
+    _phantom: PhantomData<F>,
 }
 
-impl<API: APIVersion> TablePropertiesCollector for TtlPropertiesCollector<API> {
+impl<F: KvFormat> TablePropertiesCollector for TtlPropertiesCollector<F> {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if entry_type != DBEntryType::Put {
             return;
@@ -73,11 +73,11 @@ impl<API: APIVersion> TablePropertiesCollector for TtlPropertiesCollector<API> {
             return;
         }
         // Only consider raw keys.
-        if API::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
+        if F::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
             return;
         }
 
-        match API::decode_raw_value(value) {
+        match F::decode_raw_value(value) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..
@@ -110,14 +110,14 @@ impl<API: APIVersion> TablePropertiesCollector for TtlPropertiesCollector<API> {
 }
 
 #[derive(Default)]
-pub struct TtlPropertiesCollectorFactory<API: APIVersion> {
-    _phantom: PhantomData<API>,
+pub struct TtlPropertiesCollectorFactory<F: KvFormat> {
+    _phantom: PhantomData<F>,
 }
 
-impl<API: APIVersion> TablePropertiesCollectorFactory<TtlPropertiesCollector<API>>
-    for TtlPropertiesCollectorFactory<API>
+impl<F: KvFormat> TablePropertiesCollectorFactory<TtlPropertiesCollector<F>>
+    for TtlPropertiesCollectorFactory<F>
 {
-    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector<API> {
+    fn create_table_properties_collector(&mut self, _: u32) -> TtlPropertiesCollector<F> {
         TtlPropertiesCollector {
             prop: Default::default(),
             _phantom: PhantomData,
@@ -128,19 +128,18 @@ impl<API: APIVersion> TablePropertiesCollectorFactory<TtlPropertiesCollector<API
 #[cfg(test)]
 mod tests {
     use super::*;
-    use api_version::{APIV1TTL, APIV2};
+    use api_version::test_kv_format_impl;
     use kvproto::kvrpcpb::ApiVersion;
     use tikv_util::time::UnixSecs;
 
     #[test]
     fn test_ttl_properties() {
-        test_ttl_properties_impl::<APIV1TTL>();
-        test_ttl_properties_impl::<APIV2>();
+        test_kv_format_impl!(test_ttl_properties_impl<ApiV1Ttl ApiV2>);
     }
 
-    fn test_ttl_properties_impl<API: APIVersion>() {
+    fn test_ttl_properties_impl<F: KvFormat>() {
         let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
-            let mut collector = TtlPropertiesCollector::<API> {
+            let mut collector = TtlPropertiesCollector::<F> {
                 prop: Default::default(),
                 _phantom: PhantomData,
             };
@@ -152,7 +151,7 @@ mod tests {
                 };
                 collector.add(
                     k.as_bytes(),
-                    &API::encode_raw_value(v),
+                    &F::encode_raw_value(v),
                     DBEntryType::Put,
                     0,
                     0,
@@ -175,7 +174,7 @@ mod tests {
         ];
         let props = get_properties(&case1).unwrap();
         assert_eq!(props.max_expire_ts, u64::MAX);
-        match API::TAG {
+        match F::TAG {
             ApiVersion::V1 => unreachable!(),
             ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
             // expire_ts = 0 is no longer a special case in API V2

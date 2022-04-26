@@ -89,6 +89,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
         });
         let deleted = box_try!(self.engines.raft.batch_gc(regions));
+        fail::fail_point!("worker_gc_raft_log_finished", |_| { Ok(deleted) });
         Ok(deleted)
     }
 

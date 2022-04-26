@@ -113,6 +113,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
+causal_ts = { path = "../components/causal_ts" }
 criterion = "0.3"
 criterion-cpu-time = "0.1"
 arrow = "0.10"

@@ -6,8 +6,10 @@ use tikv_util::codec::Error;
 
 use super::*;
 
-impl APIVersion for APIV1TTL {
+impl KvFormat for ApiV1Ttl {
     const TAG: ApiVersion = ApiVersion::V1ttl;
+    #[cfg(any(test, feature = "testexport"))]
+    const CLIENT_TAG: ApiVersion = ApiVersion::V1;
     const IS_TTL_ENABLED: bool = true;
 
     #[inline]

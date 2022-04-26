@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Profile a part of the code using CPU Profiler from gperftools or Callgrind.
-//! Supports Linux and MacOS.
+//! Supports Linux and macOS.
 //!
 //! ## Requirements
 //!
@@ -16,7 +16,7 @@
 //!      2. Run `./configure`
 //!      3. Run `make install`
 //!
-//!    MacOS:
+//!    macOS:
 //!
 //!      Simply `brew install gperftools`.
 //!

@@ -15,7 +15,7 @@ use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_WRITE};
 use keys::data_key;
 use pd_client::PdClient;
-use raftstore::store::{Callback, WriteResponse};
+use raftstore::store::{Bucket, BucketRange, Callback, WriteResponse};
 use raftstore::Result;
 use test_raftstore::*;
 use tikv::storage::kv::SnapshotExt;
@@ -483,7 +483,9 @@ fn test_server_apply_new_version_snapshot() {
     test_apply_new_version_snapshot(&mut cluster);
 }
 
-fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test]
+fn test_server_split_with_stale_peer() {
+    let mut cluster = new_server_cluster(0, 3);
     // disable raft log gc.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
@@ -549,18 +551,6 @@ fn test_split_with_stale_peer<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
     // node 3 must have k3.
     must_get_equal(&engine3, b"k3", b"v3");
-}
-
-#[test]
-fn test_node_split_with_stale_peer() {
-    let mut cluster = new_node_cluster(0, 3);
-    test_split_with_stale_peer(&mut cluster);
-}
-
-#[test]
-fn test_server_split_with_stale_peer() {
-    let mut cluster = new_server_cluster(0, 3);
-    test_split_with_stale_peer(&mut cluster);
 }
 
 fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -967,4 +957,195 @@ fn test_split_with_in_memory_pessimistic_locks() {
         txn_ext.pessimistic_locks.read().get(&Key::from_raw(b"c")),
         Some(&(lock_c, false))
     );
+}
+
+#[test]
+fn test_refresh_region_bucket_keys() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    cluster.must_put(b"k11", b"v1");
+    let mut region = pd_client.get_region(b"k11").unwrap();
+
+    let bucket = Bucket {
+        keys: vec![b"k11".to_vec()],
+        size: 1024 * 1024 * 200,
+    };
+
+    let mut expected_buckets = metapb::Buckets::default();
+    expected_buckets.set_keys(bucket.clone().keys.into());
+    expected_buckets
+        .keys
+        .insert(0, region.get_start_key().to_vec());
+    expected_buckets.keys.push(region.get_end_key().to_vec());
+    let buckets = vec![bucket];
+    let bucket_version = cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Option::None,
+        Some(expected_buckets.clone()),
+    );
+    let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
+    region.mut_region_epoch().set_conf_ver(conf_ver);
+
+    let bucket = Bucket {
+        keys: vec![b"k12".to_vec()],
+        size: 1024 * 1024 * 200,
+    };
+    expected_buckets.set_keys(bucket.clone().keys.into());
+    expected_buckets
+        .keys
+        .insert(0, region.get_start_key().to_vec());
+    expected_buckets.keys.push(region.get_end_key().to_vec());
+    let buckets = vec![bucket];
+    let bucket_version2 = cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Option::None,
+        Some(expected_buckets.clone()),
+    );
+    assert_eq!(bucket_version2, bucket_version + 1);
+
+    let conf_ver = 0;
+    region.mut_region_epoch().set_conf_ver(conf_ver);
+    let bucket_version3 = cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Option::None,
+        Some(expected_buckets.clone()),
+    );
+    assert_eq!(bucket_version3, bucket_version2);
+
+    // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more buckets
+    let region = pd_client.get_region(b"k11").unwrap();
+    let bucket_ranges = vec![
+        BucketRange(vec![], b"k12".to_vec()),
+        BucketRange(b"k12".to_vec(), vec![]),
+    ];
+    let buckets = vec![
+        Bucket {
+            keys: vec![b"k0".to_vec(), b"k10".to_vec(), b"k11".to_vec()],
+            size: 1024 * 1024 * 200,
+        },
+        Bucket {
+            keys: vec![b"k121".to_vec(), b"k122".to_vec()],
+            size: 1024 * 1024 * 200,
+        },
+    ];
+    expected_buckets.set_keys(
+        vec![
+            vec![],
+            b"k0".to_vec(),
+            b"k10".to_vec(),
+            b"k11".to_vec(),
+            b"k12".to_vec(),
+            b"k121".to_vec(),
+            b"k122".to_vec(),
+            vec![],
+        ]
+        .into(),
+    );
+    let bucket_version4 = cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Some(bucket_ranges),
+        Some(expected_buckets.clone()),
+    );
+    assert_eq!(bucket_version4, bucket_version3 + 1);
+
+    // remove k11~k12, k12~k121, k122~[] bucket
+    let buckets = vec![
+        Bucket {
+            keys: vec![],
+            size: 1, // small enough to merge with left bucket
+        },
+        Bucket {
+            keys: vec![],
+            size: 1024 * 1024 * 65, // not small enough to merge with left
+        },
+        Bucket {
+            keys: vec![],
+            size: 1024 * 1024, // small enough to merge with left bucket
+        },
+    ];
+
+    let bucket_ranges = vec![
+        BucketRange(b"k11".to_vec(), b"k12".to_vec()),
+        BucketRange(b"k121".to_vec(), b"k122".to_vec()),
+        BucketRange(b"k122".to_vec(), vec![]),
+    ];
+    expected_buckets.set_keys(
+        vec![
+            vec![],
+            b"k0".to_vec(),
+            b"k10".to_vec(),
+            b"k12".to_vec(),
+            b"k121".to_vec(), // k121~k122 cannot be merged to left as it's too big
+            vec![],
+        ]
+        .into(),
+    );
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Some(bucket_ranges),
+        Some(expected_buckets.clone()),
+    );
+}
+
+#[test]
+fn test_gen_split_check_bucket_ranges() {
+    let count = 5;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
+    cluster.cfg.coprocessor.enable_region_bucket = true;
+    // disable report buckets; as it will reset the user traffic stats to randmize the test result
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::secs(5);
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+
+    cluster.must_put(b"k11", b"v1");
+    let region = pd_client.get_region(b"k11").unwrap();
+
+    let bucket = Bucket {
+        keys: vec![b"k11".to_vec()],
+        size: 1024 * 1024 * 200,
+    };
+
+    let mut expected_buckets = metapb::Buckets::default();
+    expected_buckets.set_keys(bucket.clone().keys.into());
+    expected_buckets
+        .keys
+        .insert(0, region.get_start_key().to_vec());
+    expected_buckets.keys.push(region.get_end_key().to_vec());
+    let buckets = vec![bucket];
+
+    // initialize fsm.peer.bucket_regions
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets.clone(),
+        Option::None,
+        Some(expected_buckets.clone()),
+    );
+    cluster.must_put(b"k10", b"v1");
+    cluster.must_put(b"k12", b"v1");
+
+    let expected_bucket_ranges = vec![
+        BucketRange(vec![], b"k11".to_vec()),
+        BucketRange(b"k11".to_vec(), vec![]),
+    ];
+    cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
+
+    // set fsm.peer.last_bucket_regions
+    cluster.refresh_region_bucket_keys(
+        &region,
+        buckets,
+        Option::None,
+        Some(expected_buckets.clone()),
+    );
+    // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
+    let expected_bucket_ranges = vec![];
+    cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 }

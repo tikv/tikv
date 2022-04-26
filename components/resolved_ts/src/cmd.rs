@@ -282,7 +282,6 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::AssertionLevel;
-    use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
     use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
@@ -300,11 +299,7 @@ mod tests {
         let rocks_engine = TestEngineBuilder::new().build().unwrap();
         let engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
 
-        let reqs = modifies_to_requests(vec![Modify::Put(
-            "default",
-            Key::from_raw(b"k1"),
-            b"v1".to_vec(),
-        )]);
+        let reqs = vec![Modify::Put("default", Key::from_raw(b"k1"), b"v1".to_vec()).into()];
         assert!(ChangeLog::encode_rows(group_row_changes(reqs), false).is_empty());
 
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 1);
@@ -324,7 +319,7 @@ mod tests {
             .take_last_modifies()
             .into_iter()
             .flat_map(|m| {
-                let reqs = modifies_to_requests(m);
+                let reqs = m.into_iter().map(Into::into).collect();
                 ChangeLog::encode_rows(group_row_changes(reqs), false)
             })
             .collect();
@@ -411,7 +406,7 @@ mod tests {
             .take_last_modifies()
             .into_iter()
             .flat_map(|m| {
-                let reqs = modifies_to_requests(m);
+                let reqs = m.into_iter().map(Into::into).collect();
                 ChangeLog::encode_rows(group_row_changes(reqs), true)
             })
             .last()

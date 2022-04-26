@@ -22,7 +22,11 @@ use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
+use crate::store::worker::{Bucket, BucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
+use collections::HashSet;
+#[cfg(any(test, feature = "testexport"))]
+use pd_client::BucketMeta;
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 
 use super::{AbstractPeer, RegionSnapshot};
@@ -37,6 +41,14 @@ pub struct ReadResponse<S: Snapshot> {
 #[derive(Debug)]
 pub struct WriteResponse {
     pub response: RaftCmdResponse,
+}
+
+// Peer's internal stat, for test purpose only
+#[cfg(any(test, feature = "testexport"))]
+#[derive(Debug)]
+pub struct PeerInternalStat {
+    pub buckets: Arc<BucketMeta>,
+    pub bucket_ranges: Option<Vec<BucketRange>>,
 }
 
 // This is only necessary because of seeming limitations in derive(Clone) w/r/t
@@ -58,6 +70,8 @@ where
 pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
+#[cfg(any(test, feature = "testexport"))]
+pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
@@ -81,6 +95,9 @@ pub enum Callback<S: Snapshot> {
         committed_cb: Option<ExtCallback>,
         request_times: SmallVec<[Instant; 4]>,
     },
+    #[cfg(any(test, feature = "testexport"))]
+    /// Test purpose callback
+    Test { cb: TestCallback },
 }
 
 impl<S: Snapshot> HeapSize for Callback<S> {}
@@ -128,6 +145,8 @@ where
                 let resp = WriteResponse { response: resp };
                 cb(resp);
             }
+            #[cfg(any(test, feature = "testexport"))]
+            Callback::Test { .. } => (),
         }
     }
 
@@ -176,6 +195,8 @@ where
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
+            #[cfg(any(test, feature = "testexport"))]
+            Callback::Test { .. } => write!(fmt, "Callback::Test(..)"),
         }
     }
 }
@@ -238,7 +259,7 @@ pub enum StoreTick {
     SnapGc,
     CompactLockCf,
     ConsistencyCheck,
-    CleanupImportSST,
+    CleanupImportSst,
 }
 
 impl StoreTick {
@@ -250,7 +271,7 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
-            StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
         }
     }
 }
@@ -316,6 +337,10 @@ where
         context: GetEntriesContext,
         res: Box<RaftlogFetchResult>,
     },
+    EnterForceLeaderState {
+        failed_stores: HashSet<u64>,
+    },
+    ExitForceLeaderState,
 }
 
 /// Message that will be sent to a peer.
@@ -356,6 +381,7 @@ pub enum CasualMessage<EK: KvEngine> {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
         source: &'static str,
+        cb: Callback<EK::Snapshot>,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {
@@ -387,7 +413,9 @@ pub enum CasualMessage<EK: KvEngine> {
     },
     RefreshRegionBuckets {
         region_epoch: RegionEpoch,
-        bucket_keys: Vec<Vec<u8>>,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+        cb: Callback<EK::Snapshot>,
     },
 
     // Try renew leader lease
@@ -586,7 +614,7 @@ where
 {
     RaftMessage(InspectedRaftMessage),
 
-    ValidateSSTResult {
+    ValidateSstResult {
         invalid_ssts: Vec<SstMeta>,
     },
 
@@ -620,6 +648,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
+    UnsafeRecoveryReport,
     CreatePeer(metapb::Region),
 }
 
@@ -634,7 +663,7 @@ where
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
+            StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,
@@ -649,6 +678,7 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
+            StoreMsg::UnsafeRecoveryReport => write!(fmt, "UnsafeRecoveryReport"),
             StoreMsg::CreatePeer(_) => write!(fmt, "CreatePeer"),
         }
     }
