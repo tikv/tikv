@@ -9,7 +9,7 @@ use std::{cmp, fs};
 use futures::channel::mpsc as future_mpsc;
 use grpcio::{ChannelBuilder, Environment};
 
-use api_version::{dispatch_api_version, APIVersion, RawValue};
+use api_version::{dispatch_api_version, KvFormat, RawValue};
 use backup::Task;
 use collections::HashMap;
 use engine_traits::IterOptions;

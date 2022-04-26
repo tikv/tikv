@@ -428,7 +428,7 @@ impl BackupRange {
 
     fn backup_raw<S: Snapshot>(
         &self,
-        writer: &mut BackupRawKVWriter,
+        writer: &mut BackupRawKvWriter,
         snapshot: &S,
     ) -> Result<Statistics> {
         assert!(self.codec.is_raw_kv);
@@ -504,7 +504,7 @@ impl BackupRange {
             compression_type,
             compression_level,
             cipher,
-            self.codec.clone(),
+            self.codec,
         ) {
             Ok(w) => w,
             Err(e) => {
@@ -1098,7 +1098,7 @@ pub mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, APIVersion, RawValue};
+    use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IOOp, IORateLimiter, IOType};

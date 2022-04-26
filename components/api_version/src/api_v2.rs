@@ -178,7 +178,7 @@ impl KvFormat for ApiV2 {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                let mut apiv2_key = Vec::with_capacity(APIV2::get_encode_len(key.len() + 1));
+                let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 1));
                 apiv2_key.push(RAW_KEY_PREFIX);
                 apiv2_key.extend(key);
                 Ok(Self::encode_raw_key_owned(apiv2_key, ts))

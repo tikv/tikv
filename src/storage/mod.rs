@@ -4507,18 +4507,16 @@ mod tests {
 
     #[test]
     fn test_raw_checksum() {
-        test_raw_checksum_impl::<APIV1>();
-        test_raw_checksum_impl::<APIV1TTL>();
-        test_raw_checksum_impl::<APIV2>();
+        test_kv_format_impl!(test_raw_checksum_impl);
     }
 
-    fn test_raw_checksum_impl<Api: APIVersion>() {
-        let storage = TestStorageBuilder::<_, _, Api>::new(DummyLockManager)
+    fn test_raw_checksum_impl<F: KvFormat>() {
+        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
         let ctx = Context {
-            api_version: Api::CLIENT_TAG,
+            api_version: F::CLIENT_TAG,
             ..Default::default()
         };
 
@@ -4557,8 +4555,7 @@ mod tests {
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
-            block_on(storage.raw_checksum(ctx.clone(), ChecksumAlgorithm::Crc64Xor, vec![range]))
-                .unwrap(),
+            block_on(storage.raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, vec![range])).unwrap(),
         );
     }
 

@@ -271,7 +271,7 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        if ApiVersion::V2 == Api::TAG {
+        if ApiVersion::V2 == F::TAG {
             let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(&mut coprocessor_host);

@@ -8,7 +8,7 @@ use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
 use crate::storage::Statistics;
 
-use api_version::{dispatch_api_version, KvFormat, ApiV1Ttl, ApiV2};
+use api_version::{dispatch_api_version, ApiV1Ttl, ApiV2, KvFormat};
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use std::time::Duration;
@@ -142,9 +142,21 @@ impl<'a, S: Snapshot> RawStore<S> {
         statistics: &'a mut Vec<Statistics>,
     ) -> Result<(u64, u64, u64)> {
         match self {
-            RawStore::V1(inner) => inner.raw_checksum_ranges(ApiVersion::V1, cf, ranges, statistics).await,
-            RawStore::V1Ttl(inner) => inner.raw_checksum_ranges(ApiVersion::V1ttl, cf, ranges, statistics).await,
-            RawStore::V2(inner) => inner.raw_checksum_ranges(ApiVersion::V2, cf, ranges, statistics).await,
+            RawStore::V1(inner) => {
+                inner
+                    .raw_checksum_ranges(ApiVersion::V1, cf, ranges, statistics)
+                    .await
+            }
+            RawStore::V1Ttl(inner) => {
+                inner
+                    .raw_checksum_ranges(ApiVersion::V1ttl, cf, ranges, statistics)
+                    .await
+            }
+            RawStore::V2(inner) => {
+                inner
+                    .raw_checksum_ranges(ApiVersion::V2, cf, ranges, statistics)
+                    .await
+            }
         }
     }
 }

@@ -633,7 +633,7 @@ mod tests {
             .map(|key| {
                 let mut v2_key = key;
                 v2_key.insert(0, RAW_KEY_PREFIX);
-                APIV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
+                ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
         // src_api_ver, dst_api_ver, src_data, dst_data
@@ -673,7 +673,7 @@ mod tests {
                     expire_ts: None,
                     is_delete: false,
                 };
-                APIV1TTL::encode_raw_value_owned(raw_value)
+                ApiV1Ttl::encode_raw_value_owned(raw_value)
             })
             .collect();
         let apiv2_values: Vec<Vec<u8>> = apiv1_values
@@ -685,7 +685,7 @@ mod tests {
                     expire_ts: None,
                     is_delete: false,
                 };
-                APIV2::encode_raw_value_owned(raw_value)
+                ApiV2::encode_raw_value_owned(raw_value)
             })
             .collect();
         // src_api_ver, dst_api_ver, src_data, dst_data

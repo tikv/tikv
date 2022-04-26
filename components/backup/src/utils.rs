@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::metrics::*;
 use crate::Result;
-use api_version::{dispatch_api_version, APIVersion, KeyMode, APIV2};
+use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IOType;
 use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
@@ -15,7 +15,7 @@ use txn_types::{Key, TimeStamp};
 use tikv_util::error;
 
 // BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version V1/V1Ttl data and save to V2 format.
-// Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See api_version::APIV2::is_valid_ts.
+// Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
 pub const BACKUP_V1_TO_V2_TS: u64 = 1;
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
 /// any task spawn into it would run until finish even the runtime isn't referenced.
@@ -136,7 +136,7 @@ impl KeyValueCodec {
         // only in apiv2 mode, backup range check is needed.
         if self.is_raw_kv
             && self.cur_api_ver == ApiVersion::V2
-            && APIV2::parse_range_mode((Some(start_key), Some(end_key))) != KeyMode::Raw
+            && ApiV2::parse_range_mode((Some(start_key), Some(end_key))) != KeyMode::Raw
         {
             return false;
         }
@@ -255,7 +255,7 @@ impl KeyValueCodec {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use api_version::{APIVersion, RawValue};
+    use api_version::{KvFormat, RawValue};
     use txn_types::TimeStamp;
 
     #[test]
@@ -489,26 +489,26 @@ pub mod tests {
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
-                APIV2::encode_raw_key_owned(b"r".to_vec(), ts).into_encoded(),
-                APIV2::encode_raw_key_owned(b"r".to_vec(), ts),
+                ApiV2::encode_raw_key_owned(b"r".to_vec(), ts).into_encoded(),
+                ApiV2::encode_raw_key_owned(b"r".to_vec(), ts),
             ),
             (
                 ApiVersion::V2,
                 ApiVersion::V2,
-                APIV2::encode_raw_key_owned(b"rabc".to_vec(), ts).into_encoded(),
-                APIV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
+                ApiV2::encode_raw_key_owned(b"rabc".to_vec(), ts).into_encoded(),
+                ApiV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
             ),
             (
                 ApiVersion::V1,
                 ApiVersion::V2,
                 b"abc".to_vec(),
-                APIV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
+                ApiV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
             ),
             (
                 ApiVersion::V1ttl,
                 ApiVersion::V2,
                 b"".to_vec(),
-                APIV2::encode_raw_key_owned(b"r".to_vec(), ts),
+                ApiV2::encode_raw_key_owned(b"r".to_vec(), ts),
             ),
         ];
 
