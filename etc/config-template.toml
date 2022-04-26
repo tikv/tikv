@@ -1096,7 +1096,7 @@
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable-streaming = false 
+# enable = false 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.
