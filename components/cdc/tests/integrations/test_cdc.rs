@@ -579,14 +579,15 @@ fn test_cdc_scan() {
 fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
-    let (k1, v1) = (b"rkey1".to_vec(), b"value".to_vec());
+    let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
     suite.must_kv_raw_v2(1, k1.clone(), v1.clone());
 
-    let (k2, v2) = (b"rkey2".to_vec(), b"value".to_vec());
+    let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
     suite.must_kv_raw_v2(1, k2.clone(), v2.clone());
 
     let mut req = suite.new_changedata_request(1);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    req.set_checkpoint_ts(101);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -599,18 +600,15 @@ fn test_cdc_rawkv_scan() {
     match events.remove(0).event.unwrap() {
         // Batch size is set to 3.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2, "{:?}", es);
+            assert!(es.entries.len() == 1, "{:?}", es);
             let e = &es.entries[0];
-            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
-            assert_eq!(e.key, k1, "{:?}", es);
-            assert_eq!(e.value, v1, "{:?}", es);
-            let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
             assert_eq!(e.key, k2, "{:?}", es);
             assert_eq!(e.value, v2, "{:?}", es);
         }
         other => panic!("unknown event {:?}", other),
     }
+
     match events.pop().unwrap().event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
