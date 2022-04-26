@@ -11,7 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::coprocessor::checksum_crc64_xor;
@@ -1156,8 +1156,8 @@ impl Oracle {
 
 const INC_MAX_RETRY: usize = 100;
 
-fn inc<E: Engine, Api: APIVersion>(
-    store: &SyncTestStorage<E, Api>,
+fn inc<E: Engine, F: KvFormat>(
+    store: &SyncTestStorage<E, F>,
     oracle: &Oracle,
     key: &[u8],
 ) -> Result<i32, ()> {
@@ -1241,8 +1241,8 @@ fn format_key(x: usize) -> Vec<u8> {
     format!("k{}", x).into_bytes()
 }
 
-fn inc_multi<E: Engine, Api: APIVersion>(
-    store: &SyncTestStorage<E, Api>,
+fn inc_multi<E: Engine, F: KvFormat>(
+    store: &SyncTestStorage<E, F>,
     oracle: &Oracle,
     n: usize,
 ) -> bool {

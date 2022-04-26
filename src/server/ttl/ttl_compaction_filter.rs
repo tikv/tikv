@@ -4,7 +4,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
-use api_version::{APIVersion, KeyMode, RawValue};
+use api_version::{KeyMode, KvFormat, RawValue};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
@@ -13,11 +13,11 @@ use engine_rocks::RocksTtlProperties;
 use engine_traits::raw_ttl::ttl_current_ts;
 
 #[derive(Default)]
-pub struct TTLCompactionFilterFactory<API: APIVersion> {
-    _phantom: PhantomData<API>,
+pub struct TtlCompactionFilterFactory<F: KvFormat> {
+    _phantom: PhantomData<F>,
 }
 
-impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API> {
+impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
@@ -39,7 +39,7 @@ impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = TTLCompactionFilter::<API> {
+        let filter = TtlCompactionFilter::<F> {
             ts: current,
             _phantom: PhantomData,
         };
@@ -47,12 +47,12 @@ impl<API: APIVersion> CompactionFilterFactory for TTLCompactionFilterFactory<API
     }
 }
 
-struct TTLCompactionFilter<API: APIVersion> {
+struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
-    _phantom: PhantomData<API>,
+    _phantom: PhantomData<F>,
 }
 
-impl<API: APIVersion> CompactionFilter for TTLCompactionFilter<API> {
+impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
     fn featured_filter(
         &mut self,
         _level: usize,
@@ -69,11 +69,11 @@ impl<API: APIVersion> CompactionFilter for TTLCompactionFilter<API> {
             return CompactionFilterDecision::Keep;
         }
         // Only consider raw keys.
-        if API::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
+        if F::parse_key_mode(&key[keys::DATA_PREFIX_KEY.len()..]) != KeyMode::Raw {
             return CompactionFilterDecision::Keep;
         }
 
-        match API::decode_raw_value(value) {
+        match F::decode_raw_value(value) {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..

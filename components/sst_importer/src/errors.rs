@@ -26,7 +26,7 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::ParseIntError(..) => "parse_int",
         Error::FileExists(..) => "file_exists",
         Error::FileCorrupted(..) => "file_corrupt",
-        Error::InvalidSSTPath(..) => "invalid_sst",
+        Error::InvalidSstPath(..) => "invalid_sst",
         Error::Engine(..) => "engine",
         Error::CannotReadExternalStorage { .. } => "read_external_storage",
         Error::WrongKeyPrefix { .. } => "wrong_prefix",
@@ -69,7 +69,7 @@ pub enum Error {
     FileCorrupted(PathBuf, String),
 
     #[error("Invalid SST path {0:?}")]
-    InvalidSSTPath(PathBuf),
+    InvalidSstPath(PathBuf),
 
     #[error("invalid chunk")]
     InvalidChunk,
@@ -110,10 +110,10 @@ pub enum Error {
     FileConflict,
 
     #[error("ttl is not enabled")]
-    TTLNotEnabled,
+    TtlNotEnabled,
 
     #[error("The length of ttls does not equal to the length of pairs")]
-    TTLsLenNotEqualsToPairs,
+    TtlLenNotEqualsToPairs,
 
     #[error("Importing a SST file with imcompatible api version")]
     IncompatibleApiVersion,
@@ -147,7 +147,7 @@ impl ErrorCodeExt for Error {
             Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
             Error::FileExists(..) => error_code::sst_importer::FILE_EXISTS,
             Error::FileCorrupted(..) => error_code::sst_importer::FILE_CORRUPTED,
-            Error::InvalidSSTPath(_) => error_code::sst_importer::INVALID_SST_PATH,
+            Error::InvalidSstPath(_) => error_code::sst_importer::INVALID_SST_PATH,
             Error::InvalidChunk => error_code::sst_importer::INVALID_CHUNK,
             Error::Engine(_) => error_code::sst_importer::ENGINE,
             Error::CannotReadExternalStorage { .. } => {
@@ -158,10 +158,8 @@ impl ErrorCodeExt for Error {
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),
             Error::FileConflict => error_code::sst_importer::FILE_CONFLICT,
-            Error::TTLNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
-            Error::TTLsLenNotEqualsToPairs => {
-                error_code::sst_importer::TTLS_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            Error::TtlNotEnabled => error_code::sst_importer::TTL_NOT_ENABLED,
+            Error::TtlLenNotEqualsToPairs => error_code::sst_importer::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
         }
     }

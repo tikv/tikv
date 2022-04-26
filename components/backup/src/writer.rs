@@ -340,7 +340,7 @@ impl BackupWriter {
 }
 
 /// A writer writes Raw kv into SST files.
-pub struct BackupRawKVWriter {
+pub struct BackupRawKvWriter {
     name: String,
     cf: CfName,
     writer: Writer,
@@ -349,8 +349,8 @@ pub struct BackupRawKVWriter {
     codec: KeyValueCodec,
 }
 
-impl BackupRawKVWriter {
-    /// Create a new BackupRawKVWriter.
+impl BackupRawKvWriter {
+    /// Create a new BackupRawKvWriter.
     pub fn new(
         db: Arc<DB>,
         name: &str,
@@ -360,7 +360,7 @@ impl BackupRawKVWriter {
         compression_level: i32,
         cipher: CipherInfo,
         codec: KeyValueCodec,
-    ) -> Result<BackupRawKVWriter> {
+    ) -> Result<BackupRawKvWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf.into())
@@ -368,7 +368,7 @@ impl BackupRawKVWriter {
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
-        Ok(BackupRawKVWriter {
+        Ok(BackupRawKvWriter {
             name: name.to_owned(),
             cf: cf.into(),
             writer: Writer::new(writer),

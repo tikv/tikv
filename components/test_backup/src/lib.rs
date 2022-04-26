@@ -23,7 +23,7 @@ use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::coprocessor::checksum_crc64_xor;
-use tikv::coprocessor::dag::TiKVStorage;
+use tikv::coprocessor::dag::TiKvStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
@@ -349,7 +349,7 @@ impl TestSuite {
             false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKVStorage::new(snap_store, false),
+            storage: TiKvStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,

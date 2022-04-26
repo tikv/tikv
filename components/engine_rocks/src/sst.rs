@@ -6,7 +6,7 @@ use engine_traits::Error;
 use engine_traits::IterOptions;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{
-    ExternalSstFileInfo, SSTMetaInfo, SstCompressionType, SstWriter, SstWriterBuilder,
+    ExternalSstFileInfo, SstCompressionType, SstMetaInfo, SstWriter, SstWriterBuilder,
 };
 use engine_traits::{Iterable, Result, SstExt, SstReader};
 use engine_traits::{Iterator, SeekKey};
@@ -40,8 +40,8 @@ pub struct RocksSstReader {
 }
 
 impl RocksSstReader {
-    pub fn sst_meta_info(&self, sst: SstMeta) -> SSTMetaInfo {
-        let mut meta = SSTMetaInfo {
+    pub fn sst_meta_info(&self, sst: SstMeta) -> SstMetaInfo {
+        let mut meta = SstMetaInfo {
             total_kvs: 0,
             total_bytes: 0,
             meta: sst,
