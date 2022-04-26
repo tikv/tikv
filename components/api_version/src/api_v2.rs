@@ -29,7 +29,7 @@ bitflags::bitflags! {
     }
 }
 
-impl APIVersion for APIV2 {
+impl KvFormat for ApiV2 {
     const TAG: ApiVersion = ApiVersion::V2;
     #[cfg(any(test, feature = "testexport"))]
     const CLIENT_TAG: ApiVersion = ApiVersion::V2;
@@ -170,7 +170,7 @@ impl APIVersion for APIV2 {
     }
 }
 
-impl APIV2 {
+impl ApiV2 {
     pub fn append_ts_on_encoded_bytes(encoded_bytes: &mut Vec<u8>, ts: TimeStamp) {
         debug_assert!(is_valid_encoded_bytes(encoded_bytes, false));
         debug_assert!(is_valid_ts(ts));
@@ -182,7 +182,7 @@ impl APIV2 {
 
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
-    APIV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
+    ApiV2::parse_key_mode(encoded_bytes) == KeyMode::Raw
         && bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
         && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
 }
@@ -211,7 +211,7 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
 
 #[cfg(test)]
 mod tests {
-    use crate::{APIVersion, RawValue, APIV2};
+    use crate::{ApiV2, KvFormat, RawValue};
     use txn_types::{Key, TimeStamp};
 
     #[test]
@@ -244,10 +244,10 @@ mod tests {
         for (idx, (bytes, with_ts)) in cases.into_iter().enumerate() {
             let res = vec![
                 panic_hook::recover_safe(|| {
-                    let _ = APIV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
+                    let _ = ApiV2::decode_raw_key(&Key::from_encoded_slice(&bytes), with_ts);
                 }),
                 panic_hook::recover_safe(|| {
-                    let _ = APIV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
+                    let _ = ApiV2::decode_raw_key_owned(Key::from_encoded(bytes), with_ts);
                 }),
             ];
             for r in res {
@@ -265,10 +265,10 @@ mod tests {
         for (idx, (bytes, ts)) in cases.into_iter().enumerate() {
             let res = vec![
                 panic_hook::recover_safe(|| {
-                    let _ = APIV2::encode_raw_key(&bytes, ts);
+                    let _ = ApiV2::encode_raw_key(&bytes, ts);
                 }),
                 panic_hook::recover_safe(|| {
-                    let _ = APIV2::encode_raw_key_owned(bytes, ts);
+                    let _ = ApiV2::encode_raw_key_owned(bytes, ts);
                 }),
             ];
             for r in res {
@@ -299,11 +299,11 @@ mod tests {
         for (idx, (is_valid, mut bytes, ts)) in cases.into_iter().enumerate() {
             if is_valid {
                 let expected = Key::from_encoded(bytes.clone()).append_ts(ts.into());
-                APIV2::append_ts_on_encoded_bytes(&mut bytes, ts.into());
+                ApiV2::append_ts_on_encoded_bytes(&mut bytes, ts.into());
                 assert_eq!(&bytes, expected.as_encoded(), "case {}", idx);
             } else {
                 let r = panic_hook::recover_safe(|| {
-                    APIV2::append_ts_on_encoded_bytes(&mut bytes, ts.into());
+                    ApiV2::append_ts_on_encoded_bytes(&mut bytes, ts.into());
                 });
                 assert!(r.is_err(), "case {}: {:?}", idx, r);
             }
@@ -318,11 +318,11 @@ mod tests {
                 expire_ts: None,
                 is_delete: true,
             };
-            let encoded = APIV2::encode_raw_value_owned(v);
-            assert_eq!(encoded, APIV2::ENCODED_LOGICAL_DELETE);
+            let encoded = ApiV2::encode_raw_value_owned(v);
+            assert_eq!(encoded, ApiV2::ENCODED_LOGICAL_DELETE);
         }
         {
-            let v = APIV2::decode_raw_value(&APIV2::ENCODED_LOGICAL_DELETE).unwrap();
+            let v = ApiV2::decode_raw_value(&ApiV2::ENCODED_LOGICAL_DELETE).unwrap();
             assert!(v.is_delete);
         }
     }
