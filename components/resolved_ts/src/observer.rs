@@ -192,7 +192,11 @@ mod test {
         }
 
         // Both cdc and resolved-ts worker are observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
@@ -200,7 +204,11 @@ mod test {
         expect_recv(&mut rx, data.clone());
 
         // Only cdc is observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.rts_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
@@ -208,8 +216,24 @@ mod test {
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
+        // Pitr and rts is observing
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::default(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
+        let mut cb = CmdBatch::new(&observe_info, 0);
+        cb.push(&observe_info, 0, cmd.clone());
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
+        // Still observe all data
+        expect_recv(&mut rx, data.clone());
+
         // Only resolved-ts worker is observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
@@ -219,7 +243,11 @@ mod test {
         expect_recv(&mut rx, data);
 
         // Both cdc and resolved-ts worker are not observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.rts_id.stop_observing();
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);

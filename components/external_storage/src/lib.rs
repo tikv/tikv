@@ -8,6 +8,7 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+use std::fs;
 use std::io::{self, Write};
 use std::marker::Unpin;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use engine_traits::FileEncryptionInfo;
 use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
+use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
@@ -77,10 +79,16 @@ pub trait ExternalStorage: 'static + Send + Sync {
         storage_name: &str,
         restore_name: std::path::PathBuf,
         expected_length: u64,
+        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         let reader = self.read(storage_name);
+        if let Some(p) = restore_name.parent() {
+            // try create all parent dirs from the path (optional).
+            // ignore the error because once it failed, it would soon be revealed by succeed steps.
+            let _ = fs::create_dir_all(p);
+        }
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
@@ -94,6 +102,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
             output,
             speed_limiter,
             expected_length,
+            expected_sha256,
             min_read_speed,
         ))
     }
@@ -137,8 +146,8 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
     }
 }
 
-// Wrap the reader with file_crypter
-// Return the reader directly if file_crypter is None
+/// Wrap the reader with file_crypter.
+/// Return the reader directly if file_crypter is None.
 pub fn encrypt_wrap_reader<'a>(
     file_crypter: Option<FileEncryptionInfo>,
     reader: Box<dyn AsyncRead + Unpin + 'a>,
@@ -161,6 +170,7 @@ pub async fn read_external_storage_into_file(
     output: &mut dyn Write,
     speed_limiter: &Limiter,
     expected_length: u64,
+    expected_sha256: Option<Vec<u8>>,
     min_read_speed: usize,
 ) -> io::Result<()> {
     let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
@@ -168,6 +178,12 @@ pub async fn read_external_storage_into_file(
     // do the I/O copy from external_storage to the local file.
     let mut buffer = vec![0u8; READ_BUF_SIZE];
     let mut file_length = 0;
+    let mut hasher = Hasher::new(MessageDigest::sha256()).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("openssl hasher failed to init: {}", err),
+        )
+    })?;
 
     loop {
         // separate the speed limiting from actual reading so it won't
@@ -180,6 +196,14 @@ pub async fn read_external_storage_into_file(
         }
         speed_limiter.consume(bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
+        if expected_sha256.is_some() {
+            hasher.update(&buffer[..bytes_read]).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("openssl hasher udpate failed: {}", err),
+                )
+            })?;
+        }
         file_length += bytes_read as u64;
     }
 
@@ -191,6 +215,27 @@ pub async fn read_external_storage_into_file(
                 file_length, expected_length
             ),
         ));
+    }
+
+    if let Some(expected_s) = expected_sha256 {
+        let cal_sha256 = hasher.finish().map_or_else(
+            |err| {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("openssl hasher finish failed: {}", err),
+                ))
+            },
+            |bytes| Ok(bytes.to_vec()),
+        )?;
+        if !expected_s.eq(&cal_sha256) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "sha256 not match, expect: {:?}, calculate: {:?}",
+                    expected_s, cal_sha256,
+                ),
+            ));
+        }
     }
 
     Ok(())

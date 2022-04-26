@@ -4,6 +4,7 @@ use crate::engine::PanicEngine;
 use crate::write_batch::PanicWriteBatch;
 use engine_traits::{Error, RaftEngine, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::raft_serverpb::RaftLocalState;
+
 use raft::eraftpb::Entry;
 
 impl RaftEngineReadOnly for PanicEngine {

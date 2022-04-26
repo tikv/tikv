@@ -24,7 +24,7 @@ failpoints = [
   "fail/failpoints",
   "raftstore/failpoints",
   "tikv_util/failpoints",
-  "engine_rocks/failpoints"
+  "engine_rocks/failpoints",
 ]
 cloud-aws = [
   "encryption_export/cloud-aws",
@@ -259,6 +259,7 @@ members = [
   "components/error_code",
   "components/concurrency_manager",
   "components/server",
+  "components/backup-stream",
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",

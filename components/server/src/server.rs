@@ -25,6 +25,8 @@ use std::{
     u64,
 };
 
+use backup_stream::config::BackupStreamConfigManager;
+use backup_stream::observer::BackupStreamObserver;
 use api_version::{dispatch_api_version, APIVersion};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
@@ -818,6 +820,36 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             )),
         );
 
+        // Start backup stream
+        if self.config.backup_stream.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager(backup_stream_worker.scheduler())),
+            );
+
+            let backup_stream_endpoint = backup_stream::Endpoint::new::<String>(
+                node.id(),
+                &self.config.pd.endpoints,
+                self.config.backup_stream.clone(),
+                backup_stream_scheduler,
+                backup_stream_ob,
+                self.region_info_accessor.clone(),
+                self.router.clone(),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.to_stop.push(backup_stream_worker);
+        }
+
         let import_path = self.store_path.join("import");
         let mut importer = SSTImporter::new(
             &self.config.import,
@@ -979,6 +1011,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Import SST service.
         let import_service = ImportSSTService::new(
             self.config.import.clone(),
+            self.config.raft_store.raft_entry_max_size,
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),

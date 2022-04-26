@@ -721,6 +721,10 @@ fn test_serde_custom_tikv_config() {
         },
         ..Default::default()
     };
+    value.backup_stream = BackupStreamConfig {
+        num_threads: 8,
+        ..Default::default()
+    };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,

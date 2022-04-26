@@ -10,6 +10,7 @@ extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::convert::AsRef;
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -327,6 +328,20 @@ impl<L, R> Either<L, R> {
         match self {
             Either::Right(r) => Some(r),
             _ => None,
+        }
+    }
+}
+
+impl<L, R, T> AsRef<T> for Either<L, R>
+where
+    T: ?Sized,
+    L: AsRef<T>,
+    R: AsRef<T>,
+{
+    fn as_ref(&self) -> &T {
+        match self {
+            Self::Left(l) => l.as_ref(),
+            Self::Right(r) => r.as_ref(),
         }
     }
 }
