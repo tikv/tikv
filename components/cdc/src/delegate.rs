@@ -5,7 +5,7 @@ use std::string::String;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use api_version::{APIVersion, KeyMode, APIV2};
+use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use kvproto::cdcpb::{
@@ -666,7 +666,7 @@ impl Delegate {
         raw_rows: &mut HashMap<Vec<u8>, EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
-        let key_mode = APIV2::parse_key_mode(put.get_key());
+        let key_mode = ApiV2::parse_key_mode(put.get_key());
         if self.api_version == ApiVersion::V2 && key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows)
         } else {
@@ -976,8 +976,8 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
 }
 
 fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
-    let (decoded_key, ts) = APIV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
-    let decoded_value = APIV2::decode_raw_value_owned(value).unwrap();
+    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
+    let decoded_value = ApiV2::decode_raw_value_owned(value).unwrap();
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
@@ -1208,14 +1208,13 @@ mod tests {
 
         for (key, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
             let mut row = EventRow::default();
-            // APIV2::append_ts_on_encoded_bytes(&mut key_with_ts, start_ts.into());
-            let key_with_ts = APIV2::encode_raw_key(&key, Some(start_ts.into())).into_encoded();
+            let key_with_ts = ApiV2::encode_raw_key(&key, Some(start_ts.into())).into_encoded();
             let raw_value = RawValue {
                 user_value: value.to_vec(),
                 expire_ts,
                 is_delete,
             };
-            let encoded_value = APIV2::encode_raw_value_owned(raw_value);
+            let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
             decode_rawkv(key_with_ts, encoded_value, &mut row);
 
             assert_eq!(row.start_ts, start_ts);

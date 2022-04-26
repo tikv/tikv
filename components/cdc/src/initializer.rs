@@ -1,9 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
-use std::ops::Bound;
 
-use api_version::{APIVersion, APIV2, RAW_KEY_PREFIX};
+use api_version::{KvFormat, ApiV2, RAW_KEY_PREFIX};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
@@ -336,7 +335,7 @@ impl<E: KvEngine> Initializer<E> {
                     if iter.valid()? {
                         let key = iter.key().to_vec();
                         let (_, ts) =
-                            APIV2::decode_raw_key_owned(Key::from_encoded(key.clone()), true)?;
+                            ApiV2::decode_raw_key_owned(Key::from_encoded(key.clone()), true)?;
                         if ts.unwrap() >= self.checkpoint_ts {
                             let value = iter.value().to_vec();
                             total_bytes += key.len() + value.len();

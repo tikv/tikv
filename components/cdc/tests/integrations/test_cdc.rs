@@ -580,7 +580,7 @@ fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
     let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
-    suite.must_kv_raw_v2(1, k1.clone(), v1.clone());
+    suite.must_kv_raw_v2(1, k1, v1);
 
     let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
     suite.must_kv_raw_v2(1, k2.clone(), v2.clone());
