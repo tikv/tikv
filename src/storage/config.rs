@@ -2,12 +2,13 @@
 
 //! Storage configuration.
 
-use crate::config::BLOCK_CACHE_RATE;
+use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
+use std::cmp::max;
 use std::error::Error;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::SysQuota;
@@ -209,6 +210,15 @@ impl Default for BlockCacheConfig {
 }
 
 impl BlockCacheConfig {
+    fn adjust_shard_bits(&self, capacity: usize) -> i32 {
+        let max_shard_count = capacity / MIN_BLOCK_CACHE_SHARD_SIZE;
+        if max_shard_count < (2 << self.num_shard_bits) {
+            max((max_shard_count as f64).log2() as i32, 1)
+        } else {
+            self.num_shard_bits
+        }
+    }
+
     pub fn build_shared_cache(&self) -> Option<Cache> {
         if !self.shared {
             return None;
@@ -222,7 +232,7 @@ impl BlockCacheConfig {
         };
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);
-        cache_opts.set_num_shard_bits(self.num_shard_bits as c_int);
+        cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);
         cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
         cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
         if let Some(allocator) = self.new_memory_allocator() {
@@ -374,5 +384,21 @@ mod tests {
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_adjust_shard_bits() {
+        let config = BlockCacheConfig::default();
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(1).0 as usize);
+        assert_eq!(shard_bits, 4);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(4).0 as usize);
+        assert_eq!(shard_bits, 6);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(8).0 as usize);
+        assert_eq!(shard_bits, 6);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::mb(1).0 as usize);
+        assert_eq!(shard_bits, 1);
     }
 }

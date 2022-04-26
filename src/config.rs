@@ -72,6 +72,8 @@ pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
+/// Min block cache shard's size. If a shard is too small, the index/filter data may not fit one shard
+pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 64 * MIB as usize;
 
 const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
