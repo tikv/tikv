@@ -431,12 +431,31 @@ where
         Ok((handled_keys, wasted_keys))
     }
 
+    fn print_array(&mut self, name: &str, arr: Vec<u8>) {
+        for i in 0..arr.len() {
+            info!("arr {}:{}:{}", name, i, arr[i]);
+            println!("arr {}:{}:{}", name, i, arr[i]);
+        }
+    }
+
     fn raw_gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<(usize, usize)> {
+        println!("=====================================================");
+        info!("=====================================================");
         let first_key_vec = keys.first().unwrap().as_encoded();
         let first_raw_key = Key::from_raw(first_key_vec.as_slice()).append_ts(TimeStamp::max());
         let range_start_key = first_raw_key.as_encoded();
+        self.print_array("range_start_key", first_raw_key.clone().into_encoded());
 
-        let snapshot = self.engine.snapshot_on_kv_engine(&range_start_key, &[])?;
+        println!("===========================");
+        info!("===========================");
+        let last_key_vec = keys.last().unwrap().as_encoded();
+        let last_raw_key = Key::from_raw(last_key_vec.as_slice()).append_ts(TimeStamp::zero());
+        let range_end_key = last_raw_key.as_encoded();
+        self.print_array("range_end_key", last_raw_key.clone().into_encoded());
+
+        let snapshot = self
+            .engine
+            .snapshot_on_kv_engine(range_start_key, range_end_key)?;
 
         let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
 
@@ -494,6 +513,8 @@ where
                 // different userkey
                 break;
             } else {
+                info!("to delete");
+                println!("to delete");
                 raw_modifys.modifies.push(write);
             }
             cursor.next(&mut statistics);
@@ -1703,6 +1724,14 @@ mod tests {
         res
     }
 
+    fn print_array(name: &str, arr: Vec<u8>) {
+        for i in 0..arr.len() {
+            info!("arr {}:{}:{}", name, i, arr[i]);
+            println!("arr {}:{}:{}", name, i, arr[i]);
+        }
+        // println!("arr {}:{}", name, resstr);
+    }
+
     #[test]
     fn test_raw_gc_keys() {
         //init engine and gc runner
@@ -1713,7 +1742,6 @@ mod tests {
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
-        let kvdb = engine.get_rocksdb();
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -1731,7 +1759,7 @@ mod tests {
         // prepare data
         let mut test_raws = vec![];
 
-        let value1 = RawValue {
+        let value_not_delete = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(10),
             is_delete: false,
@@ -1743,35 +1771,38 @@ mod tests {
             is_delete: true,
         };
 
-        let temp = makeKey(b"r\0a", u64::MAX);
+        let key_a = b"raaaaaaaaaaa";
+        let key_b = b"rbbbbbbbbbbb";
 
-        test_raws.push((makeKey(b"r\0a", 100), value_is_delete.clone()));
-        test_raws.push((makeKey(b"r\0a", 50), value1.clone()));
-        test_raws.push((makeKey(b"r\0a", 10), value1.clone()));
-        test_raws.push((makeKey(b"r\0a", 5), value1.clone()));
+        test_raws.push((makeKey(key_a, 100), value_is_delete.clone()));
+        test_raws.push((makeKey(key_a, 50), value_not_delete.clone()));
+        test_raws.push((makeKey(key_a, 10), value_not_delete.clone()));
+        test_raws.push((makeKey(key_a, 5), value_not_delete.clone()));
 
-        test_raws.push((makeKey(b"r\0b", 50), value_is_delete.clone()));
-        test_raws.push((makeKey(b"r\0b", 20), value1.clone()));
-        test_raws.push((makeKey(b"r\0b", 20), value1.clone()));
+        test_raws.push((makeKey(key_b, 50), value_is_delete.clone()));
+        test_raws.push((makeKey(key_b, 20), value_not_delete.clone()));
+        test_raws.push((makeKey(key_b, 20), value_not_delete.clone()));
 
         let mut keys = vec![];
 
-        let engineKeyA = makeKey(b"r\0a", 100);
-        let engineKeyB = makeKey(b"r\0b", 100);
+        let engine_key_a = makeKey(key_a, 100);
+        let engine_key_b = makeKey(key_b, 100);
 
-        let currentKeyA = engineKeyA.as_slice();
-        let currentKeyB = engineKeyB.as_slice();
+        let current_key_a = engine_key_a.as_slice();
+        print_array("current_key_a", current_key_a.to_vec());
+        let current_key_b = engine_key_b.as_slice();
 
-        let (mvcc_key_prefix_vecA, commit_ts_optA) =
-            APIV2::decode_raw_key(&Key::from_encoded_slice(currentKeyA), true).unwrap();
-        let (mvcc_key_prefix_vecB, commit_ts_optB) =
-            APIV2::decode_raw_key(&Key::from_encoded_slice(currentKeyB), true).unwrap();
+        let (mvcc_key_prefix_vec_a, commit_ts_opt_a) =
+            APIV2::decode_raw_key(&Key::from_encoded_slice(current_key_a), true).unwrap();
+        print_array("mvcc_key_prefix_vec_a", mvcc_key_prefix_vec_a.clone());
+        let (mvcc_key_prefix_vec_b, commit_ts_opt_b) =
+            APIV2::decode_raw_key(&Key::from_encoded_slice(current_key_b), true).unwrap();
 
-        let toGCkeyA = Key::from_encoded_slice(&mvcc_key_prefix_vecA);
-        let toGCkeyB = Key::from_encoded_slice(&mvcc_key_prefix_vecB);
+        let to_gc_key_a = Key::from_encoded_slice(&mvcc_key_prefix_vec_a);
+        let to_gc_key_b = Key::from_encoded_slice(&mvcc_key_prefix_vec_b);
 
-        keys.push(toGCkeyA);
-        keys.push(toGCkeyB);
+        keys.push(to_gc_key_a);
+        keys.push(to_gc_key_b);
 
         // Write key-value pairs
         for &(ref rawkeyVec, ref valueVec) in &test_raws {
@@ -1781,34 +1812,40 @@ mod tests {
             };
             let key = Key::from_encoded_slice(rawkeyVec);
             let raw_key = rawkeyVec.to_vec();
-            let valueVecobj = valueVec.clone();
-            let tt = APIV2::encode_raw_value_owned(valueVecobj);
-            let m = Modify::Put(CF_DEFAULT, key, tt);
+
+            let raw_value_vec = valueVec.clone();
+            let value_vec = APIV2::encode_raw_value_owned(raw_value_vec);
+            let m = Modify::Put(CF_DEFAULT, key, value_vec);
             let batch = WriteData::from_modifies(vec![m]);
             prefixed_engine.write(&ctx, batch);
         }
 
+        // don't delete ts == safepoint
         runner.raw_gc_keys(keys.clone(), TimeStamp::new(100));
 
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
         let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
-        let res02 = mvcc_snapshot.get(&Key::from_encoded_slice(&*engineKeyA));
+        let check_key_a = mvcc_snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
+        let check_key_b = mvcc_snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
 
         assert_eq!(6, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
         // if raw.ts == safepoint , it will not be delete; we just delete the raw.ts < safepoint
-        assert_eq!(res02.unwrap().is_none(), false);
-        runner
-            .raw_gc_keys(keys.clone(), TimeStamp::new(120))
-            .unwrap();
+        assert_eq!(check_key_a.unwrap().is_none(), false);
+        assert_eq!(check_key_b.unwrap().is_none(), true);
+
+        // delete all ts < safepoint
+        runner.raw_gc_keys(keys.clone(), TimeStamp::new(120));
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
         let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
-        let res02 = mvcc_snapshot.get(&Key::from_encoded_slice(&*engineKeyA));
+        let check_key_a = mvcc_snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
+        let check_key_b = mvcc_snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
 
         assert_eq!(7, runner.stats.data.next);
         assert_eq!(4, runner.stats.data.seek);
 
-        assert_eq!(res02.unwrap().is_none(), true);
+        assert_eq!(check_key_a.unwrap().is_none(), true);
+        assert_eq!(check_key_b.unwrap().is_none(), true);
     }
 
     #[test]

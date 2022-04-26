@@ -565,6 +565,9 @@ struct RawCompactionFilter {
     orphan_versions: usize,
     versions_hist: LocalHistogram,
     filtered_hist: LocalHistogram,
+    //
+    // #[cfg(any(test, feature = "failpoints"))]
+    // callbacks_on_drop: Vec<Arc<dyn Fn(&RawCompactionFilter) + Send + Sync>>,
 }
 
 impl Drop for RawCompactionFilter {
@@ -578,10 +581,10 @@ impl Drop for RawCompactionFilter {
         self.switch_key_metrics();
         self.flush_metrics();
 
-        #[cfg(any(test, feature = "failpoints"))]
-        for callback in &self.callbacks_on_drop {
-            callback(self);
-        }
+        // #[cfg(any(test, feature = "failpoints"))]
+        // for callback in &self.callbacks_on_drop {
+        //     callback(self);
+        // }
     }
 }
 
@@ -633,6 +636,11 @@ impl RawCompactionFilter {
             orphan_versions: 0,
             versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
+            // #[cfg(any(test, feature = "failpoints"))]
+            // callbacks_on_drop: {
+            //     let ctx = GC_CONTEXT.lock().unwrap();
+            //     ctx.as_ref().unwrap().callbacks_on_drop.clone()
+            // },
         }
     }
 
@@ -647,7 +655,7 @@ impl RawCompactionFilter {
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
             return Ok(CompactionFilterDecision::Keep);
         }
-
+        self.print_array("key.clone:", key.clone().to_vec());
         // remove prefix 'z'
         let current_key = keys::origin_key(key);
         let key_mode = APIV2::parse_key_mode(current_key);
@@ -731,11 +739,18 @@ impl RawCompactionFilter {
             }
         }
     }
-
+    fn print_array(&mut self, name: &str, arr: Vec<u8>) {
+        for i in 0..arr.len() {
+            info!("arr {}:{}:{}", name, i, arr[i]);
+            println!("arr {}:{}:{}", name, i, arr[i]);
+        }
+        // println!("arr {}:{}", name, resstr);
+    }
     fn raw_handle_bottommost_delete(&mut self) {
         // Valid MVCC records should begin with `RAW_KEY_PREFIX`.
         debug!("raw_handle_bottommost_delete:");
         debug_assert_eq!(self.mvcc_key_prefix[0], RAW_KEY_PREFIX);
+        self.print_array("mvcc_key_prefix.push", self.mvcc_key_prefix.to_vec());
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix);
         self.mvcc_deletions.push(key); // key= user key
     }
@@ -1206,24 +1221,26 @@ pub mod tests {
             is_delete: false,
         };
 
+        let user_key = b"r\0aaaaaaaaaaa";
+
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(b"r\0a", 100).as_slice(),
+                makeKey(user_key, 100).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(b"r\0a", 90).as_slice(),
+                makeKey(user_key, 90).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(b"r\0a", 70).as_slice(),
+                makeKey(user_key, 70).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
@@ -1244,11 +1261,11 @@ pub mod tests {
         thread::sleep(Duration::from_millis(1000));
 
         let isexit100 = raw_engine
-            .get_value_cf(CF_DEFAULT, makeKey(b"r\0a", 100).as_slice())
+            .get_value_cf(CF_DEFAULT, makeKey(user_key, 100).as_slice())
             .unwrap()
             .is_none();
         let isexit90 = raw_engine
-            .get_value_cf(CF_DEFAULT, makeKey(b"r\0a", 90).as_slice())
+            .get_value_cf(CF_DEFAULT, makeKey(user_key, 90).as_slice())
             .unwrap()
             .is_none();
 
@@ -1302,29 +1319,31 @@ pub mod tests {
             is_delete: true,
         };
 
+        let user_key = b"r\0aaaaaaaaaaa";
+
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(b"r\0a", 9).as_slice(),
+                makeKey(user_key, 9).as_slice(),
                 &APIV2::encode_raw_value_owned(value_is_delete.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(b"r\0a", 5).as_slice(),
+                makeKey(user_key, 5).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(b"r\0a", 1).as_slice(),
+                makeKey(user_key, 1).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
 
-        gc_and_check(true, b"r\0a");
+        gc_and_check(true, user_key);
     }
 
     // Test dirty versions before a deletion mark can be handled correctly.
