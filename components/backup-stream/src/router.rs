@@ -569,7 +569,9 @@ impl TempFileKey {
         let millis = TimeStamp::physical(ts.into());
         let dt = Utc.timestamp_millis(millis as _);
         fail::fail_point!("stream_format_date_time", |s| {
-            return dt.format(&s.unwrap_or("%Y%m".to_owned())).to_string();
+            return dt
+                .format(&s.unwrap_or_else(|| "%Y%m".to_owned()))
+                .to_string();
         });
         #[cfg(feature = "failpoints")]
         return dt.format("%Y%m%d").to_string();
