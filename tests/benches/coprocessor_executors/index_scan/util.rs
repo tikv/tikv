@@ -12,7 +12,7 @@ use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_executors::interface::*;
 use tidb_query_executors::BatchIndexScanExecutor;
-use tikv::coprocessor::dag::TiKVStorage;
+use tikv::coprocessor::dag::TiKvStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
 
@@ -37,7 +37,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         unique: bool,
     ) -> Self::E {
         let mut executor = BatchIndexScanExecutor::new(
-            black_box(TiKVStorage::new(
+            black_box(TiKvStorage::new(
                 ToTxnStore::<Self::T>::to_store(store),
                 false,
             )),

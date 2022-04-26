@@ -456,9 +456,24 @@ pub struct ReadyResult {
 }
 
 #[derive(Debug)]
+/// ForceLeader process would be:
+/// 1. If it's hibernated, enter wait ticks state, and wake up the peer
+/// 2. Enter pre force leader state, become candidate and send request vote to all peers
+/// 3. Wait for the responses of the request vote, no reject should be received.
+/// 4. Enter force leader state, become leader without leader lease
+/// 5. Execute recovery plan(some remove-peer commands)
+/// 6. After the plan steps are all applied, exit force leader state
 pub enum ForceLeaderState {
-    PreForceLeader { failed_stores: HashSet<u64> },
-    ForceLeader { failed_stores: HashSet<u64> },
+    WaitTicks {
+        failed_stores: HashSet<u64>,
+        ticks: usize,
+    },
+    PreForceLeader {
+        failed_stores: HashSet<u64>,
+    },
+    ForceLeader {
+        failed_stores: HashSet<u64>,
+    },
 }
 
 pub enum UnsafeRecoveryState {
@@ -518,12 +533,7 @@ where
     /// With that, we can further propose remove failed-nodes conf-change, to make
     /// the Raft group forms majority and works normally later on.
     ///
-    /// ForceLeader process would be:
-    /// 1. Enter pre force leader state, become candidate and send request vote to all peers
-    /// 2. Wait for the responses of the request vote, no reject should be received.
-    /// 3. Enter force leader state, become leader without leader lease
-    /// 4. Execute recovery plan(some remove-peer commands)
-    /// 5. After the plan steps are all applied, exit force leader state
+    /// For details, see the comment of `ForceLeaderState`.
     pub force_leader: Option<ForceLeaderState>,
 
     /// Record the instants of peers being added into the configuration.
@@ -1000,6 +1010,7 @@ where
         engines: &Engines<EK, ER>,
         perf_context: &mut EK::PerfContext,
         keep_data: bool,
+        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
@@ -1011,52 +1022,94 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
-        // Set Tombstone state explicitly
-        let mut kv_wb = engines.kv.write_batch();
-        let mut raft_wb = engines.raft.log_batch(1024);
-        // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
-        // the minimal index that may still have logs.
-        let last_compacted_idx = self.last_compacted_idx;
-        self.mut_store()
-            .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
-
-        // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
-        // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
-        // peer list are empty, so a removed peer will be created again.  Saving current peer
-        // into the peer list of region will fix this problem.
-        if !self.get_store().is_initialized() {
-            region.mut_peers().push(self.peer.clone());
-        }
-        write_peer_state(
-            &mut kv_wb,
-            &region,
-            PeerState::Tombstone,
-            // Only persist the `merge_state` if the merge is known to be succeeded
-            // which is determined by the `keep_data` flag
-            if keep_data {
-                self.pending_merge_state.clone()
+        let (pending_create_peers, clean) = if self.local_first_replicate {
+            let mut pending = pending_create_peers.lock().unwrap();
+            if self.get_store().is_initialized() {
+                assert_eq!(pending.get(&region.get_id()), None);
+                (None, true)
+            } else if let Some(status) = pending.get(&region.get_id()) {
+                if *status == (self.peer.get_id(), false) {
+                    pending.remove(&region.get_id());
+                    // Hold the lock to avoid apply worker applies split.
+                    (Some(pending), true)
+                } else if *status == (self.peer.get_id(), true) {
+                    // It's already marked to split by apply worker, skip delete.
+                    (None, false)
+                } else {
+                    // Peer id can't be different as router should exist all the time, their is no
+                    // chance for store to insert a different peer id. And apply worker should skip
+                    // split when meeting a different id.
+                    let status = *status;
+                    // Avoid panic with lock.
+                    drop(pending);
+                    panic!("{} unexpected pending states {:?}", self.tag, status);
+                }
             } else {
-                None
-            },
-        )?;
-        // write kv rocksdb first in case of restart happen between two write
-        let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(true);
-        kv_wb.write_opt(&write_opts)?;
+                // The status is inserted when it's created. It will be removed in following cases:
+                // 1. By appy worker as it fails to split due to region state key. This is
+                //    impossible to reach this code path because the delete write batch is not
+                //    persisted yet.
+                // 2. By store fsm as it fails to create peer, which is also invalid obviously.
+                // 3. By peer fsm after persisting snapshot, then it should be initialized.
+                // 4. By peer fsm after split.
+                // 5. By peer fsm when destroy, which should go the above branch instead.
+                (None, false)
+            }
+        } else {
+            (None, true)
+        };
+        if clean {
+            // Set Tombstone state explicitly
+            let mut kv_wb = engines.kv.write_batch();
+            let mut raft_wb = engines.raft.log_batch(1024);
+            // Raft log gc should be flushed before being destroyed, so last_compacted_idx has to be
+            // the minimal index that may still have logs.
+            let last_compacted_idx = self.last_compacted_idx;
+            self.mut_store()
+                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
 
-        perf_context.start_observe();
-        engines.raft.consume(&mut raft_wb, true)?;
-        perf_context.report_metrics();
+            // StoreFsmDelegate::check_msg use both epoch and region peer list to check whether
+            // a message is targing a staled peer.  But for an uninitialized peer, both epoch and
+            // peer list are empty, so a removed peer will be created again.  Saving current peer
+            // into the peer list of region will fix this problem.
+            if !self.get_store().is_initialized() {
+                region.mut_peers().push(self.peer.clone());
+            }
 
-        if self.get_store().is_initialized() && !keep_data {
-            // If we meet panic when deleting data and raft log, the dirty data
-            // will be cleared by a newer snapshot applying or restart.
-            if let Err(e) = self.get_store().clear_data() {
-                error!(?e;
-                    "failed to schedule clear data task";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
+            write_peer_state(
+                &mut kv_wb,
+                &region,
+                PeerState::Tombstone,
+                // Only persist the `merge_state` if the merge is known to be succeeded
+                // which is determined by the `keep_data` flag
+                if keep_data {
+                    self.pending_merge_state.clone()
+                } else {
+                    None
+                },
+            )?;
+
+            // write kv rocksdb first in case of restart happen between two write
+            let mut write_opts = WriteOptions::new();
+            write_opts.set_sync(true);
+            kv_wb.write_opt(&write_opts)?;
+
+            drop(pending_create_peers);
+
+            perf_context.start_observe();
+            engines.raft.consume(&mut raft_wb, true)?;
+            perf_context.report_metrics();
+
+            if self.get_store().is_initialized() && !keep_data {
+                // If we meet panic when deleting data and raft log, the dirty data
+                // will be cleared by a newer snapshot applying or restart.
+                if let Err(e) = self.get_store().clear_data() {
+                    error!(?e;
+                        "failed to schedule clear data task";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
+                }
             }
         }
 
@@ -1071,7 +1124,11 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "takes" => ?t.saturating_elapsed(),
+            "clean" => clean,
+            "keep_data" => keep_data,
         );
+
+        fail_point!("raft_store_after_destroy_peer");
 
         Ok(())
     }
@@ -1118,6 +1175,10 @@ where
         }
         if self.raft_group.raft.lead_transferee.is_some() {
             res.reason = "transfer leader";
+            return res;
+        }
+        if self.force_leader.is_some() {
+            res.reason = "force leader";
             return res;
         }
         // Unapplied entries can change the configuration of the group.

@@ -1152,7 +1152,7 @@ enum TomlLine {
     // the `Keys` from "[`Keys`]"
     Table(String),
     // the `Keys` from "`Keys` = value"
-    KVPair(String),
+    KvPair(String),
     // Comment, empty line, etc.
     Unknown,
 }
@@ -1168,7 +1168,7 @@ impl TomlLine {
         if v.is_empty() || v.len() > 2 || TomlLine::parse_key(v[v.len() - 1].as_str()).is_none() {
             return TomlLine::Unknown;
         }
-        TomlLine::KVPair(v.pop().unwrap())
+        TomlLine::KvPair(v.pop().unwrap())
     }
 
     fn parse(s: &str) -> TomlLine {
@@ -1248,7 +1248,7 @@ impl TomlWriter {
                     self.write(line.as_bytes());
                     self.current_table = keys;
                 }
-                TomlLine::KVPair(keys) => {
+                TomlLine::KvPair(keys) => {
                     match change.remove(&TomlLine::concat_key(&self.current_table, &keys)) {
                         None => self.write(line.as_bytes()),
                         Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
