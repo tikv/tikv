@@ -23,7 +23,7 @@ use tikv_util::{
 use txn_types::KvPair;
 
 use crate::metrics::*;
-use crate::{backup_file_name, Error, Result};
+use crate::{backup_file_name, utils::KeyValueCodec, Error, Result};
 
 #[derive(Debug, Clone, Copy)]
 /// CfNameWrap wraps the CfName type.
@@ -346,6 +346,7 @@ pub struct BackupRawKVWriter {
     writer: Writer,
     limiter: Limiter,
     cipher: CipherInfo,
+    codec: KeyValueCodec,
 }
 
 impl BackupRawKVWriter {
@@ -358,6 +359,7 @@ impl BackupRawKVWriter {
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         cipher: CipherInfo,
+        codec: KeyValueCodec,
     ) -> Result<BackupRawKVWriter> {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -372,6 +374,7 @@ impl BackupRawKVWriter {
             writer: Writer::new(writer),
             limiter,
             cipher,
+            codec,
         })
     }
 
@@ -390,7 +393,11 @@ impl BackupRawKVWriter {
             };
 
             self.writer.write(&k, &v)?;
-            self.writer.update_raw_with(&k, &v, need_checksum)?;
+            self.writer.update_raw_with(
+                &self.codec.decode_dst_encoded_key(&k)?,
+                self.codec.decode_dst_encoded_value(&v)?,
+                need_checksum,
+            )?;
         }
         Ok(())
     }

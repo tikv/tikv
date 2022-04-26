@@ -8,7 +8,7 @@ use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
 use crate::storage::Statistics;
 
-use api_version::{APIV1TTL, APIV2};
+use api_version::{dispatch_api_version, APIVersion, APIV1TTL, APIV2};
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
 use std::time::Duration;
@@ -143,13 +143,19 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<(u64, u64, u64)> {
         match self {
             RawStore::V1(inner) => {
-                raw_checksum_ranges(&inner.snapshot, cf, ranges, statistics).await
+                inner
+                    .raw_checksum_ranges(ApiVersion::V1, cf, ranges, statistics)
+                    .await
             }
             RawStore::V1TTL(inner) => {
-                raw_checksum_ranges(&inner.snapshot.snap, cf, ranges, statistics).await
+                inner
+                    .raw_checksum_ranges(ApiVersion::V1ttl, cf, ranges, statistics)
+                    .await
             }
             RawStore::V2(inner) => {
-                raw_checksum_ranges(&inner.snapshot.snap, cf, ranges, statistics).await
+                inner
+                    .raw_checksum_ranges(ApiVersion::V2, cf, ranges, statistics)
+                    .await
             }
         }
     }
@@ -285,43 +291,50 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         }
         Ok(pairs)
     }
-}
-pub async fn raw_checksum_ranges<S: Snapshot>(
-    snapshot: &S,
-    cf: CfName,
-    ranges: &[KeyRange],
-    statistics: &mut Vec<Statistics>,
-) -> Result<(u64, u64, u64)> {
-    let mut total_bytes = 0;
-    let mut total_kvs = 0;
-    let digest = crc64fast::Digest::new();
-    let mut checksum: u64 = 0;
-    let mut row_count = 0;
-    let mut time_slice_start = Instant::now();
-    for r in ranges {
-        let mut stats = Statistics::default();
-        let cf_stats = stats.mut_cf_statistics(cf);
-        let mut opts = IterOptions::new(None, None, false);
-        opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
-        let mut cursor = Cursor::new(snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
-        cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
-        while cursor.valid()? {
-            row_count += 1;
-            if row_count >= MAX_BATCH_SIZE {
-                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
-                    reschedule().await;
-                    time_slice_start = Instant::now();
+    pub async fn raw_checksum_ranges(
+        &'a self,
+        api_version: ApiVersion,
+        cf: CfName,
+        ranges: &[KeyRange],
+        statistics: &'a mut Vec<Statistics>,
+    ) -> Result<(u64, u64, u64)> {
+        let mut total_bytes = 0;
+        let mut total_kvs = 0;
+        let digest = crc64fast::Digest::new();
+        let mut checksum: u64 = 0;
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
+        for r in ranges {
+            let mut stats = Statistics::default();
+            let cf_stats = stats.mut_cf_statistics(cf);
+            let mut opts = IterOptions::new(None, None, false);
+            opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
+            let mut cursor =
+                Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
+            cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
+            while cursor.valid()? {
+                row_count += 1;
+                if row_count >= MAX_BATCH_SIZE {
+                    if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
+                        reschedule().await;
+                        time_slice_start = Instant::now();
+                    }
+                    row_count = 0;
                 }
-                row_count = 0;
+                // this is the encoded key, need decode
+                let v = cursor.value(cf_stats);
+                let k = dispatch_api_version!(api_version, {
+                    let k = cursor.key(cf_stats);
+                    let (raw_key, _) = API::decode_raw_key_owned(Key::from_encoded_slice(k), true)?;
+                    raw_key
+                });
+                checksum = checksum_crc64_xor(checksum, digest.clone(), &k, v);
+                total_kvs += 1;
+                total_bytes += k.len() + v.len();
+                cursor.next(cf_stats);
             }
-            let k = cursor.key(cf_stats);
-            let v = cursor.value(cf_stats);
-            checksum = checksum_crc64_xor(checksum, digest.clone(), k, v);
-            total_kvs += 1;
-            total_bytes += k.len() + v.len();
-            cursor.next(cf_stats);
+            statistics.push(stats);
         }
-        statistics.push(stats);
+        Ok((checksum, total_kvs, total_bytes as u64))
     }
-    Ok((checksum, total_kvs, total_bytes as u64))
 }

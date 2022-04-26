@@ -11,6 +11,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use tempfile::Builder;
 use test_backup::*;
+use tikv::coprocessor::checksum_crc64_xor;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
@@ -402,14 +403,19 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
         ApiVersion::V1 | ApiVersion::V1ttl => String::from(CF_DEFAULT),
         ApiVersion::V2 => String::from(""),
     };
+    let digest = crc64fast::Digest::new();
+    let mut admin_checksum: u64 = 0;
+    let mut admin_total_kvs: u64 = 0;
+    let mut admin_total_bytes: u64 = 0;
 
     for i in 0..key_count {
         let (k, v) = suite.gen_raw_kv(i);
+        admin_total_kvs += 1;
+        admin_total_bytes += (k.len() + v.len()) as u64;
+        admin_checksum =
+            checksum_crc64_xor(admin_checksum, digest.clone(), k.as_bytes(), v.as_bytes());
         suite.must_raw_put(k.clone().into_bytes(), v.clone().into_bytes(), cf.clone());
     }
-    // Keys are order by lexicographical order, 'a'-'z' will cover all.
-    let (admin_checksum, admin_total_kvs, admin_total_bytes) =
-        suite.raw_kv_checksum("ra".to_owned(), "rz".to_owned(), CF_DEFAULT);
 
     let (store_checksum, store_kvs, store_bytes) =
         suite.storage_raw_checksum("ra".to_owned(), "rz".to_owned());

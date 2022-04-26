@@ -222,6 +222,22 @@ impl KeyValueCodec {
         Ok(ret_key)
     }
 
+    // return the user key from encoded key of dst api version
+    pub fn decode_dst_encoded_key(&self, key: &[u8]) -> Result<Vec<u8>> {
+        dispatch_api_version!(self.dst_api_ver, {
+            let (raw_key, _) = API::decode_raw_key_owned(Key::from_encoded_slice(key), true)?;
+            Ok(raw_key)
+        })
+    }
+
+    // return the user value from encoded value of dst api version
+    pub fn decode_dst_encoded_value<'a>(&self, value: &'a [u8]) -> Result<&'a [u8]> {
+        dispatch_api_version!(self.dst_api_ver, {
+            let raw_value = API::decode_raw_value(value)?;
+            Ok(raw_value.user_value)
+        })
+    }
+
     pub fn convert_key_range_to_dst_version(
         &self,
         start_key: Vec<u8>,

@@ -504,6 +504,7 @@ impl BackupRange {
             compression_type,
             compression_level,
             cipher,
+            self.codec.clone(),
         ) {
             Ok(w) => w,
             Err(e) => {
@@ -1097,7 +1098,6 @@ pub mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use crate::utils::BACKUP_V1_TO_V2_TS;
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, APIVersion, RawValue};
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
@@ -1507,7 +1507,7 @@ pub mod tests {
     }
 
     fn generate_test_raw_key(idx: u64, api_ver: ApiVersion) -> String {
-        let mut key = if idx == 100 {
+        let mut key = if idx == 0 {
             String::from("")
         } else {
             format!("k{:0>10}", idx)
@@ -1543,35 +1543,16 @@ pub mod tests {
         })
     }
 
-    fn convert_test_backup_raw_key(
-        raw_key: String,
-        ts: u64,
+    fn convert_test_backup_user_key(
+        mut raw_key: String,
         cur_ver: ApiVersion,
         dst_ver: ApiVersion,
     ) -> Key {
-        if cur_ver == dst_ver {
-            dispatch_api_version!(cur_ver, {
-                return API::encode_raw_key_owned(raw_key.into_bytes(), Some(TimeStamp::from(ts)));
-            })
-        } else if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl)
-            && dst_ver == ApiVersion::V2
+        if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl) && dst_ver == ApiVersion::V2
         {
-            let mut dst_key = raw_key;
-            dst_key.insert(0, RAW_KEY_PREFIX as char);
-            return generate_engine_test_key(dst_key, Some(BACKUP_V1_TO_V2_TS.into()), dst_ver);
+            raw_key.insert(0, RAW_KEY_PREFIX as char);
         }
         Key::from_encoded(raw_key.into_bytes())
-    }
-
-    fn convert_test_backup_raw_value(
-        value: String,
-        cur_ver: ApiVersion,
-        dst_ver: ApiVersion,
-    ) -> Vec<u8> {
-        let value = generate_engine_test_value(value, cur_ver);
-        dispatch_api_version!(dst_ver, {
-            API::convert_encoded_value_version_from(cur_ver, &value).unwrap()
-        })
     }
 
     fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
@@ -1596,10 +1577,14 @@ pub mod tests {
             let value_str = generate_test_raw_value(i, cur_api_ver);
             let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
-            let dst_key = convert_test_backup_raw_key(key_str, i, cur_api_ver, dst_api_ver);
-            let dst_value = convert_test_backup_raw_value(value_str, cur_api_ver, dst_api_ver);
-            checksum =
-                checksum_crc64_xor(checksum, digest.clone(), dst_key.as_encoded(), &dst_value);
+            let dst_user_key = convert_test_backup_user_key(key_str, cur_api_ver, dst_api_ver);
+            let dst_value = value_str.as_bytes();
+            checksum = checksum_crc64_xor(
+                checksum,
+                digest.clone(),
+                dst_user_key.as_encoded(),
+                dst_value,
+            );
             let ret = engine.put(&ctx, key, value);
             assert!(ret.is_ok());
             i += 1;
@@ -1666,17 +1651,15 @@ pub mod tests {
         let first_kv_backup_size = {
             let raw_key_str = generate_test_raw_key(start_key_idx, cur_api_ver);
             let raw_value_str = generate_test_raw_value(start_key_idx, cur_api_ver);
-            let backup_key = convert_test_backup_raw_key(raw_key_str, 1, cur_api_ver, dst_api_ver);
-            let backup_value =
-                convert_test_backup_raw_value(raw_value_str, cur_api_ver, dst_api_ver);
+            let backup_key = convert_test_backup_user_key(raw_key_str, cur_api_ver, dst_api_ver);
+            let backup_value = raw_value_str.as_bytes();
             backup_key.len() + backup_value.len()
         } as u64;
         let kv_backup_size = {
             let raw_key_str = generate_test_raw_key(1, cur_api_ver);
             let raw_value_str = generate_test_raw_value(1, cur_api_ver);
-            let backup_key = convert_test_backup_raw_key(raw_key_str, 1, cur_api_ver, dst_api_ver);
-            let backup_value =
-                convert_test_backup_raw_value(raw_value_str, cur_api_ver, dst_api_ver);
+            let backup_key = convert_test_backup_user_key(raw_key_str, cur_api_ver, dst_api_ver);
+            let backup_value = raw_value_str.as_bytes();
             backup_key.len() + backup_value.len()
         } as u64;
         assert_eq!(
