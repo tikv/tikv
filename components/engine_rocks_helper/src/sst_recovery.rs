@@ -38,8 +38,8 @@ impl Debug for FileInfo {
             fmt,
             "name:{:?}, smallest_key:{:?}, largest_key:{:?}, elapsed_secs:{}",
             self.name,
-            std::str::from_utf8(&self.smallest_key).unwrap(),
-            std::str::from_utf8(&self.largest_key).unwrap(),
+            self.smallest_key,
+            self.largest_key,
             self.start_time.elapsed().as_secs_f64(),
         )
     }
@@ -169,8 +169,8 @@ impl RecoveryRunner {
             warn!(
                 "damaged file has been deleted";
                 "file" => &file.name,
-                "smallest_key" => std::str::from_utf8(&file.smallest_key).unwrap(),
-                "largest_key" => std::str::from_utf8(&file.largest_key).unwrap(),
+                "smallest_key" => ?&file.smallest_key,
+                "largest_key" => ?&file.largest_key,
             );
         }
 

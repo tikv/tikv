@@ -194,7 +194,7 @@ impl StoreMeta {
     }
 
     /// Get all region ids overlapping damaged ranges.
-    pub fn get_all_damaged_region_ids(&self) -> Vec<u64> {
+    pub fn get_all_damaged_region_ids(&self) -> HashSet<u64> {
         let mut ids = HashSet::default();
         for (_fname, (start, end)) in self.damaged_ranges.iter() {
             for (_, id) in self
@@ -207,11 +207,22 @@ impl StoreMeta {
                 }
             }
         }
-        warn!(
-            "detected damaged regions overlapping damaged file ranges";
-            "id" => ?&ids,
-        );
-        ids.into_iter().collect()
+        if !ids.is_empty() {
+            warn!(
+                "detected damaged regions overlapping damaged file ranges";
+                "id" => ?&ids,
+            );
+        }
+        ids
+    }
+
+    fn overlap_damaged_range(&self, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
+        for (_fname, (file_start, file_end)) in self.damaged_ranges.iter() {
+            if file_end >= start_key && file_start < end_key {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -1972,6 +1983,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             // because of the `StoreMeta` lock.
         }
 
+        if meta.overlap_damaged_range(
+            &data_key(msg.get_start_key()),
+            &data_end_key(msg.get_end_key()),
+        ) {
+            warn!(
+                "Damaged region overlapped and reject to create peer";
+                "peer_id" => ?target,
+                "region_id" => &region_id,
+            );
+            return Ok(false);
+        }
+
         let mut is_overlapped = false;
         let mut regions_to_destroy = vec![];
         for (_, id) in meta.region_ranges.range((
@@ -2214,7 +2237,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             stats.set_region_count(meta.regions.len() as u32);
 
             if !meta.damaged_ranges.is_empty() {
-                let damaged_regions_id = meta.get_all_damaged_region_ids();
+                let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
         }
