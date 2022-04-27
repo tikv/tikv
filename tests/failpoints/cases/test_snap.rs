@@ -5,6 +5,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{fs, io, thread};
 
+use engine_traits::RaftEngineReadOnly;
 use raft::eraftpb::MessageType;
 use std::fs::File;
 use std::io::prelude::*;
@@ -197,6 +198,12 @@ fn test_destroy_peer_on_pending_snapshot() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    fail::cfg_callback("engine_rocks_raft_engine_clean_seek", move || {
+        if std::thread::current().name().unwrap().contains("raftstore") {
+            panic!("seek should not happen in raftstore threads");
+        }
+    })
+    .unwrap();
     let r1 = cluster.run_conf_change();
     pd_client.must_add_peer(r1, new_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(3, 3));
@@ -583,4 +590,58 @@ fn test_sending_fail_with_net_error() {
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
+}
+
+/// Logs scan are now moved to raftlog gc threads. The case is to test if logs
+/// are still cleaned up when there is stale logs before first index during applying
+/// snapshot. It's expected to schedule a gc task after applying snapshot.
+#[test]
+fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 15;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 15;
+    // Speed up log gc.
+    cluster.cfg.raft_store.raft_log_compact_sync_interval = ReadableDuration::millis(1);
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    cluster.run();
+    // Simulate raft log gc are pending in queue.
+    let fp = "worker_gc_raft_log";
+    fail::cfg(fp, "return(0)").unwrap();
+
+    let state = cluster.truncated_state(1, 3);
+    for i in 0..30 {
+        let b = format!("k{}", i).into_bytes();
+        cluster.must_put(&b, &b);
+    }
+    must_get_equal(&cluster.get_engine(3), b"k29", b"k29");
+    cluster.wait_log_truncated(1, 3, state.get_index() + 1);
+    cluster.stop_node(3);
+    let truncated_index = cluster.truncated_state(1, 3).get_index();
+    let raft_engine = cluster.engines[&3].raft.clone();
+    // Make sure there are stale logs.
+    raft_engine.get_entry(1, truncated_index).unwrap().unwrap();
+
+    let last_index = cluster.raft_local_state(1, 3).get_last_index();
+    for i in 30..60 {
+        let b = format!("k{}", i).into_bytes();
+        cluster.must_put(&b, &b);
+    }
+    cluster.wait_log_truncated(1, 2, last_index + 1);
+
+    fail::remove(fp);
+    // So peer (3, 3) will accept a snapshot. And all stale logs before first
+    // index should be cleaned up.
+    cluster.run_node(3).unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k59", b"k59");
+    cluster.must_put(b"k60", b"v60");
+    must_get_equal(&cluster.get_engine(3), b"k60", b"v60");
+
+    let truncated_index = cluster.truncated_state(1, 3).get_index();
+    let mut dest = vec![];
+    raft_engine.get_all_entries_to(1, &mut dest).unwrap();
+    // Only previous log should be cleaned up.
+    assert!(dest[0].get_index() > truncated_index, "{:?}", dest);
 }
