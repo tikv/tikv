@@ -30,7 +30,7 @@ use raftstore::store::*;
 use raftstore::Result;
 use resource_metering::CollectorRegHandle;
 use tikv::config::{ConfigController, Module};
-use tikv::import::SSTImporter;
+use tikv::import::SstImporter;
 use tikv::server::raftkv::ReplicaReadLockChecker;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
@@ -272,7 +272,7 @@ impl Simulator for NodeCluster {
 
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
-            Arc::new(SSTImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
+            Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());

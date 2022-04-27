@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::usize;
 
-use api_version::APIV1TTL;
+use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel};
@@ -61,7 +61,7 @@ use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::{RawCompactionFilterFactory, WriteCompactionFilterFactory};
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::ttl::TTLCompactionFilterFactory;
+use crate::server::ttl::TtlCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
@@ -600,17 +600,16 @@ impl DefaultCfConfig {
             ApiVersion::V1ttl => {
                 cf_opts.add_table_properties_collector_factory(
                     "tikv.ttl-properties-collector",
-                    TtlPropertiesCollectorFactory::<APIV1TTL>::default(),
+                    TtlPropertiesCollectorFactory::<ApiV1Ttl>::default(),
                 );
                 cf_opts
                     .set_compaction_filter_factory(
                         "ttl_compaction_filter_factory",
-                        TTLCompactionFilterFactory::<APIV1TTL>::default(),
+                        TtlCompactionFilterFactory::<ApiV1Ttl>::default(),
                     )
                     .unwrap();
             }
             ApiVersion::V2 => {
-                //TODO add a new CompactionFilter for API V2
                 cf_opts
                     .set_compaction_filter_factory(
                         "apiv2_gc_compaction_filter_factory",
@@ -3618,12 +3617,12 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::ttl::TTLCheckerTask;
+    use crate::server::ttl::TtlCheckerTask;
     use crate::storage::config_manager::StorageConfigManger;
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::txn::flow_controller::FlowController;
     use crate::storage::{Storage, TestStorageBuilder};
-    use api_version::{APIVersion, APIV1};
+    use api_version::{ApiV1, KvFormat};
     use case_macros::*;
     use engine_traits::{DBOptions as DBOptionsTrait, ALL_CFS};
     use kvproto::kvrpcpb::CommandPri;
@@ -3964,15 +3963,15 @@ mod tests {
         assert_eq!(res.get("raftstore.store-pool-size"), Some(&"17".to_owned()));
     }
 
-    fn new_engines<Api: APIVersion>(
+    fn new_engines<F: KvFormat>(
         cfg: TiKvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager, Api>,
+        Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
-        ReceiverWrapper<TTLCheckerTask>,
+        ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,
     ) {
-        assert_eq!(Api::TAG, cfg.storage.api_version());
+        assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
             ALL_CFS,
@@ -3987,7 +3986,7 @@ mod tests {
         )
         .unwrap();
         let storage =
-            TestStorageBuilder::<_, _, Api>::from_engine_and_lock_mgr(engine, DummyLockManager)
+            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, DummyLockManager)
                 .config(cfg.storage.clone())
                 .build()
                 .unwrap();
@@ -4023,7 +4022,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, _, flow_controller) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
         assert_eq!(
             db.get_options_cf(CF_DEFAULT)
@@ -4152,7 +4151,7 @@ mod tests {
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update max_background_jobs
@@ -4226,7 +4225,7 @@ mod tests {
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // update rate_limiter_auto_tuned
@@ -4249,7 +4248,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
@@ -4295,7 +4294,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (_, cfg_controller, mut rx, _) = new_engines::<APIV1>(cfg);
+        let (_, cfg_controller, mut rx, _) = new_engines::<ApiV1>(cfg);
 
         // Can not update shared block cache through rocksdb module
         cfg_controller
@@ -4303,7 +4302,7 @@ mod tests {
             .unwrap();
         match rx.recv() {
             None => unreachable!(),
-            Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
+            Some(TtlCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
     }
 
@@ -4312,7 +4311,7 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
         cfg.validate().unwrap();
-        let (storage, cfg_controller, ..) = new_engines::<APIV1>(cfg);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let scheduler = storage.get_scheduler();
 
         let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
