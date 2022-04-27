@@ -522,8 +522,6 @@ where
 
         let mut raw_modifys = MvccRaw::new();
 
-        // let mut keys_iter = keys.iter();
-        // let mut next_gc_key = keys_iter.next();
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
             if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifys, &mut snapshot) {
@@ -531,7 +529,6 @@ where
                 error!(?e; "Raw GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
             }
-
             // flush_raw_gc;
             Self::flush_raw_gc(raw_modifys, &self.limiter, &self.engine)?;
             // after flush, reset rwModify=let RawModify=MvccRaw::new();
@@ -549,7 +546,8 @@ where
         //snapshot: &mut RawBasicSnapshot<E::Snap>,
         kv_snapshot: &mut <E as Engine>::Snap,
     ) -> Result<()> {
-        let start_key = Key::from_raw(key.as_encoded()).append_ts(safe_point);
+        let start_key =
+            Key::from_raw(key.as_encoded()).append_ts(TimeStamp::new(safe_point.into_inner() - 1));
         let start_key_arr = start_key.as_encoded();
         let start_seek_key = Key::from_encoded_slice(start_key_arr);
         //kv_snapshot.
@@ -576,8 +574,6 @@ where
                 // different userkey
                 break;
             } else {
-                info!("to delete");
-                println!("to delete");
                 raw_modifys.modifies.push(write);
             }
             cursor.next(&mut statistics);
@@ -1904,7 +1900,7 @@ mod tests {
         let check_key_a = snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
         let check_key_b = snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
 
-        assert_eq!(6, runner.stats.data.next);
+        assert_eq!(5, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
         // if raw.ts == safepoint , it will not be delete; we just delete the raw.ts < safepoint
         assert_eq!(check_key_a.unwrap().is_none(), false);
@@ -1918,7 +1914,7 @@ mod tests {
         let check_key_a = snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
         let check_key_b = snapshot.get(&Key::from_encoded_slice(&*engine_key_b));
 
-        assert_eq!(7, runner.stats.data.next);
+        assert_eq!(6, runner.stats.data.next);
         assert_eq!(4, runner.stats.data.seek);
 
         assert_eq!(check_key_a.unwrap().is_none(), true);
