@@ -111,10 +111,7 @@ impl RecoveryRunner {
 
                 // defensive behavior
                 if self.damaged_files.len() >= MAX_DAMAGED_FILES_NUM {
-                    self.set_panic_mark_and_panic(
-                        path,
-                        &format!("too many damaged files detected"),
-                    );
+                    self.set_panic_mark_and_panic(path, "too many damaged files detected");
                 }
 
                 // lock the store_meta and check if the range exist.
