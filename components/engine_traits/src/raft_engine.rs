@@ -18,6 +18,9 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         max_size: Option<usize>,
         to: &mut Vec<Entry>,
     ) -> Result<usize>;
+
+    /// Get all available entries in the region.
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
 }
 
 pub struct RaftLogGCTask {
@@ -50,6 +53,7 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn clean(
         &self,
         raft_group_id: u64,
+        first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
