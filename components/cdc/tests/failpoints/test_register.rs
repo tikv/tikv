@@ -11,7 +11,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::metapb::RegionEpoch;
 use pd_client::PdClient;
 use raft::StateRole;
-use raftstore::coprocessor::{ObserverContext, RoleChange};
+use raftstore::coprocessor::{ObserverContext, RoleChange, RoleObserver};
 use test_raftstore::sleep_ms;
 
 #[test]
