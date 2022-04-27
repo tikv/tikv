@@ -4,6 +4,7 @@
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -115,6 +116,14 @@ impl<T: Display + Send> Scheduler<T> {
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
         }
+        self.schedule_force(task)
+    }
+
+    /// Schedules a task to run.
+    ///
+    /// Different from the `schedule` function, the task will still be scheduled
+    /// if pending task number exceeds capacity.
+    pub fn schedule_force(&self, task: T) -> Result<(), ScheduleError<T>> {
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
         if let Err(e) = self.sender.unbounded_send(Msg::Task(task)) {
@@ -134,6 +143,10 @@ impl<T: Display + Send> Scheduler<T> {
 
     pub fn stop(&self) {
         self.sender.close_channel();
+    }
+
+    pub fn pending_tasks(&self) -> usize {
+        self.counter.load(Ordering::Acquire)
     }
 }
 
@@ -270,11 +283,13 @@ impl<S: Into<String>> Builder<S> {
     }
 
     /// Pending tasks won't exceed `pending_capacity`.
+    #[must_use]
     pub fn pending_capacity(mut self, pending_capacity: usize) -> Self {
         self.pending_capacity = pending_capacity;
         self
     }
 
+    #[must_use]
     pub fn thread_count(mut self, thread_count: usize) -> Self {
         self.thread_count = thread_count;
         self
@@ -283,7 +298,7 @@ impl<S: Into<String>> Builder<S> {
     pub fn create(self) -> Worker {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
-            .thread_count(self.thread_count, self.thread_count)
+            .thread_count(self.thread_count, self.thread_count, self.thread_count)
             .build_single_level_pool();
         let remote = pool.remote().clone();
         let pool = Arc::new(Mutex::new(Some(pool)));
@@ -356,6 +371,22 @@ impl Worker {
         self.remote.spawn(async move {
             while let Some(Ok(_)) = interval.next().await {
                 func();
+            }
+        });
+    }
+
+    pub fn spawn_interval_async_task<F, Fut>(&self, interval: Duration, mut func: F)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+        F: FnMut() -> Fut + Send + 'static,
+    {
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        self.remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                let fut = func();
+                fut.await;
             }
         });
     }

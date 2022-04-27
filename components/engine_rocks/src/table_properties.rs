@@ -25,7 +25,7 @@ impl engine_traits::TablePropertiesCollection for TablePropertiesCollection {
     where
         F: FnMut(&Self::UserCollectedProperties) -> bool,
     {
-        for (_, props) in (&self.0).into_iter() {
+        for (_, props) in self.0.into_iter() {
             let props = unsafe { std::mem::transmute(props.user_collected_properties()) };
             if !f(props) {
                 break;
@@ -40,7 +40,7 @@ impl engine_traits::TablePropertiesExt for RocksEngine {
     fn table_properties_collection(
         &self,
         cf: &str,
-        ranges: &[Range],
+        ranges: &[Range<'_>],
     ) -> Result<Self::TablePropertiesCollection> {
         let collection = self.get_properties_of_tables_in_range(cf, ranges)?;
         Ok(TablePropertiesCollection(collection))
@@ -51,7 +51,7 @@ impl RocksEngine {
     pub(crate) fn get_properties_of_tables_in_range(
         &self,
         cf: &str,
-        ranges: &[Range],
+        ranges: &[Range<'_>],
     ) -> Result<rocksdb::TablePropertiesCollection> {
         let cf = util::get_cf_handle(self.as_inner(), cf)?;
         // FIXME: extra allocation

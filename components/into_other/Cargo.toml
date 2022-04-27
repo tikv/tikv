@@ -6,5 +6,5 @@ publish = false
 
 [dependencies]
 engine_traits = { path = "../engine_traits", default-features = false }
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }

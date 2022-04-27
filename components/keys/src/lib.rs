@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_region_id_key() {
-        let region_ids = vec![0, 1, 1024, std::u64::MAX];
+        let region_ids = vec![0, 1, 1024, u64::MAX];
         for region_id in region_ids {
             let prefix = region_raft_prefix(region_id);
 

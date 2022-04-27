@@ -1,84 +1,91 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod mock_pubsub;
 mod mock_receiver_server;
+
+pub use mock_receiver_server::MockReceiverServer;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::{select, FutureExt};
-use grpcio::{Environment, Server};
-use kvproto::kvrpcpb::{ApiVersion, Context};
-use kvproto::resource_usage_agent::ResourceUsageRecord;
-use mock_receiver_server::MockReceiverServer;
-use resource_metering::{init_recorder, Config, ConfigManager, Task, TEST_TAG_PREFIX};
+use grpcio::{ChannelBuilder, ClientSStreamReceiver, Environment};
+use kvproto::kvrpcpb::Context;
+use kvproto::resource_usage_agent::{
+    ResourceMeteringPubSubClient, ResourceMeteringRequest, ResourceUsageRecord,
+};
+use resource_metering::{Config, ResourceTagFactory};
 use tempfile::TempDir;
-use tikv::config::{ConfigController, Module, TiKvConfig};
+use test_util::alloc_port;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::{RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder};
-use tikv_util::config::ReadableDuration;
-use tikv_util::worker::LazyWorker;
+use tikv::storage::{RocksEngine, StorageApiV1, TestEngineBuilder, TestStorageBuilderApiV1};
 use tokio::runtime::{self, Runtime};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
-    receiver_server: Option<Server>,
+    pubsub_server_port: u16,
+    receiver_server: Option<MockReceiverServer>,
 
-    storage: Storage<RocksEngine, DummyLockManager>,
-    reporter: Option<Box<LazyWorker<Task>>>,
+    storage: StorageApiV1<RocksEngine, DummyLockManager>,
     cfg_controller: ConfigController,
+    resource_tag_factory: ResourceTagFactory,
 
     tx: Sender<Vec<ResourceUsageRecord>>,
     rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
-    rt: Runtime,
+    pub rt: Runtime,
     cancel_workload: Option<oneshot::Sender<()>>,
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
     _dir: TempDir,
+    stop_workers: Option<Box<dyn FnOnce()>>,
 }
 
 impl TestSuite {
-    pub fn new() -> Self {
-        fail::cfg("cpu-record-test-filter", "return").unwrap();
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager {},
-            ApiVersion::V1,
-        )
-        .build()
-        .unwrap();
-
-        let mut reporter = Box::new(LazyWorker::new("resource-metering-reporter"));
-        let scheduler = reporter.scheduler();
-
+    pub fn new(cfg: resource_metering::Config) -> Self {
         let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
-        tikv_cfg.resource_metering.report_receiver_interval = ReadableDuration::secs(5);
-
-        let resource_metering_cfg = tikv_cfg.resource_metering.clone();
+        tikv_cfg.resource_metering = cfg.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
-        cfg_controller.register(
-            Module::ResourceMetering,
-            Box::new(ConfigManager::new(
-                resource_metering_cfg.clone(),
-                scheduler.clone(),
-                init_recorder(
-                    resource_metering_cfg.enabled,
-                    resource_metering_cfg.precision.as_millis(),
-                ),
-            )),
-        );
+
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(cfg.precision.as_millis());
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(cfg.clone(), collector_reg_handle);
         let env = Arc::new(Environment::new(2));
-        let mut reporter_client = resource_metering::GrpcClient::default();
-        reporter_client.set_env(env.clone());
-        reporter.start_with_timer(resource_metering::Reporter::new(
-            reporter_client,
-            resource_metering_cfg,
-            scheduler.clone(),
-        ));
+        let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
+            cfg.receiver_address.clone(),
+            env.clone(),
+            data_sink_reg_handle.clone(),
+        );
+        let pubsub_server_port = alloc_port();
+        let mut pubsub_server = mock_pubsub::MockPubSubServer::new(
+            pubsub_server_port,
+            env.clone(),
+            data_sink_reg_handle,
+        );
+        pubsub_server.start();
+
+        let cfg_manager = resource_metering::ConfigManager::new(
+            cfg,
+            recorder_notifier,
+            reporter_notifier,
+            address_change_notifier,
+        );
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(cfg_manager),
+        );
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+            .set_resource_tag_factory(resource_tag_factory.clone())
+            .build()
+            .unwrap();
 
         let (tx, rx) = unbounded();
 
@@ -88,10 +95,11 @@ impl TestSuite {
             .unwrap();
 
         Self {
+            pubsub_server_port,
             receiver_server: None,
             storage,
-            reporter: Some(reporter),
             cfg_controller,
+            resource_tag_factory,
             tx,
             rx,
             env,
@@ -99,13 +107,38 @@ impl TestSuite {
             cancel_workload: None,
             wait_for_cancel: None,
             _dir: dir,
+            stop_workers: Some(Box::new(move || {
+                futures::executor::block_on(pubsub_server.shutdown()).unwrap();
+                single_target_worker.stop_worker();
+                reporter_worker.stop_worker();
+                recorder_worker.stop_worker();
+            })),
         }
     }
 
-    pub fn cfg_enabled(&mut self, enabled: bool) {
-        self.cfg_controller
-            .update_config("resource-metering.enabled", &enabled.to_string())
+    pub fn get_storage(&self) -> StorageApiV1<RocksEngine, DummyLockManager> {
+        self.storage.clone()
+    }
+
+    pub fn get_tag_factory(&self) -> ResourceTagFactory {
+        self.resource_tag_factory.clone()
+    }
+
+    pub fn subscribe(
+        &self,
+    ) -> (
+        ResourceMeteringPubSubClient,
+        ClientSStreamReceiver<ResourceUsageRecord>,
+    ) {
+        let channel = {
+            let cb = ChannelBuilder::new(self.env.clone());
+            cb.connect(&format!("127.0.0.1:{}", self.pubsub_server_port))
+        };
+        let client = ResourceMeteringPubSubClient::new(channel);
+        let receiver = client
+            .subscribe(&ResourceMeteringRequest::default())
             .unwrap();
+        (client, receiver)
     }
 
     pub fn cfg_receiver_address(&self, addr: impl Into<String>) {
@@ -139,22 +172,29 @@ impl TestSuite {
     }
 
     pub fn get_current_cfg(&self) -> Config {
-        self.cfg_controller.get_current().resource_metering.clone()
+        self.cfg_controller.get_current().resource_metering
     }
 
     pub fn start_receiver_at(&mut self, port: u16) {
         assert!(self.receiver_server.is_none());
 
-        let mut receiver_server =
-            MockReceiverServer::new(self.tx.clone()).build_server(port, self.env.clone());
-        receiver_server.start();
+        let mut receiver_server = MockReceiverServer::new(self.tx.clone());
+        receiver_server.start_server(port, self.env.clone());
         self.receiver_server = Some(receiver_server);
     }
 
     pub fn shutdown_receiver(&mut self) {
         if let Some(mut receiver) = self.receiver_server.take() {
-            self.rt.block_on(receiver.shutdown()).unwrap();
+            self.rt.block_on(receiver.shutdown_server());
         }
+    }
+
+    pub fn block_receiver(&mut self) {
+        self.receiver_server.as_ref().unwrap().block();
+    }
+
+    pub fn unblock_receiver(&mut self) {
+        self.receiver_server.as_ref().unwrap().unblock();
     }
 
     pub fn setup_workload(&mut self, tags: Vec<impl Into<String>>) {
@@ -169,13 +209,8 @@ impl TestSuite {
             loop {
                 let mut workload = futures::future::join_all(tags.iter().map(|tag| {
                     let mut ctx = Context::default();
-                    ctx.set_resource_group_tag({
-                        let mut t = Vec::from(TEST_TAG_PREFIX);
-                        let tag = tag.clone();
-                        t.extend_from_slice(tag.as_bytes());
-                        t
-                    });
-                    storage.get(ctx, b"".to_vec(), TimeStamp::new(0))
+                    ctx.set_resource_group_tag(tag.as_bytes().to_vec());
+                    storage.get(ctx, Key::from_raw(b""), TimeStamp::new(0))
                 }))
                 .fuse();
 
@@ -198,48 +233,53 @@ impl TestSuite {
         }
     }
 
-    pub fn fetch_reported_cpu_time(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
+    pub fn nonblock_receiver_all(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
         let mut res = HashMap::new();
-        self.rx
-            .try_iter()
-            .flat_map(|r| r.into_iter())
-            .for_each(|r| {
-                let tag = String::from_utf8_lossy(
-                    (!r.get_resource_group_tag().is_empty())
-                        .then(|| r.resource_group_tag.split_at(TEST_TAG_PREFIX.len()).1)
-                        .unwrap_or(b""),
-                )
-                .into_owned();
-                let (ts, cpu_time) = res.entry(tag).or_insert((vec![], vec![]));
-                ts.extend(&r.record_list_timestamp_sec);
-                cpu_time.extend(&r.record_list_cpu_time_ms);
-            });
-
+        if let Ok(r) = self.rx.try_recv() {
+            Self::merge_records(&mut res, r);
+        }
         res
     }
 
-    pub fn flush_receiver(&self) {
-        let _ = self
-            .rx
-            .recv_timeout(self.get_current_cfg().report_receiver_interval.0);
+    pub fn block_receive_one(&self) -> HashMap<String, (Vec<u64>, Vec<u32>)> {
+        let records = self.rx.recv().unwrap();
+        let mut res = HashMap::new();
+        Self::merge_records(&mut res, records);
+        res
     }
 
-    pub fn reset(&mut self) {
-        self.cfg_enabled(false);
-        self.cfg_receiver_address("");
-        self.cancel_workload();
-        self.flush_receiver();
-        self.cfg_precision("1s");
-        self.cfg_report_receiver_interval("5s");
-        self.cfg_max_resource_groups(5000);
-        self.shutdown_receiver();
+    fn merge_records(
+        map: &mut HashMap<String, (Vec<u64>, Vec<u32>)>,
+        records: Vec<ResourceUsageRecord>,
+    ) {
+        for r in records {
+            let tag = String::from_utf8_lossy(r.get_record().get_resource_group_tag()).into_owned();
+            let (ts, cpu_time) = map.entry(tag).or_insert((vec![], vec![]));
+            ts.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.timestamp_sec),
+            );
+            cpu_time.extend(
+                r.get_record()
+                    .get_items()
+                    .iter()
+                    .map(|item| item.cpu_time_ms),
+            );
+        }
+    }
+
+    pub fn flush_receiver(&self) {
+        while self.rx.try_recv().is_ok() {}
+        let _ = self.rx.recv_timeout(
+            self.get_current_cfg().report_receiver_interval.0 + Duration::from_millis(500),
+        );
     }
 }
 
 impl Drop for TestSuite {
     fn drop(&mut self) {
-        self.reset();
-        self.reporter.take().unwrap().stop_worker();
-        fail::remove("cpu-record-test-filter");
+        self.stop_workers.take().unwrap()();
     }
 }

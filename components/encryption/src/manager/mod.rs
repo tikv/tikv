@@ -54,7 +54,7 @@ impl Dicts {
         Ok(Dicts {
             file_dict: Mutex::new(FileDictionary::default()),
             file_dict_file: Mutex::new(FileDictionaryFile::new(
-                Path::new(path).to_owned(),
+                Path::new(path),
                 FILE_DICT_NAME,
                 enable_file_dictionary_log,
                 file_dictionary_rewrite_threshold,

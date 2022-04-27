@@ -5,6 +5,7 @@ use crate::storage::mvcc::NewerTsCheckState;
 use crate::storage::txn::Result;
 use bytes::{Buf, Bytes};
 use kvengine::Item;
+use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use tikv_kv::{Snapshot, Statistics};
@@ -66,12 +67,14 @@ impl<S: Snapshot> super::Store for CloudStore<S> {
     fn batch_get(
         &self,
         keys: &[Key],
-        statistics: &mut Statistics,
+        statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
         let mut res_vec = Vec::with_capacity(keys.len());
         for key in keys {
-            let res = self.get(key, statistics);
+            let mut stats = Statistics::default();
+            let res = self.get(key, &mut stats);
             res_vec.push(res);
+            statistics.push(stats);
         }
         Ok(res_vec)
     }
@@ -147,6 +150,7 @@ impl<S: Snapshot> CloudStore<S> {
                 user_key,
                 TimeStamp::new(start_ts),
                 bypass_locks,
+                IsolationLevel::Si,
             )?;
         }
         if snap.get_start_key() > raw_key.as_slice() || snap.get_end_key() <= raw_key.as_slice() {
@@ -204,6 +208,7 @@ impl<S: Snapshot> CloudStore<S> {
                 &key,
                 self.start_ts.into(),
                 &self.bypass_locks,
+                IsolationLevel::Si,
             )?;
             lock_iter.next();
         }

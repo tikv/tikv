@@ -7,6 +7,7 @@ use engine_traits::{
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
+use pd_client::BucketMeta;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -36,6 +37,7 @@ pub struct RegionSnapshot<S: Snapshot> {
     pub txn_extra_op: TxnExtraOp,
     // `None` means the snapshot does not provide peer related transaction extensions.
     pub txn_ext: Option<Arc<TxnExt>>,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
 }
 
 impl<S> RegionSnapshot<S>
@@ -67,6 +69,7 @@ where
             term: None,
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
+            bucket_meta: None,
         }
     }
 
@@ -181,6 +184,7 @@ where
             term: self.term,
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
+            bucket_meta: self.bucket_meta.clone(),
         }
     }
 }
@@ -282,10 +286,10 @@ fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
-            iter_opt.set_vec_upper_bound(region_end_key);
+            iter_opt.set_vec_upper_bound(region_end_key, 0);
         }
     } else {
-        iter_opt.set_vec_upper_bound(region_end_key);
+        iter_opt.set_vec_upper_bound(region_end_key, 0);
     }
 }
 
@@ -410,8 +414,17 @@ mod tests {
         EK: KvEngine,
         ER: RaftEngine,
     {
-        let (sched, _) = worker::dummy_scheduler();
-        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
+        let (region_sched, _) = worker::dummy_scheduler();
+        let (raftlog_fetch_sched, _) = worker::dummy_scheduler();
+        PeerStorage::new(
+            engines,
+            r,
+            region_sched,
+            raftlog_fetch_sched,
+            0,
+            "".to_owned(),
+        )
+        .unwrap()
     }
 
     fn load_default_dataset<EK, ER>(engines: Engines<EK, ER>) -> (PeerStorage<EK, ER>, DataSet)

@@ -166,6 +166,11 @@ where
         let router = self.router.clone();
         let importer = self.importer.clone();
         async move {
+            // check api version
+            if !importer.as_ref().check_api_version(&ssts)? {
+                return Err(Error::IncompatibleApiVersion);
+            }
+
             let mut resp = IngestResponse::default();
             let res = match snapshot_res.await {
                 Ok(snap) => snap,
@@ -335,9 +340,11 @@ where
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
         let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
-        let mut rx = rx.map_err(Error::from);
+        let mut map_rx = rx.map_err(Error::from);
 
         let handle_task = async move {
+            // So stream will not be dropped until response is sent.
+            let rx = &mut map_rx;
             let res = async move {
                 let first_chunk = rx.try_next().await?;
                 let meta = match first_chunk {

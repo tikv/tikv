@@ -13,7 +13,7 @@ use crate::util::{BenchCase, FixtureBuilder};
 fn bench_top_n_1_order_by_impl<M>(
     columns: usize,
     n: usize,
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -29,7 +29,7 @@ fn bench_top_n_1_order_by_impl<M>(
 }
 
 /// ORDER BY col LIMIT 10. 1 projection field.
-fn bench_top_n_1_order_by_1_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+fn bench_top_n_1_order_by_1_column_limit_10<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
 {
@@ -37,15 +37,17 @@ where
 }
 
 /// ORDER BY col LIMIT 4000. 1 projection field.
-fn bench_top_n_1_order_by_1_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
-where
+fn bench_top_n_1_order_by_1_column_limit_4000<M>(
+    b: &mut criterion::Bencher<'_, M>,
+    input: &Input<M>,
+) where
     M: Measurement,
 {
     bench_top_n_1_order_by_impl(1, 4000, b, input);
 }
 
 /// ORDER BY col LIMIT 10. 50 projection fields.
-fn bench_top_n_1_order_by_50_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+fn bench_top_n_1_order_by_50_column_limit_10<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
 {
@@ -53,8 +55,10 @@ where
 }
 
 /// ORDER BY col LIMIT 4000. 50 projection fields.
-fn bench_top_n_1_order_by_50_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
-where
+fn bench_top_n_1_order_by_50_column_limit_4000<M>(
+    b: &mut criterion::Bencher<'_, M>,
+    input: &Input<M>,
+) where
     M: Measurement,
 {
     bench_top_n_1_order_by_impl(50, 4000, b, input);
@@ -63,7 +67,7 @@ where
 fn bench_top_n_3_order_by_impl<M>(
     columns: usize,
     n: usize,
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -87,7 +91,7 @@ fn bench_top_n_3_order_by_impl<M>(
 }
 
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 10. 3 projection fields.
-fn bench_top_n_3_order_by_3_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+fn bench_top_n_3_order_by_3_column_limit_10<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
 {
@@ -95,15 +99,17 @@ where
 }
 
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 4000. 3 projection fields.
-fn bench_top_n_3_order_by_3_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
-where
+fn bench_top_n_3_order_by_3_column_limit_4000<M>(
+    b: &mut criterion::Bencher<'_, M>,
+    input: &Input<M>,
+) where
     M: Measurement,
 {
     bench_top_n_3_order_by_impl(3, 4000, b, input)
 }
 
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 10. 50 projection fields.
-fn bench_top_n_3_order_by_50_column_limit_10<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+fn bench_top_n_3_order_by_50_column_limit_10<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
 {
@@ -111,8 +117,10 @@ where
 }
 
 /// ORDER BY isnull(col0), col0, col1 DESC LIMIT 4000. 50 projection fields.
-fn bench_top_n_3_order_by_50_column_limit_4000<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
-where
+fn bench_top_n_3_order_by_50_column_limit_4000<M>(
+    b: &mut criterion::Bencher<'_, M>,
+    input: &Input<M>,
+) where
     M: Measurement,
 {
     bench_top_n_3_order_by_impl(50, 4000, b, input)

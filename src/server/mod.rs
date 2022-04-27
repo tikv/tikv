@@ -5,6 +5,7 @@ mod raft_client;
 
 pub mod config;
 pub mod debug;
+mod engine_factory;
 pub mod errors;
 pub mod gc_worker;
 pub mod load_statistics;
@@ -12,6 +13,7 @@ pub mod lock_manager;
 pub mod node;
 mod proxy;
 pub mod raftkv;
+mod reset_to_version;
 pub mod resolve;
 pub mod server;
 pub mod service;
@@ -31,6 +33,7 @@ pub use self::raftkv::RaftKv;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::{Server, GRPC_THREAD_PREFIX};
 pub use self::transport::ServerTransport;
+pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;

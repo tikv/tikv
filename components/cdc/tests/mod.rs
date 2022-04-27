@@ -104,17 +104,26 @@ impl TestSuiteBuilder {
         }
     }
 
+    #[must_use]
     pub fn cluster(mut self, cluster: Cluster<ServerCluster>) -> TestSuiteBuilder {
         self.cluster = Some(cluster);
         self
     }
 
+    #[must_use]
     pub fn memory_quota(mut self, memory_quota: usize) -> TestSuiteBuilder {
         self.memory_quota = Some(memory_quota);
         self
     }
 
     pub fn build(self) -> TestSuite {
+        self.build_with_cluster_runner(|cluster| cluster.run())
+    }
+
+    pub fn build_with_cluster_runner<F>(self, mut runner: F) -> TestSuite
+    where
+        F: FnMut(&mut Cluster<ServerCluster>),
+    {
         init();
         let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
         let mut cluster = self.cluster.unwrap();
@@ -155,7 +164,7 @@ impl TestSuiteBuilder {
             endpoints.insert(id, worker);
         }
 
-        cluster.run();
+        runner(&mut cluster);
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
@@ -451,7 +460,7 @@ impl TestSuite {
         let env = self.env.clone();
         self.cdc_cli.entry(store_id).or_insert_with(|| {
             let channel = ChannelBuilder::new(env)
-                .max_receive_message_len(std::i32::MAX)
+                .max_receive_message_len(i32::MAX)
                 .connect(&addr);
             ChangeDataClient::new(channel)
         })

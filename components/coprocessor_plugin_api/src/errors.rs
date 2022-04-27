@@ -34,7 +34,7 @@ pub enum PluginError {
 }
 
 impl fmt::Display for PluginError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PluginError::KeyNotInRegion { key, region_id, .. } => {
                 write!(f, "Key {:?} not found in region {:?}", key, region_id)

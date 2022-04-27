@@ -206,9 +206,7 @@ impl GcManagerHandle {
             .stop_signal_sender
             .send(())
             .map_err(|e| box_err!("failed to send stop signal to gc worker thread: {:?}", e));
-        if res.is_err() {
-            return res;
-        }
+        res?;
         self.join_handle
             .join()
             .map_err(|e| box_err!("failed to join gc worker thread: {:?}", e))

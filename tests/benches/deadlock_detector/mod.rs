@@ -53,7 +53,7 @@ struct Config {
     ttl: Duration,
 }
 
-fn bench_detect(b: &mut Bencher, cfg: &Config) {
+fn bench_detect(b: &mut Bencher<'_>, cfg: &Config) {
     let mut detect_table = DetectTable::new(cfg.ttl);
     let mut generator = DetectGenerator::new(cfg.range);
     b.iter(|| {

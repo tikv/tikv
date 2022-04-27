@@ -143,9 +143,9 @@ mod tests {
     };
     use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};
 
-    fn encode_to_v1_compatible(mut ctx: &mut EvalContext, col: &Column) -> Vec<u8> {
+    fn encode_to_v1_compatible(ctx: &mut EvalContext, col: &Column) -> Vec<u8> {
         let mut buf_v2 = vec![];
-        buf_v2.write_value(&mut ctx, col).unwrap();
+        buf_v2.write_value(ctx, col).unwrap();
         let mut buf_v1 = vec![];
         buf_v1.write_v2_as_datum(&buf_v2, col.ft()).unwrap();
         buf_v1

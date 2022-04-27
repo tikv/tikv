@@ -805,13 +805,8 @@ impl TtlPropertiesExt for Engine {
 
 impl WriteBatchExt for Engine {
     type WriteBatch = EngineWriteBatch;
-    type WriteBatchVec = EngineWriteBatch;
 
     const WRITE_BATCH_MAX_KEYS: usize = 1;
-
-    fn support_write_batch_vec(&self) -> bool {
-        panic!()
-    }
 
     fn write_batch(&self) -> Self::WriteBatch {
         panic!()
@@ -823,10 +818,7 @@ impl WriteBatchExt for Engine {
 
 pub struct EngineWriteBatch;
 
-impl engine_traits::WriteBatch<Engine> for EngineWriteBatch {
-    fn with_capacity(_: &Engine, _: usize) -> Self {
-        panic!()
-    }
+impl engine_traits::WriteBatch for EngineWriteBatch {
 
     fn write_opt(&self, _: &WriteOptions) -> TraitsResult<()> {
         panic!()

@@ -2,17 +2,22 @@
 
 use super::*;
 
+use std::sync::Arc;
+
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
 
 use engine_rocks::PerfLevel;
+use resource_metering::ResourceTagFactory;
 use tidb_query_datatype::codec::Datum;
 use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::read_pool::ReadPool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::storage::{Engine, TestEngineBuilder};
+use tikv::storage::lock_manager::DummyLockManager;
+use tikv::storage::{Engine, TestEngineBuilder, TestStorageBuilderApiV1};
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::thread_group::GroupProperties;
 
 #[derive(Clone)]
@@ -74,7 +79,10 @@ pub fn init_data_with_details<E: Engine>(
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
-    let mut store = Store::from_engine(engine);
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
+    let mut store = Store::from_storage(storage);
 
     store.begin();
     for &(id, name, count) in vals {
@@ -95,7 +103,14 @@ pub fn init_data_with_details<E: Engine>(
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
-    let copr = Endpoint::new(cfg, pool.handle(), cm, PerfLevel::EnableCount);
+    let copr = Endpoint::new(
+        cfg,
+        pool.handle(),
+        cm,
+        PerfLevel::EnableCount,
+        ResourceTagFactory::new_for_test(),
+        Arc::new(QuotaLimiter::default()),
+    );
     (store, copr)
 }
 

@@ -23,6 +23,7 @@ failpoints = ["fail/failpoints"]
 nortcheck = []
 
 [dependencies]
+api_version = { path = "../api_version", default-features = false }
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 file_system = { path = "../file_system", default-features = false }
@@ -43,8 +44,8 @@ online_config = { path = "../online_config" }
 tempfile = "3.0"
 serde = "1.0"
 serde_derive = "1.0"
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
-raft = { version = "0.6.0-alpha", default-features = false, features = ["protobuf-codec"] }
+kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 protobuf = "2"
 fail = "0.5"
 case_macros = { path = "../case_macros" }
@@ -53,7 +54,7 @@ case_macros = { path = "../case_macros" }
 git = "https://github.com/tikv/rust-rocksdb.git"
 rev = "e97c9b50d388ac00aae538afcdbb6224a2b12fda"
 package = "rocksdb"
-features = ["encryption", "static_libcpp"]
+features = ["encryption"]
 
 [dev-dependencies]
 rand = "0.8"

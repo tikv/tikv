@@ -36,6 +36,12 @@ pub fn duration_to_us(d: Duration) -> u64 {
     d.as_secs() * 1_000_000 + (nanos / 1_000)
 }
 
+/// Converts TimeSpec to nanoseconds
+#[inline]
+pub fn timespec_to_ns(t: Timespec) -> u64 {
+    (t.sec as u64) * NANOSECONDS_PER_SECOND + t.nsec as u64
+}
+
 /// Converts Duration to nanoseconds.
 #[inline]
 pub fn duration_to_ns(d: Duration) -> u64 {
@@ -190,7 +196,6 @@ impl Drop for Monitor {
 
         if let Err(e) = h.unwrap().join() {
             error!("join time monitor worker failed"; "err" => ?e);
-            return;
         }
     }
 }
@@ -527,7 +532,6 @@ impl Default for ThreadReadId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f64;
     use std::ops::Sub;
     use std::thread;
     use std::time::{Duration, SystemTime};

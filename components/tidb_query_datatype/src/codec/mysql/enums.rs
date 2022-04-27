@@ -190,7 +190,7 @@ impl<'a> ToString for EnumRef<'a> {
 
 pub trait EnumEncoder: NumberEncoder {
     #[inline]
-    fn write_enum_uint(&mut self, data: EnumRef) -> Result<()> {
+    fn write_enum_uint(&mut self, data: EnumRef<'_>) -> Result<()> {
         self.write_u64(*data.value)?;
         Ok(())
     }

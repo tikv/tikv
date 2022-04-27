@@ -5,9 +5,10 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["cloud-aws", "cloud-gcp"]
+default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
+cloud-azure = ["external_storage_export/cloud-azure"]
 
 [dependencies]
 backup = { path = "../backup" }
@@ -20,8 +21,8 @@ file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.9",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore" }

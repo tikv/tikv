@@ -132,7 +132,7 @@ mod encryption_method_serde {
         impl<'de> Visitor<'de> for EncryptionMethodVisitor {
             type Value = EncryptionMethod;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(formatter, "valid encryption method")
             }
 

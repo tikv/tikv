@@ -37,7 +37,7 @@ fn setup(
     DetectorScheduler,
     LockManager,
 ) {
-    let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
+    let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
     let pd_client = Arc::new(TestPdClient::new(0, true));
     let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
     lock_mgr
@@ -93,6 +93,7 @@ fn test_lock_manager_cfg_update() {
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
     cfg.pessimistic_txn.pipelined = false;
+    cfg.pessimistic_txn.in_memory = false;
     cfg.validate().unwrap();
     let (cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg);
 
@@ -166,11 +167,38 @@ fn test_lock_manager_cfg_update() {
     });
 
     // update pipelined
-    assert!(!lock_mgr.get_pipelined().load(Ordering::Relaxed));
+    assert!(
+        !lock_mgr
+            .get_storage_dynamic_configs()
+            .pipelined_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
     cfg_controller
         .update_config("pessimistic-txn.pipelined", "true")
         .unwrap();
-    assert!(lock_mgr.get_pipelined().load(Ordering::Relaxed));
+    assert!(
+        lock_mgr
+            .get_storage_dynamic_configs()
+            .pipelined_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
+
+    // update in-memory
+    assert!(
+        !lock_mgr
+            .get_storage_dynamic_configs()
+            .in_memory_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
+    cfg_controller
+        .update_config("pessimistic-txn.in-memory", "true")
+        .unwrap();
+    assert!(
+        lock_mgr
+            .get_storage_dynamic_configs()
+            .in_memory_pessimistic_lock
+            .load(Ordering::SeqCst)
+    );
 
     lock_mgr.stop();
 }

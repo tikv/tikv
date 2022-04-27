@@ -49,7 +49,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -102,7 +102,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -152,7 +152,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,

@@ -23,6 +23,6 @@ pub trait TablePropertiesExt {
     fn table_properties_collection(
         &self,
         cf: &str,
-        ranges: &[Range],
+        ranges: &[Range<'_>],
     ) -> Result<Self::TablePropertiesCollection>;
 }

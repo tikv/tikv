@@ -88,7 +88,7 @@ fn test_proposal_prevent_sleep() {
         RegionPacketFilter::new(1, 1).direction(Direction::Send),
     ));
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
-    let mut admin_req = new_admin_request(1, &region.get_region_epoch(), conf_change);
+    let mut admin_req = new_admin_request(1, region.get_region_epoch(), conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
     let (cb, _rx) = make_cb(&admin_req);
     cluster
@@ -310,6 +310,8 @@ fn test_inconsistent_configuration() {
     cluster.stop_node(3);
     cluster.run_node(3).unwrap();
     cluster.must_put(b"k2", b"v2");
+    // In case leader changes.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Wait till leader peer goes to sleep.
     thread::sleep(

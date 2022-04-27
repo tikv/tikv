@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(transparent)]
 pub struct TimeStamp(u64);
 
 const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
@@ -21,7 +22,7 @@ impl TimeStamp {
     }
 
     pub const fn max() -> TimeStamp {
-        TimeStamp(std::u64::MAX)
+        TimeStamp(u64::MAX)
     }
 
     pub const fn new(ts: u64) -> TimeStamp {
@@ -33,11 +34,18 @@ impl TimeStamp {
         self.0 >> TSO_PHYSICAL_SHIFT_BITS
     }
 
+    /// Extracts logical part of a timestamp.
+    pub fn logical(self) -> u64 {
+        self.0 & ((1 << TSO_PHYSICAL_SHIFT_BITS) - 1)
+    }
+
+    #[must_use]
     pub fn next(self) -> TimeStamp {
         assert!(self.0 < u64::MAX);
         TimeStamp(self.0 + 1)
     }
 
+    #[must_use]
     pub fn prev(self) -> TimeStamp {
         assert!(self.0 > 0);
         TimeStamp(self.0 - 1)
@@ -88,7 +96,7 @@ impl From<&u64> for TimeStamp {
 }
 
 impl fmt::Display for TimeStamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }
@@ -96,7 +104,7 @@ impl fmt::Display for TimeStamp {
 impl slog::Value for TimeStamp {
     fn serialize(
         &self,
-        record: &slog::Record,
+        record: &slog::Record<'_>,
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -142,14 +150,12 @@ impl TsSet {
 
     pub fn from_u64s(ts: Vec<u64>) -> Self {
         // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::new(ts)
+        Self::new(unsafe { tikv_util::memory::vec_transmute(ts) })
     }
 
     pub fn vec_from_u64s(ts: Vec<u64>) -> Self {
         // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::vec(ts)
+        Self::vec(unsafe { tikv_util::memory::vec_transmute(ts) })
     }
 
     /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
@@ -190,6 +196,9 @@ mod tests {
 
         let extracted_physical = ts.physical();
         assert_eq!(extracted_physical, physical);
+
+        let extracted_logical = ts.logical();
+        assert_eq!(extracted_logical, logical);
     }
 
     #[test]

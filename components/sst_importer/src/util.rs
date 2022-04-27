@@ -115,7 +115,7 @@ mod tests {
 
     fn check_prepare_sst_for_ingestion(
         db_opts: Option<RocksDBOptions>,
-        cf_opts: Option<Vec<RocksCFOptions>>,
+        cf_opts: Option<Vec<RocksCFOptions<'_>>>,
         key_manager: Option<&DataKeyManager>,
         was_encrypted: bool,
     ) {

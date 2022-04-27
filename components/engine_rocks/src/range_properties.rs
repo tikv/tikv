@@ -9,7 +9,7 @@ use std::path::Path;
 use tikv_util::{box_err, box_try, debug, info};
 
 impl RangePropertiesExt for RocksEngine {
-    fn get_range_approximate_keys(&self, range: Range, large_threshold: u64) -> Result<u64> {
+    fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
         // try to get from RangeProperties first.
         match self.get_range_approximate_keys_cf(CF_WRITE, range, large_threshold) {
             Ok(v) => {
@@ -31,7 +31,7 @@ impl RangePropertiesExt for RocksEngine {
     fn get_range_approximate_keys_cf(
         &self,
         cfname: &str,
-        range: Range,
+        range: Range<'_>,
         large_threshold: u64,
     ) -> Result<u64> {
         let start_key = &range.start_key;
@@ -76,7 +76,7 @@ impl RangePropertiesExt for RocksEngine {
         Ok(total_keys)
     }
 
-    fn get_range_approximate_size(&self, range: Range, large_threshold: u64) -> Result<u64> {
+    fn get_range_approximate_size(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
         let mut size = 0;
         for cfname in LARGE_CFS {
             size += self
@@ -91,7 +91,7 @@ impl RangePropertiesExt for RocksEngine {
     fn get_range_approximate_size_cf(
         &self,
         cfname: &str,
-        range: Range,
+        range: Range<'_>,
         large_threshold: u64,
     ) -> Result<u64> {
         let start_key = &range.start_key;
@@ -138,7 +138,7 @@ impl RangePropertiesExt for RocksEngine {
 
     fn get_range_approximate_split_keys(
         &self,
-        range: Range,
+        range: Range<'_>,
         key_count: usize,
     ) -> Result<Vec<Vec<u8>>> {
         let get_cf_size = |cf: &str| self.get_range_approximate_size_cf(cf, range, 0);
@@ -163,7 +163,7 @@ impl RangePropertiesExt for RocksEngine {
     fn get_range_approximate_split_keys_cf(
         &self,
         cfname: &str,
-        range: Range,
+        range: Range<'_>,
         key_count: usize,
     ) -> Result<Vec<Vec<u8>>> {
         let start_key = &range.start_key;

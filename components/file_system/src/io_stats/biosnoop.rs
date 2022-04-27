@@ -11,6 +11,8 @@ use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
+use strum::{EnumCount, IntoEnumIterator};
+use tikv_util::sys::thread;
 
 /// Biosnoop leverages BCC to make use of eBPF to get disk IO of TiKV requests.
 /// The BCC code is in `biosnoop.c` which is compiled and attached kernel on
@@ -61,7 +63,7 @@ thread_local! {
     static IDX: IdxWrapper = unsafe {
         let idx = IDX_ALLOCATOR.allocate();
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let tid = nix::unistd::gettid().as_raw() as u32;
+            let tid = thread::thread_id();
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
             ctx.type_table.set(
                 &mut tid.to_ne_bytes(),
@@ -145,29 +147,33 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
+pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+    let mut bytes = Default::default();
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
-            let mut io_type_buf =
-                std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
-            if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
-                assert!(e.len() == std::mem::size_of::<IOBytes>());
-                return std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
+            for io_type in IOType::iter() {
+                let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
+                let mut io_type_buf =
+                    std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
+                if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
+                    assert!(e.len() == std::mem::size_of::<IOBytes>());
+                    bytes[io_type as usize] =
+                        std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
+                }
             }
         }
     }
-    IOBytes::default()
+    bytes
 }
 
-pub fn init_io_snooper() -> Result<(), String> {
+pub fn init() -> Result<(), String> {
     unsafe {
         if BPF_CONTEXT.is_some() {
             return Ok(());
         }
     }
 
-    let code = include_str!("biosnoop.c").replace("##TGID##", &nix::unistd::getpid().to_string());
+    let code = include_str!("biosnoop.c").replace("##TGID##", &thread::process_id().to_string());
 
     // TODO: When using bpf_get_ns_current_pid_tgid of newer kernel, need
     // to get the device id and inode number.
@@ -243,7 +249,8 @@ macro_rules! flush_io_latency {
     };
 }
 
-pub(crate) fn flush_io_latency_metrics() {
+#[allow(dead_code)]
+pub fn flush_io_latency_metrics() {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             flush_io_latency!(ctx.bpf, other);
@@ -262,25 +269,26 @@ pub(crate) fn flush_io_latency_metrics() {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_io_bytes, flush_io_latency_metrics};
-    use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
-    use crate::metrics::*;
-    use crate::{get_io_type, init_io_snooper, set_io_type, IOType};
-    use rand::Rng;
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::{
-        fs::OpenOptions, io::Read, io::Seek, io::SeekFrom, io::Write, os::unix::fs::OpenOptionsExt,
+    use super::{
+        fetch_io_bytes, flush_io_latency_metrics, get_io_type, init, set_io_type, BPF_CONTEXT,
+        MAX_THREAD_IDX,
     };
-    use tempfile::TempDir;
-    use test::Bencher;
+    use crate::metrics::*;
+    use crate::IOType;
+    use crate::OpenOptions;
 
     use libc::O_DIRECT;
     use maligned::A512;
     use maligned::{AsBytes, AsBytesMut};
+    use rand::Rng;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::{io::Read, io::Seek, io::SeekFrom, io::Write};
+    use tempfile::TempDir;
+    use test::Bencher;
 
     #[test]
     fn test_biosnoop() {
-        init_io_snooper().unwrap();
+        init().unwrap();
         // Test cases are running in parallel, while they depend on the same global variables.
         // To make them not affect each other, run them in sequence.
         test_thread_idx_allocation();
@@ -303,16 +311,16 @@ mod tests {
             .unwrap();
         let mut w = vec![A512::default(); 2];
         w.as_bytes_mut()[512] = 42;
-        let mut compaction_bytes_before = fetch_io_bytes(IOType::Compaction);
+        let mut compaction_bytes_before = fetch_io_bytes()[IOType::Compaction as usize];
         f.write(w.as_bytes()).unwrap();
         f.sync_all().unwrap();
-        let compaction_bytes = fetch_io_bytes(IOType::Compaction);
+        let compaction_bytes = fetch_io_bytes()[IOType::Compaction as usize];
         assert_ne!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         compaction_bytes_before = compaction_bytes;
         drop(f);
 
-        let other_bytes_before = fetch_io_bytes(IOType::Other);
+        let other_bytes_before = fetch_io_bytes()[IOType::Other as usize];
         std::thread::spawn(move || {
             set_io_type(IOType::Other);
             let mut f = OpenOptions::new()
@@ -327,8 +335,8 @@ mod tests {
         .join()
         .unwrap();
 
-        let compaction_bytes = fetch_io_bytes(IOType::Compaction);
-        let other_bytes = fetch_io_bytes(IOType::Other);
+        let compaction_bytes = fetch_io_bytes()[IOType::Compaction as usize];
+        let other_bytes = fetch_io_bytes()[IOType::Other as usize];
         assert_eq!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         assert_eq!((other_bytes - other_bytes_before).write, 0);
@@ -400,7 +408,7 @@ mod tests {
     #[bench]
     #[ignore]
     fn bench_write_enable_io_snoop(b: &mut Bencher) {
-        init_io_snooper().unwrap();
+        init().unwrap();
         bench_write(b);
     }
 
@@ -414,7 +422,7 @@ mod tests {
     #[bench]
     #[ignore]
     fn bench_read_enable_io_snoop(b: &mut Bencher) {
-        init_io_snooper().unwrap();
+        init().unwrap();
         bench_read(b);
     }
 
@@ -428,7 +436,7 @@ mod tests {
     #[bench]
     #[ignore]
     fn bench_flush_io_latency_metrics(b: &mut Bencher) {
-        init_io_snooper().unwrap();
+        init().unwrap();
         set_io_type(IOType::ForegroundWrite);
 
         let tmp = TempDir::new().unwrap();

@@ -87,11 +87,14 @@ where
     }
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
-        Ok(box_try!(get_approximate_split_keys(
-            engine,
-            region,
-            self.batch_split_limit,
-        )))
+        if self.batch_split_limit != 0 {
+            return Ok(box_try!(get_approximate_split_keys(
+                engine,
+                region,
+                self.batch_split_limit,
+            )));
+        }
+        Ok(vec![])
     }
 }
 
@@ -164,7 +167,9 @@ where
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= host.cfg.region_max_size.0 {
+        if region_size >= host.cfg.region_max_size.0
+            || host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0
+        {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
@@ -172,14 +177,21 @@ where
                 "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit {
-                policy = CheckPolicy::Approximate
+            let batch_split_limit = if region_size >= host.cfg.region_max_size.0 {
+                host.cfg.batch_split_limit
+            } else {
+                0
+            };
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit
+                || region_size >= host.cfg.region_size_threshold_for_approximate.0
+            {
+                policy = CheckPolicy::Approximate;
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
                 host.cfg.region_max_size.0,
                 host.cfg.region_split_size.0,
-                host.cfg.batch_split_limit,
+                batch_split_limit,
                 policy,
             )));
         } else {
@@ -227,7 +239,7 @@ fn get_approximate_split_keys(
 pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
+    use crate::store::{BucketRange, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use collections::HashSet;
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
@@ -273,6 +285,7 @@ pub mod tests {
                     }
                     break;
                 }
+                Ok((_region_id, CasualMessage::RefreshRegionBuckets { .. })) => {}
                 others => panic!("expect split check result, but got {:?}", others),
             }
         }
@@ -284,6 +297,81 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
     ) {
         must_split_at_impl(rx, exp_region, exp_split_keys, false)
+    }
+
+    pub fn must_generate_buckets(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        exp_buckets_keys: &[Vec<u8>],
+    ) {
+        loop {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    mut buckets,
+                    bucket_ranges: _,
+                    ..
+                },
+            )) = rx.try_recv()
+            {
+                let mut i = 0;
+                if !exp_buckets_keys.is_empty() {
+                    let bucket = buckets.pop().unwrap();
+                    assert_eq!(bucket.keys.len(), exp_buckets_keys.len());
+                    while i < bucket.keys.len() {
+                        assert_eq!(bucket.keys[i], exp_buckets_keys[i]);
+                        i += 1
+                    }
+                } else {
+                    assert!(buckets.is_empty());
+                }
+                break;
+            }
+        }
+    }
+
+    pub fn must_generate_buckets_approximate(
+        rx: &mpsc::Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        bucket_range: Option<BucketRange>,
+        min_leap: i32,
+        max_leap: i32,
+    ) {
+        loop {
+            if let Ok((
+                _,
+                CasualMessage::RefreshRegionBuckets {
+                    region_epoch: _,
+                    mut buckets,
+                    bucket_ranges: _,
+                    ..
+                },
+            )) = rx.try_recv()
+            {
+                let bucket_keys = buckets.pop().unwrap().keys;
+                if let Some(bucket_range) = bucket_range {
+                    assert!(!bucket_keys.is_empty());
+                    for i in 0..bucket_keys.len() {
+                        assert!(bucket_keys[i] < bucket_range.1);
+                        assert!(bucket_keys[i] >= bucket_range.0);
+                    }
+                }
+                if bucket_keys.len() >= 2 {
+                    for i in 0..bucket_keys.len() - 1 {
+                        let start: i32 = std::str::from_utf8(&bucket_keys[i])
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        let end: i32 = std::str::from_utf8(&bucket_keys[i + 1])
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        assert!(end - start >= min_leap && end - start < max_leap);
+                    }
+                }
+
+                break;
+            }
+        }
     }
 
     fn test_split_check_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
@@ -335,6 +423,7 @@ pub mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
@@ -357,6 +446,7 @@ pub mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(&rx, &region, vec![b"0006".to_vec()]);
 
@@ -370,6 +460,7 @@ pub mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(&rx, &region, vec![b"0006".to_vec(), b"0012".to_vec()]);
 
@@ -384,6 +475,7 @@ pub mod tests {
             region.clone(),
             true,
             CheckPolicy::Scan,
+            None,
         ));
         must_split_at(
             &rx,
@@ -399,7 +491,98 @@ pub mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region,
+            true,
+            CheckPolicy::Scan,
+            None,
+        ));
+    }
+
+    fn test_generate_bucket_impl(cfs_with_range_prop: &[CfName], data_cf: CfName) {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
+        let mut cf_opt = ColumnFamilyOptions::new();
+        cf_opt.set_no_range_properties(true);
+        cf_opt.set_disable_auto_compactions(true);
+
+        let cfs_opts = ALL_CFS
+            .iter()
+            .map(|cf| {
+                if cfs_with_range_prop.contains(cf) {
+                    let mut opt = ColumnFamilyOptions::new();
+                    opt.set_disable_auto_compactions(true);
+                    CFOptions::new(cf, opt)
+                } else {
+                    CFOptions::new(cf, cf_opt.clone())
+                }
+            })
+            .collect();
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_start_key(vec![]);
+        region.set_end_key(vec![]);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: ReadableSize(50000),
+            region_split_size: ReadableSize(50000),
+            batch_split_limit: 5,
+            enable_region_bucket: true,
+            region_bucket_size: ReadableSize(3000),
+            region_size_threshold_for_approximate: ReadableSize(50000),
+            ..Default::default()
+        };
+
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
+        for i in 0..2000 {
+            // kv size is (6+1)*2 = 10, given bucket size is 3000, expect each bucket has about 210 keys
+            let s = keys::data_key(format!("{:04}00", i).as_bytes());
+            engine.put_cf(data_cf, &s, &s).unwrap();
+            if i % 10 == 0 && i > 0 {
+                engine.flush_cf(data_cf, true).unwrap();
+            }
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Approximate,
+            None,
+        ));
+
+        must_generate_buckets_approximate(&rx, None, 15000, 45000);
+
+        let start = format!("{:04}", 0).into_bytes();
+        let end = format!("{:04}", 20).into_bytes();
+
+        // insert keys into 0000 ~ 0020 with 000000 ~ 002000
+        for i in 0..2000 {
+            // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
+            let s = keys::data_key(format!("{:06}", i).as_bytes());
+            engine.put_cf(data_cf, &s, &s).unwrap();
+            if i % 10 == 0 {
+                engine.flush_cf(data_cf, true).unwrap();
+            }
+        }
+
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Approximate,
+            Some(vec![BucketRange(start.clone(), end.clone())]),
+        ));
+
+        must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450);
+        drop(rx);
     }
 
     #[test]
@@ -408,6 +591,15 @@ pub mod tests {
         test_split_check_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
         for cf in LARGE_CFS {
             test_split_check_impl(LARGE_CFS, cf);
+        }
+    }
+
+    #[test]
+    fn test_generate_bucket_by_approximate() {
+        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_DEFAULT);
+        test_generate_bucket_impl(&[CF_DEFAULT, CF_WRITE], CF_WRITE);
+        for cf in LARGE_CFS {
+            test_generate_bucket_impl(LARGE_CFS, cf);
         }
     }
 
@@ -463,7 +655,12 @@ pub mod tests {
         }
 
         for policy in &[CheckPolicy::Scan, CheckPolicy::Approximate] {
-            runnable.run(SplitCheckTask::split_check(region.clone(), true, *policy));
+            runnable.run(SplitCheckTask::split_check(
+                region.clone(),
+                true,
+                *policy,
+                None,
+            ));
             // Ignore the split keys. Only check whether it can split or not.
             must_split_at_impl(&rx, &region, vec![], true);
         }
@@ -492,7 +689,12 @@ pub mod tests {
         }
         engine.flush_cf(CF_LOCK, true).unwrap();
         for policy in &[CheckPolicy::Scan, CheckPolicy::Approximate] {
-            runnable.run(SplitCheckTask::split_check(region.clone(), true, *policy));
+            runnable.run(SplitCheckTask::split_check(
+                region.clone(),
+                true,
+                *policy,
+                None,
+            ));
             // Ignore the split keys. Only check whether it can split or not.
             must_split_at_impl(&rx, &region, vec![], true);
         }

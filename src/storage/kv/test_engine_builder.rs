@@ -61,6 +61,17 @@ impl TestEngineBuilder {
         self
     }
 
+    /// Register causal observer for RawKV API V2.
+    // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction filter) & CausalObserver.
+    // Consider decoupling them.
+    fn register_causal_observer(engine: &mut RocksEngine) {
+        let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        engine.register_observer(|host| {
+            causal_ob.register_to(host);
+        });
+    }
+
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -89,7 +100,7 @@ impl TestEngineBuilder {
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
-            cache_opt.capacity.0 = Some(ReadableSize::kb(0));
+            cache_opt.capacity = Some(ReadableSize::kb(0));
         }
         let cache = cache_opt.build_shared_cache();
         let cfs_opts = cfs
@@ -105,13 +116,20 @@ impl TestEngineBuilder {
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(
+        let mut engine = RocksEngine::new(
             &path,
             &cfs,
             Some(cfs_opts),
             cache.is_some(),
             self.io_rate_limiter,
-        )
+            None, /* CFOptions */
+        )?;
+
+        if let ApiVersion::V2 = api_version {
+            Self::register_causal_observer(&mut engine);
+        }
+
+        Ok(engine)
     }
 }
 
@@ -123,8 +141,8 @@ impl Default for TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::CfStatistics;
     use super::super::PerfStatisticsInstant;
+    use super::super::{CfStatistics, TEST_ENGINE_CFS};
     use super::super::{Engine, Snapshot};
     use super::*;
     use crate::storage::{Cursor, CursorBuilder, ScanMode};

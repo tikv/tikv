@@ -139,7 +139,7 @@
 //!
 //! # The porting process
 //!
-//! These are some guidelines that seem to make the porting managable. As the
+//! These are some guidelines that seem to make the porting manageable. As the
 //! process continues new strategies are discovered and written here. This is a
 //! big refactoring and will take many monthse.
 //!
@@ -254,10 +254,6 @@
 #![feature(min_specialization)]
 #![feature(assert_matches)]
 
-#[cfg(test)]
-extern crate serde_derive;
-extern crate slog_global;
-extern crate tikv_alloc;
 #[macro_use(fail_point)]
 extern crate fail;
 
@@ -332,13 +328,14 @@ pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
 mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask};
+pub use raft_engine::{
+    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, RAFT_LOG_MULTI_GET_CNT,
+};
 
 // These modules need further scrutiny
 
 pub mod compaction_job;
-pub mod key_prefix;
-pub mod raw_value;
+pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
 

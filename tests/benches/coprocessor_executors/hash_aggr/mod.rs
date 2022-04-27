@@ -12,7 +12,7 @@ use crate::util::{BenchCase, FixtureBuilder};
 
 /// COUNT(1) GROUP BY COL where COL is a int column.
 /// Each row is a new group.
-fn bench_hash_aggr_count_1_group_by_int_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+fn bench_hash_aggr_count_1_group_by_int_col<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
 {
@@ -27,7 +27,7 @@ where
 /// COUNT(1) GROUP BY COL where COL is a int column.
 /// There will be two groups totally.
 fn bench_hash_aggr_count_1_group_by_int_col_2_groups<M>(
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -43,8 +43,10 @@ fn bench_hash_aggr_count_1_group_by_int_col_2_groups<M>(
 /// COUNT(1) GROUP BY COL > X.
 /// Half of the row belong to one group and the rest belong to another group. Thus there are
 /// totally two groups.
-fn bench_hash_aggr_count_1_group_by_fn_2_groups<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
-where
+fn bench_hash_aggr_count_1_group_by_fn_2_groups<M>(
+    b: &mut criterion::Bencher<'_, M>,
+    input: &Input<M>,
+) where
     M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_0_n();
@@ -62,8 +64,10 @@ where
 
 /// COUNT(1) GROUP BY COL where COL is a decimal column (by slow hash aggr).
 /// Each row is a new group.
-fn bench_hash_aggr_count_1_group_by_decimal_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
-where
+fn bench_hash_aggr_count_1_group_by_decimal_col<M>(
+    b: &mut criterion::Bencher<'_, M>,
+    input: &Input<M>,
+) where
     M: Measurement,
 {
     let fb = FixtureBuilder::new(input.src_rows).push_column_decimal_0_n();
@@ -77,7 +81,7 @@ where
 /// COUNT(1) GROUP BY COL where COL is a decimal column (by slow hash aggr).
 /// There will be two groups totally.
 fn bench_hash_aggr_count_1_group_by_decimal_col_2_groups<M>(
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -94,7 +98,7 @@ fn bench_hash_aggr_count_1_group_by_decimal_col_2_groups<M>(
 /// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real column.
 /// Each row is a new group.
 fn bench_hash_aggr_count_1_group_by_int_col_real_col<M>(
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -115,7 +119,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_real_col<M>(
 /// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real column.
 /// There will be two groups totally.
 fn bench_hash_aggr_count_1_group_by_int_col_real_col_2_groups<M>(
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -136,7 +140,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_real_col_2_groups<M>(
 /// COUNT(1), FIRST(COL3) GROUP BY COL1, COL2 where COL1 is a int column and
 /// COL2, COL3 are real columns. Each row is a new group.
 fn bench_hash_aggr_count_1_first_group_by_int_col_real_col<M>(
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,
@@ -163,7 +167,7 @@ fn bench_hash_aggr_count_1_first_group_by_int_col_real_col<M>(
 /// COUNT(1), FIRST(COL3) GROUP BY COL1, COL2 where COL1 is a int column and
 /// COL2, COL3 are real columns. There will be two groups totally.
 fn bench_hash_aggr_count_1_first_group_by_int_col_real_col_2_groups<M>(
-    b: &mut criterion::Bencher<M>,
+    b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
 ) where
     M: Measurement,

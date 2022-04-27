@@ -69,7 +69,7 @@ impl<K> Trace<K> {
     fn promote(&mut self, mut record: NonNull<Record<K>>) {
         unsafe {
             cut_out(record.as_mut());
-            suture(record.as_mut(), &mut self.head.next.as_mut());
+            suture(record.as_mut(), self.head.next.as_mut());
             suture(&mut self.head, record.as_mut());
         }
     }
@@ -139,6 +139,7 @@ pub trait SizePolicy<K, V> {
     fn on_reset(&mut self, val: usize);
 }
 
+#[derive(Default)]
 pub struct CountTracker(usize);
 
 impl<K, V> SizePolicy<K, V> for CountTracker {
@@ -156,12 +157,6 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
 
     fn on_reset(&mut self, val: usize) {
         self.0 = val;
-    }
-}
-
-impl Default for CountTracker {
-    fn default() -> Self {
-        Self(0)
     }
 }
 
@@ -295,7 +290,7 @@ where
         }
     }
 
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             base: self.map.iter(),
         }
@@ -343,7 +338,7 @@ where
     }
 }
 
-pub struct Iter<'a, K: 'a, V: 'a> {
+pub struct Iter<'a, K, V> {
     base: std::collections::hash_map::Iter<'a, K, ValueEntry<K, V>>,
 }
 

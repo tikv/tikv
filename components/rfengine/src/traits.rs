@@ -56,6 +56,10 @@ impl RaftEngineReadOnly for RFEngine {
         ENGINE_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(elapsed_secs(timer));
         return Ok(buf.len() - old_len);
     }
+
+    fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
+        todo!()
+    }
 }
 
 impl RaftEngine for RFEngine {
@@ -86,6 +90,7 @@ impl RaftEngine for RFEngine {
     fn clean(
         &self,
         _raft_group_id: u64,
+        _first_index: u64,
         _state: &RaftLocalState,
         _batch: &mut Self::LogBatch,
     ) -> Result<()> {

@@ -1,14 +1,23 @@
-log-level = "debug"
-log-file = "foo"
-log-format = "json"
+log-level = "info"
+log-file = ""
+log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-enable-io-snoop = false
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
+
+[log]
+level = "fatal"
+format = "json"
+
+[log.file]
+filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
 
 [readpool.unified]
 min-thread-count = 5
@@ -66,7 +75,7 @@ end-point-max-concurrency = 10
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
-heavy-load-threshold = 1000
+heavy-load-threshold = 25
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
@@ -80,7 +89,7 @@ a = "b"
 [storage]
 data-dir = "/var"
 gc-ratio-threshold = 1.2
-max-key-size = 8192
+max-key-size = 4096
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
@@ -202,7 +211,12 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
-raft-msg-flush-interval = "2333us"
+check-leader-lease-interval = "123ms"
+renew-leader-lease-advance-duration = "456ms"
+reactive-memory-lock-tick-interval = "566ms"
+reactive-memory-lock-timeout-tick = 8
+report-min-resolved-ts-interval = "233ms"
+report-region-buckets-tick-interval = "1234s"
 
 [coprocessor]
 split-region-on-table = false
@@ -213,6 +227,10 @@ region-max-keys = 100000
 region-split-keys = 100000
 consistency-check-method = "raw"
 perf-level = 5
+enable-region-bucket = true 
+region-bucket-size = "1MB"
+region-size-threshold-for-approximate = "3MB"
+region-bucket-merge-size-ratio = 0.4
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"
@@ -243,7 +261,6 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
-enable-multi-batch-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -550,7 +567,7 @@ max-sorted-runs = 100
 gc-merge-rewrite = true
 
 [raft-engine]
-enable = true
+enable = false
 dir = "test-dir"
 batch-compression-threshold = "1KB"
 bytes-per-sync = "64KB"
@@ -585,6 +602,7 @@ type = "plaintext"
 [backup]
 num-threads = 456
 batch-size = 7
+s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
 [backup.hadoop]
@@ -608,6 +626,7 @@ enabled = false # test backward compatibility
 wait-for-lock-timeout = "10ms"
 wake-up-delay-duration = 100 # test backward compatibility
 pipelined = false
+in-memory = false
 
 [cdc]
 min-ts-interval = "4s"

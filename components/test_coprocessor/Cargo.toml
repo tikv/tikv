@@ -14,9 +14,10 @@ test-engines-panic = [
 ]
 
 [dependencies]
+api_version = { path = "../api_version" }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 futures = "0.3"
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
+kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
 protobuf = "2"
 test_storage = { path = "../test_storage", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
@@ -27,3 +28,4 @@ collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 txn_types = { path = "../txn_types", default-features = false }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
+resource_metering = { path = "../resource_metering" }

@@ -41,6 +41,7 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use time::Timespec;
 use uuid::Uuid;
+use raftstore::coprocessor::RoleChange;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -437,6 +438,9 @@ pub(crate) struct Peer {
 
     pub(crate) scheduled_change_sets: VecDeque<u64>,
     pub(crate) prepared_change_sets: HashMap<u64, kvengine::ChangeSet>,
+
+    /// lead_transferee if the peer is in a leadership transferring.
+    pub lead_transferee: u64,
 }
 
 impl Peer {
@@ -499,7 +503,7 @@ impl Peer {
             last_compacted_index: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
-            leader_lease: Lease::new(cfg.raft_store_max_leader_lease()),
+            leader_lease: Lease::new(cfg.raft_store_max_leader_lease(), cfg.renew_leader_lease_advance_duration()),
             peer_stat: PeerStat::default(),
             txn_ext: Arc::new(TxnExt::default()),
             max_ts_sync_status: Arc::new(Default::default()),
@@ -507,6 +511,7 @@ impl Peer {
             need_campaign: false,
             scheduled_change_sets: Default::default(),
             prepared_change_sets: Default::default(),
+            lead_transferee: raft::INVALID_ID,
         };
         // If this region has only one peer and I am the one, campaign directly.
         if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
@@ -1051,9 +1056,15 @@ impl Peer {
             // didn't change
             ctx.global
                 .coprocessor_host
-                .on_role_change(self.region(), ss.raft_state);
+                .on_role_change(self.region(), RoleChange {
+                    state: ss.raft_state,
+                    leader_id: ss.leader_id,
+                    prev_lead_transferee: self.lead_transferee,
+                    vote: self.raft_group.raft.vote,
+                });
             self.cmd_epoch_checker.maybe_update_term(self.term());
         }
+        self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
     pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {

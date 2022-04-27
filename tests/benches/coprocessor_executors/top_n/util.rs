@@ -22,7 +22,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         fb: &FixtureBuilder,
         order_by_expr: &[Expr],
         order_is_desc: &[bool],
@@ -56,7 +56,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         fb: &FixtureBuilder,
         order_by_expr: &[Expr],
         order_is_desc: &[bool],

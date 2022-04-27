@@ -23,10 +23,10 @@ log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2.8"
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
+kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
 raftstore = { path = "../raftstore"}
-raft = { version = "0.6.0-alpha", default-features = false }
-raft-proto = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft-proto = { version = "0.7.0", default-features = false }
 online_config = { path = "../online_config" }
 fail = "0.4"
 futures = "0.3"
@@ -42,7 +42,7 @@ kvengine = { path = "../kvengine"}
 rfengine = { path = "../rfengine"}
 rand = "0.8"
 tokio = { version = "1.5", features = ["full"] }
-grpcio = { version = "0.9",  default-features = false}
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 pd_client = { path = "../pd_client", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }

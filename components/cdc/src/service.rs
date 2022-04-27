@@ -11,7 +11,6 @@ use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::cdcpb::{ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use tikv_util::worker::*;
 use tikv_util::{error, info, warn};
 
@@ -184,7 +183,7 @@ impl Service {
 impl ChangeData for Service {
     fn event_feed(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
@@ -214,7 +213,6 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
-            let enable_old_value = request.get_extra_op() == TxnExtraOp::ReadOldValue;
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -224,13 +222,7 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(
-                peer.clone(),
-                region_epoch,
-                req_id,
-                conn_id,
-                enable_old_value,
-            );
+            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
             let ret = scheduler
                 .schedule(Task::Register {
                     request,

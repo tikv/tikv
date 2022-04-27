@@ -28,6 +28,7 @@ use raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use raftstore::store::SnapManagerBuilder;
 use raftstore::store::*;
 use raftstore::Result;
+use resource_metering::CollectorRegHandle;
 use tikv::config::{ConfigController, Module};
 use tikv::import::SSTImporter;
 use tikv::server::raftkv::ReplicaReadLockChecker;
@@ -123,6 +124,10 @@ impl Transport for ChannelTransport {
         }
     }
 
+    fn set_store_allowlist(&mut self, _allowlist: Vec<u64>) {
+        unimplemented!();
+    }
+
     fn need_flush(&self) -> bool {
         false
     }
@@ -137,6 +142,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RocksEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
+    cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
@@ -150,6 +156,7 @@ impl NodeCluster {
             pd_client,
             nodes: HashMap::default(),
             snap_mgrs: HashMap::default(),
+            cfg_controller: None,
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
@@ -193,6 +200,10 @@ impl NodeCluster {
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    pub fn get_cfg_controller(&self) -> Option<&ConfigController> {
+        self.cfg_controller.as_ref()
     }
 }
 
@@ -275,14 +286,6 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate().unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        cfg_controller.register(
-            Module::Raftstore,
-            Box::new(RaftstoreConfigManager(raft_store)),
-        );
-
         node.try_bootstrap_store(engines.clone())?;
         node.start(
             engines.clone(),
@@ -295,6 +298,7 @@ impl Simulator for NodeCluster {
             split_scheduler,
             AutoSplitController::default(),
             cm,
+            CollectorRegHandle::new_for_test(),
         )?;
         assert!(
             engines
@@ -313,6 +317,18 @@ impl Simulator for NodeCluster {
                 .as_ref()
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
+
+        let mut raftstore_cfg = cfg.tikv.raft_store;
+        raftstore_cfg.validate().unwrap();
+        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.refresh_config_scheduler(),
+                raft_store,
+            )),
+        );
+
         if let Some(tmp) = snap_mgr_path {
             self.trans
                 .core
@@ -330,6 +346,7 @@ impl Simulator for NodeCluster {
             .routers
             .insert(node_id, SimulateTransport::new(router));
         self.nodes.insert(node_id, node);
+        self.cfg_controller = Some(cfg_controller);
         self.simulate_trans.insert(node_id, simulate_trans);
 
         Ok(node_id)

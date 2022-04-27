@@ -21,7 +21,7 @@ where
 {
     fn name(&self) -> &'static str;
 
-    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, exprs: &[Expr]);
+    fn bench(&self, b: &mut criterion::Bencher<'_, M>, fb: &FixtureBuilder, exprs: &[Expr]);
 
     fn box_clone(&self) -> Box<dyn SelectionBencher<M>>;
 }
@@ -47,7 +47,7 @@ where
         "batch"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, exprs: &[Expr]) {
+    fn bench(&self, b: &mut criterion::Bencher<'_, M>, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             Box::new(

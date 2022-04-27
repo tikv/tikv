@@ -4,7 +4,7 @@ use super::timestamp::TimeStamp;
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
-use kvproto::kvrpcpb;
+use kvproto::kvrpcpb::{self, Assertion};
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
@@ -105,6 +105,7 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
+    #[must_use]
     pub fn append_ts(mut self, ts: TimeStamp) -> Key {
         self.0.encode_u64_desc(ts.into_inner()).unwrap();
         self
@@ -224,7 +225,7 @@ impl Key {
 
 impl Clone for Key {
     fn clone(&self) -> Self {
-        // default clone implemention use self.len() to reserve capacity
+        // default clone implementation use self.len() to reserve capacity
         // for the sake of appending ts, we need to reserve more
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);
@@ -254,94 +255,133 @@ pub enum MutationType {
 }
 
 /// A row mutation.
-#[derive(Debug, Clone)]
-pub enum RawMutation {
-    /// Put `Value` into `Key` with TTL. The TTL will overwrite the existing TTL value.
-    Put { key: Key, value: Value, ttl: u64 },
-    /// Delete `Key`.
-    Delete { key: Key },
-}
-
-impl RawMutation {
-    pub fn key(&self) -> &Key {
-        match self {
-            RawMutation::Put {
-                ref key,
-                value: _,
-                ttl: _,
-            } => key,
-            RawMutation::Delete { ref key } => key,
-        }
-    }
-}
-
-/// A row mutation.
+///
+/// It may also carry an `Assertion` field, which means it has such an *assertion* to the data
+/// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite
+/// request) is going to be finished successfully, otherwise it indicates there should be some bug
+/// causing the attempt to write wrong data.
 #[derive(Debug, Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
+    Put((Key, Value), Assertion),
     /// Delete `Key`.
-    Delete(Key),
+    Delete(Key, Assertion),
     /// Set a lock on `Key`.
-    Lock(Key),
+    Lock(Key, Assertion),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    Insert((Key, Value)),
+    Insert((Key, Value), Assertion),
     /// Check `key` must be not exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    CheckNotExists(Key),
+    CheckNotExists(Key, Assertion),
 }
 
 impl Mutation {
     pub fn key(&self) -> &Key {
         match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
-            Mutation::CheckNotExists(ref key) => key,
+            Mutation::Put((ref key, _), _) => key,
+            Mutation::Delete(ref key, _) => key,
+            Mutation::Lock(ref key, _) => key,
+            Mutation::Insert((ref key, _), _) => key,
+            Mutation::CheckNotExists(ref key, _) => key,
         }
     }
 
     pub fn mutation_type(&self) -> MutationType {
         match self {
-            Mutation::Put(_) => MutationType::Put,
-            Mutation::Delete(_) => MutationType::Delete,
-            Mutation::Lock(_) => MutationType::Lock,
-            Mutation::Insert(_) => MutationType::Insert,
+            Mutation::Put(..) => MutationType::Put,
+            Mutation::Delete(..) => MutationType::Delete,
+            Mutation::Lock(..) => MutationType::Lock,
+            Mutation::Insert(..) => MutationType::Insert,
             _ => MutationType::Other,
         }
     }
 
     pub fn into_key_value(self) -> (Key, Option<Value>) {
         match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
-            Mutation::CheckNotExists(key) => (key, None),
+            Mutation::Put((key, value), _) => (key, Some(value)),
+            Mutation::Delete(key, _) => (key, None),
+            Mutation::Lock(key, _) => (key, None),
+            Mutation::Insert((key, value), _) => (key, Some(value)),
+            Mutation::CheckNotExists(key, _) => (key, None),
         }
     }
 
     pub fn should_not_exists(&self) -> bool {
-        matches!(self, Mutation::Insert(_) | Mutation::CheckNotExists(_))
+        matches!(
+            self,
+            Mutation::Insert(_, _) | Mutation::CheckNotExists(_, _)
+        )
     }
 
     pub fn should_not_write(&self) -> bool {
-        matches!(self, Mutation::CheckNotExists(_))
+        matches!(self, Mutation::CheckNotExists(_, _))
+    }
+
+    pub fn get_assertion(&self) -> Assertion {
+        *match self {
+            Mutation::Put(_, assertion) => assertion,
+            Mutation::Delete(_, assertion) => assertion,
+            Mutation::Lock(_, assertion) => assertion,
+            Mutation::Insert(_, assertion) => assertion,
+            Mutation::CheckNotExists(_, assertion) => assertion,
+        }
+    }
+
+    pub fn set_assertion(&mut self, assertion: Assertion) {
+        *match self {
+            Mutation::Put(_, ref mut assertion) => assertion,
+            Mutation::Delete(_, ref mut assertion) => assertion,
+            Mutation::Lock(_, ref mut assertion) => assertion,
+            Mutation::Insert(_, ref mut assertion) => assertion,
+            Mutation::CheckNotExists(_, ref mut assertion) => assertion,
+        } = assertion;
+    }
+
+    /// Creates a Put mutation with none assertion.
+    pub fn make_put(key: Key, value: Value) -> Self {
+        Mutation::Put((key, value), Assertion::None)
+    }
+
+    /// Creates a Delete mutation with none assertion.
+    pub fn make_delete(key: Key) -> Self {
+        Mutation::Delete(key, Assertion::None)
+    }
+
+    /// Creates a Lock mutation with none assertion.
+    pub fn make_lock(key: Key) -> Self {
+        Mutation::Lock(key, Assertion::None)
+    }
+
+    /// Creates a Insert mutation with none assertion.
+    pub fn make_insert(key: Key, value: Value) -> Self {
+        Mutation::Insert((key, value), Assertion::None)
+    }
+
+    /// Creates a CheckNotExists mutation with none assertion.
+    pub fn make_check_not_exists(key: Key) -> Self {
+        Mutation::CheckNotExists(key, Assertion::None)
     }
 }
 
 impl From<kvrpcpb::Mutation> for Mutation {
     fn from(mut m: kvrpcpb::Mutation) -> Mutation {
         match m.get_op() {
-            kvrpcpb::Op::Put => Mutation::Put((Key::from_raw(m.get_key()), m.take_value())),
-            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
-            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
-            kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
-            kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Put => Mutation::Put(
+                (Key::from_raw(m.get_key()), m.take_value()),
+                m.get_assertion(),
+            ),
+            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::Insert => Mutation::Insert(
+                (Key::from_raw(m.get_key()), m.take_value()),
+                m.get_assertion(),
+            ),
+            kvrpcpb::Op::CheckNotExists => {
+                Mutation::CheckNotExists(Key::from_raw(m.get_key()), m.get_assertion())
+            }
             _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
@@ -447,6 +487,9 @@ bitflags! {
         const ONE_PC = 0b00000001;
         /// Indicates this request is from a stale read-only transaction.
         const STALE_READ = 0b00000010;
+        /// Indicates this request is a transfer leader command that needs to be proposed
+        /// like a normal command.
+        const TRANSFER_LEADER_PROPOSAL = 0b00000100;
     }
 }
 

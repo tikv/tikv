@@ -22,9 +22,11 @@ use tokio::time::{sleep, timeout};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
+use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::debug;
 use tikv_util::stream::{error_stream, retry};
+use tikv_util::time::Instant;
 
 use crate::util;
 
@@ -55,6 +57,7 @@ pub struct Config {
     force_path_style: bool,
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
+    multi_part_size: usize,
 }
 
 impl Config {
@@ -68,6 +71,7 @@ impl Config {
             force_path_style: false,
             sse_kms_key_id: None,
             storage_class: None,
+            multi_part_size: MINIMUM_PART_SIZE,
         }
     }
 
@@ -99,6 +103,7 @@ impl Config {
             access_key_pair,
             force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
+            multi_part_size: MINIMUM_PART_SIZE,
         })
     }
 
@@ -130,6 +135,7 @@ impl Config {
             access_key_pair,
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
+            multi_part_size: MINIMUM_PART_SIZE,
         })
     }
 }
@@ -162,6 +168,14 @@ impl S3Storage {
 
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
         Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
+    }
+
+    pub fn set_multi_part_size(&mut self, mut size: usize) {
+        if size < MINIMUM_PART_SIZE {
+            // default multi_part_size is 5MB, S3 cannot allow a smaller size.
+            size = MINIMUM_PART_SIZE
+        }
+        self.config.multi_part_size = size;
     }
 
     /// Create a new S3 storage for the given config.
@@ -225,6 +239,7 @@ struct S3Uploader<'client> {
     server_side_encryption: Option<StringNonEmpty>,
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
+    multi_part_size: usize,
 
     upload_id: String,
     parts: Vec<CompletedPart>,
@@ -262,6 +277,7 @@ impl<'client> S3Uploader<'client> {
             server_side_encryption: config.sse.as_ref().cloned(),
             sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
             storage_class: config.storage_class.as_ref().cloned(),
+            multi_part_size: config.multi_part_size,
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
@@ -273,7 +289,7 @@ impl<'client> S3Uploader<'client> {
         reader: &mut (dyn AsyncRead + Unpin + Send),
         est_len: u64,
     ) -> Result<(), UploadError> {
-        if est_len <= MINIMUM_PART_SIZE as u64 {
+        if est_len <= self.multi_part_size as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
@@ -283,7 +299,7 @@ impl<'client> S3Uploader<'client> {
             // Otherwise, use multipart upload to improve robustness.
             self.upload_id = retry(|| self.begin()).await?;
             let upload_res = async {
-                let mut buf = vec![0; MINIMUM_PART_SIZE];
+                let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
                 loop {
                     let data_size = reader.read(&mut buf).await?;
@@ -387,18 +403,25 @@ impl<'client> S3Uploader<'client> {
         part_number: i64,
         data: &[u8],
     ) -> Result<CompletedPart, RusotoError<UploadPartError>> {
-        match timeout(
-            Self::get_timeout(),
-            self.client.upload_part(UploadPartRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.upload_id.clone(),
-                part_number,
-                content_length: Some(data.len() as i64),
-                body: Some(data.to_vec().into()),
-                ..Default::default()
-            }),
-        )
+        match timeout(Self::get_timeout(), async {
+            let start = Instant::now();
+            let r = self
+                .client
+                .upload_part(UploadPartRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.upload_id.clone(),
+                    part_number,
+                    content_length: Some(data.len() as i64),
+                    body: Some(data.to_vec().into()),
+                    ..Default::default()
+                })
+                .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "upload_part"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            r
+        })
         .await
         {
             Ok(part) => Ok(CompletedPart {
@@ -437,7 +460,9 @@ impl<'client> S3Uploader<'client> {
                 Err(RusotoError::ParseError("failed to put object".to_owned()))
             });
 
-            self.client
+            let start = Instant::now();
+            let r = self
+                .client
                 .put_object(PutObjectRequest {
                     bucket: self.bucket.clone(),
                     key: self.key.clone(),
@@ -452,7 +477,11 @@ impl<'client> S3Uploader<'client> {
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
-                .await
+                .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "put_object"])
+                .observe(start.saturating_elapsed().as_secs_f64());
+            r
         })
         .await
         .map_err(|_| {
@@ -537,7 +566,7 @@ impl BlobStorage for S3Storage {
 mod tests {
     use super::*;
     use rusoto_core::signature::SignedRequest;
-    use rusoto_mock::MockRequestDispatcher;
+    use rusoto_mock::{MockRequestDispatcher, MultipleMockRequestDispatcher};
     use tikv_util::stream::block_on_external_io;
 
     #[test]
@@ -551,9 +580,70 @@ mod tests {
             access_key: StringNonEmpty::required("abc".to_string()).unwrap(),
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
         });
-        assert!(S3Storage::new(config.clone()).is_ok());
+        let mut s = S3Storage::new(config.clone()).unwrap();
+        // set a less than 5M value not work
+        s.set_multi_part_size(1024);
+        assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
+        // set 8M
+        s.set_multi_part_size(8 * 1024 * 1024);
+        assert_eq!(s.config.multi_part_size, 8 * 1024 * 1024);
+        // set 6M
+        s.set_multi_part_size(6 * 1024 * 1024);
+        assert_eq!(s.config.multi_part_size, 6 * 1024 * 1024);
+        // set a less than 5M value will fallback to 5M
+        s.set_multi_part_size(1024);
+        assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
+
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
         assert!(S3Storage::new(config).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_s3_storage_multi_part() {
+        let magic_contents = "567890";
+
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let bucket = BucketConf::default(bucket_name);
+        let mut config = Config::default(bucket);
+        let multi_part_size = 2;
+        // set multi_part_size to use upload_part function
+        config.multi_part_size = multi_part_size;
+
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3 part + 1 complete)
+        let dispatcher = MultipleMockRequestDispatcher::new(vec![
+            MockRequestDispatcher::with_status(200).with_body(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+               <root>
+                 <UploadId>1</UploadId>
+               </root>"#,
+            ),
+            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200),
+            MockRequestDispatcher::with_status(200),
+        ]);
+
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+
+        let resp = s
+            .put(
+                "mykey",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )
+            .await;
+        assert!(resp.is_ok());
+        assert_eq!(
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .get_metric_with_label_values(&["s3", "upload_part"])
+                .unwrap()
+                .get_sample_count(),
+            // length of magic_contents
+            (magic_contents.len() / multi_part_size) as u64,
+        );
     }
 
     #[cfg(feature = "failpoints")]
@@ -585,6 +675,7 @@ mod tests {
         )
         .await
         .unwrap();
+
         let mut reader = s.get("mykey");
         let mut buf = Vec::new();
         let ret = reader.read_to_end(&mut buf).await;
@@ -673,7 +764,6 @@ mod tests {
     // reliable way to test s3 (rusoto_mock requires custom logic to verify the
     // body stream which itself can have bug)
     fn test_real_s3_storage() {
-        use std::f64::INFINITY;
         use tikv_util::time::Limiter;
 
         let bucket = BucketConf {
@@ -689,7 +779,7 @@ mod tests {
             ..Config::default()
         };
 
-        let limiter = Limiter::new(INFINITY);
+        let limiter = Limiter::new(f64::INFINITY);
 
         let storage = S3Storage::new(&s3).unwrap();
         const LEN: usize = 1024 * 1024 * 4;

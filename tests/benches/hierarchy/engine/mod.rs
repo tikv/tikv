@@ -9,7 +9,7 @@ use txn_types::{Key, Value};
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
 fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
-    bencher: &mut Bencher,
+    bencher: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -37,7 +37,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
 }
 
 fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
-    bencher: &mut Bencher,
+    bencher: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
@@ -50,7 +50,7 @@ fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
 
 //exclude snapshot
 fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
-    bencher: &mut Bencher,
+    bencher: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();

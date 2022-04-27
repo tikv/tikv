@@ -23,7 +23,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
@@ -56,7 +56,7 @@ where
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher<M>,
+        b: &mut criterion::Bencher<'_, M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],

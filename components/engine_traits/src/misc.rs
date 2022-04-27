@@ -31,17 +31,22 @@ pub trait MiscExt: CFNamesExt + FlowControlFactorsExt {
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
 
-    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
+    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.cf_names() {
             self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
         }
         Ok(())
     }
 
-    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()>;
+    fn delete_ranges_cf(
+        &self,
+        cf: &str,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<()>;
 
     /// Return the approximate number of records and size in the range of memtables of the cf.
-    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)>;
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)>;
 
     fn ingest_maybe_slowdown_writes(&self, cf: &str) -> Result<bool>;
 

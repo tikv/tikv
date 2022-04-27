@@ -55,7 +55,11 @@ impl<R: Seek> Seek for EncrypterReader<R> {
 
 impl<R: AsyncRead + Unpin> AsyncRead for EncrypterReader<R> {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
 }
@@ -96,7 +100,11 @@ impl<R: Seek> Seek for DecrypterReader<R> {
 
 impl<R: AsyncRead + Unpin> AsyncRead for DecrypterReader<R> {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
         unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
     }
 }
@@ -123,6 +131,16 @@ impl<W> EncrypterWriter<W> {
     #[inline]
     pub fn finalize(self) -> IoResult<W> {
         self.0.finalize()
+    }
+
+    #[inline]
+    pub fn inner(&self) -> &W {
+        &self.0.writer
+    }
+
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.0.writer
     }
 }
 
@@ -252,7 +270,11 @@ impl<R: Seek> Seek for CrypterReader<R> {
 
 impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
     #[inline]
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<IoResult<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<IoResult<usize>> {
         let inner = Pin::into_inner(self);
         let poll = Pin::new(&mut inner.reader).poll_read(cx, buf);
         let read_count = match poll {
@@ -260,7 +282,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
             _ => return poll,
         };
         if let Some(crypter) = inner.crypter.as_mut() {
-            if let Err(e) = crypter.do_crypter_in_place(buf) {
+            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count]) {
                 return Poll::Ready(Err(e));
             }
         }
@@ -387,10 +409,7 @@ impl CrypterCore {
 
     fn reset_buffer(&mut self, size: usize) {
         // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
-        self.buffer.reserve(size + self.block_size);
-        unsafe {
-            self.buffer.set_len(size + self.block_size);
-        }
+        self.buffer.resize(size + self.block_size, 0);
     }
 
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
@@ -484,10 +503,11 @@ impl CrypterCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::crypter;
     use byteorder::{BigEndian, ByteOrder};
+    use futures::AsyncReadExt;
     use rand::{rngs::OsRng, RngCore};
+    use std::{cmp::min, io::Cursor};
 
     fn generate_data_key(method: EncryptionMethod) -> Vec<u8> {
         let key_length = crypter::get_method_key_length(method);
@@ -643,5 +663,108 @@ mod tests {
                 .into_inner();
             assert_eq!(plaintext, written);
         }
+    }
+
+    struct MockCursorReader {
+        cursor: Cursor<Vec<u8>>,
+        read_maxsize_once: usize,
+    }
+
+    impl MockCursorReader {
+        fn new(buff: &mut [u8], size_once: usize) -> MockCursorReader {
+            Self {
+                cursor: Cursor::new(buff.to_vec()),
+                read_maxsize_once: size_once,
+            }
+        }
+    }
+
+    impl AsyncRead for MockCursorReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<IoResult<usize>> {
+            let len = min(self.read_maxsize_once, buf.len());
+            let r = self.cursor.read(&mut buf[..len]);
+            assert!(r.is_ok());
+            Poll::Ready(IoResult::Ok(r.unwrap()))
+        }
+    }
+
+    async fn test_poll_read() {
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+        ];
+        let iv = Iv::new_ctr();
+        let mut plain_text = vec![0; 10240];
+        OsRng.fill_bytes(&mut plain_text);
+
+        for method in methods {
+            let key = generate_data_key(method);
+            // encrypt plaintext into encrypt_text
+            let read_once = 16;
+            let mut encrypt_reader = EncrypterReader::new(
+                MockCursorReader::new(&mut plain_text[..], read_once),
+                method,
+                &key[..],
+                iv,
+            )
+            .unwrap();
+            let mut encrypt_text = [0; 20480];
+            let mut encrypt_read_len = 0;
+
+            loop {
+                let s = encrypt_reader
+                    .read(&mut encrypt_text[encrypt_read_len..])
+                    .await;
+                assert!(s.is_ok());
+                let read_len = s.unwrap();
+                if read_len == 0 {
+                    break;
+                }
+                encrypt_read_len += read_len;
+            }
+
+            if method == EncryptionMethod::Plaintext {
+                assert_eq!(encrypt_text[..encrypt_read_len], plain_text);
+            } else {
+                assert_ne!(encrypt_text[..encrypt_read_len], plain_text);
+            }
+
+            // decrypt encrypt_text into decrypt_text
+            let mut decrypt_text = [0; 20480];
+            let mut decrypt_read_len = 0;
+            let read_once = 20;
+            let mut decrypt_reader = DecrypterReader::new(
+                MockCursorReader::new(&mut encrypt_text[..encrypt_read_len], read_once),
+                method,
+                &key[..],
+                iv,
+            )
+            .unwrap();
+
+            loop {
+                let s = decrypt_reader
+                    .read(&mut decrypt_text[decrypt_read_len..])
+                    .await;
+                assert!(s.is_ok());
+                let read_len = s.unwrap();
+                if read_len == 0 {
+                    break;
+                }
+                decrypt_read_len += read_len;
+            }
+
+            assert_eq!(decrypt_text[..decrypt_read_len], plain_text);
+        }
+    }
+
+    #[test]
+    fn test_async_read() {
+        futures::executor::block_on(test_poll_read());
     }
 }

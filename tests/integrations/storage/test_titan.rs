@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
@@ -63,20 +62,20 @@ fn test_turnoff_titan() {
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         assert_eq!(
-            db.get_property_int(&"rocksdb.num-files-at-level0").unwrap(),
+            db.get_property_int("rocksdb.num-files-at-level0").unwrap(),
             2
         );
         assert_eq!(
-            db.get_property_int(&"rocksdb.num-files-at-level1").unwrap(),
+            db.get_property_int("rocksdb.num-files-at-level1").unwrap(),
             0
         );
         assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
+            db.get_property_int("rocksdb.titandb.num-live-blob-file")
                 .unwrap(),
             2
         );
         assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
+            db.get_property_int("rocksdb.titandb.num-obsolete-blob-file")
                 .unwrap(),
             0
         );
@@ -105,16 +104,16 @@ fn test_turnoff_titan() {
         all_check_pass = true;
         for i in cluster.get_node_ids().into_iter() {
             let db = cluster.get_engine(i);
-            if db.get_property_int(&"rocksdb.num-files-at-level0").unwrap() != 0 {
+            if db.get_property_int("rocksdb.num-files-at-level0").unwrap() != 0 {
                 all_check_pass = false;
                 break;
             }
-            if db.get_property_int(&"rocksdb.num-files-at-level1").unwrap() != 1 {
+            if db.get_property_int("rocksdb.num-files-at-level1").unwrap() != 1 {
                 all_check_pass = false;
                 break;
             }
             if db
-                .get_property_int(&"rocksdb.titandb.num-live-blob-file")
+                .get_property_int("rocksdb.titandb.num-live-blob-file")
                 .unwrap()
                 != 0
             {
@@ -195,29 +194,29 @@ fn test_delete_files_in_range_for_titan() {
     let start_ts = 7.into();
     let commit_ts = 8.into();
     let write = Write::new(WriteType::Put, start_ts, None);
-    let db = &engines.kv.as_inner();
+    let db = engines.kv.as_inner();
     let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
     let write_cf = db.cf_handle(CF_WRITE).unwrap();
     db.put_cf(
-        &default_cf,
+        default_cf,
         &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()),
         b"a_value",
     )
     .unwrap();
     db.put_cf(
-        &write_cf,
+        write_cf,
         &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
         &write.as_ref().to_bytes(),
     )
     .unwrap();
     db.put_cf(
-        &default_cf,
+        default_cf,
         &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()),
         b"b_value",
     )
     .unwrap();
     db.put_cf(
-        &write_cf,
+        write_cf,
         &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
         &write.as_ref().to_bytes(),
     )
@@ -226,16 +225,16 @@ fn test_delete_files_in_range_for_titan() {
     // Flush and compact the kvs into L6.
     db.flush(true).unwrap();
     db.c().compact_files_in_range(None, None, None).unwrap();
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Delete one mvcc kvs we have written above.
     // Here we make the kvs on the L5 by ingesting SST.
     let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
     let mut writer = RocksSstWriterBuilder::new()
-        .build(&sst_file_path.to_str().unwrap())
+        .build(sst_file_path.to_str().unwrap())
         .unwrap();
     writer
         .delete(&data_key(
@@ -245,7 +244,7 @@ fn test_delete_files_in_range_for_titan() {
     writer.finish().unwrap();
     let mut opts = IngestExternalFileOptions::new();
     opts.move_files(true);
-    db.ingest_external_file_cf(&default_cf, &opts, &[sst_file_path.to_str().unwrap()])
+    db.ingest_external_file_cf(default_cf, &opts, &[sst_file_path.to_str().unwrap()])
         .unwrap();
 
     // Now the LSM structure of default cf is:
@@ -255,15 +254,15 @@ fn test_delete_files_in_range_for_titan() {
     //
     // There is one blob file in Titan
     // blob1: (a_7, a_value), (b_7, b_value)
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level5").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Used to trigger titan gc
-    let db = &engines.kv.as_inner();
+    let db = engines.kv.as_inner();
     db.put(b"1", b"1").unwrap();
     db.flush(true).unwrap();
     db.put(b"2", b"2").unwrap();
@@ -284,13 +283,13 @@ fn test_delete_files_in_range_for_titan() {
     // blob2: (1, 1)
     // blob3: (2, 2)
     // blob4: (b_7, b_value)
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level1").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level5").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Wait Titan to purge obsolete files
@@ -351,21 +350,21 @@ fn test_delete_files_in_range_for_titan() {
     // blob2: (1, 1)
     // blob3: (2, 2)
     // blob4: (b_7, b_value)
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level1").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level5").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Generate a snapshot
     let default_sst_file_path = path.path().join("default.sst");
     let write_sst_file_path = path.path().join("write.sst");
-    let limiter = Limiter::new(INFINITY);
+    let limiter = Limiter::new(f64::INFINITY);
     build_sst_cf_file::<RocksEngine>(
-        &default_sst_file_path.to_str().unwrap(),
+        default_sst_file_path.to_str().unwrap(),
         &engines.kv,
         &engines.kv.snapshot(),
         CF_DEFAULT,
@@ -375,7 +374,7 @@ fn test_delete_files_in_range_for_titan() {
     )
     .unwrap();
     build_sst_cf_file::<RocksEngine>(
-        &write_sst_file_path.to_str().unwrap(),
+        write_sst_file_path.to_str().unwrap(),
         &engines.kv,
         &engines.kv.snapshot(),
         CF_WRITE,
@@ -392,13 +391,13 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     let engines1 = new_temp_engine(&dir1);
     apply_sst_cf_file(
-        &default_sst_file_path.to_str().unwrap(),
+        default_sst_file_path.to_str().unwrap(),
         &engines1.kv,
         CF_DEFAULT,
     )
     .unwrap();
     apply_sst_cf_file(
-        &write_sst_file_path.to_str().unwrap(),
+        write_sst_file_path.to_str().unwrap(),
         &engines1.kv,
         CF_WRITE,
     )

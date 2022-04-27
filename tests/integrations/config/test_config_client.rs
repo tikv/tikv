@@ -16,7 +16,8 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 
 #[test]
 fn test_update_config() {
-    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
 
@@ -65,7 +66,8 @@ fn test_dispatch_change() {
         }
     }
 
-    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
@@ -180,4 +182,53 @@ max-write-bytes-per-sec = "100MB"
 blob-run-mode = "read-only"
 "#;
     assert_eq!(expect.as_bytes(), res.as_slice());
+}
+
+#[test]
+fn test_update_from_toml_file() {
+    use online_config::ConfigManager;
+    use std::error::Error;
+    use std::result::Result;
+
+    #[derive(Clone)]
+    struct CfgManager(Arc<Mutex<RaftstoreConfig>>);
+
+    impl ConfigManager for CfgManager {
+        fn dispatch(&mut self, c: ConfigChange) -> Result<(), Box<dyn Error>> {
+            self.0.lock().unwrap().update(c);
+            Ok(())
+        }
+    }
+
+    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let cfg_controller = ConfigController::new(cfg);
+    let cfg = cfg_controller.get_current();
+    let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
+    cfg_controller.register(Module::Raftstore, Box::new(mgr));
+
+    // update config file
+    let c = r#"
+[raftstore]
+raft-log-gc-threshold = 2000
+"#;
+    let mut f = File::create(&cfg.cfg_path).unwrap();
+    f.write_all(c.as_bytes()).unwrap();
+    // before update this configuration item should be the default value
+    assert_eq!(
+        cfg_controller
+            .get_current()
+            .raft_store
+            .raft_log_gc_threshold,
+        50
+    );
+    // config update from config file
+    assert!(cfg_controller.update_from_toml_file().is_ok());
+    // after update this configration item should be constant with the modified configuration file
+    assert_eq!(
+        cfg_controller
+            .get_current()
+            .raft_store
+            .raft_log_gc_threshold,
+        2000
+    );
 }

@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(result[0].to_int_vec(), &[Some(6)]);
 
         let chunked_vec: ChunkedVecSized<Int> = vec![Some(1i64), None, Some(-1i64)].into();
-        update_vector!(state, &mut ctx, &chunked_vec, &[1, 2]).unwrap();
+        update_vector!(state, &mut ctx, chunked_vec, &[1, 2]).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();

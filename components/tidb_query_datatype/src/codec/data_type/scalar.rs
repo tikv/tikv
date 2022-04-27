@@ -336,7 +336,7 @@ impl<'a> ScalarValueRef<'a> {
     #[inline]
     pub fn cmp_sort_key(
         &self,
-        other: &ScalarValueRef,
+        other: &ScalarValueRef<'_>,
         field_type: &FieldType,
     ) -> crate::codec::Result<Ordering> {
         Ok(match_template! {
@@ -399,7 +399,7 @@ impl_as_ref! { Duration, as_duration }
 
 impl ScalarValue {
     #[inline]
-    pub fn as_json(&self) -> Option<JsonRef> {
+    pub fn as_json(&self) -> Option<JsonRef<'_>> {
         EvaluableRef::borrow_scalar_value(self)
     }
 }
@@ -413,7 +413,7 @@ impl<'a> ScalarValueRef<'a> {
 
 impl ScalarValue {
     #[inline]
-    pub fn as_bytes(&self) -> Option<BytesRef> {
+    pub fn as_bytes(&self) -> Option<BytesRef<'_>> {
         EvaluableRef::borrow_scalar_value(self)
     }
 }

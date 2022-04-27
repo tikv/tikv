@@ -609,7 +609,7 @@ impl ReadMetrics {
         }
         if self.rejected_by_appiled_term > 0 {
             LOCAL_READ_REJECT
-                .appiled_term
+                .applied_term
                 .inc_by(self.rejected_by_appiled_term);
             self.rejected_by_appiled_term = 0;
         }

@@ -314,13 +314,13 @@ impl parse::Parse for RpnFnAttr {
                             max_args = Some(lit.base10_parse()?);
                         }
                         "extra_validator" => {
-                            extra_validator = Some((&**right).into_token_stream());
+                            extra_validator = Some(right.into_token_stream());
                         }
                         "metadata_type" => {
-                            metadata_type = Some((&**right).into_token_stream());
+                            metadata_type = Some(right.into_token_stream());
                         }
                         "metadata_mapper" => {
-                            metadata_mapper = Some((&**right).into_token_stream());
+                            metadata_mapper = Some(right.into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -929,7 +929,7 @@ impl VargsRpnFn {
         let arg_type_anonymous = arg_type.eval_type.get_type_with_lifetime(quote! { '_ });
 
         let ret_type = if attr.writer {
-            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+            parse2::<RpnFnSignatureReturnGuardType>(item_fn.sig.output.to_token_stream())
                 .map_err(|_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -938,7 +938,7 @@ impl VargsRpnFn {
                 })?
                 .into_return_type()?
         } else {
-            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+            parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream()).map_err(
                 |_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1174,15 +1174,13 @@ impl RawVargsRpnFn {
             ));
         }
 
-        let ret_type = parse2::<RpnFnSignatureReturnType>(
-            (&item_fn.sig.output).into_token_stream(),
-        )
-        .map_err(|_| {
-            Error::new_spanned(
-                &item_fn.sig.output,
-                "Expect return type to be like `Result<Option<T>>`",
-            )
-        })?;
+        let ret_type = parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream())
+            .map_err(|_| {
+                Error::new_spanned(
+                    &item_fn.sig.output,
+                    "Expect return type to be like `Result<Option<T>>`",
+                )
+            })?;
         Ok(Self {
             captures: attr.captures,
             max_args: attr.max_args,
@@ -1309,7 +1307,6 @@ struct NormalRpnFn {
     evaluator_ident: Ident,
     arg_types: Vec<TokenStream>,
     arg_types_anonymous: Vec<TokenStream>,
-    arg_types_no_ref: Vec<TokenStream>,
     ret_type: TypePath,
 }
 
@@ -1334,7 +1331,6 @@ impl NormalRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
         let mut arg_types_anonymous = Vec::new();
-        let mut arg_types_no_ref = Vec::new();
         let take_cnt = item_fn.sig.inputs.len() - attr.captures.len() - attr.writer as usize;
         let fn_args = item_fn
             .sig
@@ -1346,10 +1342,9 @@ impl NormalRpnFn {
             let arg_type = Self::get_arg_type(&attr, fn_arg)?;
             arg_types.push(arg_type.eval_type.get_type_with_lifetime(quote! { 'arg_ }));
             arg_types_anonymous.push(arg_type.eval_type.get_type_with_lifetime(quote! { '_ }));
-            arg_types_no_ref.push(arg_type.eval_type.get_type_with_lifetime(quote! {}));
         }
         let ret_type = if attr.writer {
-            parse2::<RpnFnSignatureReturnGuardType>((&item_fn.sig.output).into_token_stream())
+            parse2::<RpnFnSignatureReturnGuardType>(item_fn.sig.output.to_token_stream())
                 .map_err(|_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1358,7 +1353,7 @@ impl NormalRpnFn {
                 })?
                 .into_return_type()?
         } else {
-            parse2::<RpnFnSignatureReturnType>((&item_fn.sig.output).into_token_stream()).map_err(
+            parse2::<RpnFnSignatureReturnType>(item_fn.sig.output.to_token_stream()).map_err(
                 |_| {
                     Error::new_spanned(
                         &item_fn.sig.output,
@@ -1382,7 +1377,6 @@ impl NormalRpnFn {
             evaluator_ident,
             arg_types,
             arg_types_anonymous,
-            arg_types_no_ref,
             ret_type: ret_type.eval_type,
         })
     }

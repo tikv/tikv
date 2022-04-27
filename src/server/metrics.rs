@@ -147,8 +147,16 @@ make_static_metric! {
         "type" => BatchableRequestKind,
     }
 
-    pub struct RequestBatchRatioHistogramVec: Histogram {
-        "type" => BatchableRequestKind,
+    pub label_enum FlushReason {
+        full,
+        full_after_delay,
+        delay,
+        eof,
+        wake,
+    }
+
+    pub struct RaftMessageFlushCounterVec: IntCounter {
+        "reason" => FlushReason,
     }
 }
 
@@ -201,6 +209,10 @@ lazy_static! {
         &["cf", "tag"]
     )
     .unwrap();
+    pub static ref GC_KEY_FAILURES: IntCounter = register_int_counter!(
+        "tikv_gcworker_gc_key_failures",
+        "Counter of gc key failures"
+    ).unwrap();
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
@@ -355,11 +367,14 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_FLUSH_COUNTER: IntCounter = register_int_counter!(
-        "tikv_server_raft_message_flush_total",
-        "Total number of raft messages flushed immediately"
-    )
-    .unwrap();
+    pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
+        register_static_int_counter_vec!(
+            RaftMessageFlushCounterVec,
+            "tikv_server_raft_message_flush_total",
+            "Total number of raft messages flushed immediately",
+            &["reason"]
+        )
+        .unwrap();
     pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
         "tikv_config_rocksdb",
         "Config information of rocksdb",

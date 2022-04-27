@@ -29,7 +29,7 @@ impl Default for ReadOptions {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WriteOptions {
     sync: bool,
     no_slowdown: bool,
@@ -57,15 +57,6 @@ impl WriteOptions {
 
     pub fn no_slowdown(&self) -> bool {
         self.no_slowdown
-    }
-}
-
-impl Default for WriteOptions {
-    fn default() -> WriteOptions {
-        WriteOptions {
-            sync: false,
-            no_slowdown: false,
-        }
     }
 }
 
@@ -209,8 +200,8 @@ impl IterOptions {
         self.upper_bound = Some(builder);
     }
 
-    pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(KeyBuilder::from_vec(bound, 0, 0));
+    pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>, reserved_prefix_len: usize) {
+        self.upper_bound = Some(KeyBuilder::from_vec(bound, reserved_prefix_len, 0));
     }
 
     pub fn set_upper_bound_prefix(&mut self, prefix: &[u8]) {

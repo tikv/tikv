@@ -19,5 +19,6 @@ define_error_codes!(
     BAD_FORMAT => ("BadFormat", "", ""),
     FILE_CONFLICT => ("FileConflict", "", ""),
     TTL_NOT_ENABLED => ("TTLNotEnabled", "", ""),
-    TTLS_LEN_NOT_EQUALS_TO_PAIRS => ("TTLsLenNotEqualsToPairs", "", "")
+    TTLS_LEN_NOT_EQUALS_TO_PAIRS => ("TTLsLenNotEqualsToPairs", "", ""),
+    INCOMPATIBLE_API_VERSION => ("IncompatibleApiVersion", "", "")
 );

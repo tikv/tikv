@@ -4,7 +4,7 @@ use crate::timestamp::{TimeStamp, TsSet};
 use crate::types::{Key, Mutation, Value, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
-use kvproto::kvrpcpb::{LockInfo, Op};
+use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op};
 use std::{borrow::Cow, mem::size_of};
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
@@ -31,10 +31,10 @@ const ROLLBACK_TS_PREFIX: u8 = b'r';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
         match *mutation {
-            Mutation::Put(_) | Mutation::Insert(_) => Some(LockType::Put),
-            Mutation::Delete(_) => Some(LockType::Delete),
-            Mutation::Lock(_) => Some(LockType::Lock),
-            Mutation::CheckNotExists(_) => None,
+            Mutation::Put(..) | Mutation::Insert(..) => Some(LockType::Put),
+            Mutation::Delete(..) => Some(LockType::Delete),
+            Mutation::Lock(..) => Some(LockType::Lock),
+            Mutation::CheckNotExists(..) => None,
         }
     }
 
@@ -132,12 +132,14 @@ impl Lock {
         }
     }
 
+    #[must_use]
     pub fn use_async_commit(mut self, secondaries: Vec<Vec<u8>>) -> Self {
         self.use_async_commit = true;
         self.secondaries = secondaries;
         self
     }
 
+    #[must_use]
     pub fn with_rollback_ts(mut self, rollback_ts: Vec<TimeStamp>) -> Self {
         self.rollback_ts = rollback_ts;
         self
@@ -324,8 +326,8 @@ impl Lock {
     }
 
     /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
-    pub fn check_ts_conflict(
-        lock: Cow<Self>,
+    fn check_ts_conflict_si(
+        lock: Cow<'_, Self>,
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,
@@ -359,6 +361,49 @@ impl Lock {
         Err(Error::from(ErrorInner::KeyIsLocked(
             lock.into_owned().into_lock_info(raw_key),
         )))
+    }
+
+    // Check if lock could be bypassed for isolation level `RcCheckTs`.
+    fn check_ts_conflict_rc_check_ts(
+        lock: Cow<'_, Self>,
+        key: &Key,
+        ts: TimeStamp,
+        bypass_locks: &TsSet,
+    ) -> Result<()> {
+        if lock.lock_type == LockType::Lock || lock.lock_type == LockType::Pessimistic {
+            // Ignore lock when the lock's type is Lock or Pessimistic.
+            return Ok(());
+        }
+
+        // The lock is resolved already.
+        if bypass_locks.contains(lock.ts) {
+            return Ok(());
+        }
+
+        // Return conflict error.
+        Err(Error::from(ErrorInner::WriteConflict {
+            start_ts: ts,
+            conflict_start_ts: lock.ts,
+            conflict_commit_ts: Default::default(),
+            key: key.to_raw()?,
+            primary: lock.primary.to_vec(),
+        }))
+    }
+
+    pub fn check_ts_conflict(
+        lock: Cow<'_, Self>,
+        key: &Key,
+        ts: TimeStamp,
+        bypass_locks: &TsSet,
+        iso_level: IsolationLevel,
+    ) -> Result<()> {
+        match iso_level {
+            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks),
+            IsolationLevel::RcCheckTs => {
+                Lock::check_ts_conflict_rc_check_ts(lock, key, ts, bypass_locks)
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn is_pessimistic_txn(&self) -> bool {
@@ -409,6 +454,10 @@ impl PessimisticLock {
             self.min_commit_ts,
         )
     }
+
+    pub fn memory_size(&self) -> usize {
+        self.primary.len() + size_of::<Self>()
+    }
 }
 
 impl std::fmt::Debug for PessimisticLock {
@@ -432,17 +481,17 @@ mod tests {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::make_put(Key::from_raw(key), value.to_vec()),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(Key::from_raw(key)),
+                Mutation::make_delete(Key::from_raw(key)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
             (
-                Mutation::Lock(Key::from_raw(key)),
+                Mutation::make_lock(Key::from_raw(key)),
                 LockType::Lock,
                 FLAG_LOCK,
             ),
@@ -675,10 +724,24 @@ mod tests {
         let empty = Default::default();
 
         // Ignore the lock if read ts is less than the lock version
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 50.into(), &empty).unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            50.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
 
         // Returns the lock if read ts >= lock version
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 110.into(), &empty).unwrap_err();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap_err();
 
         // Ignore locks that occurs in the `bypass_locks` set.
         Lock::check_ts_conflict(
@@ -686,6 +749,7 @@ mod tests {
             &key,
             110.into(),
             &TsSet::from_u64s(vec![109]),
+            IsolationLevel::Si,
         )
         .unwrap_err();
         Lock::check_ts_conflict(
@@ -693,6 +757,7 @@ mod tests {
             &key,
             110.into(),
             &TsSet::from_u64s(vec![110]),
+            IsolationLevel::Si,
         )
         .unwrap_err();
         Lock::check_ts_conflict(
@@ -700,6 +765,7 @@ mod tests {
             &key,
             110.into(),
             &TsSet::from_u64s(vec![100]),
+            IsolationLevel::Si,
         )
         .unwrap();
         Lock::check_ts_conflict(
@@ -707,19 +773,41 @@ mod tests {
             &key,
             110.into(),
             &TsSet::from_u64s(vec![99, 101, 102, 100, 80]),
+            IsolationLevel::Si,
         )
         .unwrap();
 
         // Ignore the lock if it is Lock or Pessimistic.
         lock.lock_type = LockType::Lock;
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 110.into(), &empty).unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
         lock.lock_type = LockType::Pessimistic;
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 110.into(), &empty).unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            110.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
 
         // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            TimeStamp::max(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
 
         // Should not ignore the primary lock of an async commit transaction even if setting u64::MAX as ts
         let async_commit_lock = lock.clone().use_async_commit(vec![]);
@@ -728,18 +816,91 @@ mod tests {
             &key,
             TimeStamp::max(),
             &empty,
+            IsolationLevel::Si,
         )
         .unwrap_err();
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, TimeStamp::max(), &empty).unwrap_err();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            TimeStamp::max(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap_err();
 
         // Ignore the lock if read ts is less than min_commit_ts
         lock.min_commit_ts = 150.into();
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 140.into(), &empty).unwrap();
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 150.into(), &empty).unwrap_err();
-        Lock::check_ts_conflict(Cow::Borrowed(&lock), &key, 160.into(), &empty).unwrap_err();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            140.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            150.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap_err();
+        Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &key,
+            160.into(),
+            &empty,
+            IsolationLevel::Si,
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn test_check_ts_conflict_rc_check_ts() {
+        let k1 = Key::from_raw(b"k1");
+        let mut lock = Lock::new(
+            LockType::Put,
+            vec![],
+            100.into(),
+            3,
+            None,
+            100.into(),
+            1,
+            TimeStamp::zero(),
+        );
+
+        let empty = Default::default();
+
+        // Ignore locks that occurs in the `bypass_locks` set.
+        Lock::check_ts_conflict_rc_check_ts(
+            Cow::Borrowed(&lock),
+            &k1,
+            50.into(),
+            &TsSet::from_u64s(vec![100]),
+        )
+        .unwrap();
+
+        // Ignore locks if the lock type are Pessimistic or Lock.
+        lock.lock_type = LockType::Pessimistic;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty).unwrap();
+        lock.lock_type = LockType::Lock;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty).unwrap();
+
+        // Report error even if read ts is less than the lock version.
+        lock.lock_type = LockType::Put;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty)
+            .unwrap_err();
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 110.into(), &empty)
+            .unwrap_err();
+
+        // Report error if for other lock types.
+        lock.lock_type = LockType::Delete;
+        Lock::check_ts_conflict_rc_check_ts(Cow::Borrowed(&lock), &k1, 50.into(), &empty)
+            .unwrap_err();
     }
 
     #[test]
@@ -846,5 +1007,18 @@ mod tests {
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
             for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20) }"
         );
+    }
+
+    #[test]
+    fn test_pessimistic_lock_memory_size() {
+        let lock = PessimisticLock {
+            primary: b"primary".to_vec().into_boxed_slice(),
+            start_ts: 5.into(),
+            ttl: 1000,
+            for_update_ts: 10.into(),
+            min_commit_ts: 20.into(),
+        };
+        // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 4 8-byte integers.
+        assert_eq!(lock.memory_size(), 7 + 16 + 4 * 8);
     }
 }

@@ -20,11 +20,5 @@
 #[macro_use]
 extern crate tikv_util;
 
-extern crate slog_global;
-
-extern crate serde_derive;
-
-extern crate raft;
-
 mod engine;
 pub use engine::{RaftEngineConfig, RaftLogBatch, RaftLogEngine, RecoveryMode};

@@ -55,7 +55,7 @@ ENABLE_FEATURES += mem-profiling
 endif
 endif
 
-# Disable portable on MacOS to sidestep the compiler bug in clang 4.9
+# Disable portable on macOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
@@ -66,6 +66,9 @@ ifeq ($(shell uname -p),aarch64)
 ROCKSDB_SYS_SSE=0
 endif
 ifeq ($(shell uname -p),arm)
+ROCKSDB_SYS_SSE=0
+endif
+ifeq ($(shell uname -p),arm64)
 ROCKSDB_SYS_SSE=0
 endif
 
@@ -84,10 +87,6 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
-ifeq ($(BCC_IOSNOOP),1)
-ENABLE_FEATURES += bcc-iosnoop
-endif
-
 # Set the storage engines used for testing
 ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb
@@ -98,6 +97,7 @@ endif
 ifneq ($(NO_CLOUD),1)
 ENABLE_FEATURES += cloud-aws
 ENABLE_FEATURES += cloud-gcp
+ENABLE_FEATURES += cloud-azure
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -286,6 +286,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@./scripts/check-redact-log
+	@./scripts/check-docker-build
 	@./scripts/clippy-all
 
 pre-audit:

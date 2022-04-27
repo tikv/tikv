@@ -249,7 +249,11 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(
+        &mut self,
+        _ctx: &mut EvalContext,
+        value: Option<EnumRef<'_>>,
+    ) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
@@ -334,7 +338,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
@@ -592,7 +596,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &ChunkedVecSized::from_slice(&[Some(21i64), None, Some(22i64)]),
+            ChunkedVecSized::from_slice(&[Some(21i64), None, Some(22i64)]),
             &[0, 1, 2]
         )
         .unwrap();
@@ -705,7 +709,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &ChunkedVecSized::from_slice(&[Some(69i64), None, Some(68i64)]),
+            ChunkedVecSized::from_slice(&[Some(69i64), None, Some(68i64)]),
             &[0, 1, 2]
         )
         .unwrap();
@@ -760,7 +764,7 @@ mod tests {
                 update!(
                     state,
                     &mut ctx,
-                    Some(&String::from(arg).into_bytes() as BytesRef)
+                    Some(&String::from(arg).into_bytes() as BytesRef<'_>)
                 )
                 .unwrap();
             }
@@ -914,7 +918,7 @@ mod tests {
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
             let max_slice: ChunkedVecSized<Int> = max_result.as_ref().to_int_vec().into();
-            update_vector!(max_state, &mut ctx, &max_slice, max_result.logical_rows()).unwrap();
+            update_vector!(max_state, &mut ctx, max_slice, max_result.logical_rows()).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
@@ -931,7 +935,7 @@ mod tests {
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
             let min_slice: ChunkedVecSized<Int> = min_result.as_ref().to_int_vec().into();
-            update_vector!(min_state, &mut ctx, &min_slice, min_result.logical_rows()).unwrap();
+            update_vector!(min_state, &mut ctx, min_slice, min_result.logical_rows()).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 

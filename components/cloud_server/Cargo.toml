@@ -14,7 +14,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["fail/failpoints"]
-bcc-iosnoop = ["tikv/bcc-iosnoop"]
 cloud-aws = [ "encryption_export/cloud-aws" ]
 cloud-gcp = [ "encryption_export/cloud-gcp" ]
 test-engines-rocksdb = [
@@ -46,12 +45,12 @@ fail = "0.4"
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
-grpcio = { version = "0.9", default-features = false, features = ["openssl-vendored"] }
-grpcio-health = { version = "0.9", default-features = false }
+grpcio = { version = "0.10",  default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
 hyper = { version = "0.14", features = ["full"] }
 keys = { path = "../keys", default-features = false }
-kvproto = { git = "https://github.com/coocood/kvproto.git", rev = "128b6a780ee757fe66484bf324673abb4f868473" }
+kvproto = { git = "https://github.com/coocood/kvproto.git", branch = "cloud-native" }
 kvengine = { path = "../kvengine", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
@@ -68,7 +67,7 @@ prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 promptly = "0.3.0"
 protobuf = "2.8"
-raft = { version = "0.6.0-alpha", default-features = false }
+raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 raftstore = { path = "../raftstore", default-features = false }
 rfengine = { path = "../rfengine", default-features = false }

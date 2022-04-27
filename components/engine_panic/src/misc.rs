@@ -12,11 +12,16 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
+    fn delete_ranges_cf(
+        &self,
+        cf: &str,
+        strategy: DeleteStrategy,
+        ranges: &[Range<'_>],
+    ) -> Result<()> {
         panic!()
     }
 
-    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range) -> Result<(u64, u64)> {
+    fn get_approximate_memtable_stats_cf(&self, cf: &str, range: &Range<'_>) -> Result<(u64, u64)> {
         panic!()
     }
 

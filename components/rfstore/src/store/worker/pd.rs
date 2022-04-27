@@ -544,7 +544,7 @@ where
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
         let stats_copy = stats.clone();
-        let resp = self.pd_client.store_heartbeat(stats, optional_report);
+        let resp = self.pd_client.store_heartbeat(stats, optional_report, None);
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {

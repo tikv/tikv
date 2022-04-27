@@ -41,7 +41,7 @@ impl RocksMvccProperties {
         // To be compatible with old versions.
         res.num_deletes = props
             .decode_u64(PROP_NUM_DELETES)
-            .unwrap_or_else(|_| res.num_versions - res.num_puts);
+            .unwrap_or(res.num_versions - res.num_puts);
         res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
         Ok(res)
     }

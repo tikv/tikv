@@ -3,16 +3,18 @@
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::Context;
-use test_storage::SyncTestStorageBuilder;
+use test_storage::SyncTestStorageBuilderApiV1;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 use txn_types::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
-fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilderApiV1::from_engine(engine)
+        .build()
+        .unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -32,9 +34,11 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Ben
     );
 }
 
-fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilderApiV1::from_engine(engine)
+        .build()
+        .unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -45,7 +49,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
                 .map(|(k, v)| {
                     (
                         Context::default(),
-                        vec![Mutation::Put((Key::from_raw(k), v.clone()))],
+                        vec![Mutation::make_put(Key::from_raw(k), v.clone())],
                         k.clone(),
                     )
                 })
@@ -61,9 +65,11 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
     );
 }
 
-fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
+fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+    let store = SyncTestStorageBuilderApiV1::from_engine(engine)
+        .build()
+        .unwrap();
     b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
@@ -73,7 +79,7 @@ fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Benc
                 store
                     .prewrite(
                         Context::default(),
-                        vec![Mutation::Put((Key::from_raw(k), v.clone()))],
+                        vec![Mutation::make_put(Key::from_raw(k), v.clone())],
                         k.clone(),
                         1,
                     )

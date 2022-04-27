@@ -79,7 +79,7 @@ where
 {
     type Output = F::Output;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         match this.state {
             LimitationState::NotLimited if this.execution_time > this.time_limit_without_permit => {

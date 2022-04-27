@@ -18,17 +18,20 @@ use futures::task::Poll;
 use futures::task::Waker;
 
 use super::{
-    metrics::*, tso::TimestampOracle, Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT,
+    metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
+    REQUEST_TIMEOUT,
 };
 use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
+    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
+    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
+use kvproto::metapb::BucketStats;
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest, ReportBucketsResponse,
+    ResponseHeader,
 };
 use security::SecurityManager;
 use tikv_util::time::Instant;
@@ -85,12 +88,18 @@ pub struct Inner {
         UnboundedSender<RegionHeartbeatRequest>,
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
+    pub buckets_sender: Either<
+        Option<ClientDuplexSender<ReportBucketsRequest>>,
+        UnboundedSender<ReportBucketsRequest>,
+    >,
+    pub buckets_resp: Option<ClientCStreamReceiver<ReportBucketsResponse>>,
     pub client_stub: PdClientStub,
     target: TargetInfo,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     pub pending_heartbeat: Arc<AtomicU64>,
+    pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
 
     last_try_reconnect: Instant,
@@ -163,21 +172,27 @@ impl Client {
                 .with_label_values(&[&target.via])
                 .set(1);
         }
-        let (tx, rx) = client_stub
+        let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+        let (buckets_tx, buckets_resp) = client_stub
+            .report_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
                 env,
-                hb_sender: Either::Left(Some(tx)),
-                hb_receiver: Either::Left(Some(rx)),
+                hb_sender: Either::Left(Some(hb_tx)),
+                hb_receiver: Either::Left(Some(hb_rx)),
+                buckets_sender: Either::Left(Some(buckets_tx)),
+                buckets_resp: Some(buckets_resp),
                 client_stub,
                 members,
                 target,
                 security_mgr,
                 on_reconnect: None,
                 pending_heartbeat: Arc::default(),
+                pending_buckets: Arc::default(),
                 last_try_reconnect: Instant::now(),
                 tso,
             }),
@@ -196,7 +211,7 @@ impl Client {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
 
-        let (tx, rx) = client_stub
+        let (hb_tx, hb_rx) = client_stub
             .region_heartbeat_opt(target.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         info!("heartbeat sender and receiver are stale, refreshing ...");
@@ -205,9 +220,21 @@ impl Client {
         if let Either::Left(Some(ref mut r)) = inner.hb_sender {
             r.cancel();
         }
-        inner.hb_sender = Either::Left(Some(tx));
-        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+        inner.hb_sender = Either::Left(Some(hb_tx));
+        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(hb_rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
+
+        let (buckets_tx, buckets_resp) = client_stub
+            .report_buckets_opt(target.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_buckets", e));
+        info!("buckets sender and receiver are stale, refreshing ...");
+        // Try to cancel an unused buckets sender.
+        if let Either::Left(Some(ref mut r)) = inner.buckets_sender {
+            r.cancel();
+        }
+        inner.buckets_sender = Either::Left(Some(buckets_tx));
+        inner.buckets_resp = Some(buckets_resp);
+
         inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
@@ -774,6 +801,243 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::StoreTombstone => Err(Error::StoreTombstone(err.get_message().to_owned())),
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
         ErrorType::Unknown => Err(box_err!(err.get_message())),
+        ErrorType::GlobalConfigNotFound => {
+            Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
+        }
         ErrorType::Ok => Ok(()),
+    }
+}
+
+pub fn new_bucket_stats(meta: &BucketMeta) -> BucketStats {
+    let count = meta.keys.len() - 1;
+    let mut stats = BucketStats::default();
+    stats.set_write_bytes(vec![0; count]);
+    stats.set_read_bytes(vec![0; count]);
+    stats.set_write_qps(vec![0; count]);
+    stats.set_read_qps(vec![0; count]);
+    stats.set_write_keys(vec![0; count]);
+    stats.set_read_keys(vec![0; count]);
+    stats
+}
+
+pub fn find_bucket_index<S: AsRef<[u8]>>(key: &[u8], bucket_keys: &[S]) -> Option<usize> {
+    let last_key = bucket_keys.last().unwrap().as_ref();
+    let search_keys = &bucket_keys[..bucket_keys.len() - 1];
+    search_keys
+        .binary_search_by(|k| k.as_ref().cmp(key))
+        .map_or_else(
+            |idx| {
+                if idx == 0 || (idx == search_keys.len() && !last_key.is_empty() && key >= last_key)
+                {
+                    None
+                } else {
+                    Some(idx - 1)
+                }
+            },
+            Some,
+        )
+}
+
+/// Merge incoming bucket stats. If a range in new buckets overlaps with multiple ranges in
+/// current buckets, stats of the new range will be added to all stats of current ranges.
+pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
+    cur: &[C],
+    cur_stats: &mut BucketStats,
+    incoming: &[I],
+    delta_stats: &BucketStats,
+) {
+    // Return [start, end] of indices of buckets
+    fn find_overlay_ranges<S: AsRef<[u8]>>(
+        range: (&[u8], &[u8]),
+        keys: &[S],
+    ) -> Option<(usize, usize)> {
+        let bucket_cnt = keys.len() - 1;
+        let last_bucket_idx = bucket_cnt - 1;
+        let start = match find_bucket_index(range.0, keys) {
+            Some(idx) => idx,
+            None => {
+                if range.0 < keys[0].as_ref() {
+                    0
+                } else {
+                    // Not in the bucket range.
+                    return None;
+                }
+            }
+        };
+
+        let end = if range.1.is_empty() {
+            last_bucket_idx
+        } else {
+            match find_bucket_index(range.1, keys) {
+                Some(idx) => {
+                    // If end key is the start key of a bucket, this bucket should not be included.
+                    if range.1 == keys[idx].as_ref() {
+                        if idx == 0 {
+                            return None;
+                        }
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                }
+                None => {
+                    if range.1 >= keys[keys.len() - 1].as_ref() {
+                        last_bucket_idx
+                    } else {
+                        // Not in the bucket range.
+                        return None;
+                    }
+                }
+            }
+        };
+        Some((start, end))
+    }
+
+    macro_rules! stats_add {
+        ($right:ident, $ridx:expr, $left:ident, $lidx:expr, $member:ident) => {
+            if let Some(s) = $right.$member.get_mut($ridx) {
+                *s += $left.$member.get($lidx).copied().unwrap_or_default();
+            }
+        };
+    }
+
+    for new_idx in 0..(incoming.len() - 1) {
+        let start = &incoming[new_idx];
+        let end = &incoming[new_idx + 1];
+        if let Some((start_idx, end_idx)) = find_overlay_ranges((start.as_ref(), end.as_ref()), cur)
+        {
+            for cur_idx in start_idx..=end_idx {
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_bytes);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_bytes);
+
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_qps);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_qps);
+
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, read_keys);
+                stats_add!(cur_stats, cur_idx, delta_stats, new_idx, write_keys);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{merge_bucket_stats, util::find_bucket_index};
+    use kvproto::metapb::BucketStats;
+
+    #[test]
+    fn test_merge_bucket_stats() {
+        #[allow(clippy::type_complexity)]
+        let cases: &[((Vec<&[u8]>, _), (Vec<&[u8]>, _), _)] = &[
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                vec![2, 2, 2, 2],
+            ),
+            (
+                (vec![b"k1", b"k3", b"k5", b"k7", b"k9"], vec![1, 1, 1, 1]),
+                (vec![b"k0", b"k6", b"k8"], vec![1, 1]),
+                vec![2, 2, 3, 2],
+            ),
+            (
+                (vec![b"k0", b"k6", b"k8"], vec![1, 1]),
+                (
+                    vec![b"k1", b"k3", b"k5", b"k7", b"k9", b"ka"],
+                    vec![1, 1, 1, 1, 1],
+                ),
+                vec![4, 3],
+            ),
+            (
+                (vec![b"k4", b"k6", b"kb"], vec![1, 1]),
+                (
+                    vec![b"k1", b"k3", b"k5", b"k7", b"k9", b"ka"],
+                    vec![1, 1, 1, 1, 1],
+                ),
+                vec![3, 4],
+            ),
+            (
+                (vec![b"k3", b"k5", b"k7"], vec![1, 1]),
+                (vec![b"k4", b"k5"], vec![1]),
+                vec![2, 1],
+            ),
+            (
+                (vec![b"", b""], vec![1]),
+                (vec![b"", b""], vec![1]),
+                vec![2],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"", b"k2", b""], vec![1, 1]),
+                vec![2, 3],
+            ),
+            (
+                (vec![b"", b""], vec![1]),
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                vec![3],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"", b""], vec![1]),
+                vec![2, 2],
+            ),
+            (
+                (vec![b"", b"k1", b""], vec![1, 1]),
+                (vec![b"k2", b"k3"], vec![1]),
+                vec![1, 2],
+            ),
+            (
+                (vec![b"", b"k3", b""], vec![1, 1]),
+                (vec![b"k1", b"k2"], vec![1]),
+                vec![2, 1],
+            ),
+            (
+                (vec![b"", b"k3"], vec![1]),
+                (vec![b"k1", b""], vec![1]),
+                vec![2],
+            ),
+            (
+                (vec![b"", b"k3"], vec![1]),
+                (vec![b"k4", b""], vec![1]),
+                vec![1],
+            ),
+        ];
+        for (current, incoming, expected) in cases {
+            let cur_keys = &current.0;
+            let incoming_keys = &incoming.0;
+            let mut cur_stats = BucketStats::default();
+            cur_stats.set_read_qps(current.1.to_vec());
+            let mut incoming_stats = BucketStats::default();
+            incoming_stats.set_read_qps(incoming.1.to_vec());
+            merge_bucket_stats(cur_keys, &mut cur_stats, incoming_keys, &incoming_stats);
+            assert_eq!(cur_stats.get_read_qps(), expected);
+        }
+    }
+
+    #[test]
+    fn test_find_bucket_index() {
+        let keys = vec![
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+        ];
+        assert_eq!(find_bucket_index(b"k1", &keys), Some(0));
+        assert_eq!(find_bucket_index(b"k5", &keys), Some(2));
+        assert_eq!(find_bucket_index(b"k2", &keys), Some(0));
+        assert_eq!(find_bucket_index(b"k6", &keys), Some(2));
+        assert_eq!(find_bucket_index(b"k7", &keys), None);
+        assert_eq!(find_bucket_index(b"k0", &keys), None);
+        assert_eq!(find_bucket_index(b"k8", &keys), None);
+        let keys = vec![
+            b"".to_vec(),
+            b"k1".to_vec(),
+            b"k3".to_vec(),
+            b"k5".to_vec(),
+            b"k7".to_vec(),
+            b"".to_vec(),
+        ];
+        assert_eq!(find_bucket_index(b"k0", &keys), Some(0));
+        assert_eq!(find_bucket_index(b"k7", &keys), Some(4));
+        assert_eq!(find_bucket_index(b"k8", &keys), Some(4));
     }
 }

@@ -54,6 +54,8 @@ pub struct Config {
     // The lease provided by a successfully proposed and applied entry.
     pub raft_store_max_leader_lease: ReadableDuration,
 
+    pub renew_leader_lease_advance_duration: ReadableDuration,
+
     pub allow_remove_leader: bool,
 
     // Interval to gc unnecessary raft log (ms).
@@ -100,6 +102,7 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             raft_store_max_leader_lease: ReadableDuration::secs(9),
+            renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             allow_remove_leader: false,
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
             split_region_check_tick_interval: ReadableDuration::secs(3),
@@ -127,6 +130,10 @@ impl Config {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
 
+    pub fn renew_leader_lease_advance_duration(&self) -> TimeDuration {
+        TimeDuration::from_std(self.renew_leader_lease_advance_duration.0).unwrap()
+    }
+
     pub fn raft_heartbeat_interval(&self) -> Duration {
         self.raft_base_tick_interval.0 * self.raft_heartbeat_ticks as u32
     }
@@ -142,7 +149,8 @@ impl Config {
         cfg.raft_max_inflight_msgs = old.raft_max_inflight_msgs;
         cfg.raft_entry_max_size = old.raft_entry_max_size;
         cfg.raft_store_max_leader_lease = old.raft_store_max_leader_lease;
-        cfg.allow_remove_leader = old.allow_remove_leader;
+        cfg.renew_leader_lease_advance_duration = old.renew_leader_lease_advance_duration;
+        cfg.allow_remove_leader = old.allow_remove_leader();
         cfg.pd_heartbeat_tick_interval = old.pd_heartbeat_tick_interval;
         cfg.pd_store_heartbeat_tick_interval = old.pd_store_heartbeat_tick_interval;
         cfg.max_peer_down_duration = old.max_peer_down_duration;

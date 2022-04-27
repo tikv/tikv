@@ -24,6 +24,8 @@ use tidb_query_executors::{
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
+use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::time::Instant;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
@@ -46,6 +48,7 @@ pub struct AnalyzeContext<S: Snapshot> {
     storage: Option<TiKVStorage<CloudStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -55,6 +58,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         start_ts: u64,
         snap: S,
         req_ctx: &ReqContext,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         // let store = SnapshotStore::new(
         //     snap,
@@ -71,6 +75,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             storage: Some(TiKVStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
+            quota_limiter,
         })
     }
 
@@ -266,7 +271,8 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
-                let mut builder = RowSampleBuilder::new(col_req, storage, ranges)?;
+                let mut builder =
+                    RowSampleBuilder::new(col_req, storage, ranges, self.quota_limiter.clone())?;
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
@@ -306,6 +312,7 @@ struct RowSampleBuilder<S: Snapshot> {
     sample_rate: f64,
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
@@ -313,6 +320,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         mut req: AnalyzeColumnsReq,
         storage: TiKVStorage<CloudStore<S>>,
         ranges: Vec<KeyRange>,
+        quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -336,6 +344,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             sample_rate: req.get_sample_rate(),
             columns_info,
             column_groups: req.take_column_groups().into(),
+            quota_limiter,
         })
     }
 
@@ -366,53 +375,66 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
-            let result = self.data.next_batch(BATCH_MAX_SIZE);
-            is_drained = result.is_drained?;
 
-            let columns_slice = result.physical_columns.as_slice();
+            let mut sample = self.quota_limiter.new_sample();
+            {
+                let _guard = sample.observe_cpu();
+                let result = self.data.next_batch(BATCH_MAX_SIZE);
+                is_drained = result.is_drained?;
 
-            for logical_row in &result.logical_rows {
-                let mut column_vals: Vec<Vec<u8>> = Vec::new();
-                let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
-                for i in 0..self.columns_info.len() {
-                    let mut val = vec![];
-                    columns_slice[i].encode(
-                        *logical_row,
-                        &self.columns_info[i],
-                        &mut EvalContext::default(),
-                        &mut val,
-                    )?;
-                    if self.columns_info[i].as_accessor().is_string_like() {
-                        let sorted_val = match_template_collator! {
-                            TT, match self.columns_info[i].as_accessor().collation()? {
-                                Collation::TT => {
-                                    let mut mut_val = &val[..];
-                                    let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
-                                    if decoded_val == Datum::Null {
-                                        val.clone()
-                                    } else {
-                                        // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                        // So it is safe the unwrap the Ok value.
-                                        let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
-                                        decoded_sorted_val
+                let columns_slice = result.physical_columns.as_slice();
+
+                for logical_row in &result.logical_rows {
+                    let mut column_vals: Vec<Vec<u8>> = Vec::new();
+                    let mut collation_key_vals: Vec<Vec<u8>> = Vec::new();
+                    for i in 0..self.columns_info.len() {
+                        let mut val = vec![];
+                        columns_slice[i].encode(
+                            *logical_row,
+                            &self.columns_info[i],
+                            &mut EvalContext::default(),
+                            &mut val,
+                        )?;
+                        if self.columns_info[i].as_accessor().is_string_like() {
+                            let sorted_val = match_template_collator! {
+                                TT, match self.columns_info[i].as_accessor().collation()? {
+                                    Collation::TT => {
+                                        let mut mut_val = &val[..];
+                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut EvalContext::default(), &self.columns_info[i])?;
+                                        if decoded_val == Datum::Null {
+                                            val.clone()
+                                        } else {
+                                            // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
+                                            // So it is safe the unwrap the Ok value.
+                                            let decoded_sorted_val = TT::sort_key(&decoded_val.as_string()?.unwrap().into_owned())?;
+                                            decoded_sorted_val
+                                        }
                                     }
                                 }
-                            }
-                        };
-                        collation_key_vals.push(sorted_val);
-                    } else {
-                        collation_key_vals.push(Vec::new());
+                            };
+                            collation_key_vals.push(sorted_val);
+                        } else {
+                            collation_key_vals.push(Vec::new());
+                        }
+                        column_vals.push(val);
                     }
-                    column_vals.push(val);
+                    collector.mut_base().count += 1;
+                    collector.collect_column_group(
+                        &column_vals,
+                        &collation_key_vals,
+                        &self.columns_info,
+                        &self.column_groups,
+                    );
+                    collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
                 }
-                collector.mut_base().count += 1;
-                collector.collect_column_group(
-                    &column_vals,
-                    &collation_key_vals,
-                    &self.columns_info,
-                    &self.column_groups,
-                );
-                collector.collect_column(column_vals, collation_key_vals, &self.columns_info);
+            }
+
+            // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
+            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            if !quota_delay.is_zero() {
+                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                    .get(ThrottleType::analyze_full_sampling)
+                    .inc_by(quota_delay.as_micros() as u64);
             }
         }
         Ok(AnalyzeSamplingResult::new(collector))
@@ -501,7 +523,7 @@ impl BaseRowSampleCollector {
                     continue;
                 }
                 has_null = false;
-                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64
+                self.total_sizes[col_len + i] += columns_val[*j as usize].len() as i64 - 1
             }
             // We only maintain the null count for single column case.
             if has_null && offsets.len() == 1 {
@@ -537,7 +559,7 @@ impl BaseRowSampleCollector {
             } else {
                 self.fm_sketches[i].insert(&columns_val[i]);
             }
-            self.total_sizes[i] += columns_val[i].len() as i64;
+            self.total_sizes[i] += columns_val[i].len() as i64 - 1;
         }
     }
 
@@ -652,21 +674,11 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct ReservoirRowSampleCollector {
     base: BaseRowSampleCollector,
     samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
     max_sample_size: usize,
-}
-
-impl Default for ReservoirRowSampleCollector {
-    fn default() -> Self {
-        ReservoirRowSampleCollector {
-            base: Default::default(),
-            samples: BinaryHeap::new(),
-            max_sample_size: 0,
-        }
-    }
 }
 
 impl ReservoirRowSampleCollector {
@@ -1055,7 +1067,7 @@ impl SampleCollector {
         if let Some(c) = self.cm_sketch.as_mut() {
             c.insert(&data);
         }
-        self.total_size += data.len() as u64;
+        self.total_size += data.len() as u64 - 1;
         if self.samples.len() < self.max_sample_size {
             self.samples.push(data);
             return;
@@ -1200,7 +1212,7 @@ mod tests {
         assert_eq!(sample.null_count, 1);
         assert_eq!(sample.count, 3);
         assert_eq!(sample.cm_sketch.unwrap().count(), 3);
-        assert_eq!(sample.total_size, 6)
+        assert_eq!(sample.total_size, 3)
     }
 
     #[test]

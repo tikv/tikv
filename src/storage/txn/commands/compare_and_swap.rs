@@ -9,11 +9,15 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot};
-use engine_traits::raw_value::{ttl_to_expire_ts, RawValue};
+use api_version::{match_template_api_version, APIVersion, RawValue};
+use engine_traits::raw_ttl::ttl_to_expire_ts;
 use engine_traits::CfName;
 use kvproto::kvrpcpb::ApiVersion;
+use raw::RawStore;
+use tikv_kv::Statistics;
 use txn_types::{Key, Value};
 
+// TODO: consider add `APIVersion` generic parameter.
 command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value. The bool indicates whether they are equal.
@@ -46,18 +50,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let old_value = if self.api_version == ApiVersion::V1 {
-            snapshot.get_cf(cf, &key)?
-        } else {
-            raw::RawEncodeSnapshot::from_snapshot(snapshot, self.api_version).get_cf(cf, &key)?
-        };
+        let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
+            cf,
+            &key,
+            &mut Statistics::default(),
+        )?;
 
         let pr = if old_value == previous_value {
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),
+                is_delete: false,
             };
-            let m = Modify::Put(cf, key, raw_value.to_bytes(self.api_version));
+            let encoded_raw_value = match_template_api_version!(
+                API,
+                match self.api_version {
+                    ApiVersion::API => API::encode_raw_value_owned(raw_value),
+                }
+            );
+            let m = Modify::Put(cf, key, encoded_raw_value);
             data.push(m);
             ProcessResult::RawCompareAndSwapRes {
                 previous_value: old_value,
@@ -88,31 +99,37 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Engine, Statistics, TestEngineBuilder};
+    use api_version::{APIV1, APIV1TTL, APIV2};
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
-    use txn_types::Key;
 
     #[test]
     fn test_cas_basic() {
-        test_cas_basic_impl(ApiVersion::V1);
-        test_cas_basic_impl(ApiVersion::V1ttl);
-        test_cas_basic_impl(ApiVersion::V2);
+        test_cas_basic_impl::<APIV1>();
+        test_cas_basic_impl::<APIV1TTL>();
+        test_cas_basic_impl::<APIV2>();
     }
 
-    fn test_cas_basic_impl(api_version: ApiVersion) {
+    /// Note: for API V2, TestEngine don't support MVCC reading, so `pre_propose` observer is ignored,
+    /// and no timestamp will be append to key.
+    /// The full test of `RawCompareAndSwap` is in `src/storage/mod.rs`.
+    fn test_cas_basic_impl<Api: APIVersion>() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
-        let key = b"k";
+        let key = b"rk";
+
+        let encoded_key = Api::encode_raw_key(key, None);
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            Key::from_encoded(key.to_vec()),
+            encoded_key.clone(),
             None,
             b"v1".to_vec(),
             0,
-            api_version,
+            Api::TAG,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -121,11 +138,11 @@ mod tests {
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            Key::from_encoded(key.to_vec()),
+            encoded_key.clone(),
             None,
             b"v2".to_vec(),
             1,
-            api_version,
+            Api::TAG,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
@@ -134,11 +151,11 @@ mod tests {
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
-            Key::from_encoded(key.to_vec()),
+            encoded_key,
             Some(b"v1".to_vec()),
             b"v3".to_vec(),
             2,
-            api_version,
+            Api::TAG,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
@@ -152,7 +169,6 @@ mod tests {
         cmd: TypedCommand<(Option<Value>, bool)>,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
-        use crate::storage::DummyLockManager;
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
         let context = WriteContext {

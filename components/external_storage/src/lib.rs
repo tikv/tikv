@@ -53,6 +53,7 @@ pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
 
 #[derive(Debug, Default)]
 pub struct BackendConfig {
+    pub s3_multi_part_size: usize,
     pub hdfs_config: HdfsConfig,
 }
 

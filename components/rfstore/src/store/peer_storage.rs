@@ -17,7 +17,7 @@ use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
 use kvproto::raft_serverpb::PeerState;
 use protobuf::Message;
-use raft::StorageError;
+use raft::{GetEntriesContext, StorageError};
 use raft_proto::eraftpb;
 use raft_proto::eraftpb::{ConfState, HardState};
 use raftstore::store::util;
@@ -125,6 +125,7 @@ impl raft::Storage for PeerStorage {
         low: u64,
         high: u64,
         max_size: impl Into<Option<u64>>,
+        context: GetEntriesContext,
     ) -> raft::Result<Vec<eraftpb::Entry>> {
         self.check_range(low, high)?;
         let mut ents = Vec::with_capacity((high - low) as usize);
@@ -171,7 +172,7 @@ impl raft::Storage for PeerStorage {
         Ok(self.raft_state.last_index)
     }
 
-    fn snapshot(&self, request_index: u64) -> raft::Result<eraftpb::Snapshot> {
+    fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<eraftpb::Snapshot> {
         if !self.initial_flushed || self.shard_meta.is_none() {
             info!("shard has not flushed for generating snapshot"; "region" => self.tag());
             return Err(raft::Error::Store(

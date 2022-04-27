@@ -84,8 +84,8 @@ impl Table {
     /// Create a `KeyRange` which select all records in current table.
     pub fn get_record_range_all(&self) -> KeyRange {
         let mut range = KeyRange::default();
-        range.set_start(table::encode_row_key(self.id, std::i64::MIN));
-        range.set_end(table::encode_row_key(self.id, std::i64::MAX));
+        range.set_start(table::encode_row_key(self.id, i64::MIN));
+        range.set_end(table::encode_row_key(self.id, i64::MAX));
         range
     }
 
@@ -108,10 +108,10 @@ impl Table {
     pub fn get_index_range_all(&self, idx: i64) -> KeyRange {
         let mut range = KeyRange::default();
         let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(::std::i64::MIN).unwrap();
+        buf.encode_i64(i64::MIN).unwrap();
         range.set_start(table::encode_index_seek_key(self.id, idx, &buf));
         buf.clear();
-        buf.encode_i64(::std::i64::MAX).unwrap();
+        buf.encode_i64(i64::MAX).unwrap();
         range.set_end(table::encode_index_seek_key(self.id, idx, &buf));
         range
     }
@@ -138,6 +138,7 @@ impl TableBuilder {
         }
     }
 
+    #[must_use]
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
         use std::cmp::Ordering::*;
 

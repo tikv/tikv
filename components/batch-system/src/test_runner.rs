@@ -107,7 +107,10 @@ impl Handler {
 }
 
 impl PollHandler<Runner, Runner> for Handler {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin<F>(&mut self, _batch_size: usize, _update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a Config),
+    {
         self.local.begin += 1;
     }
 
@@ -139,12 +142,18 @@ pub struct Builder {
     pub pause_counter: Arc<AtomicUsize>,
 }
 
-impl Builder {
-    pub fn new() -> Builder {
+impl Default for Builder {
+    fn default() -> Builder {
         Builder {
             metrics: Arc::default(),
             pause_counter: Arc::new(AtomicUsize::new(0)),
         }
+    }
+}
+
+impl Builder {
+    pub fn new() -> Self {
+        Builder::default()
     }
 }
 
