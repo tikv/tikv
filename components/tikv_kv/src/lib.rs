@@ -5,15 +5,10 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
-#![feature(negative_impls)]
 #![feature(generic_associated_types)]
 
-#[macro_use]
-extern crate derive_more;
 #[macro_use(fail_point)]
 extern crate fail;
-#[macro_use]
-extern crate slog_derive;
 #[macro_use]
 extern crate tikv_util;
 
@@ -21,7 +16,6 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
-mod perf_context;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
@@ -49,7 +43,6 @@ use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
-pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,

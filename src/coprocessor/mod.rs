@@ -37,7 +37,7 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::mvcc::TimeStamp;
 use crate::storage::Statistics;
 use async_trait::async_trait;
-use engine_rocks::PerfLevel;
+use engine_traits::PerfLevel;
 use kvproto::{coprocessor as coppb, kvrpcpb};
 use lazy_static::lazy_static;
 use metrics::ReqTag;
