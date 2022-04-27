@@ -953,7 +953,13 @@ where
             &mut kv_wb,
             &region,
             PeerState::Tombstone,
-            self.pending_merge_state.clone(),
+            // Only persist the `merge_state` if the merge is known to be succeeded
+            // which is determined by the `keep_data` flag
+            if keep_data {
+                self.pending_merge_state.clone()
+            } else {
+                None
+            },
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
@@ -1295,7 +1301,8 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
-            ctx.coprocessor_host.on_step_read_index(&mut m);
+            ctx.coprocessor_host
+                .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -2666,7 +2673,7 @@ where
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(states);
+            self.pending_reads.advance_leader_reads(&self.tag, states);
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
@@ -2929,6 +2936,7 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
+        fail_point!("after_propose");
 
         match res {
             Err(e) => {
@@ -4327,6 +4335,17 @@ where
         };
 
         send_msg.set_to_peer(to_peer);
+
+        if msg.get_from() != self.peer.get_id() {
+            debug!(
+                "redirecting message";
+                "msg_type" => ?msg.get_msg_type(),
+                "from" => msg.get_from(),
+                "to" => msg.get_to(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
 
         // There could be two cases:
         // 1. Target peer already exists but has not established communication with leader yet

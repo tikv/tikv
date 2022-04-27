@@ -14,6 +14,7 @@ mod test_import_service;
 mod test_kv_service;
 mod test_memory_usage_limit;
 mod test_merge;
+mod test_metrics_overflow;
 mod test_pd_client;
 mod test_pending_peers;
 mod test_replica_read;
