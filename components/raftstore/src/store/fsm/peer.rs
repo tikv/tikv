@@ -2370,23 +2370,12 @@ where
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
 
-<<<<<<< HEAD
-        if self.fsm.peer.has_unpersisted_ready() {
-            assert!(self.ctx.sync_write_worker.is_none());
-            // The destroy must be delayed if there are some unpersisted readies.
-            // Otherwise there is a race of writting kv db and raft db between here
-            // and write worker.
-            if let Some(mbt) = self.fsm.delayed_destroy {
-=======
-        fail_point!("destroy_peer_after_pending_move", |_| { true });
-
         if let Some(reason) = self.maybe_delay_destroy() {
             if self
                 .fsm
                 .delayed_destroy
                 .map_or(false, |delay| delay.reason == reason)
             {
->>>>>>> 617025560... raftstore: move scan delete to raft log gc worker (#11853)
                 panic!(
                     "{} destroy peer twice with same delay reason, original {:?}, now {}",
                     self.fsm.peer.tag, self.fsm.delayed_destroy, merged_by_target
