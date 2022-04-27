@@ -11,7 +11,7 @@ use rand::random;
 
 use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
@@ -1004,8 +1004,8 @@ fn test_txn_store_rawkv_api_version() {
             store.ctx.set_api_version(req_api_version);
 
             let mut end_key = key.to_vec();
-            if let Some(end_key) = end_key.last_mut() {
-                *end_key = 0xff;
+            if let Some(last_byte) = end_key.last_mut() {
+                *last_byte = 0xff;
             }
 
             let mut range = KeyRange::default();
@@ -1093,13 +1093,16 @@ fn test_txn_store_rawkv_api_version() {
                     vec![(key.to_vec(), b"value".to_vec())],
                 );
 
-                let mut digest = crc64fast::Digest::new();
-                digest.write(key);
-                digest.write(b"value");
-                store.raw_checksum_ok(
-                    vec![range_bounded.clone()],
-                    (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
-                );
+                // TODO: Remove this conditional statement after raw_checksum is done for API V2
+                if storage_api_version != ApiVersion::V2 {
+                    let mut digest = crc64fast::Digest::new();
+                    digest.write(key);
+                    digest.write(b"value");
+                    store.raw_checksum_ok(
+                        vec![range_bounded.clone()],
+                        (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
+                    );
+                }
             } else {
                 store.raw_get_err(cf.to_owned(), key.to_vec());
                 if !matches!(storage_api_version, ApiVersion::V1) {
@@ -1156,8 +1159,8 @@ impl Oracle {
 
 const INC_MAX_RETRY: usize = 100;
 
-fn inc<E: Engine, Api: APIVersion>(
-    store: &SyncTestStorage<E, Api>,
+fn inc<E: Engine, F: KvFormat>(
+    store: &SyncTestStorage<E, F>,
     oracle: &Oracle,
     key: &[u8],
 ) -> Result<i32, ()> {
@@ -1241,8 +1244,8 @@ fn format_key(x: usize) -> Vec<u8> {
     format!("k{}", x).into_bytes()
 }
 
-fn inc_multi<E: Engine, Api: APIVersion>(
-    store: &SyncTestStorage<E, Api>,
+fn inc_multi<E: Engine, F: KvFormat>(
+    store: &SyncTestStorage<E, F>,
     oracle: &Oracle,
     n: usize,
 ) -> bool {

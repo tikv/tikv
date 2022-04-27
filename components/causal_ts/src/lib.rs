@@ -34,9 +34,17 @@ pub mod tests {
     use std::sync::Arc;
 
     /// for TEST purpose.
-    #[derive(Default)]
     pub struct TestProvider {
         ts: Arc<AtomicU64>,
+    }
+
+    impl Default for TestProvider {
+        fn default() -> Self {
+            Self {
+                // Note that `ts` should not start from 0. See `ApiV2::encode_raw_key`.
+                ts: Arc::new(AtomicU64::new(100)),
+            }
+        }
     }
 
     impl CausalTsProvider for TestProvider {

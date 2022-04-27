@@ -2728,12 +2728,9 @@ mod tests {
             let actual = Time::from_local_time(&mut ctx, TimeType::DateTime, i % MAX_FSP)?;
             let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
 
-            //2022-02-15 07:45:48.581699 NonFixed(UTC)   c_datetime
-            //2022-02-15 07:45:48.581933075 UTC          Utc::now()
-            //We compare length 22 of then; Exceed it may be not equal ( in milli seconds ).
-            let now0 = &c_datetime.to_string()[0..22];
-            let now1 = &Utc::now().to_string()[0..22];
-            assert_eq!(now0, now1);
+            let now0 = c_datetime.timestamp_millis() as u64;
+            let now1 = Utc::now().timestamp_millis() as u64;
+            assert!(now1 - now0 < 1000, "{:?} {:?}", now1, now0);
         }
         Ok(())
     }

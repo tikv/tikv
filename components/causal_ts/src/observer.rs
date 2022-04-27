@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use api_version::{APIVersion, KeyMode, APIV2};
-use engine_rocks::RocksEngine;
+use api_version::{ApiV2, KeyMode, KvFormat};
+use engine_traits::KvEngine;
 use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use raft::StateRole;
 use raftstore::coprocessor;
@@ -36,7 +36,7 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
         Self { causal_ts_provider }
     }
 
-    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
+    pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
         coprocessor_host.registry.register_query_observer(
             CAUSAL_OBSERVER_PRIORITY,
             BoxQueryObserver::new(self.clone()),
@@ -59,7 +59,7 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
 
         for req in requests.iter_mut().filter(|r| {
             r.get_cmd_type() == CmdType::Put
-                && APIV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
+                && ApiV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
         }) {
             if ts.is_none() {
                 ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
@@ -67,7 +67,7 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
                 })?);
             }
 
-            APIV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
+            ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
         }
         Ok(())
     }
@@ -91,7 +91,7 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
 pub mod tests {
     use super::*;
     use crate::BatchTsoProvider;
-    use api_version::{APIVersion, APIV2};
+    use api_version::{ApiV2, KvFormat};
     use futures::executor::block_on;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{RaftCmdRequest, Request as RaftRequest};
@@ -126,7 +126,7 @@ pub mod tests {
             let mut cmd_req = RaftCmdRequest::default();
 
             for key in keys {
-                let key = APIV2::encode_raw_key(key, None);
+                let key = ApiV2::encode_raw_key(key, None);
                 let value = b"value".to_vec();
                 let mut req = RaftRequest::default();
                 req.set_cmd_type(CmdType::Put);
@@ -143,7 +143,7 @@ pub mod tests {
 
             for req in cmd_req.get_requests() {
                 let key = Key::from_encoded_slice(req.get_put().get_key());
-                let (_, ts) = APIV2::decode_raw_key_owned(key, true).unwrap();
+                let (_, ts) = ApiV2::decode_raw_key_owned(key, true).unwrap();
                 assert_eq!(ts, Some(TimeStamp::from(i as u64 + 101)));
             }
         }

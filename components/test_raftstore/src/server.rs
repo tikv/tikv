@@ -19,7 +19,7 @@ use tempfile::TempDir;
 use tikv::storage::kv::SnapContext;
 use tokio::runtime::Builder as TokioBuilder;
 
-use api_version::{dispatch_api_version, APIVersion};
+use api_version::{dispatch_api_version, KvFormat};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -47,7 +47,7 @@ use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tikv::coprocessor;
 use tikv::coprocessor_v2;
-use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::import::{ImportSstService, SstImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
 use tikv::server::load_statistics::ThreadLoadPool;
@@ -132,7 +132,7 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
-    pub importers: HashMap<u64, Arc<SSTImporter>>,
+    pub importers: HashMap<u64, Arc<SstImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
@@ -235,7 +235,7 @@ impl ServerCluster {
         )
     }
 
-    fn run_node_impl<Api: APIVersion>(
+    fn run_node_impl<F: KvFormat>(
         &mut self,
         node_id: u64,
         mut cfg: Config,
@@ -351,7 +351,7 @@ impl ServerCluster {
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-        let store = create_raft_storage::<_, _, _, Api>(
+        let store = create_raft_storage::<_, _, _, F>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -372,7 +372,7 @@ impl ServerCluster {
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(
-                SSTImporter::new(
+                SstImporter::new(
                     &cfg.import,
                     dir,
                     key_manager.clone(),
@@ -381,7 +381,7 @@ impl ServerCluster {
                 .unwrap(),
             )
         };
-        let import_service = ImportSSTService::new(
+        let import_service = ImportSstService::new(
             cfg.import.clone(),
             sim_router.clone(),
             engines.kv.clone(),
