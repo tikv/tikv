@@ -515,7 +515,6 @@ fn test_malformed_read_index() {
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
     cluster.cfg.raft_store.hibernate_regions = true;
-    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
