@@ -1043,7 +1043,7 @@ mod tests {
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilderApiV1};
-    use api_version::APIVersion;
+    use api_version::KvFormat;
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
@@ -1164,8 +1164,8 @@ mod tests {
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
-    fn check_data<E: Engine, Api: APIVersion>(
-        storage: &Storage<E, DummyLockManager, Api>,
+    fn check_data<E: Engine, F: KvFormat>(
+        storage: &Storage<E, DummyLockManager, F>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = block_on(storage.scan(
