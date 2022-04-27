@@ -49,18 +49,6 @@ pub struct GcContext {
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }
 
-struct RawGcContext {
-    db: RocksEngine,
-    store_id: u64,
-    safe_point: Arc<AtomicU64>,
-    cfg_tracker: GcWorkerConfigManager,
-    feature_gate: FeatureGate,
-    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
-    region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
-    #[cfg(any(test, feature = "failpoints"))]
-    callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
-}
-
 // Give all orphan versions an ID to log them.
 static ORPHAN_VERSIONS_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -531,7 +519,6 @@ impl WriteCompactionFilter {
     }
 }
 
-
 pub struct CompactionFilterStats {
     pub versions: Cell<usize>, // Total stale versions meet by compaction filters.
     pub filtered: Cell<usize>, // Filtered versions by compaction filters.
@@ -816,7 +803,7 @@ pub mod test_utils {
             self.post_gc();
         }
 
-        pub fn gcRaw(&mut self, engine: &RocksEngine) {
+        pub fn gc_raw(&mut self, engine: &RocksEngine) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(engine);
 
@@ -872,18 +859,12 @@ pub mod test_utils {
 pub mod tests {
     use super::test_utils::*;
     use super::*;
-    use api_version::RawValue;
-    use kvproto::kvrpcpb::ApiVersion;
-    use std::thread;
 
     use crate::config::DbConfig;
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use engine_traits::{
-        DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_DEFAULT, CF_WRITE,
-    };
-    use crate::server::gc_worker::rawkv_compaction_filter::tests::makeKey;
+    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
 
     #[test]
     fn test_is_compaction_filter_allowed() {

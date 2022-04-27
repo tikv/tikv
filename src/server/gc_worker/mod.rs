@@ -9,12 +9,12 @@ mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GCWorker instead.
 pub use crate::storage::{Callback, Error, ErrorInner, Result};
-pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
+pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
 
 #[cfg(any(test, feature = "failpoints"))]

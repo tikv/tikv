@@ -1,20 +1,29 @@
-use std::ffi::CString;
-use std::mem;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use prometheus::local::LocalHistogram;
-use api_version::{APIV2, APIVersion, KeyMode};
-use api_version::api_v2::RAW_KEY_PREFIX;
-use engine_rocks::raw::{CompactionFilter, CompactionFilterContext, CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter, new_compaction_filter_raw};
-use engine_rocks::RocksEngine;
-use engine_traits::MiscExt;
-use engine_traits::raw_ttl::ttl_current_ts;
-use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::worker::{ScheduleError, Scheduler};
-use txn_types::Key;
-use crate::server::gc_worker::compaction_filter::{DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTERED, GC_COMPACTION_MVCC_ROLLBACK, GC_CONTEXT,CompactionFilterStats};
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
+use crate::server::gc_worker::compaction_filter::{
+    CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
+    GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_MVCC_ROLLBACK,
+    GC_CONTEXT,
+};
 use crate::server::gc_worker::GcTask;
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use api_version::api_v2::RAW_KEY_PREFIX;
+use api_version::{APIVersion, KeyMode, APIV2};
+use engine_rocks::raw::{
+    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
+    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+};
+use engine_rocks::RocksEngine;
+use engine_traits::raw_ttl::ttl_current_ts;
+use engine_traits::MiscExt;
+use prometheus::local::LocalHistogram;
+use raftstore::coprocessor::RegionInfoProvider;
+use std::ffi::CString;
+use std::mem;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tikv_util::worker::{ScheduleError, Scheduler};
+use txn_types::Key;
 
 pub struct RawCompactionFilterFactory;
 
@@ -38,7 +47,14 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
-        let filter = RawCompactionFilter::new(db, safe_point, gc_scheduler, current, context,(store_id, region_info_provider),);
+        let filter = RawCompactionFilter::new(
+            db,
+            safe_point,
+            gc_scheduler,
+            current,
+            context,
+            (store_id, region_info_provider),
+        );
         let name = CString::new("raw_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
@@ -51,7 +67,6 @@ struct RawCompactionFilter {
     current_ts: u64,
     mvcc_key_prefix: Vec<u8>,
     mvcc_deletions: Vec<Key>,
-    is_bottommost_level: bool,
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     // Some metrics about implementation detail.
@@ -63,9 +78,6 @@ struct RawCompactionFilter {
     orphan_versions: usize,
     versions_hist: LocalHistogram,
     filtered_hist: LocalHistogram,
-    //
-    // #[cfg(any(test, feature = "failpoints"))]
-    // callbacks_on_drop: Vec<Arc<dyn Fn(&RawCompactionFilter) + Send + Sync>>,
 }
 
 thread_local! {
@@ -82,11 +94,6 @@ impl Drop for RawCompactionFilter {
 
         self.switch_key_metrics();
         self.flush_metrics();
-
-        // #[cfg(any(test, feature = "failpoints"))]
-        // for callback in &self.callbacks_on_drop {
-        //     callback(self);
-        // }
     }
 }
 
@@ -116,7 +123,7 @@ impl RawCompactionFilter {
         safe_point: u64,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         ts: u64,
-        context: &CompactionFilterContext,
+        _context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -129,7 +136,6 @@ impl RawCompactionFilter {
             current_ts: ts,
             mvcc_key_prefix: vec![],
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
-            is_bottommost_level: context.is_bottommost_level(),
             regions_provider,
 
             versions: 0,
@@ -140,11 +146,6 @@ impl RawCompactionFilter {
             orphan_versions: 0,
             versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
-            // #[cfg(any(test, feature = "failpoints"))]
-            // callbacks_on_drop: {
-            //     let ctx = GC_CONTEXT.lock().unwrap();
-            //     ctx.as_ref().unwrap().callbacks_on_drop.clone()
-            // },
         }
     }
 
@@ -159,7 +160,7 @@ impl RawCompactionFilter {
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
             return Ok(CompactionFilterDecision::Keep);
         }
-        self.print_array("key.clone:", key.clone().to_vec());
+
         // remove prefix 'z'
         let current_key = keys::origin_key(key);
         let key_mode = APIV2::parse_key_mode(current_key);
@@ -186,17 +187,17 @@ impl RawCompactionFilter {
             if commit_ts >= self.safe_point {
                 return Ok(CompactionFilterDecision::Keep);
             }
-            let raw_value = APIV2::decode_raw_value(&value)?;
+            let raw_value = APIV2::decode_raw_value(value)?;
             // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
             if raw_value.is_delete || raw_value.expire_ts.unwrap() < self.current_ts {
                 self.raw_handle_bottommost_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
                 }
-            } else {
-                // the lastest version ,and not deleted or expaired ttl , need to be retained
-                return Ok(CompactionFilterDecision::Keep);
+                // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
             }
+            // the lastest version ,and not deleted or expaired ttl , need to be retained
+            Ok(CompactionFilterDecision::Keep)
         } else {
             if commit_ts >= self.safe_point {
                 return Ok(CompactionFilterDecision::Keep);
@@ -204,11 +205,8 @@ impl RawCompactionFilter {
 
             self.filtered += 1;
             // ts < safepoint ,and it's not the lastest version, it's need to be removed.
-            return Ok(CompactionFilterDecision::Remove);
+            Ok(CompactionFilterDecision::Remove)
         }
-
-        // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
-        return Ok(CompactionFilterDecision::Keep);
     }
 
     fn raw_gc_mvcc_deletions(&mut self) {
@@ -245,18 +243,11 @@ impl RawCompactionFilter {
             }
         }
     }
-    fn print_array(&mut self, name: &str, arr: Vec<u8>) {
-        for i in 0..arr.len() {
-            info!("arr {}:{}:{}", name, i, arr[i]);
-            println!("arr {}:{}:{}", name, i, arr[i]);
-        }
-        // println!("arr {}:{}", name, resstr);
-    }
+
     fn raw_handle_bottommost_delete(&mut self) {
         // Valid MVCC records should begin with `RAW_KEY_PREFIX`.
         debug!("raw_handle_bottommost_delete:");
         debug_assert_eq!(self.mvcc_key_prefix[0], RAW_KEY_PREFIX);
-        self.print_array("mvcc_key_prefix.push", self.mvcc_key_prefix.to_vec());
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix);
         self.mvcc_deletions.push(key); // key= user key
     }
@@ -295,7 +286,6 @@ impl RawCompactionFilter {
     }
 }
 
-
 #[cfg(test)]
 pub mod tests {
 
@@ -305,15 +295,13 @@ pub mod tests {
     use std::thread;
 
     use crate::config::DbConfig;
+    use crate::server::gc_worker::TestGCRunner;
     use crate::storage::kv::TestEngineBuilder;
-    use engine_traits::{
-        DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_DEFAULT ,
-    };
+    use engine_traits::{Peekable, SyncMutable, CF_DEFAULT};
     use std::time::Duration;
     use txn_types::TimeStamp;
-    use crate::server::gc_worker::TestGCRunner;
 
-    pub fn makeKey(key: &[u8], ts: i32) -> Vec<u8> {
+    pub fn make_key(key: &[u8], ts: i32) -> Vec<u8> {
         let key1 = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts as u64))
             .as_encoded()
@@ -333,7 +321,6 @@ pub mod tests {
             .build_with_cfg(&cfg)
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let value = vec![b'v'; 512];
         let mut gc_runner = TestGCRunner::new(0);
 
         let value1 = RawValue {
@@ -347,46 +334,46 @@ pub mod tests {
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(user_key, 100).as_slice(),
+                make_key(user_key, 100).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(user_key, 90).as_slice(),
+                make_key(user_key, 90).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(user_key, 70).as_slice(),
-                &APIV2::encode_raw_value_owned(value1.clone()),
+                make_key(user_key, 70).as_slice(),
+                &APIV2::encode_raw_value_owned(value1),
             )
             .unwrap();
 
-        gc_runner.safe_point(80).gcRaw(&raw_engine);
+        gc_runner.safe_point(80).gc_raw(&raw_engine);
         //Wait gc  end
         thread::sleep(Duration::from_millis(1000));
 
         // 70 < safepoint(80), this version was removed
         let isexit70 = raw_engine
-            .get_value_cf(CF_DEFAULT, makeKey(b"r\0a", 70).as_slice())
+            .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
             .unwrap()
             .is_none();
         assert_eq!(isexit70, true);
 
-        gc_runner.safe_point(90).gcRaw(&raw_engine);
+        gc_runner.safe_point(90).gc_raw(&raw_engine);
         // Wait gc end
         thread::sleep(Duration::from_millis(1000));
 
         let isexit100 = raw_engine
-            .get_value_cf(CF_DEFAULT, makeKey(user_key, 100).as_slice())
+            .get_value_cf(CF_DEFAULT, make_key(user_key, 100).as_slice())
             .unwrap()
             .is_none();
         let isexit90 = raw_engine
-            .get_value_cf(CF_DEFAULT, makeKey(user_key, 90).as_slice())
+            .get_value_cf(CF_DEFAULT, make_key(user_key, 90).as_slice())
             .unwrap()
             .is_none();
 
@@ -404,11 +391,10 @@ pub mod tests {
             .build()
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let value = vec![b'v'; 512];
         let mut gc_runner = TestGCRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
-            gc_runner.safe_point(500).gcRaw(&raw_engine);
+            gc_runner.safe_point(500).gc_raw(&raw_engine);
 
             // Wait up to 1 second, and treat as no task if timeout.
             if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
@@ -418,7 +404,7 @@ pub mod tests {
                         assert_eq!(keys.len(), 1);
                         let got = keys[0].as_encoded();
                         let expect = Key::from_raw(prefix).append_ts(9.into());
-                        let (usekey, userts) = APIV2::decode_raw_key(&expect, true).unwrap();
+                        let (usekey, _userts) = APIV2::decode_raw_key(&expect, true).unwrap();
                         assert_eq!(got, &usekey);
                     }
                     _ => unreachable!(),
@@ -445,22 +431,22 @@ pub mod tests {
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(user_key, 9).as_slice(),
-                &APIV2::encode_raw_value_owned(value_is_delete.clone()),
+                make_key(user_key, 9).as_slice(),
+                &APIV2::encode_raw_value_owned(value_is_delete),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(user_key, 5).as_slice(),
+                make_key(user_key, 5).as_slice(),
                 &APIV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                makeKey(user_key, 1).as_slice(),
-                &APIV2::encode_raw_value_owned(value1.clone()),
+                make_key(user_key, 1).as_slice(),
+                &APIV2::encode_raw_value_owned(value1),
             )
             .unwrap();
 
