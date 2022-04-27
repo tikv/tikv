@@ -1,5 +1,6 @@
 use std::ffi::CString;
 use std::mem;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use prometheus::local::LocalHistogram;
 use api_version::{APIV2, APIVersion, KeyMode};
@@ -8,6 +9,7 @@ use engine_rocks::raw::{CompactionFilter, CompactionFilterContext, CompactionFil
 use engine_rocks::RocksEngine;
 use engine_traits::MiscExt;
 use engine_traits::raw_ttl::ttl_current_ts;
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
 use crate::server::gc_worker::compaction_filter::{DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTERED, GC_COMPACTION_MVCC_ROLLBACK, GC_CONTEXT,CompactionFilterStats};
@@ -31,9 +33,12 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         //---------------- GC context END --------------
         let db = gc_context.db.clone();
         let gc_scheduler = gc_context.gc_scheduler.clone();
+        let store_id = gc_context.store_id;
+        let region_info_provider = gc_context.region_info_provider.clone();
+
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
-        let filter = RawCompactionFilter::new(db, safe_point, gc_scheduler, current, context);
+        let filter = RawCompactionFilter::new(db, safe_point, gc_scheduler, current, context,(store_id, region_info_provider),);
         let name = CString::new("raw_compaction_filter").unwrap();
         unsafe { new_compaction_filter_raw(name, filter) }
     }
@@ -47,6 +52,7 @@ struct RawCompactionFilter {
     mvcc_key_prefix: Vec<u8>,
     mvcc_deletions: Vec<Key>,
     is_bottommost_level: bool,
+    regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     // Some metrics about implementation detail.
     versions: usize,
@@ -111,6 +117,7 @@ impl RawCompactionFilter {
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         ts: u64,
         context: &CompactionFilterContext,
+        regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
@@ -123,6 +130,7 @@ impl RawCompactionFilter {
             mvcc_key_prefix: vec![],
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
             is_bottommost_level: context.is_bottommost_level(),
+            regions_provider,
 
             versions: 0,
             filtered: 0,
@@ -209,6 +217,8 @@ impl RawCompactionFilter {
             let task = GcTask::RawGcKeys {
                 keys: mem::replace(&mut self.mvcc_deletions, empty), //gc_keys->gc_key->gc->gc.run
                 safe_point: self.safe_point.into(),
+                store_id: self.regions_provider.0,
+                region_info_provider: self.regions_provider.1.clone(),
             };
             self.schedule_gc_task(task, false);
         }

@@ -39,12 +39,12 @@ const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 // not available when constructing `WriteCompactionFilterFactory`.
 pub struct GcContext {
     pub(crate) db: RocksEngine,
-    store_id: u64,
+    pub(crate) store_id: u64,
     pub(crate) safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
     pub(crate) gc_scheduler: Scheduler<GcTask<RocksEngine>>,
-    region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
+    pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }

@@ -91,6 +91,8 @@ where
     RawGcKeys {
         keys: Vec<Key>,
         safe_point: TimeStamp,
+        store_id: u64,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
     },
     UnsafeDestroyRange {
         ctx: Context,
@@ -438,7 +440,7 @@ where
         }
     }
 
-    fn raw_gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<(usize, usize)> {
+    fn raw_gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp, regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>) -> Result<(usize, usize)> {
         println!("=====================================================");
         info!("=====================================================");
         let first_key_vec = keys.first().unwrap().as_encoded();
@@ -453,6 +455,51 @@ where
         let range_end_key = last_raw_key.as_encoded();
         self.print_array("range_end_key", last_raw_key.clone().into_encoded());
 
+        //--------------------------------KeysInRegions-----------------------------
+        struct KeysInRegions<R: Iterator<Item = Region>> {
+            keys: Peekable<IntoIter<Key>>,
+            regions: Peekable<R>,
+        }
+        impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
+            type Item = Key;
+            fn next(&mut self) -> Option<Key> {
+                loop {
+                    let region = self.regions.peek()?;
+                    let key = self.keys.peek()?.as_encoded().as_slice();
+                    if key < region.get_start_key() {
+                        self.keys.next();
+                    } else if region.get_end_key().is_empty() || key < region.get_end_key() {
+                        return self.keys.next();
+                    } else {
+                        self.regions.next();
+                    }
+                }
+            }
+        }
+
+        fn get_keys_in_regions(
+            keys: Vec<Key>,
+            regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+        ) -> Result<Box<dyn Iterator<Item = Key>>> {
+            if keys.len() >= 2 {
+                if let Some((store_id, region_info_provider)) = regions_provider {
+                    let start = keys.first().unwrap().as_encoded();
+                    let end = keys.last().unwrap().as_encoded();
+                    let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
+                        .into_iter()
+                        .filter(move |r| find_peer(r, store_id).is_some())
+                        .peekable();
+
+                    let keys = keys.into_iter().peekable();
+                    return Ok(Box::new(KeysInRegions { keys, regions }));
+                }
+            }
+            Ok(Box::new(keys.into_iter()))
+        }
+
+        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        //--------------------------------KeysInRegions-----------------------------
+
         let snapshot = self
             .engine
             .snapshot_on_kv_engine(range_start_key, range_end_key)?;
@@ -461,8 +508,9 @@ where
 
         let mut raw_modifys = MvccRaw::new();
 
-        let mut keys_iter = keys.iter();
-        let mut next_gc_key = keys_iter.next();
+        // let mut keys_iter = keys.iter();
+        // let mut next_gc_key = keys_iter.next();
+        let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
             if let Err(e) = self.raw_gc_key(safe_point, key, &mut raw_modifys, &mut mvcc_snapshot) {
                 GC_KEY_FAILURES.inc();
@@ -474,7 +522,7 @@ where
             Self::flush_raw_gc(raw_modifys, &self.limiter, &self.engine)?;
             // after flush, reset rwModify=let RawModify=MvccRaw::new();
             raw_modifys = MvccRaw::new();
-            next_gc_key = keys_iter.next();
+            next_gc_key = keys.next();
         }
         Ok((0, 0))
     }
@@ -750,8 +798,10 @@ where
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);
                 self.update_statistics_metrics();
             }
-            GcTask::RawGcKeys { keys, safe_point } => {
-                match self.raw_gc_keys(keys, safe_point) {
+            GcTask::RawGcKeys {
+                keys, safe_point, store_id,
+                region_info_provider, } => {
+                match self.raw_gc_keys(keys, safe_point,Some((store_id, region_info_provider))) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
@@ -1754,6 +1804,21 @@ mod tests {
                 .tracker("gc-woker".to_owned()),
             cfg,
         );
+
+        let mut r1 = Region::default();
+        r1.set_id(1);
+        r1.mut_region_epoch().set_version(1);
+        r1.set_start_key(b"".to_vec());
+        r1.set_end_key(b"".to_vec());
+        r1.mut_peers().push(Peer::default());
+        r1.mut_peers()[0].set_store_id(1);
+
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+
+
+
         //init engine and gc runner end...
 
         // prepare data
@@ -1821,7 +1886,7 @@ mod tests {
         }
 
         // don't delete ts == safepoint
-        runner.raw_gc_keys(keys.clone(), TimeStamp::new(100));
+        runner.raw_gc_keys(keys.clone(), TimeStamp::new(100),Some((1, ri_provider.clone())));
 
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
         let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
@@ -1835,7 +1900,7 @@ mod tests {
         assert_eq!(check_key_b.unwrap().is_none(), true);
 
         // delete all ts < safepoint
-        runner.raw_gc_keys(keys.clone(), TimeStamp::new(120));
+        runner.raw_gc_keys(keys.clone(), TimeStamp::new(120),Some((1, ri_provider.clone())));
         let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
         let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot);
         let check_key_a = mvcc_snapshot.get(&Key::from_encoded_slice(&*engine_key_a));
