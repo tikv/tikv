@@ -2637,6 +2637,9 @@ pub struct TiKvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
+    // The term "log-backup" and "backup-stream" points to the same object.
+    // But the product name is `log-backup`.
+    #[serde(rename = "log-backup")]
     pub backup_stream: BackupStreamConfig,
 
     #[online_config(submodule)]

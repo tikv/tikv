@@ -1089,7 +1089,7 @@
 ## in order to reduce impact on the cluster's performance during back up.
 # enable-auto-tune = true 
 
-[backup-stream] 
+[log-backup] 
 ## Number of threads to perform backup stream tasks.
 ## The default value is set to min(CPU_NUM * 0.5, 8).
 # num-threads = 8
