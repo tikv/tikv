@@ -8,9 +8,10 @@ use crate::storage::kv::Result;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot};
 use crate::storage::Statistics;
 
-use api_version::{dispatch_api_version, ApiV1Ttl, ApiV2, KvFormat};
+use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use kvproto::kvrpcpb::{ApiVersion, KeyRange};
+use std::marker::PhantomData;
 use std::time::Duration;
 use tikv_util::time::Instant;
 use txn_types::{Key, KvPair};
@@ -21,9 +22,9 @@ const MAX_BATCH_SIZE: usize = 1024;
 
 // TODO: refactor to utilize generic type `KvFormat` and eliminate matching `api_version`.
 pub enum RawStore<S: Snapshot> {
-    V1(RawStoreInner<S>),
-    V1Ttl(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>>),
-    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, ApiV2>>),
+    V1(RawStoreInner<S, ApiV1>),
+    V1Ttl(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>, ApiV1Ttl>),
+    V2(RawStoreInner<RawEncodeSnapshot<RawMvccSnapshot<S>, ApiV2>, ApiV2>),
 }
 
 impl<'a, S: Snapshot> RawStore<S> {
@@ -142,32 +143,24 @@ impl<'a, S: Snapshot> RawStore<S> {
         statistics: &'a mut Vec<Statistics>,
     ) -> Result<(u64, u64, u64)> {
         match self {
-            RawStore::V1(inner) => {
-                inner
-                    .raw_checksum_ranges(ApiVersion::V1, cf, ranges, statistics)
-                    .await
-            }
-            RawStore::V1Ttl(inner) => {
-                inner
-                    .raw_checksum_ranges(ApiVersion::V1ttl, cf, ranges, statistics)
-                    .await
-            }
-            RawStore::V2(inner) => {
-                inner
-                    .raw_checksum_ranges(ApiVersion::V2, cf, ranges, statistics)
-                    .await
-            }
+            RawStore::V1(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
+            RawStore::V1Ttl(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
+            RawStore::V2(inner) => inner.raw_checksum_ranges(cf, ranges, statistics).await,
         }
     }
 }
 
-pub struct RawStoreInner<S: Snapshot> {
+pub struct RawStoreInner<S: Snapshot, F: KvFormat> {
     snapshot: S,
+    _phantom: PhantomData<F>,
 }
 
-impl<'a, S: Snapshot> RawStoreInner<S> {
+impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
     pub fn new(snapshot: S) -> Self {
-        RawStoreInner { snapshot }
+        RawStoreInner {
+            snapshot,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn raw_get_key_value(
@@ -291,9 +284,9 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         }
         Ok(pairs)
     }
+
     pub async fn raw_checksum_ranges(
         &'a self,
-        api_version: ApiVersion,
         cf: CfName,
         ranges: &[KeyRange],
         statistics: &'a mut Vec<Statistics>,
@@ -321,16 +314,13 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
                     }
                     row_count = 0;
                 }
-                // this is the encoded key, need decode
+                // Calculate checksum on user key, as timestamp is not visible on client side.
                 let v = cursor.value(cf_stats);
-                let k = dispatch_api_version!(api_version, {
-                    let k = cursor.key(cf_stats);
-                    let (raw_key, _) = API::decode_raw_key_owned(Key::from_encoded_slice(k), true)?;
-                    raw_key
-                });
-                checksum = checksum_crc64_xor(checksum, digest.clone(), &k, v);
+                let (raw_key, _) =
+                    F::decode_raw_key_owned(Key::from_encoded_slice(cursor.key(cf_stats)), true)?;
+                checksum = checksum_crc64_xor(checksum, digest.clone(), &raw_key, v);
                 total_kvs += 1;
-                total_bytes += k.len() + v.len();
+                total_bytes += raw_key.len() + v.len();
                 cursor.next(cf_stats);
             }
             statistics.push(stats);
