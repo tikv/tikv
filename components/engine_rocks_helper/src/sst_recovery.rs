@@ -12,6 +12,7 @@ use tikv_util::warn;
 use tikv_util::{self, set_panic_mark, worker::*};
 
 pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+const MAX_DAMAGED_FILES_NUM: usize = 2;
 
 pub struct RecoveryRunner {
     db: Arc<DB>,
@@ -105,6 +106,14 @@ impl RecoveryRunner {
                             "key range mismatch, smallest key:{:?}, largest key:{:?}",
                             &f.smallest_key, &f.largest_key
                         ),
+                    );
+                }
+
+                // defensive behavior
+                if self.damaged_files.len() >= MAX_DAMAGED_FILES_NUM {
+                    self.set_panic_mark_and_panic(
+                        path,
+                        &format!("too many damaged files detected"),
                     );
                 }
 
