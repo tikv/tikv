@@ -8,7 +8,7 @@ use crate::server::gc_worker::compaction_filter::{
 use crate::server::gc_worker::GcTask;
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use api_version::api_v2::RAW_KEY_PREFIX;
-use api_version::{KvFormat, KeyMode, ApiV2};
+use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
@@ -335,21 +335,21 @@ pub mod tests {
             .put_cf(
                 CF_DEFAULT,
                 make_key(user_key, 100).as_slice(),
-                &APIV2::encode_raw_value_owned(value1.clone()),
+                &ApiV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
                 make_key(user_key, 90).as_slice(),
-                &APIV2::encode_raw_value_owned(value1.clone()),
+                &ApiV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
                 make_key(user_key, 70).as_slice(),
-                &APIV2::encode_raw_value_owned(value1),
+                &ApiV2::encode_raw_value_owned(value1),
             )
             .unwrap();
 
@@ -404,7 +404,7 @@ pub mod tests {
                         assert_eq!(keys.len(), 1);
                         let got = keys[0].as_encoded();
                         let expect = Key::from_raw(prefix).append_ts(9.into());
-                        let (usekey, _userts) = APIV2::decode_raw_key(&expect, true).unwrap();
+                        let (usekey, _userts) = ApiV2::decode_raw_key(&expect, true).unwrap();
                         assert_eq!(got, &usekey);
                     }
                     _ => unreachable!(),
@@ -432,21 +432,21 @@ pub mod tests {
             .put_cf(
                 CF_DEFAULT,
                 make_key(user_key, 9).as_slice(),
-                &APIV2::encode_raw_value_owned(value_is_delete),
+                &ApiV2::encode_raw_value_owned(value_is_delete),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
                 make_key(user_key, 5).as_slice(),
-                &APIV2::encode_raw_value_owned(value1.clone()),
+                &ApiV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
                 make_key(user_key, 1).as_slice(),
-                &APIV2::encode_raw_value_owned(value1),
+                &ApiV2::encode_raw_value_owned(value1),
             )
             .unwrap();
 

@@ -8,7 +8,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
-use api_version::{KvFormat, ApiV2};
+use api_version::{ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
@@ -1241,7 +1241,7 @@ mod tests {
         must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
     };
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilderApiV1};
-    use api_version::{KvFormat, RawValue, ApiV2};
+    use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
