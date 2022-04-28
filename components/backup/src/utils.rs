@@ -160,7 +160,7 @@ impl KeyValueCodec {
 
     pub fn convert_encoded_key_to_dst_version(&self, key: &[u8]) -> Result<Key> {
         let ret = dispatch_api_version!(self.dst_api_ver, {
-            API::convert_encoded_key_version_from(
+            API::convert_raw_encoded_key_version_from(
                 self.cur_api_ver,
                 key,
                 Some(TimeStamp::from(BACKUP_V1_TO_V2_TS)),
@@ -178,7 +178,7 @@ impl KeyValueCodec {
 
     pub fn convert_encoded_value_to_dst_version(&self, value: &[u8]) -> Result<Vec<u8>> {
         let ret = dispatch_api_version!(self.dst_api_ver, {
-            API::convert_encoded_value_version_from(self.cur_api_ver, value)
+            API::convert_raw_encoded_value_version_from(self.cur_api_ver, value)
         });
         ret.map_err(|err| {
             error!("convert raw value fails";
@@ -247,7 +247,7 @@ impl KeyValueCodec {
             return (start_key, end_key);
         }
         dispatch_api_version!(self.dst_api_ver, {
-            API::convert_user_key_range_version_from(self.cur_api_ver, start_key, end_key)
+            API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)
         })
     }
 }

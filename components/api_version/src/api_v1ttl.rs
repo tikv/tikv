@@ -58,7 +58,7 @@ impl KvFormat for ApiV1Ttl {
         value.user_value
     }
 
-    fn convert_encoded_key_version_from(
+    fn convert_raw_encoded_key_version_from(
         src_api: ApiVersion,
         key: &[u8],
         _ts: Option<TimeStamp>,
@@ -74,7 +74,7 @@ impl KvFormat for ApiV1Ttl {
         }
     }
 
-    fn convert_user_key_range_version_from(
+    fn convert_raw_user_key_range_version_from(
         src_api: ApiVersion,
         mut start_key: Vec<u8>,
         mut end_key: Vec<u8>,

@@ -70,21 +70,24 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     }
 
     // Convert the encoded key from src_api version to Self::TAG version
-    fn convert_encoded_key_version_from(
+    fn convert_raw_encoded_key_version_from(
         src_api: ApiVersion,
         key: &[u8],
         ts: Option<TimeStamp>,
     ) -> Result<Key>;
 
     // Convert the user key range from src_api version to Self::TAG version
-    fn convert_user_key_range_version_from(
+    fn convert_raw_user_key_range_version_from(
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     ) -> (Vec<u8>, Vec<u8>);
 
     /// Convert the encoded value from src_api version to Self::TAG version
-    fn convert_encoded_value_version_from(src_api: ApiVersion, value: &[u8]) -> Result<Vec<u8>> {
+    fn convert_raw_encoded_value_version_from(
+        src_api: ApiVersion,
+        value: &[u8],
+    ) -> Result<Vec<u8>> {
         if src_api == Self::TAG {
             return Ok(value.to_owned());
         }
@@ -646,7 +649,7 @@ mod tests {
         for i in 0..apiv1_keys.len() {
             for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
                 let dst_key = dispatch_api_version!(dst_api_ver, {
-                    API::convert_encoded_key_version_from(
+                    API::convert_raw_encoded_key_version_from(
                         src_api_ver,
                         &src_data[i],
                         Some(TimeStamp::from(timestamp)),
@@ -708,7 +711,7 @@ mod tests {
         for i in 0..apiv1_values.len() {
             for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
                 let dst_value = dispatch_api_version!(dst_api_ver, {
-                    API::convert_encoded_value_version_from(src_api_ver, &src_data[i])
+                    API::convert_raw_encoded_value_version_from(src_api_ver, &src_data[i])
                 });
                 assert_eq!(dst_value.unwrap(), dst_data[i]);
             }
@@ -716,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_user_key_range() {
+    fn test_convert_raw_user_key_range() {
         let apiv1_key_ranges = vec![
             (b""[..].to_owned(), b""[..].to_owned()),
             (b"abc"[..].to_owned(), b"abz"[..].to_owned()),
@@ -771,7 +774,7 @@ mod tests {
             for i in 0..apiv1_key_ranges.len() {
                 let dst_key_range = dispatch_api_version!(dst_api_ver, {
                     let (src_start, src_end) = src_data[i].clone();
-                    API::convert_user_key_range_version_from(src_api_ver, src_start, src_end)
+                    API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
                 });
                 assert_eq!(dst_key_range, dst_data[i]);
             }
