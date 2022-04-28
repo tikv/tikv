@@ -51,8 +51,10 @@ use crate::storage::kv::{
 };
 use crate::storage::lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout};
 use crate::storage::metrics::{self, *};
+use crate::storage::txn::commands::Command::AcquirePessimisticLock;
 use crate::storage::txn::commands::{
-    self, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+    self, CallbackWithArcError, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
+    WriteResultLockInfo,
 };
 use crate::storage::txn::sched_pool::tls_collect_query;
 use crate::storage::txn::{
@@ -113,7 +115,7 @@ struct TaskContext {
     task: Option<Task>,
 
     lock: Lock,
-    cb: Option<StorageCallback>,
+    cb: Option<SchedulerTaskCallback>,
     pr: Option<ProcessResult>,
     // The one who sets `owned` from false to true is allowed to take
     // `cb` and `pr` safely.
@@ -128,7 +130,7 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(task: Task, cb: StorageCallback) -> TaskContext {
+    fn new(task: Task, cb: SchedulerTaskCallback) -> TaskContext {
         let tag = task.cmd.tag();
         let lock = task.cmd.gen_lock();
         // Write command should acquire write lock.
@@ -169,6 +171,42 @@ impl TaskContext {
         self.owned
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
             .is_ok()
+    }
+}
+
+pub enum SchedulerTaskCallback {
+    NormalRequestCallback(StorageCallback),
+    LockKeyCallbacks(Vec<CallbackWithArcError<PessimisticLockKeyResult>>),
+}
+
+impl SchedulerTaskCallback {
+    fn execute(self, pr: ProcessResult) {
+        match self {
+            Self::NormalRequestCallback(cb) => cb.execute(pr),
+            Self::LockKeyCallbacks(cbs) => {
+                match pr {
+                    ProcessResult::Failed { err }
+                    | ProcessResult::PessimisticLockRes { res: Err(err) } => {
+                        let err = Arc::new(err);
+                        for cb in cbs {
+                            cb(Err(err.clone()));
+                        }
+                    }
+                    ProcessResult::PessimisticLockRes { res: Ok(res) } => {
+                        match res {
+                            Ok(PessimisticLockResults(v)) => {
+                                // TODO: May this case happen?
+                                assert_eq!(v.len(), cbs.len());
+                                for (res, cb) in v.into_iter().zip(cbs) {
+                                    cb(Ok(res))
+                                }
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 }
 
@@ -231,7 +269,7 @@ impl<L: LockManager> SchedulerInner<L> {
         self.task_slots[id_index(cid)].lock()
     }
 
-    fn new_task_context(&self, task: Task, callback: StorageCallback) -> TaskContext {
+    fn new_task_context(&self, task: Task, callback: SchedulerTaskCallback) -> TaskContext {
         let tctx = TaskContext::new(task, callback);
         let running_write_bytes = self
             .running_write_bytes
@@ -395,7 +433,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             });
             return;
         }
-        self.schedule_command(cmd, callback);
+        self.schedule_command(
+            cmd,
+            SchedulerTaskCallback::NormalRequestCallback(callback),
+            None,
+        );
     }
 
     /// Releases all the latches held by a command.
@@ -406,20 +448,28 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
     ) {
-        let (latch_wakeup_list, txn_lock_wakeup_list) =
+        let (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list) =
             self.inner
                 .latches
                 .release(lock, cid, wait_for_locks, released_locks);
-        for wcid in latch_wakeup_list {
+        for wcid in cmd_wakeup_list {
             self.try_to_wake_up(wcid);
         }
 
+        assert_eq!(latch_keep_list.is_empty(), txn_lock_wakeup_list.is_empty());
+
         if !txn_lock_wakeup_list.is_empty() {
-            self.schedule_awakened_pessimistic_locks(txn_lock_wakeup_list);
+            let acquired_latches = Lock::new_already_acquired(latch_keep_list);
+            self.schedule_awakened_pessimistic_locks(txn_lock_wakeup_list, acquired_latches);
         }
     }
 
-    fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
+    fn schedule_command(
+        &self,
+        cmd: Command,
+        callback: SchedulerTaskCallback,
+        already_acquired_latches: Option<Lock>,
+    ) {
         let cid = self.inner.gen_id();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
@@ -435,7 +485,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
         let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
-        if self.inner.latches.acquire(&mut tctx.lock, cid) {
+        if already_acquired_latches.is_some() || self.inner.latches.acquire(&mut tctx.lock, cid) {
+            if let Some(lock) = already_acquired_latches {
+                assert_eq!(lock.required_hashes.len(), lock.owned_count);
+                tctx.lock = lock;
+            }
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
             let task = tctx.task.take().unwrap();
@@ -493,7 +547,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn schedule_awakened_pessimistic_locks(&self, awakened_locks_info: Vec<WriteResultLockInfo>) {}
+    fn schedule_awakened_pessimistic_locks(
+        &self,
+        mut awakened_locks_info: Vec<WriteResultLockInfo>,
+        latches: Lock,
+    ) {
+        let key_callbacks: Vec<_> = awakened_locks_info
+            .iter_mut()
+            .map(|i| i.key_cb.take().unwrap())
+            .collect();
+        let cmd = commands::AcquirePessimisticLock::new_resumed(awakened_locks_info);
+        // TODO: Make flow control take effect on this thing.
+        self.schedule_command(
+            cmd.into(),
+            SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
+            Some(latches),
+        );
+    }
 
     // pub for test
     pub fn get_sched_pool(&self, priority: CommandPri) -> &SchedPool {
@@ -873,10 +943,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let mut partial_lock_ctx = None;
         let mut pr = Some(pr);
-        if let Some(l) = lock_info.as_mut() {
-            if let Command::AcquirePessimisticLock(cmd) = &task {
-                if !cmd.is_resumed_after_waiting() {
-                    let ctx = scheduler.convert_to_ref_counting_callback(
+        if let Command::AcquirePessimisticLock(cmd) = &task {
+            if cmd.is_resumed_after_waiting() {
+                if let Some(l) = lock_info.as_mut() {
+                    scheduler.take_waiting_locks_from_result(cid, pr.as_mut().unwrap(), l);
+                }
+            } else {
+                if let Some(l) = lock_info.as_mut() {
+                    let ctx = scheduler.convert_to_keywise_callbacks(
                         cid,
                         cmd,
                         pr.take.unwrap(),
@@ -1217,7 +1291,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn convert_to_ref_counting_callback(
+    fn convert_to_keywise_callbacks(
         &self,
         cid: u64,
         cmd: &commands::AcquirePessimisticLock,
@@ -1227,23 +1301,50 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ) -> PartialPessimisticLockRequestContext {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
+        let cb = match task_ctx.cb.take() {
+            Some(SchedulerTaskCallback::NormalRequestCallback(cb)) => cb,
+            _ => unreachable!(),
+        };
 
-        let ctx = PartialPessimisticLockRequestContext::new(
-            cmd,
-            first_batch_pr,
-            task_ctx.cb.unwrap(),
-            total_size,
-        );
+        let ctx = PartialPessimisticLockRequestContext::new(cmd, first_batch_pr, cb, total_size);
         let first_batch_cb = ctx.get_callback_for_first_write_batch(first_batch_size);
-        task_ctx.cb = Some(first_batch_cb);
+        // TODO: Do not use NormalRequestCallback and remove get_callback_for_first_write_batch
+        task_ctx.cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
         ctx
+    }
+
+    fn take_waiting_locks_from_result(
+        &self,
+        cid: u64,
+        pr: &mut ProcessResult,
+        lock_info: &mut Vec<WriteResultLockInfo>,
+    ) {
+        let results = match pr {
+            ProcessResult::PessimisticLockRes {
+                res: Ok(PessimisticLockKeyResult(res)),
+            } => res,
+            _ => unreachable!(),
+        };
+
+        let mut slot = self.inner.get_task_slot(cid);
+        let task_ctx = slot.get_mut(&cid).unwrap();
+        let cbs = match task_ctx.cb {
+            Some(SchedulerTaskCallback::LockKeyCallbacks(ref mut v)) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(results.len(), cbs.len());
+        let result_iter = results.iter();
+        // cbs.retain(|_| matches!(*result_iter.next().unwrap(), PessimisticLockKeyResult::Waiting))
     }
 }
 
 struct PartialPessimisticLockRequestContextInner {
     pr: ProcessResult,
     cb: StorageCallback,
-    result_rx: std::sync::mpsc::Receiver<(usize, StorageResult<PessimisticLockKeyResult>)>,
+    result_rx: std::sync::mpsc::Receiver<(
+        usize,
+        std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
+    )>,
 }
 
 #[derive(Clone)]
@@ -1253,7 +1354,10 @@ struct PartialPessimisticLockRequestContext {
         Mutex<Option<PartialPessimisticLockRequestContextInner>>,
         AtomicUsize,
     )>,
-    tx: std::sync::mpsc::Sender<(usize, StorageResult<PessimisticLockKeyResult>)>,
+    tx: std::sync::mpsc::Sender<(
+        usize,
+        std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
+    )>,
 
     // Fields for logging:
     start_ts: TimeStamp,
@@ -1299,7 +1403,7 @@ impl PartialPessimisticLockRequestContext {
     fn get_callback_for_blocked_key(
         &self,
         index: usize,
-    ) -> impl FnOnce(StorageResult<PessimisicLockKeyRsult>) {
+    ) -> impl FnOnce(std::result::Result<PessimisicLockKeyRsult, Arc<StorageError>>) {
         let ctx = self.clone();
         move |res| {
             // TODO: Handle error.
@@ -1396,7 +1500,7 @@ mod tests {
                 10.into(),
             )
             .into(),
-            commands::AcquirePessimisticLock::new(
+            commands::AcquirePessimisticLock::new_normal(
                 vec![(Key::from_raw(b"k"), false)],
                 b"k".to_vec(),
                 10.into(),

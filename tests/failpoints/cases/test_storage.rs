@@ -651,7 +651,7 @@ fn test_async_apply_prewrite_impl<E: Engine>(
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_normal(
                     vec![(Key::from_raw(key), false)],
                     key.to_vec(),
                     start_ts,
@@ -993,7 +993,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine>(
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_normal(
                     vec![(Key::from_raw(key), false)],
                     key.to_vec(),
                     start_ts,

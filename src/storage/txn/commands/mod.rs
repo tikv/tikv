@@ -63,7 +63,9 @@ use crate::storage::types::{
     MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
     SecondaryLocksStatus, StorageCallbackType, TxnStatus,
 };
-use crate::storage::{metrics, Callback, Result as StorageResult, Snapshot, Statistics};
+use crate::storage::{
+    metrics, Callback, Error as StorageError, Result as StorageResult, Snapshot, Statistics,
+};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 
 /// Store Transaction scheduler commands.
@@ -200,7 +202,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
-        AcquirePessimisticLock::new(
+        AcquirePessimisticLock::new_normal(
             keys,
             req.take_primary_lock(),
             req.get_start_version().into(),
@@ -387,6 +389,9 @@ pub struct PessimisticLockParameters {
     pub check_existence: bool,
 }
 
+pub type CallbackWithArcError<T> =
+    Box(dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>));
+
 pub struct WriteResultLockInfo {
     pub index_in_request: usize,
     pub key: Key,
@@ -394,7 +399,7 @@ pub struct WriteResultLockInfo {
     pub last_found_lock: LockInfo,
     pub lock_digest: lock_manager::LockDigest,
     pub hash_for_latch: u64,
-    pub key_cb: Option<Callback<PessimisticLockResults>>,
+    pub key_cb: Option<CallbackWithArcError<PessimisticLockResults>>,
     // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
     pub is_first_lock: bool,
@@ -412,7 +417,7 @@ impl WriteResultLockInfo {
         parameters: PessimisticLockParameters,
         lock_digest: lock_manager::LockDigest,
         hash_for_latch: u64,
-        key_cb: Option<Callback<PessimisticLockResults>>,
+        key_cb: Option<CallbackWithArcError<PessimisticLockResults>>,
     ) -> Self {
         Self {
             index_in_request,

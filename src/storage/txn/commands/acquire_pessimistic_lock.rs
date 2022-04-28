@@ -24,12 +24,25 @@ use std::hash::{Hash, Hasher};
 
 // TODO: Support multi keys from different requests and has different start_ts and for_update_ts.
 
+pub struct PessimisticLockKeyContext {
+    index_in_request: usize,
+    lock_digest: LockDigest,
+    hash_for_latch: u64,
+}
+
 pub enum PessimisticLockCmdInner {
     SingleRequest {
         params: PessimisticLockParameters,
         keys: Vec<(Key, bool)>,
     },
-    BatchResumedRequests(Vec<WriteResultLockInfo>),
+    BatchResumedRequests(
+        Vec<(
+            Key,
+            bool,
+            PessimisticLockParameters,
+            PessimisticLockKeyContext,
+        )>,
+    ),
 }
 
 command! {
@@ -62,20 +75,8 @@ command! {
         }
 }
 
-struct PessimisticLockKeyContext {
-    index_in_request: usize,
-    lock_digest: LockDigest,
-    hash_for_latch: u64,
-    key_cb: Option<Callback<PessimisticLockResults>>,
-}
-
 impl PessimisticLockKeyContext {
-    fn from_key(
-        index: usize,
-        key: &Key,
-        ts: TimeStamp,
-        key_cb: Option<Callback<PessimisticLockResults>>,
-    ) -> Self {
+    fn from_key(index: usize, key: &Key, ts: TimeStamp) -> Self {
         let lock_digest = LockDigest {
             hash: key.gen_hash(),
             ts,
@@ -87,7 +88,6 @@ impl PessimisticLockKeyContext {
             index_in_request: index,
             lock_digest,
             hash_for_latch,
-            key_cb,
         }
     }
 }
@@ -141,27 +141,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     .enumerate()
                     .map(|(index, (params, (key, should_not_exist)))| {
                         let lock_key_ctx =
-                            PessimisticLockKeyContext::from_key(index, &key, params.start_ts, None);
+                            PessimisticLockKeyContext::from_key(index, &key, params.start_ts);
                         (key, should_not_exist, params, lock_key_ctx)
                     });
                 Self::process_write_impl(snapshot, context, self.ctx, iter, self.is_first_lock)
             }
             PessimisticLockCmdInner::BatchResumedRequests(items) => {
-                let iter = items.into_iter().map(|item| {
-                    let lock_key_ctx = PessimisticLockKeyContext::from_key(
-                        item.index_in_request,
-                        &item.key,
-                        item.parameters.start_ts,
-                        item.key_cb,
-                    );
-                    (
-                        item.key,
-                        item.should_not_exist,
-                        item.parameters,
-                        lock_key_ctx,
-                    )
-                });
-                Self::process_write_impl(snapshot, context, self.ctx, iter, false)
+                Self::process_write_impl(snapshot, context, self.ctx, items.into_iter(), false)
             }
         }
     }
@@ -270,7 +256,7 @@ impl AcquirePessimisticLock {
                         parameters: params,
                         lock_key_ctx.lock_digest,
                         lock_key_ctx.hash_for_latch,
-                        lock_key_ctx.key_cb,
+                        None,
                     ));
                 }
                 Err(e) => return Err(Error::from(e)),
@@ -341,6 +327,63 @@ impl AcquirePessimisticLock {
 }
 
 impl AcquirePessimisticLock {
+    pub fn new_normal(
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        lock_ttl: u64,
+        is_first_lock: bool,
+        for_update_ts: TimeStamp,
+        wait_timeout: Option<WaitTimeout>,
+        return_values: bool,
+        min_commit_ts: TimeStamp,
+        _old_values: OldValues, // TODO: Remove it
+        check_existence: bool,
+        ctx: Context,
+    ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
+        let params = PessimisticLockParameters {
+            pb_ctx: ctx.clone(),
+            primary,
+            start_ts,
+            lock_ttl,
+            for_update_ts,
+            wait_timeout,
+            return_values,
+            min_commit_ts,
+            check_existence,
+        };
+        let inner = PessimisticLockCmdInner::SingleRequest { params, keys };
+        Self::new(inner, is_first_lock, ctx)
+    }
+
+    pub fn new_resumed(
+        items: Vec<WriteResultLockInfo>,
+    ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
+        assert!(!items.is_empty());
+        let ctx = items[0].parameters.pb_ctx.clone();
+        let items = items
+            .into_iter()
+            .map(
+                (|item| {
+                    assert!(item.key_cb.is_none());
+                    let lock_key_ctx = PessimisticLockKeyContext {
+                        index_in_request: item.index_in_request,
+                        lock_digest: item.lock_digest,
+                        hash_for_latch: item.hash_for_latch,
+                    };
+                    (
+                        item.key,
+                        item.should_not_exist,
+                        item.parameters,
+                        lock_key_ctx,
+                    )
+                }),
+            )
+            .collect();
+        let inner = PessimisticLockCmdInner::BatchResumedRequests(items);
+        Self::new(inner, false, ctx)
+    }
+
     pub fn is_resumed_after_waiting(&self) -> bool {
         match &self.inner {
             PessimisticLockCmdInner::SingleRequest { .. } => false,

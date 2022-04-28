@@ -2960,7 +2960,7 @@ pub mod test_util {
     ) -> PessimisticLockCommand {
         let primary = keys[0].0.clone().to_raw().unwrap();
         let for_update_ts: TimeStamp = for_update_ts.into();
-        commands::AcquirePessimisticLock::new(
+        commands::AcquirePessimisticLock::new_normal(
             keys,
             primary,
             start_ts.into(),
@@ -6853,7 +6853,7 @@ mod tests {
         // Meet lock-k.
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_normal(
                     vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
                     k.clone(),
                     20.into(),
@@ -7534,7 +7534,7 @@ mod tests {
         // T1 acquires lock on k1, start_ts = 1, for_update_ts = 3
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_normal(
                     vec![(key1.clone(), false)],
                     k1.to_vec(),
                     1.into(),
@@ -7556,7 +7556,7 @@ mod tests {
         // T2 acquires lock on k2, start_ts = 10, for_update_ts = 15
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_normal(
                     vec![(key2.clone(), false)],
                     k2.to_vec(),
                     10.into(),
@@ -7779,7 +7779,7 @@ mod tests {
                 ExpectedWrite::new().expect_proposed_cb(),
             ],
 
-            command: AcquirePessimisticLock::new(
+            command: AcquirePessimisticLock::new_normal(
                 keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
@@ -7804,7 +7804,7 @@ mod tests {
                 ExpectedWrite::new().expect_no_proposed_cb(),
             ],
 
-            command: AcquirePessimisticLock::new(
+            command: AcquirePessimisticLock::new_normal(
                 keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),

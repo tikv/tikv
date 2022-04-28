@@ -165,6 +165,14 @@ impl Lock {
         }
     }
 
+    pub fn new_already_acquired(required_hashes: Vec<u64>) -> Self {
+        let owned_count = required_hashes.len();
+        Self {
+            required_hashes,
+            owned_count,
+        }
+    }
+
     /// Returns true if all the required latches have be acquired, false otherwise.
     pub fn acquired(&self) -> bool {
         self.required_hashes.len() == self.owned_count
@@ -232,7 +240,7 @@ impl Latches {
         who: u64,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         released_locks: Option<ReleasedLocks>,
-    ) -> (Vec<u64>, Vec<WriteResultLockInfo>) {
+    ) -> (Vec<u64>, Vec<u64>, Vec<WriteResultLockInfo>) {
         let mut wait_for_locks = if let Some(mut v) = wait_for_locks {
             v.sort_unstable_by_key(|x| x.hash_for_latch);
             v.into_iter().peekable()
@@ -246,32 +254,41 @@ impl Latches {
             vec![].into_iter().peekable()
         };
 
-        let mut latch_wakeup_list: Vec<u64> = vec![];
+        let mut cmd_wakeup_list: Vec<u64> = vec![];
+        let mut latch_keep_list: Vec<u64> = vec![];
         let mut txn_lock_wakeup_list = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
             let (v, front) = latch.pop_front(key_hash).unwrap();
             assert_eq!(front, who);
             assert_eq!(v, key_hash);
-            if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
-                latch_wakeup_list.push(wakeup);
-            }
 
             while let Some(next_lock) = wait_for_locks.next_if(|v| v.hash_for_latch <= key_hash) {
                 assert!(next_lock.hash_for_latch == *key_hash);
                 latch.push_lock_waiting(next_lock);
             }
 
+            let mut has_awakened_lock = false;
             while let Some(next_lock) = released_locks.next_if(|v| v.hash_for_latch <= key_hash) {
                 assert!(next_lock.hash_for_latch == *key_hash);
                 // TODO: Pass term here
                 if let Some(lock_wait) = latch.pop_lock_waiting(&next_lock.key, None) {
                     txn_lock_wakeup_list.push(lock_wait);
+                    has_awakened_lock = true;
                 }
+            }
+
+            // If we are waking up some blocked pessimistic lock requests, do not wake up next queueing command.
+            if !has_awakened_lock {
+                if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
+                    cmd_wakeup_list.push(wakeup);
+                }
+            } else {
+                latch_keep_list.push(key_hash);
             }
         }
         assert!(wait_for_locks.peek().is_none());
-        (latch_wakeup_list, txn_lock_wakeup_list)
+        (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list)
     }
 
     #[inline]

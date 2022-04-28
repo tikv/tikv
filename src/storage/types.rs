@@ -9,6 +9,7 @@ use crate::storage::{
 };
 use kvproto::kvrpcpb;
 use std::fmt::Debug;
+use std::sync::Arc;
 use txn_types::{Key, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
@@ -130,7 +131,7 @@ pub enum PessimisticLockKeyResult {
         conflict_ts: TimeStamp,
     },
     Waiting,
-    Failed(Error),
+    Failed(Arc<Error>),
 }
 
 impl PessimisticLockKeyResult {
