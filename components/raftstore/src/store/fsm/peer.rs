@@ -6,7 +6,8 @@ use std::cell::Cell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::time::Instant;
 use std::{cmp, mem, u64};
 
@@ -64,8 +65,11 @@ use crate::store::memory::*;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, ExtCallback, InspectedRaftMessage};
 use crate::store::peer::{
-    ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-    UnsafeRecoveryState, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    fill_out_unsafe_recovery_report, start_unsafe_recovery_report,
+    wait_apply_for_unsafe_recovery_report, ConsistencyState, ForceLeaderState, Peer,
+    PersistSnapshotResult, StaleState, UnsafeRecoveryFillOutReportSharedState,
+    UnsafeRecoveryLeaveJointSharedState, UnsafeRecoveryState, UnsafeRecoveryWaitApplySharedState,
+    TRANSFER_LEADER_COMMAND_REPLY_CTX,
 };
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter, LeaseState};
@@ -673,8 +677,14 @@ where
                 PeerMsg::DestroyForUnsafeRecovery(num_tasks) => {
                     self.on_destroy_for_unsafe_recovery(num_tasks)
                 }
-                PeerMsg::UnsafeRecoveryWaitApply(counter) => {
-                    self.on_unsafe_recovery_wait_apply(counter)
+                PeerMsg::UnsafeRecoveryWaitApply(report_state) => {
+                    self.on_unsafe_recovery_wait_apply(report_state)
+                }
+                PeerMsg::UnsafeRecoveryLeaveJoint(report_state) => {
+                    self.on_unsafe_recovery_leave_joint(report_state)
+                }
+                PeerMsg::UnsafeRecoveryFillOutReport(report_state) => {
+                    self.on_unsafe_recovery_fill_out_report(report_state)
                 }
             }
         }
@@ -740,43 +750,44 @@ where
     fn on_demote_failed_voters_for_unsafe_recovery(
         &mut self,
         mut voters: Vec<metapb::Peer>,
-        num_tasks: Arc<AtomicUsize>,
+        counter: Arc<AtomicUsize>,
     ) {
         info!(
             "Unsafe recovery, demoting following voters {:?} in region {:?}",
             voters,
             self.region(),
         );
-        if voters.is_empty() {
-            return;
-        }
-        if !self.fsm.peer.is_leader() {
-            error!("Unsafe recovery, demoting failed voters failed, since this peer is not forced leader";
-             "role" => ?self.fsm.peer.peer.get_role(),
-            "force_leader_state" => ?self.fsm.peer.force_leader);
-            return;
-        }
+        if !voters.is_empty() {
+            if !self.fsm.peer.force_leader.is_some() {
+                panic!(
+                    "Unsafe recovery, demoting failed voters failed, since this peer is not forced leader"
+                );
+            }
 
-        let region = self.fsm.peer.region();
-        let mut req = new_admin_request(region.get_id(), self.fsm.peer.peer.clone());
-        req.mut_header()
-            .set_region_epoch(region.get_region_epoch().clone());
-        let change_peer_reqs = voters
-            .drain(..)
-            .map(|mut peer| {
-                peer.set_role(metapb::PeerRole::Learner);
-                let mut cp = pdpb::ChangePeer::default();
-                cp.set_change_type(ConfChangeType::AddLearnerNode);
-                cp.set_peer(peer);
-                cp
-            })
-            .collect();
-        req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
-        self.propose_raft_command_internal(req, Callback::None, DiskFullOpt::AllowedOnAlmostFull);
-        self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::DemoteFailedVoters {
-            failed_voters: voters,
-            task_counter: num_tasks,
-        });
+            let region = self.fsm.peer.region();
+            let mut req = new_admin_request(region.get_id(), self.fsm.peer.peer.clone());
+            req.mut_header()
+                .set_region_epoch(region.get_region_epoch().clone());
+            let change_peer_reqs = voters
+                .drain(..)
+                .map(|mut peer| {
+                    peer.set_role(metapb::PeerRole::Learner);
+                    let mut cp = pdpb::ChangePeer::default();
+                    cp.set_change_type(ConfChangeType::AddLearnerNode);
+                    cp.set_peer(peer);
+                    cp
+                })
+                .collect();
+            req.set_admin_request(new_change_peer_v2_request(change_peer_reqs));
+            self.propose_raft_command_internal(
+                req,
+                Callback::None,
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
+        }
+        if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            start_unsafe_recovery_report(&self.ctx.router);
+        }
     }
 
     fn on_destroy_for_unsafe_recovery(&mut self, num_tasks: Arc<AtomicUsize>) {
@@ -797,33 +808,118 @@ where
             self.fsm.peer.unsafe_recovery_state.take()
         {
             if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                if let Err(e) = self
-                    .ctx
-                    .router
-                    .send_control(StoreMsg::ReportForUnsafeRecovery(None))
-                {
-                    error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
-                }
+                start_unsafe_recovery_report(&self.ctx.router);
             }
         }
     }
 
-    fn on_unsafe_recovery_wait_apply(&mut self, counter: Arc<AtomicUsize>) {
+    fn on_unsafe_recovery_wait_apply(
+        &mut self,
+        shared_state: Arc<Mutex<UnsafeRecoveryWaitApplySharedState>>,
+    ) {
+        let target_index = if self.fsm.peer.force_leader.is_some() {
+            self.fsm.peer.raft_group.raft.raft_log.last_index()
+        } else {
+            self.fsm.peer.raft_group.raft.raft_log.committed
+        };
         info!(
             "unsafe recovery wait apply";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "target_index" => self.fsm.peer.raft_group.raft.raft_log.committed,
-            "task_counter" => counter.load(Ordering::SeqCst)
+            "force_leader" => self.fsm.peer.force_leader.is_some(),
+            "target_index" => target_index,
         );
 
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
-            target_index: self.fsm.peer.raft_group.raft.raft_log.committed,
-            task_counter: counter,
+            target_index,
+            shared_state,
         });
         self.fsm
             .peer
             .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ self.fsm.stopped);
+    }
+
+    fn on_unsafe_recovery_leave_joint(
+        &mut self,
+        shared_state: Arc<Mutex<UnsafeRecoveryLeaveJointSharedState>>,
+    ) {
+        let mut shared_state_ptr = shared_state.lock().unwrap();
+        if self.fsm.peer.force_leader.is_some() && self.fsm.peer.in_joint_state() {
+            info!(
+                "Unsafe recovery, leave joint state";
+                "region_id" => self.fsm.region_id(),
+            );
+            // Exit joint state and wait for it to be applied.
+            let region = self.fsm.peer.region();
+            let region_id = region.get_id();
+            let mut req = new_admin_request(region_id, self.fsm.peer.peer.clone());
+            req.mut_header()
+                .set_region_epoch(region.get_region_epoch().clone());
+            req.set_admin_request(new_change_peer_v2_request(vec![]));
+            self.propose_raft_command_internal(
+                req,
+                Callback::None,
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
+            (*shared_state_ptr).has_joint = true;
+        }
+        if (*shared_state_ptr).counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            info!(
+                "Unsafe recovery, finishes leave joint for all the regions";
+            );
+            if (*shared_state_ptr).has_joint {
+                wait_apply_for_unsafe_recovery_report(&self.ctx.router);
+            } else {
+                fill_out_unsafe_recovery_report(&self.ctx.router);
+            }
+        }
+    }
+
+    fn on_unsafe_recovery_fill_out_report(
+        &mut self,
+        shared_state: Arc<Mutex<UnsafeRecoveryFillOutReportSharedState>>,
+    ) {
+        let mut self_report = pdpb::PeerReport::default();
+        match self.ctx.engines.raft.get_raft_state(self.region_id()) {
+            Ok(Some(raft_local_state)) => self_report.set_raft_state(raft_local_state),
+            Ok(None) => {
+                error!("Unsafe recovery, can't find raft local state"; "region" => self.region_id())
+            }
+            Err(e) => {
+                error!("Unsafe recovery, fail to read raft local state"; "region" => self.region_id(), "err" => ?e)
+            }
+        };
+        let region_state_key = keys::region_state_key(self.region_id());
+        match self
+            .ctx
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        {
+            Ok(Some(region_state)) => self_report.set_region_state(region_state),
+            Ok(None) => {
+                error!("Unsafe recovery, can't find region local state"; "region" => self.region_id());
+            }
+            Err(e) => {
+                error!(
+                    "Unsafe recovery, fail to read region local state"; "region" => self.region_id(), "err" => ?e,
+                );
+            }
+        };
+        self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        let mut shared_state_ptr = shared_state.lock().unwrap();
+        (*shared_state_ptr).reports.push(self_report);
+        if (*shared_state_ptr).counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            if let Err(e) = self
+                .ctx
+                .router
+                .send_control(StoreMsg::ReportForUnsafeRecovery(Some(
+                    (*shared_state_ptr).reports.clone(),
+                )))
+            {
+                error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
+            }
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1171,23 +1267,14 @@ where
             SignificantMsg::RaftlogFetched { context, res } => {
                 self.on_raft_log_fetched(context, res);
             }
-            SignificantMsg::EnterForceLeaderState {
-                failed_stores,
-                counter,
-                forced_leaders,
-            } => {
-                self.on_enter_pre_force_leader(failed_stores, counter, forced_leaders);
+            SignificantMsg::EnterForceLeaderState { failed_stores } => {
+                self.on_enter_pre_force_leader(failed_stores);
             }
             SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
         }
     }
 
-    fn on_enter_pre_force_leader(
-        &mut self,
-        failed_stores: HashSet<u64>,
-        counter: Arc<AtomicUsize>,
-        forced_leaders: Arc<Mutex<Vec<u64>>>,
-    ) {
+    fn on_enter_pre_force_leader(&mut self, failed_stores: HashSet<u64>) {
         match self.fsm.peer.force_leader {
             Some(ForceLeaderState::PreForceLeader { .. }) => {
                 self.on_force_leader_fail();
@@ -1245,7 +1332,6 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "alive_voter" => ?expected_alive_voter,
-            "counter" => counter.load(Ordering::SeqCst),
         );
 
         // Do not use prevote as prevote won't set `vote` to itself.
@@ -1274,11 +1360,7 @@ where
             return;
         }
 
-        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader {
-            failed_stores,
-            counter,
-            forced_leaders,
-        });
+        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader { failed_stores });
         self.fsm.has_ready = true;
     }
 
@@ -1296,12 +1378,8 @@ where
         );
         assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
 
-        let (failed_stores, counter, forced_leaders) = match self.fsm.peer.force_leader.take() {
-            Some(ForceLeaderState::PreForceLeader {
-                failed_stores,
-                counter,
-                forced_leaders,
-            }) => (failed_stores, counter, forced_leaders),
+        let failed_stores = match self.fsm.peer.force_leader.take() {
+            Some(ForceLeaderState::PreForceLeader { failed_stores }) => failed_stores,
             _ => unreachable!(),
         };
 
@@ -1337,17 +1415,6 @@ where
 
         self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader { failed_stores });
         self.fsm.has_ready = true;
-        let mut leaders = forced_leaders.lock().unwrap();
-        (*leaders).push(self.fsm.region_id());
-        if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            if let Err(e) = self
-                .ctx
-                .router
-                .send_control(StoreMsg::ReportForUnsafeRecovery(Some((*leaders).clone())))
-            {
-                error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
-            }
-        }
     }
 
     fn on_exit_force_leader(&mut self) {
@@ -1885,44 +1952,6 @@ where
                 .fsm
                 .peer
                 .unsafe_recovery_maybe_finish_wait_apply(self.ctx, /*force=*/ false),
-            Some(UnsafeRecoveryState::DemoteFailedVoters {
-                failed_voters: _,
-                task_counter,
-            }) => {
-                info!(
-                    "Unsafe recovery, entering joint state to demote failed voters is done";
-                    "region_id" => self.fsm.region_id(),
-                    "task_counter" => task_counter.load(Ordering::SeqCst)
-                );
-                let task_counter = task_counter.clone();
-                self.fsm.peer.unsafe_recovery_state = None;
-
-                // Exit joint state and wait for it to be applied.
-                let region = self.fsm.peer.region();
-                let region_id = region.get_id();
-                let mut req = new_admin_request(region_id, self.fsm.peer.peer.clone());
-                req.mut_header()
-                    .set_region_epoch(region.get_region_epoch().clone());
-                req.set_admin_request(new_change_peer_v2_request(vec![]));
-                self.propose_raft_command_internal(
-                    req,
-                    Callback::None,
-                    DiskFullOpt::AllowedOnAlmostFull,
-                );
-                self.fsm.peer.raft_group.raft.raft_log.committed =
-                    self.fsm.peer.raft_group.raft.raft_log.last_index();
-                self.fsm.has_ready = true;
-                if let Err(e) = self
-                    .ctx
-                    .router
-                    .force_send(region_id, PeerMsg::UnsafeRecoveryWaitApply(task_counter))
-                {
-                    panic!(
-                        "fail to schedule wait apply after failed voters are demoted due to {:?}",
-                        e
-                    );
-                }
-            }
             Some(_) | None => {}
         }
     }

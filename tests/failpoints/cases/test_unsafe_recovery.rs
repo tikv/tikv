@@ -124,8 +124,10 @@ fn test_unsafe_recovery_execution_result_report() {
 
     // Construct recovery plan.
     let mut plan = pdpb::RecoveryPlan::default();
-    plan.set_enter_force_leader_regions([region2.get_id()].to_vec());
-    plan.set_failed_stores([nodes[1], nodes[2]].to_vec());
+    let mut force_leader = pdpb::ForceLeader::default();
+    force_leader.set_enter_force_leaders([region2.get_id()].to_vec());
+    force_leader.set_failed_stores([nodes[1], nodes[2]].to_vec());
+    plan.set_force_leader(force_leader);
     // Triggers the unsafe recovery plan execution.
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[0]);
@@ -148,10 +150,10 @@ fn test_unsafe_recovery_execution_result_report() {
         .filter(|&peer| peer.get_store_id() != nodes[0])
         .cloned()
         .collect();
-    let mut peer_list_update = pdpb::PeerListUpdate::default();
-    peer_list_update.set_region_id(region2.get_id());
-    peer_list_update.set_demote_voters(to_be_removed.into());
-    plan.mut_peer_list_updates().push(peer_list_update);
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region2.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
 
     let mut create = metapb::Region::default();
     create.set_id(101);

@@ -21,7 +21,7 @@ use getset::Getters;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo};
 use kvproto::metapb::{self, PeerRole};
-use kvproto::pdpb::PeerStats;
+use kvproto::pdpb::{self, PeerStats};
 use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, PutRequest,
     RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
@@ -50,11 +50,11 @@ use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::async_io::write::WriteMsg;
 use crate::store::async_io::write_router::WriteRouter;
 use crate::store::fsm::apply::CatchUpLogs;
-use crate::store::fsm::store::PollContext;
+use crate::store::fsm::store::{PollContext, RaftRouter};
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES};
-use crate::store::msg::{RaftCommand, StoreMsg};
+use crate::store::msg::{PeerMsg, RaftCommand, StoreMsg};
 use crate::store::txn_ext::LocksStatus;
 use crate::store::util::{admin_cmd_epoch_lookup, RegionReadProgress};
 use crate::store::worker::{
@@ -457,14 +457,44 @@ pub struct ReadyResult {
 
 #[derive(Debug)]
 pub enum ForceLeaderState {
-    PreForceLeader {
-        failed_stores: HashSet<u64>,
-        counter: Arc<AtomicUsize>,
-        forced_leaders: Arc<Mutex<Vec<u64>>>,
-    },
-    ForceLeader {
-        failed_stores: HashSet<u64>,
-    },
+    PreForceLeader { failed_stores: HashSet<u64> },
+    ForceLeader { failed_stores: HashSet<u64> },
+}
+
+// Following shared states are used while reporting to PD for unsafe recovery and shared among
+// all the regions per their life cycle.
+// The work flow is like:
+//                   start_unsafe_recovery_report
+//                                 |                               <-----
+//            --------------------------------------------              |
+//           |                  |                         |             |
+//      wait apply          wait apply       ...      wait apply        |
+//           |                  |                         |             |
+//            --------------------------------------------              |
+//                                 |                                    |  if exists left joint
+//            --------------------------------------------              |
+//           |                  |                         |             |
+//      leave joint          leave joint     ...     leave joint        | 
+//           |                  |                         |             |
+//            --------------------------------------------              |
+//                                 |                                -----
+//            --------------------------------------------
+//           |                  |                         |
+//     fill out report    fill out report    ...    fill out report
+//           |                  |                         |
+//            --------------------------------------------
+//                                 |
+//                     send report (store heartbeat)
+pub struct UnsafeRecoveryWaitApplySharedState {
+    pub counter: AtomicUsize,
+}
+pub struct UnsafeRecoveryLeaveJointSharedState {
+    pub counter: AtomicUsize,
+    pub has_joint: bool,
+}
+pub struct UnsafeRecoveryFillOutReportSharedState {
+    pub counter: AtomicUsize,
+    pub reports: Vec<pdpb::PeerReport>,
 }
 
 pub enum UnsafeRecoveryState {
@@ -475,13 +505,9 @@ pub enum UnsafeRecoveryState {
     // sending a store heartbeat message to store fsm.
     WaitApply {
         target_index: u64,
-        task_counter: Arc<AtomicUsize>,
+        shared_state: Arc<Mutex<UnsafeRecoveryWaitApplySharedState>>,
     },
     Destroy(Arc<AtomicUsize>),
-    DemoteFailedVoters {
-        failed_voters: Vec<metapb::Peer>,
-        task_counter: Arc<AtomicUsize>,
-    },
 }
 
 #[derive(Getters)]
@@ -4515,25 +4541,22 @@ where
         if let Some(unsafe_recovery_state) = &self.unsafe_recovery_state {
             if let UnsafeRecoveryState::WaitApply {
                 target_index,
-                task_counter,
+                shared_state,
             } = unsafe_recovery_state
             {
                 if self.raft_group.raft.raft_log.applied >= *target_index || force {
                     info!(
-                        "unsafe recovery finish wait apply";
+                        "Unsafe recovery, finish wait apply";
                         "region_id" => self.region().get_id(),
                         "peer_id" => self.peer_id(),
                         "target_index" => target_index,
                         "applied" =>  self.raft_group.raft.raft_log.applied,
                         "force" => force,
-                        "counter" =>  task_counter.load(Ordering::SeqCst)
                     );
-                    if task_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                        if let Err(e) = ctx
-                            .router
-                            .send_control(StoreMsg::ReportForUnsafeRecovery(None))
-                        {
-                            error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
+                    {
+                        let report_state_ptr = shared_state.lock().unwrap();
+                        if (*report_state_ptr).counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                            leave_joint_for_unsafe_recovery_report(&ctx.router);
                         }
                     }
                     // Reset the state if the wait is finished.
@@ -5197,6 +5220,95 @@ mod memtrace {
                 + self.apply_snap_ctx.as_ref().map_or(0, |ctx| ctx.msgs.len()))
                 * mem::size_of::<eraftpb::Message>()
             + mem::size_of_val(self.pending_request_snapshot_count.as_ref())
+        }
+    }
+}
+
+pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(router: &RaftRouter<EK, ER>) {
+    wait_apply_for_unsafe_recovery_report(router);
+}
+
+pub fn wait_apply_for_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
+    router: &RaftRouter<EK, ER>,
+) {
+    // This store needs to report detailed info of hosted regions to PD.
+    //
+    // The info has to be up to date, meaning that all committed changes til now have to be applied before the report is sent.
+    // The entire process may include:
+    // 1.	`broadcast_normal` "wait apply" messsages to all peers.
+    // 2.	`on_unsafe_recovery_wait_apply` examines whether the peer have not-yet-applied entries, if so, memorize the target index.
+    // 3.	`on_apply_res` checks whether entries before the "unsafe recovery report target commit index" have all been applied.
+    // The one who finally finds out the number of remaining tasks is 0 schedules an unsafe recovery reporting store heartbeat.
+    info!("Unsafe recovery, preparing report");
+    // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
+    let wait_apply = Arc::new(Mutex::new(UnsafeRecoveryWaitApplySharedState {
+        counter: AtomicUsize::new(1),
+    }));
+    let clone = wait_apply.clone();
+    router.broadcast_normal(|| {
+        let wait_apply_ptr = clone.lock().unwrap();
+        let _ = (*wait_apply_ptr).counter.fetch_add(1, Ordering::SeqCst);
+        PeerMsg::UnsafeRecoveryWaitApply(clone.clone())
+    });
+    // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
+    let wait_apply_ptr = wait_apply.lock().unwrap();
+    if (*wait_apply_ptr).counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+        leave_joint_for_unsafe_recovery_report(router);
+    }
+}
+
+// Exit joint state iff a region is in force leader and joint state.
+pub fn leave_joint_for_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
+    router: &RaftRouter<EK, ER>,
+) {
+    info!("Unsafe recovery, scanning all regions to see if any of them needs to leave joint state");
+    let leave_joint = Arc::new(Mutex::new(UnsafeRecoveryLeaveJointSharedState {
+        counter: AtomicUsize::new(1),
+        has_joint: false,
+    }));
+    let clone = leave_joint.clone();
+    router.broadcast_normal(|| {
+        let leave_joint_ptr = clone.lock().unwrap();
+        let _ = (*leave_joint_ptr).counter.fetch_add(1, Ordering::SeqCst);
+        PeerMsg::UnsafeRecoveryLeaveJoint(clone.clone())
+    });
+    // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
+    let leave_joint_ptr = leave_joint.lock().unwrap();
+    if (*leave_joint_ptr).counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+        if (*leave_joint_ptr).has_joint {
+            // If some regions are forced to leave joint state, wait for the proposal to be applied.
+            wait_apply_for_unsafe_recovery_report(router);
+        } else {
+            fill_out_unsafe_recovery_report(router);
+        }
+    }
+}
+
+pub fn fill_out_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(router: &RaftRouter<EK, ER>) {
+    info!("Unsafe recovery, filling out store report");
+    let fill_out_report = Arc::new(Mutex::new(UnsafeRecoveryFillOutReportSharedState {
+        counter: AtomicUsize::new(1),
+        reports: Vec::default(),
+    }));
+    let clone = fill_out_report.clone();
+    router.broadcast_normal(|| {
+        let fill_out_report_ptr = clone.lock().unwrap();
+        let _ = (*fill_out_report_ptr)
+            .counter
+            .fetch_add(1, Ordering::SeqCst);
+        PeerMsg::UnsafeRecoveryFillOutReport(clone.clone())
+    });
+    // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
+    let fill_out_report_ptr = fill_out_report.lock().unwrap();
+    if (*fill_out_report_ptr)
+        .counter
+        .fetch_sub(1, Ordering::SeqCst)
+        == 1
+    {
+        if let Err(e) = router.send_control(StoreMsg::ReportForUnsafeRecovery(Some(
+            (*fill_out_report_ptr).reports.clone(),
+        ))) {
+            error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
         }
     }
 }

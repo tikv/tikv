@@ -739,7 +739,7 @@ impl PdCluster {
         self.unsafe_recovery_require_report = false;
         if let Some((_, plan)) = self.unsafe_recovery_plan.remove_entry(&store_id) {
             debug!("Unsafe recovery, sending recovery plan"; "store_id" => store_id, "plan" => ?plan);
-            resp.set_plan(plan);
+            resp.set_recovery_plan(plan);
         }
 
         Ok(resp)

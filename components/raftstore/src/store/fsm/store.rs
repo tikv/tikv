@@ -24,8 +24,7 @@ use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
-use kvproto::pdpb::QueryStats;
-use kvproto::pdpb::StoreStats;
+use kvproto::pdpb::{self, QueryStats, StoreStats};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
@@ -623,8 +622,10 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::ReportForUnsafeRecovery(forced_leaders) => self.store_heartbeat_pd(true, forced_leaders),
-                StoreMsg::CreatePeerForUnsafeRecovery(region, counter) => self.on_create_peer_for_unsafe_recovery(region, counter),
+                StoreMsg::ReportForUnsafeRecovery(reports) => self.store_heartbeat_pd(reports),
+                StoreMsg::CreatePeerForUnsafeRecovery(region, counter) => {
+                    self.on_create_peer_for_unsafe_recovery(region, counter)
+                }
             }
         }
     }
@@ -2155,7 +2156,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
-    fn store_heartbeat_pd(&mut self, send_detailed_report: bool, forced_leaders: Option<Vec<u64>>) {
+    fn store_heartbeat_pd(&mut self, reports: Option<Vec<pdpb::PeerReport>>) {
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
@@ -2233,8 +2234,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let task = PdTask::StoreHeartbeat {
             stats,
             store_info,
-            send_detailed_report,
-            forced_leaders,
+            reports,
             dr_autosync_status: self
                 .ctx
                 .global_replication_state
@@ -2251,7 +2251,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_pd_store_heartbeat_tick(&mut self) {
-        self.store_heartbeat_pd(false, None);
+        self.store_heartbeat_pd(None);
         self.register_pd_store_heartbeat_tick();
     }
 
@@ -2729,15 +2729,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .router
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
-            if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                if let Err(e) = self
-                    .ctx
-                    .router
-                    .send_control(StoreMsg::ReportForUnsafeRecovery(None))
-                {
-                    error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
-                }
+        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+            if let Err(e) = self
+                .ctx
+                .router
+                .send_control(StoreMsg::ReportForUnsafeRecovery(None))
+            {
+                error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
             }
+        }
     }
 }
 

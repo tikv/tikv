@@ -2,7 +2,7 @@
 
 use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
-use std::sync::{atomic::AtomicUsize, mpsc, Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{result, thread};
 
@@ -1381,11 +1381,7 @@ impl<T: Simulator> Cluster<T> {
         router
             .significant_send(
                 region_id,
-                SignificantMsg::EnterForceLeaderState {
-                    failed_stores,
-                    counter: Arc::new(AtomicUsize::new(1)),
-                    forced_leaders: Arc::new(Mutex::new(Vec::new())),
-                },
+                SignificantMsg::EnterForceLeaderState { failed_stores },
             )
             .unwrap();
     }

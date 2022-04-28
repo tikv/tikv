@@ -37,10 +37,10 @@ fn test_unsafe_recovery_update_region() {
         .map(|peer| peer.clone())
         .collect();
     let mut plan = pdpb::RecoveryPlan::default();
-    let mut peer_list_update = pdpb::PeerListUpdate::default();
-    peer_list_update.set_region_id(region.get_id());
-    peer_list_update.set_demote_voters(to_be_removed.into());
-    plan.mut_peer_list_updates().push(peer_list_update);
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
     cluster.must_send_store_heartbeat(nodes[0]);
 

@@ -3,12 +3,12 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{cmp, io, mem};
 
-use engine_traits::{KvEngine, RaftEngine, CF_RAFT};
+use engine_traits::{KvEngine, RaftEngine};
 #[cfg(feature = "failpoints")]
 use fail::fail_point;
 use kvproto::kvrpcpb::DiskFullOpt;
@@ -16,7 +16,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
-use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus};
 use kvproto::{metapb, pdpb};
 use ordered_float::OrderedFloat;
@@ -26,6 +26,7 @@ use yatp::Remote;
 
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
+use crate::store::peer::start_unsafe_recovery_report;
 use crate::store::transport::SignificantRouter;
 use crate::store::util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration};
 use crate::store::worker::query_stats::QueryStats;
@@ -42,14 +43,14 @@ use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{merge_bucket_stats, BucketStat, Error, PdClient, RegionStat};
-use protobuf::Message;
+use protobuf::RepeatedField;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::{Instant as TiInstant, UnixSecs};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::topn::TopN;
 use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use tikv_util::{box_err, box_try, debug, error, info, thd_name, warn};
+use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -134,8 +135,7 @@ where
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_report: bool,
-        forced_leaders: Option<Vec<u64>>,
+        reports: Option<Vec<pdpb::PeerReport>>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
     ReportBatchSplit {
@@ -1026,8 +1026,7 @@ where
         &mut self,
         mut stats: pdpb::StoreStats,
         store_info: StoreInfo<EK, ER>,
-        send_detailed_report: bool,
-        opt_forced_leaders: Option<Vec<u64>>,
+        opt_peer_reports: Option<Vec<pdpb::PeerReport>>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
         let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
@@ -1146,56 +1145,12 @@ where
         stats.set_slow_score(slow_score as u64);
 
         let mut optional_report = None;
-        if send_detailed_report {
-            let mut store_report = pdpb::StoreReport::new();
-            let mut forced_leaders = HashSet::default();
-            if let Some(leaders) = opt_forced_leaders {
-                for forced_leader in leaders {
-                    forced_leaders.insert(forced_leader);
-                }
-            };
-            store_info
-                .kv_engine
-                .scan_cf(
-                    CF_RAFT,
-                    keys::REGION_META_MIN_KEY,
-                    keys::REGION_META_MAX_KEY,
-                    false,
-                    |key, value| {
-                        let (_, suffix) = box_try!(keys::decode_region_meta_key(key));
-                        if suffix != keys::REGION_STATE_SUFFIX {
-                            return Ok(true);
-                        }
-
-                        let mut region_local_state = RegionLocalState::default();
-                        region_local_state.merge_from_bytes(value)?;
-                        if region_local_state.get_state() == PeerState::Tombstone {
-                            return Ok(true);
-                        }
-                        let raft_local_state = match store_info
-                            .raft_engine
-                            .get_raft_state(region_local_state.get_region().get_id())
-                            .unwrap()
-                        {
-                            None => return Ok(true),
-                            Some(value) => value,
-                        };
-                        let mut peer_report = pdpb::PeerReport::new();
-                        if forced_leaders.contains(&region_local_state.get_region().get_id()) {
-                            peer_report.set_is_forced_leader(true);
-                        }
-                        peer_report.set_region_state(region_local_state);
-                        peer_report.set_raft_state(raft_local_state);
-                        store_report.mut_peer_reports().push(peer_report);
-                        Ok(true)
-                    },
-                )
-                .unwrap();
+        if let Some(peer_reports) = opt_peer_reports {
+            let mut store_report = pdpb::StoreReport::default();
+            store_report.set_peer_reports(RepeatedField::from_vec(peer_reports));
             optional_report = Some(store_report);
         }
         let router = self.router.clone();
-        let scheduler = self.scheduler.clone();
-        let stats_copy = stats.clone();
         let resp =
             self.pd_client
                 .store_heartbeat(stats, optional_report, dr_autosync_status.clone());
@@ -1205,68 +1160,35 @@ where
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
-                    if resp.get_require_detailed_report() {
-                        // This store needs to report detailed info of hosted regions to PD.
-                        //
-                        // The info has to be up to date, meaning that all committed changes til now have to be applied before the report is sent.
-                        // The entire process may include:
-                        // 1.	`broadcast_normal` "wait apply" messsages to all peers.
-                        // 2.	`on_unsafe_recovery_wait_apply` examines whether the peer have not-yet-applied entries, if so, memorize the target index.
-                        // 3.	`on_apply_res` checks whether entries before the "unsafe recovery report target commit index" have all been applied.
-                        // The one who finally finds out the number of remaining tasks is 0 schedules an unsafe recovery reporting store heartbeat.
-                        info!("required to send detailed report in the next heartbeat");
-                        // Init the counter with 1 in case the msg processing is faster than the distributing thus cause FSMs race to send a report.
-                        let counter = Arc::new(AtomicUsize::new(1));
-                        let counter_clone = counter.clone();
-                        router.broadcast_normal(|| {
-                            let _ = counter_clone.fetch_add(1, Ordering::Relaxed);
-                            PeerMsg::UnsafeRecoveryWaitApply(counter_clone.clone())
-                        });
-                        // Reporting needs to be triggered here in case there is no message to be sent or messages processing finished before above function returns.
-                        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-                            let task = Task::StoreHeartbeat {
-                                stats: stats_copy,
-                                store_info,
-                                send_detailed_report: true,
-                                forced_leaders: None,
-                                dr_autosync_status,
-                            };
-                            if let Err(e) = scheduler.schedule(task) {
-                                error!("notify pd failed"; "err" => ?e);
-                            }
-                        }
-                    } else if resp.has_plan() {
+                    if resp.has_recovery_plan() {
                         info!("Unsafe recovery, received a recovery plan");
-                        let plan = resp.get_plan();
-                        if !plan.get_enter_force_leader_regions().is_empty() {
-                            let counter = Arc::new(AtomicUsize::new(
-                                plan.get_enter_force_leader_regions().len(),
-                            ));
-                            let forced_leaders = Arc::new(Mutex::new(Vec::new()));
+                        let plan = resp.get_recovery_plan();
+                        if plan.has_force_leader() {
                             let mut failed_stores = HashSet::default();
-                            for failed_store in plan.get_failed_stores() {
+                            for failed_store in plan.get_force_leader().get_failed_stores() {
                                 failed_stores.insert(*failed_store);
                             }
-                            for region in plan.get_enter_force_leader_regions() {
+                            for region in plan.get_force_leader().get_enter_force_leaders() {
                                 info!("Unsafe recovery, forcely assign the peer in this store to be the leader"; "region" => region);
                                 if let Err(e) = router.significant_send(
                                     *region,
                                     SignificantMsg::EnterForceLeaderState {
                                         failed_stores: failed_stores.clone(),
-                                        counter: counter.clone(),
-                                        forced_leaders: forced_leaders.clone(),
                                     },
                                 ) {
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
                             }
-                        } else {
+                        } else if plan.get_creates().len() != 0
+                            || plan.get_demotes().len() != 0
+                            || plan.get_tombstones().len() != 0
+                        {
                             let counter = Arc::new(AtomicUsize::new(
-                                resp.get_plan().get_creates().len()
-                                    + resp.get_plan().get_deletes().len()
-                                    + resp.get_plan().get_peer_list_updates().len(),
+                                plan.get_creates().len()
+                                    + plan.get_tombstones().len()
+                                    + plan.get_demotes().len(),
                             ));
-                            for create in resp.get_plan().get_creates() {
+                            for create in plan.get_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
                                 if let Err(e) =
                                     router.send_control(StoreMsg::CreatePeerForUnsafeRecovery(
@@ -1277,7 +1199,7 @@ where
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for delete in resp.get_plan().get_deletes() {
+                            for delete in plan.get_tombstones() {
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
                                 if let Err(e) = router.force_send(
                                     *delete,
@@ -1286,18 +1208,23 @@ where
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
                                 }
                             }
-                            for demote in resp.get_plan().get_peer_list_updates() {
+                            for demote in plan.get_demotes() {
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
                                 if let Err(e) = router.force_send(
                                     demote.get_region_id(),
                                     PeerMsg::DemoteFailedVotersForUnsafeRecovery(
-                                        demote.get_demote_voters().to_vec(),
+                                        demote.get_failed_voters().to_vec(),
                                         counter.clone(),
                                     ),
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
                                 }
                             }
+                        } else {
+                            info!(
+                                "Unsafe recovery, required to send detailed report in the next heartbeat"
+                            );
+                            start_unsafe_recovery_report(&router);
                         }
                     }
                 }
@@ -1902,16 +1829,9 @@ where
             Task::StoreHeartbeat {
                 stats,
                 store_info,
-                send_detailed_report,
-                forced_leaders,
+                reports,
                 dr_autosync_status,
-            } => self.handle_store_heartbeat(
-                stats,
-                store_info,
-                send_detailed_report,
-                forced_leaders,
-                dr_autosync_status,
-            ),
+            } => self.handle_store_heartbeat(stats, store_info, reports, dr_autosync_status),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),

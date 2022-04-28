@@ -10,7 +10,7 @@ use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
-use kvproto::pdpb::CheckPolicy;
+use kvproto::pdpb::{self, CheckPolicy};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -21,6 +21,10 @@ use smallvec::{smallvec, SmallVec};
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
 use crate::store::metrics::RaftEventDurationType;
+use crate::store::peer::{
+    UnsafeRecoveryFillOutReportSharedState, UnsafeRecoveryLeaveJointSharedState,
+    UnsafeRecoveryWaitApplySharedState,
+};
 use crate::store::util::{KeysInfoFormatter, LatencyInspector};
 use crate::store::worker::{Bucket, BucketRange};
 use crate::store::{RaftlogFetchResult, SnapKey};
@@ -339,8 +343,6 @@ where
     },
     EnterForceLeaderState {
         failed_stores: HashSet<u64>,
-        counter: Arc<AtomicUsize>,
-        forced_leaders: Arc<Mutex<Vec<u64>>>,
     },
     ExitForceLeaderState,
 }
@@ -574,7 +576,9 @@ pub enum PeerMsg<EK: KvEngine> {
     Destroy(u64),
     DemoteFailedVotersForUnsafeRecovery(Vec<metapb::Peer>, Arc<AtomicUsize>),
     DestroyForUnsafeRecovery(Arc<AtomicUsize>),
-    UnsafeRecoveryWaitApply(Arc<AtomicUsize>),
+    UnsafeRecoveryWaitApply(Arc<Mutex<UnsafeRecoveryWaitApplySharedState>>),
+    UnsafeRecoveryLeaveJoint(Arc<Mutex<UnsafeRecoveryLeaveJointSharedState>>),
+    UnsafeRecoveryFillOutReport(Arc<Mutex<UnsafeRecoveryFillOutReportSharedState>>),
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -609,7 +613,11 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::DestroyForUnsafeRecovery(_) => {
                 write!(fmt, "Destroy the peer for unsafe recovery")
             }
-            PeerMsg::UnsafeRecoveryWaitApply(counter) => write!(fmt, "WaitApply {:?}", *counter),
+            PeerMsg::UnsafeRecoveryWaitApply(_) => write!(fmt, "WaitApply for unsafe recovery"),
+            PeerMsg::UnsafeRecoveryLeaveJoint(_) => write!(fmt, "LeaveJoint for unsafe recovery"),
+            PeerMsg::UnsafeRecoveryFillOutReport(_) => {
+                write!(fmt, "FillOutReport for unsafe recovery")
+            }
         }
     }
 }
@@ -654,7 +662,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    ReportForUnsafeRecovery(Option<Vec<u64>>),
+    ReportForUnsafeRecovery(Option<Vec<pdpb::PeerReport>>),
     CreatePeerForUnsafeRecovery(metapb::Region, Arc<AtomicUsize>),
 }
 
@@ -684,8 +692,8 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
-            StoreMsg::ReportForUnsafeRecovery( .. )=> write!(fmt, "ReportForUnsafeRecovery"),
-            StoreMsg::CreatePeerForUnsafeRecovery( .. ) => write!(fmt, "CreatePeerForUnsafeRecovery"),
+            StoreMsg::ReportForUnsafeRecovery(..) => write!(fmt, "ReportForUnsafeRecovery"),
+            StoreMsg::CreatePeerForUnsafeRecovery(..) => write!(fmt, "CreatePeerForUnsafeRecovery"),
         }
     }
 }
