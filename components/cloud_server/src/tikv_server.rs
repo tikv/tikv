@@ -62,7 +62,7 @@ use tikv::{
     },
     storage::{self, mvcc::MvccConsistencyCheckObserver},
 };
-use tikv_util::quota_limiter::QuotaLimiter;
+use tikv_util::quota_limiter::{QuotaLimitConfigManager, QuotaLimiter};
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
@@ -414,6 +414,15 @@ impl TiKVServer {
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         info!("init servers");
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+
+        cfg_controller.register(
+            tikv::config::Module::Quota,
+            Box::new(QuotaLimitConfigManager::new(Arc::clone(
+                &self.quota_limiter,
+            ))),
+        );
+
         let lock_mgr = LockManager::new(&self.config.pessimistic_txn);
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
@@ -447,6 +456,34 @@ impl TiKVServer {
                 .build()
                 .unwrap(),
         );
+        // Start resource metering.
+        let (recorder_notifier, collector_reg_handle, resource_tag_factory, recorder_worker) =
+            resource_metering::init_recorder(self.config.resource_metering.precision.as_millis());
+        self.to_stop.push(recorder_worker);
+        let (reporter_notifier, data_sink_reg_handle, reporter_worker) =
+            resource_metering::init_reporter(
+                self.config.resource_metering.clone(),
+                collector_reg_handle.clone(),
+            );
+        self.to_stop.push(reporter_worker);
+        let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
+            self.config.resource_metering.receiver_address.clone(),
+            self.env.clone(),
+            data_sink_reg_handle.clone(),
+        );
+        self.to_stop.push(single_target_worker);
+        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
+
+        let cfg_manager = resource_metering::ConfigManager::new(
+            self.config.resource_metering.clone(),
+            recorder_notifier,
+            reporter_notifier,
+            address_change_notifier,
+        );
+        cfg_controller.register(
+            tikv::config::Module::ResourceMetering,
+            Box::new(cfg_manager),
+        );
 
         let storage_read_pool_handle = if self.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
@@ -468,6 +505,7 @@ impl TiKVServer {
             lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             reporter,
+            resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
         )
@@ -524,7 +562,7 @@ impl TiKVServer {
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
                 PerfLevel::EnableCount,
-                ResourceTagFactory::new_for_test(),
+                resource_tag_factory,
                 Arc::new(QuotaLimiter::default()),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),

@@ -43,6 +43,7 @@ pub fn create_raft_storage<R: FlowStatsReporter, F: KvFormat>(
     dynamic_switches: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
     reporter: R,
+    resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
 ) -> Result<Storage<RaftKv, LockManager, F>> {
@@ -55,7 +56,7 @@ pub fn create_raft_storage<R: FlowStatsReporter, F: KvFormat>(
         dynamic_switches,
         flow_controller,
         reporter,
-        ResourceTagFactory::new_for_test(), // TODO(x) support later.
+        resource_tag_factory,
         quota_limiter,
         feature_gate,
     )?;
