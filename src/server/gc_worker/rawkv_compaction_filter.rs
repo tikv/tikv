@@ -47,6 +47,12 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
+        if safe_point == 0 {
+            // Safe point has not been initialized yet.
+            debug!("skip gc in compaction filter because of no safe point");
+            return std::ptr::null_mut();
+        }
+
         let filter = RawCompactionFilter::new(
             db,
             safe_point,
@@ -78,6 +84,8 @@ struct RawCompactionFilter {
     orphan_versions: usize,
     versions_hist: LocalHistogram,
     filtered_hist: LocalHistogram,
+
+    encountered_errors: bool,
 }
 
 thread_local! {
@@ -106,11 +114,17 @@ impl CompactionFilter for RawCompactionFilter {
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
+        if self.encountered_errors {
+            // If there are already some errors, do nothing.
+            return CompactionFilterDecision::Keep;
+        }
+
         match self.do_filter(level, key, sequence, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
                 GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
         }
@@ -146,6 +160,8 @@ impl RawCompactionFilter {
             orphan_versions: 0,
             versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
+
+            encountered_errors: false,
         }
     }
 
