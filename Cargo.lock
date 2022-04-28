@@ -2691,7 +2691,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/coocood/kvproto.git?branch=cloud-native#6939865941eee7c98e27d1c8c7ad8443b37f4e5d"
+source = "git+https://github.com/coocood/kvproto.git?branch=cloud-native#b2873f6e50307a2fc6d88f190df28c057ee6f85a"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
