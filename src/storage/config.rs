@@ -390,10 +390,10 @@ mod tests {
     fn test_adjust_shard_bits() {
         let config = BlockCacheConfig::default();
         let shard_bits = config.adjust_shard_bits(ReadableSize::gb(1).0 as usize);
-        assert_eq!(shard_bits, 4);
+        assert_eq!(shard_bits, 3);
 
         let shard_bits = config.adjust_shard_bits(ReadableSize::gb(4).0 as usize);
-        assert_eq!(shard_bits, 6);
+        assert_eq!(shard_bits, 5);
 
         let shard_bits = config.adjust_shard_bits(ReadableSize::gb(8).0 as usize);
         assert_eq!(shard_bits, 6);
