@@ -70,7 +70,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
         let mode = K::parse_key_mode(key);
         if self.api_version == ApiVersion::V2 && mode != KeyMode::Txn && mode != KeyMode::TiDB {
             return Err(Error::invalid_key_mode(
-                SstWriterType::Raw,
+                SstWriterType::Txn,
                 self.api_version,
                 key,
             ));
