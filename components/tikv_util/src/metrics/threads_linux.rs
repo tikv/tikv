@@ -575,6 +575,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::yatp_pool::DefaultTicker;
+    use futures::executor::block_on;
     use std::env::temp_dir;
     use std::io::Write;
     use std::time::Duration;
@@ -818,5 +820,66 @@ mod tests {
         tc.collect();
         tc.desc();
         monitor_threads("smoke").unwrap();
+    }
+
+    #[test]
+    fn test_thread_name_wrapper() {
+        let thread_name = "thread_for_test";
+
+        let (tx, rx) = sync::mpsc::sync_channel(10);
+
+        let get_name = move || {
+            let tid = thread::thread_id();
+            if let Some(name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid) {
+                tx.clone().send(name.to_string()).unwrap();
+            } else {
+                panic!("thread not found");
+            }
+        };
+
+        // test std thread builder
+        std::thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn_wrapper(get_name.clone())
+            .unwrap()
+            .join()
+            .unwrap();
+
+        let name = rx.recv().unwrap();
+        assert_eq!(name, thread_name);
+
+        // test Yatp
+        let get_name_fn = get_name.clone();
+        block_on(
+            YatpPoolBuilder::new(DefaultTicker {})
+                .name_prefix(thread_name)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
+                .build_future_pool()
+                .spawn_handle(async move { get_name_fn() })
+                .unwrap(),
+        )
+        .unwrap();
+
+        let name = rx.recv().unwrap();
+        assert!(name.contains(thread_name));
+
+        // test tokio thread builder
+        let get_name_fn = get_name.clone();
+        block_on(
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_name(thread_name)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
+                .build()
+                .unwrap()
+                .spawn(async move { get_name_fn() }),
+        )
+        .unwrap();
+
+        let name = rx.recv().unwrap();
+        assert_eq!(name, thread_name);
+
+        assert_eq!(THREAD_NAME_HASHMAP.lock().unwrap().len(), 0);
     }
 }
