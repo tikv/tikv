@@ -1179,6 +1179,7 @@ where
                                     error!("fail to send force leader message for recovery"; "err" => ?e);
                                 }
                             }
+                            start_unsafe_recovery_report(&router);
                         } else if plan.get_creates().len() != 0
                             || plan.get_demotes().len() != 0
                             || plan.get_tombstones().len() != 0

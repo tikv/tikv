@@ -67,6 +67,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use crate::store::memory::*;
 use crate::store::metrics::*;
+use crate::store::peer::start_unsafe_recovery_report;
 use crate::store::peer_storage;
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
@@ -2729,14 +2730,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .router
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
-        if counter.fetch_sub(1, Ordering::Relaxed) == 1 {
-            if let Err(e) = self
-                .ctx
-                .router
-                .send_control(StoreMsg::ReportForUnsafeRecovery(None))
-            {
-                error!("fail to send detailed report after recovery tasks finished"; "err" => ?e);
-            }
+        if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            start_unsafe_recovery_report(&self.ctx.router);
         }
     }
 }
