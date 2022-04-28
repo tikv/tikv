@@ -987,13 +987,7 @@ where
                 self.reset_raft_tick(GroupState::Ordered);
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
-                let mut msg = raft::eraftpb::Message::new();
-                msg.msg_type = MessageType::MsgUnreachable;
-                msg.to = peer_id;
-                msg.from = self.fsm.peer.peer_id();
-
-                let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
-                self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
+                self.fsm.peer.send_reject_log_message(self.ctx, peer_id);
             }
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
@@ -2306,6 +2300,12 @@ where
             }
             ExtraMessageType::MsgHibernateResponse => {
                 self.on_hibernate_response(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+                self.fsm
+                    .peer
+                    .raft_group
+                    .report_unreachable(msg.get_from_peer().get_id());
             }
         }
     }

@@ -11,7 +11,7 @@ use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{ExtraMessageType, RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::router::{LocalReadRouter, RaftStoreRouter};
 use raftstore::store::{
@@ -374,6 +374,7 @@ pub struct RegionPacketFilter {
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
     drop_type: Vec<MessageType>,
     skip_type: Vec<MessageType>,
+    extra_msg_type: Vec<ExtraMessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
     msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
@@ -385,11 +386,14 @@ impl Filter for RegionPacketFilter {
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
             let msg_type = m.get_message().get_msg_type();
+            let extra_msg_type = m.get_extra_msg().get_type();
 
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
+                && ((self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
+                    || (self.extra_msg_type.is_empty()
+                        || self.extra_msg_type.contains(&extra_msg_type)))
                 && !self.skip_type.contains(&msg_type)
             {
                 let res = match self.block {
@@ -432,6 +436,7 @@ impl RegionPacketFilter {
             direction: Direction::Both,
             drop_type: vec![],
             skip_type: vec![],
+            extra_msg_type: vec![],
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
             msg_callback: None,
@@ -454,6 +459,11 @@ impl RegionPacketFilter {
     #[must_use]
     pub fn skip(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.skip_type.push(m_type);
+        self
+    }
+
+    pub fn extra_msg_type(mut self, extra_msg_type: ExtraMessageType) -> RegionPacketFilter {
+        self.extra_msg_type.push(extra_msg_type);
         self
     }
 

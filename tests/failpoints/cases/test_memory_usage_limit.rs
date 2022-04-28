@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::raft_serverpb::ExtraMessageType;
 use raft::eraftpb::MessageType;
 use raftstore::store::MEMTRACE_ENTRY_CACHE;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -101,27 +102,47 @@ fn test_memory_full_cause_of_raft_message() {
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(r1, 1)
             .direction(Direction::Recv)
-            .msg_type(MessageType::MsgUnreachable)
+            .extra_msg_type(ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage)
             .allow(usize::MAX)
             .set_msg_callback(Arc::new(move |_m| {
                 response_to_1_.fetch_add(1, Ordering::SeqCst);
             })),
     ));
 
+    println!(
+        "raft_base_tick_interval {}",
+        cluster.cfg.tikv.raft_store.raft_base_tick_interval
+    );
+    println!(
+        "raft_heartbeat_ticks {}",
+        cluster.cfg.tikv.raft_store.raft_heartbeat_ticks
+    );
+    println!(
+        "raft_election_timeout_ticks {}",
+        cluster.cfg.raft_store.raft_election_timeout_ticks
+    );
     // A MsgHeartbeatResponse will trigger one MsgAppend.
     fail::cfg("needs_reject_raft_append", "return").unwrap();
+    let before = Instant::now();
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+    println!("must put duration: {:?}", before.elapsed());
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     let now = Instant::now();
     while now.elapsed() < Duration::from_secs(2) {
-        sleep_ms(100);
+        // sleep_ms(100);
         let appends = append_to_2.load(Ordering::SeqCst);
+        println!("currently append to 2 times is {}", appends);
         if appends < 10 {
             continue;
         }
+        println!("append to 2 times is {}", appends);
         let responses = response_to_1.load(Ordering::SeqCst);
+        println!("currently response times is {}", responses);
         if responses < 10 {
             continue;
         }
+        println!("response times is {}", responses);
         fail::cfg("needs_delay_raft_append", "off").unwrap();
         return;
     }

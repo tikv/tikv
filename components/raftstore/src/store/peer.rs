@@ -4825,6 +4825,28 @@ where
         self.send_extra_message(msg, &mut ctx.trans, peer);
     }
 
+    pub fn send_reject_log_message<T: Transport>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to_peer: u64,
+    ) {
+        let to = match self.get_peer_from_cache(to_peer) {
+            Some(p) => p,
+            None => {
+                warn!(
+                    "failed to look up recipient peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "to_peer" => self.leader_id(),
+                );
+                return;
+            }
+        };
+        let mut msg = ExtraMessage::default();
+        msg.set_type(ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage);
+        self.send_extra_message(msg, &mut ctx.trans, &to);
+    }
+
     pub fn bcast_check_stale_peer_message<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
