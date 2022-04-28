@@ -8,7 +8,6 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
-use api_version::{ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
@@ -461,12 +460,12 @@ where
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
-        let first_key_vec = keys.first().unwrap().as_encoded();
-        let first_raw_key = Key::from_raw(first_key_vec.as_slice()).append_ts(TimeStamp::max());
+        let first_key = keys.first().unwrap();
+        let first_raw_key = first_key.clone().append_ts(TimeStamp::max());
         let range_start_key = first_raw_key.as_encoded();
 
-        let last_key_vec = keys.last().unwrap().as_encoded();
-        let last_raw_key = Key::from_raw(last_key_vec.as_slice()).append_ts(TimeStamp::zero());
+        let last_key = keys.last().unwrap();
+        let last_raw_key = last_key.clone().append_ts(TimeStamp::zero());
         let range_end_key = last_raw_key.as_encoded();
 
         //--------------------------------KeysInRegions-----------------------------
@@ -518,8 +517,6 @@ where
             .engine
             .snapshot_on_kv_engine(range_start_key, range_end_key)?;
 
-        // let mut mvcc_snapshot = RawBasicSnapshot::from_snapshot(snapshot.clone());
-
         let mut raw_modifys = MvccRaw::new();
 
         let mut next_gc_key = keys.next();
@@ -543,39 +540,33 @@ where
         safe_point: TimeStamp,
         key: &Key,
         raw_modifys: &mut MvccRaw,
-        //snapshot: &mut RawBasicSnapshot<E::Snap>,
         kv_snapshot: &mut <E as Engine>::Snap,
     ) -> Result<()> {
-        let start_key =
-            Key::from_raw(key.as_encoded()).append_ts(TimeStamp::new(safe_point.into_inner() - 1));
+        let start_key = key
+            .clone()
+            .append_ts(TimeStamp::new(safe_point.into_inner() - 1));
+
+        let end_key = key.clone().append_ts(TimeStamp::zero());
+
         let start_key_arr = start_key.as_encoded();
         let start_seek_key = Key::from_encoded_slice(start_key_arr);
-        //kv_snapshot.
-        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
+
+        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT)
+            .range(Some(start_key), Some(end_key))
+            .build()?;
 
         let mut statistics = CfStatistics::default();
 
         cursor.seek(&start_seek_key, &mut statistics)?;
 
         while cursor.valid()? {
-            let engine_key = Key::from_encoded_slice(cursor.key(&mut statistics));
+            let engine_slice = cursor.key(&mut statistics);
 
-            let (usekey, userts) = ApiV2::decode_raw_key(&engine_key, true)?;
-            let ts = userts.unwrap();
-            if ts == safe_point {
-                cursor.next(&mut statistics);
-                continue;
-            }
-            let prefix_key = Key::from_encoded_slice(&usekey);
+            let engine_key = Key::from_encoded_slice(engine_slice);
             let write = Modify::Delete(CF_DEFAULT, engine_key);
             raw_modifys.write_size += write.size();
+            raw_modifys.modifies.push(write);
 
-            if prefix_key != key.clone() {
-                // different userkey
-                break;
-            } else {
-                raw_modifys.modifies.push(write);
-            }
             cursor.next(&mut statistics);
         }
 
@@ -1226,6 +1217,7 @@ mod tests {
     use std::{thread, time::Duration};
 
     use crate::config::DbConfig;
+    use crate::server::gc_worker::rawkv_compaction_filter::split_ts;
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
         SnapContext, TestEngineBuilder, WriteData,
@@ -1860,13 +1852,11 @@ mod tests {
         let current_key_a = engine_key_a.as_slice();
         let current_key_b = engine_key_b.as_slice();
 
-        let (mvcc_key_prefix_vec_a, _commit_ts_opt_a) =
-            ApiV2::decode_raw_key(&Key::from_encoded_slice(current_key_a), true).unwrap();
-        let (mvcc_key_prefix_vec_b, _commit_ts_opt_b) =
-            ApiV2::decode_raw_key(&Key::from_encoded_slice(current_key_b), true).unwrap();
+        let (mvcc_key_prefix_vec_a, _commit_ts_opt_a) = split_ts(current_key_a).unwrap();
+        let (mvcc_key_prefix_vec_b, _commit_ts_opt_b) = split_ts(current_key_b).unwrap();
 
-        let to_gc_key_a = Key::from_encoded_slice(&mvcc_key_prefix_vec_a);
-        let to_gc_key_b = Key::from_encoded_slice(&mvcc_key_prefix_vec_b);
+        let to_gc_key_a = Key::from_encoded_slice(mvcc_key_prefix_vec_a);
+        let to_gc_key_b = Key::from_encoded_slice(mvcc_key_prefix_vec_b);
 
         keys.push(to_gc_key_a);
         keys.push(to_gc_key_b);
