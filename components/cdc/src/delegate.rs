@@ -585,7 +585,7 @@ impl Delegate {
         };
 
         let mut txn_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
-        let mut raw_rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
+        let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
@@ -609,7 +609,11 @@ impl Delegate {
         }
 
         if !txn_rows.is_empty() {
-            self.sink_downstream(txn_rows, index, ChangeDataRequestKvApi::TiDb)?;
+            let mut rows = Vec::with_capacity(txn_rows.len());
+            for (_, v) in txn_rows {
+                rows.push(v);
+            }
+            self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
         }
 
         if !raw_rows.is_empty() {
@@ -621,14 +625,10 @@ impl Delegate {
 
     fn sink_downstream(
         &mut self,
-        rows: HashMap<Vec<u8>, EventRow>,
+        entries: Vec<EventRow>,
         index: u64,
         kv_api: ChangeDataRequestKvApi,
     ) -> Result<()> {
-        let mut entries = Vec::with_capacity(rows.len());
-        for (_, v) in rows {
-            entries.push(v);
-        }
         let event_entries = EventEntries {
             entries: entries.into(),
             ..Default::default()
@@ -663,7 +663,7 @@ impl Delegate {
         put: PutRequest,
         is_one_pc: bool,
         txn_rows: &mut HashMap<Vec<u8>, EventRow>,
-        raw_rows: &mut HashMap<Vec<u8>, EventRow>,
+        raw_rows: &mut Vec<EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
@@ -674,23 +674,10 @@ impl Delegate {
         }
     }
 
-    fn sink_raw_put(
-        &mut self,
-        mut put: PutRequest,
-        rows: &mut HashMap<Vec<u8>, EventRow>,
-    ) -> Result<()> {
+    fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
         let mut row = EventRow::default();
         decode_rawkv(put.take_key(), put.take_value(), &mut row);
-
-        match rows.get_mut(&row.key) {
-            Some(row_with_value) => {
-                row.value = mem::take(&mut row_with_value.value);
-                *row_with_value = row;
-            }
-            None => {
-                rows.insert(row.key.clone(), row);
-            }
-        }
+        rows.push(row);
         Ok(())
     }
 
