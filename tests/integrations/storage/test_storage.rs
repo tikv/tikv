@@ -14,6 +14,7 @@ use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
 use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
+use tikv::coprocessor::checksum_crc64_xor;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
@@ -1093,16 +1094,12 @@ fn test_txn_store_rawkv_api_version() {
                     vec![(key.to_vec(), b"value".to_vec())],
                 );
 
-                // TODO: Remove this conditional statement after raw_checksum is done for API V2
-                if storage_api_version != ApiVersion::V2 {
-                    let mut digest = crc64fast::Digest::new();
-                    digest.write(key);
-                    digest.write(b"value");
-                    store.raw_checksum_ok(
-                        vec![range_bounded.clone()],
-                        (digest.sum64(), 1, (key.len() + b"value".len()) as u64),
-                    );
-                }
+                let digest = crc64fast::Digest::new();
+                let checksum = checksum_crc64_xor(0, digest.clone(), key, b"value");
+                store.raw_checksum_ok(
+                    vec![range_bounded.clone()],
+                    (checksum, 1, (key.len() + b"value".len()) as u64),
+                );
             } else {
                 store.raw_get_err(cf.to_owned(), key.to_vec());
                 if !matches!(storage_api_version, ApiVersion::V1) {
