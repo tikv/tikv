@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::match_template_api_version;
-use api_version::APIVersion;
+use api_version::KvFormat;
 use api_version::RawValue;
 use engine_traits::raw_ttl::ttl_to_expire_ts;
 use kvproto::import_sstpb::*;
@@ -17,7 +17,7 @@ use crate::import_file::ImportPath;
 use crate::metrics::*;
 use crate::Result;
 
-pub struct TxnSSTWriter<E: KvEngine> {
+pub struct TxnSstWriter<E: KvEngine> {
     default: E::SstWriter,
     default_entries: u64,
     default_bytes: u64,
@@ -31,7 +31,7 @@ pub struct TxnSSTWriter<E: KvEngine> {
     key_manager: Option<Arc<DataKeyManager>>,
 }
 
-impl<E: KvEngine> TxnSSTWriter<E> {
+impl<E: KvEngine> TxnSstWriter<E> {
     pub fn new(
         default: E::SstWriter,
         write: E::SstWriter,
@@ -41,7 +41,7 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         write_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
-        TxnSSTWriter {
+        TxnSstWriter {
             default,
             default_path,
             default_entries: 0,
@@ -134,7 +134,7 @@ impl<E: KvEngine> TxnSSTWriter<E> {
     }
 }
 
-pub struct RawSSTWriter<E: KvEngine> {
+pub struct RawSstWriter<E: KvEngine> {
     default: E::SstWriter,
     default_entries: u64,
     default_deletes: u64,
@@ -145,7 +145,7 @@ pub struct RawSSTWriter<E: KvEngine> {
     api_version: ApiVersion,
 }
 
-impl<E: KvEngine> RawSSTWriter<E> {
+impl<E: KvEngine> RawSstWriter<E> {
     pub fn new(
         default: E::SstWriter,
         default_path: ImportPath,
@@ -153,7 +153,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
     ) -> Self {
-        RawSSTWriter {
+        RawSstWriter {
             default,
             default_path,
             default_entries: 0,
@@ -194,7 +194,7 @@ impl<E: KvEngine> RawSSTWriter<E> {
                     } else if API::IS_TTL_ENABLED {
                         ttl_to_expire_ts(batch.get_ttl())
                     } else {
-                        return Err(crate::Error::TTLNotEnabled);
+                        return Err(crate::Error::TtlNotEnabled);
                     };
 
                     for m in batch.take_pairs().into_iter() {
@@ -257,7 +257,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{Config, SSTImporter};
+    use crate::{Config, SstImporter};
 
     #[test]
     fn test_write_txn_sst() {
@@ -266,7 +266,7 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
+        let importer = SstImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
@@ -316,7 +316,7 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let importer = SstImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
@@ -371,7 +371,7 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SSTImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
+        let importer = SstImporter::new(&cfg, &importer_dir, None, ApiVersion::V1).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 

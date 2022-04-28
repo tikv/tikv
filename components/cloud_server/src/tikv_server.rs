@@ -25,13 +25,14 @@ use crate::server::Server;
 use crate::setup::{initial_logger, initial_metric, validate_and_persist_config};
 use crate::status_server::StatusServer;
 use crate::{node::*, raftkv::*, resolve, signal_handler};
+use api_version::{ApiV1, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::raw::DBCompressionType;
+use engine_rocks::PerfLevel;
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimitMode, IORateLimiter,
-    MetricsManager as IOMetricsManager,
+    BytesFetcher, IORateLimitMode, IORateLimiter, MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -43,6 +44,7 @@ use raftstore::coprocessor::{
     RawConsistencyCheckObserver,
 };
 use raftstore::RegionInfoAccessor;
+use resource_metering::ResourceTagFactory;
 use rfengine::RFEngine;
 use rfstore::store::PENDING_MSG_CAP;
 use rfstore::store::{Engines, LocalReader, MetaChangeListener, RaftBatchSystem, StoreMeta};
@@ -60,6 +62,7 @@ use tikv::{
     },
     storage::{self, mvcc::MvccConsistencyCheckObserver},
 };
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, VersionTrack},
@@ -95,7 +98,7 @@ pub fn run_tikv(config: TiKvConfig) {
     info!("created tikv server");
 
     // Must be called after `TiKVServer::init`.
-    let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+    let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
     register_memory_usage_high_water(high_water);
 
@@ -105,7 +108,7 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_encryption();
     // TODO(x) io limiter and metrics flusher
     tikv.init_engines();
-    let server_config = tikv.init_servers();
+    let server_config = tikv.init_servers::<ApiV1>();
     tikv.register_services();
     tikv.run_server(server_config);
     tikv.run_status_server();
@@ -141,6 +144,7 @@ struct TiKVServer {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    quota_limiter: Arc<QuotaLimiter>,
 }
 
 struct TiKVEngines {
@@ -201,6 +205,13 @@ impl TiKVServer {
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
+        let quota_limiter = Arc::new(QuotaLimiter::new(
+            config.quota.foreground_cpu_time,
+            config.quota.foreground_write_bandwidth,
+            config.quota.foreground_read_bandwidth,
+            config.quota.max_delay_duration,
+        ));
+
         TiKVServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -221,6 +232,7 @@ impl TiKVServer {
             concurrency_manager,
             env,
             background_worker,
+            quota_limiter,
         }
     }
 
@@ -399,10 +411,10 @@ impl TiKVServer {
         self.engines = Some(TiKVEngines { store_meta, engine });
     }
 
-    fn init_servers(&mut self) -> Arc<VersionTrack<ServerConfig>> {
+    fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         info!("init servers");
 
-        let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
+        let lock_mgr = LockManager::new(&self.config.pessimistic_txn);
         lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
         let engines = self.engines.as_mut().unwrap();
@@ -447,15 +459,17 @@ impl TiKVServer {
             storage_read_pools.handle()
         };
         let reporter = rfstore::store::FlowStatsReporter::new(pd_sender.clone());
-        let storage = create_raft_storage(
+        let storage = create_raft_storage::<_, F>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
             lock_mgr.clone(),
             self.concurrency_manager.clone(),
-            lock_mgr.get_pipelined(),
+            lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             reporter,
+            Arc::clone(&self.quota_limiter),
+            self.pd_client.feature_gate().clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -509,7 +523,9 @@ impl TiKVServer {
                 &server_config.value(),
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
-                engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
+                PerfLevel::EnableCount,
+                ResourceTagFactory::new_for_test(),
+                Arc::new(QuotaLimiter::default()),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
@@ -580,28 +596,6 @@ impl TiKVServer {
                 &self.config.pessimistic_txn,
             )
             .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
-    }
-
-    fn init_io_utility(&mut self) -> (Arc<IORateLimiter>, BytesFetcher) {
-        let io_snooper_on = self.config.enable_io_snoop
-            && file_system::init_io_snooper()
-                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
-                .is_ok();
-        let limiter = Arc::new(
-            self.config
-                .storage
-                .io_rate_limit
-                .build(!io_snooper_on /*enable_statistics*/),
-        );
-        let fetcher = if io_snooper_on {
-            BytesFetcher::FromIOSnooper()
-        } else {
-            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
-        };
-        // Set up IO limiter even when rate limit is disabled, so that rate limits can be
-        // dynamically applied later on.
-        set_io_rate_limiter(Some(limiter.clone()));
-        (limiter, fetcher)
     }
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
@@ -688,7 +682,7 @@ impl TiKVServer {
             dfs_conf.s3_bucket.clone(),
         ));
         let mut kv_opts = kvengine::Options::default();
-        let capacity = match conf.storage.block_cache.capacity.0 {
+        let capacity = match conf.storage.block_cache.capacity {
             None => {
                 let total_mem = SysQuota::memory_limit_in_bytes();
                 ((total_mem as f64) * tikv::config::BLOCK_CACHE_RATE) as usize

@@ -12,7 +12,7 @@ use tikv_util::time::Instant;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use yatp::task::future::reschedule;
 
-use crate::coprocessor::dag::TiKVStorage;
+use crate::coprocessor::dag::TiKvStorage;
 use crate::coprocessor::*;
 use crate::storage::txn::CloudStore;
 use crate::storage::{Snapshot, Statistics};
@@ -20,7 +20,7 @@ use crate::storage::{Snapshot, Statistics};
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    scanner: RangesScanner<TiKVStorage<CloudStore<S>>>,
+    scanner: RangesScanner<TiKvStorage<CloudStore<S>>>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -42,7 +42,7 @@ impl<S: Snapshot> ChecksumContext<S> {
         // );
         let store = CloudStore::new(snap, start_ts, req_ctx.bypass_locks.clone());
         let scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKVStorage::new(store, false),
+            storage: TiKvStorage::new(store, false),
             ranges: ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, false))

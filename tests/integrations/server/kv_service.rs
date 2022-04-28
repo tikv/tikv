@@ -33,7 +33,7 @@ use test_raftstore::*;
 use tikv::config::QuotaConfig;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::Config as ImportConfig;
-use tikv::import::SSTImporter;
+use tikv::import::SstImporter;
 use tikv::server;
 use tikv::server::gc_worker::sync_gc;
 use tikv::server::service::{batch_commands_request, batch_commands_response};
@@ -958,7 +958,7 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 

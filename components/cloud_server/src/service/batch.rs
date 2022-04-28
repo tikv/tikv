@@ -1,5 +1,6 @@
 // Copyright 20211 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
 use tikv::server::metrics::{GrpcTypeKind, REQUEST_BATCH_SIZE_HISTOGRAM_VEC};
 use tikv::server::service::{batch_commands_response, GrpcRequestDuration, MeasuredSingleResponse};
@@ -59,9 +60,9 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
-    pub fn maybe_commit<E: Engine, L: LockManager>(
+    pub fn maybe_commit<E: Engine, L: LockManager, F: KvFormat>(
         &mut self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if self.gets.len() >= self.batch_size {
@@ -77,9 +78,9 @@ impl ReqBatcher {
         }
     }
 
-    pub fn commit<E: Engine, L: LockManager>(
+    pub fn commit<E: Engine, L: LockManager, F: KvFormat>(
         self,
-        storage: &Storage<E, L>,
+        storage: &Storage<E, L, F>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if !self.gets.is_empty() {
@@ -200,8 +201,8 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
     }
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
     tx: Sender<MeasuredSingleResponse>,
@@ -240,8 +241,8 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<E: Engine, L: LockManager>(
-    storage: &Storage<E, L>,
+fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
     tx: Sender<MeasuredSingleResponse>,

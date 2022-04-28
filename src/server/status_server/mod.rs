@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod profile;
+pub mod profile;
 pub mod region_meta;
 use self::profile::{
     activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,

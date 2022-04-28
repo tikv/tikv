@@ -2,7 +2,7 @@
 
 //! Storage online config manager.
 
-use crate::server::ttl::TTLCheckerTask;
+use crate::server::ttl::TtlCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::txn::flow_controller::FlowController;
@@ -19,7 +19,7 @@ use tikv_util::worker::Scheduler;
 pub struct StorageConfigManger<E: Engine, L: LockManager> {
     kvdb: <E as Engine>::Local,
     shared_block_cache: bool,
-    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+    ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
     flow_controller: Arc<FlowController>,
     scheduler: TxnScheduler<E, L>,
 }
@@ -31,7 +31,7 @@ impl<E: Engine, L: LockManager> StorageConfigManger<E, L> {
     pub fn new(
         kvdb: <E as Engine>::Local,
         shared_block_cache: bool,
-        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+        ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
         flow_controller: Arc<FlowController>,
         scheduler: TxnScheduler<E, L>,
     ) -> Self {
@@ -69,7 +69,7 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
         } else if let Some(v) = change.remove("ttl_check_poll_interval") {
             let interval: ReadableDuration = v.into();
             self.ttl_checker_scheduler
-                .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
+                .schedule(TtlCheckerTask::UpdatePollInterval(interval.into()))
                 .unwrap();
         } else if let Some(ConfigValue::Module(mut flow_control)) = change.remove("flow_control") {
             if let Some(v) = flow_control.remove("enable") {

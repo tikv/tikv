@@ -19,10 +19,11 @@ use engine_traits::{CfName, KvEngine, MvccProperties, CF_DEFAULT, CF_LOCK, CF_WR
 use kvproto::raft_cmdpb::CustomRequest;
 use kvproto::{
     errorpb,
-    kvrpcpb::Context,
+    kvrpcpb::{Context, IsolationLevel},
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
+use raft::StateRole;
 use raftstore::coprocessor::{
     dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
 };
@@ -315,6 +316,10 @@ impl Engine for RaftKv {
                     let bytes = keys::data_end_key(key2.as_encoded());
                     *key2 = Key::from_encoded(bytes);
                 }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
             }
         }
         write_modifies(&self.engine, modifies)
@@ -461,7 +466,7 @@ impl ReplicaReadLockChecker {
 impl Coprocessor for ReplicaReadLockChecker {}
 
 impl ReadIndexObserver for ReplicaReadLockChecker {
-    fn on_step(&self, msg: &mut eraftpb::Message) {
+    fn on_step(&self, msg: &mut eraftpb::Message, _role: StateRole) {
         if msg.get_msg_type() != MessageType::MsgReadIndex {
             return;
         }
@@ -491,6 +496,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             key,
                             start_ts,
                             &Default::default(),
+                            IsolationLevel::Si,
                         )
                     },
                 );
@@ -594,6 +600,9 @@ fn detect_custom_type(modifies: &Vec<Modify>) -> rlog::CustomRaftlogType {
                     _ => unreachable!("unknown cf {:?}", modifies),
                 }
             }
+            Modify::PessimisticLock(..) => {
+                return rlog::TYPE_PESSIMISTIC_LOCK;
+            }
             Modify::DeleteRange(..) => unreachable!("delete range in modifies"),
         }
     }
@@ -607,6 +616,11 @@ fn build_pessimistic_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                 assert_eq!(*cf, CF_LOCK);
                 let raw_key = key.to_raw().unwrap();
                 builder.append_lock(&raw_key, val);
+            }
+            Modify::PessimisticLock(key, lock) => {
+                let raw_key = key.to_raw().unwrap();
+                let val = lock.to_lock().to_bytes();
+                builder.append_lock(&raw_key, &val);
             }
             _ => unreachable!(),
         }
@@ -760,7 +774,7 @@ mod tests {
         e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m);
+        checker.on_step(&mut m, raft::StateRole::Leader);
         assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
     }
 }

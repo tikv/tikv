@@ -95,7 +95,7 @@ dependencies = [
  "bitflags",
  "codec",
  "engine_traits",
- "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
+ "kvproto 0.0.2 (git+https://github.com/coocood/kvproto.git?branch=cloud-native)",
  "match_template",
  "panic_hook",
  "thiserror",
@@ -894,6 +894,7 @@ dependencies = [
 name = "cloud_server"
 version = "5.4.0-alpha"
 dependencies = [
+ "api_version",
  "async-stream",
  "backup",
  "bytes 1.0.1",
@@ -961,7 +962,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-openssl",
- "tokio-timer 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer",
  "toml",
  "txn_types",
  "url",
@@ -3604,7 +3605,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
+ "tokio-timer",
  "txn_types",
  "yatp",
 ]
@@ -5715,7 +5716,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio",
- "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
+ "tokio-timer",
  "txn_types",
 ]
 
@@ -6158,7 +6159,7 @@ dependencies = [
  "tipb",
  "tokio",
  "tokio-openssl",
- "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
+ "tokio-timer",
  "toml",
  "txn_types",
  "url",
@@ -6389,7 +6390,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-executor",
- "tokio-timer 0.2.13 (git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix)",
+ "tokio-timer",
  "toml",
  "url",
  "utime",
@@ -6509,18 +6510,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "tokio-timer"
-version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93044f2d313c95ff1cb7809ce9a7a05735b012288a888b62d4434fd58c94f296"
-dependencies = [
- "crossbeam-utils 0.7.2",
- "futures 0.1.31",
- "slab",
- "tokio-executor",
 ]
 
 [[package]]

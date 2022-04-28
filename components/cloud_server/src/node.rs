@@ -6,14 +6,16 @@ use std::time::Duration;
 
 use super::server::Result;
 use super::RaftKv;
+use api_version::KvFormat;
 use concurrency_manager::ConcurrencyManager;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 use kvproto::replication_modepb::ReplicationStatus;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use protobuf::Message;
 use raftstore::coprocessor::dispatcher::CoprocessorHost;
 use raftstore::store::{initial_region, FlowStatsReporter};
+use resource_metering::ResourceTagFactory;
 use rfstore::store::store_fsm::StoreMeta;
 use rfstore::store::{self, Config as StoreConfig, Engines};
 use rfstore::store::{PdTask, RaftBatchSystem, Transport};
@@ -21,8 +23,10 @@ use tikv::read_pool::ReadPoolHandle;
 use tikv::server::lock_manager::LockManager;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::txn::flow_controller::FlowController;
+use tikv::storage::DynamicConfigs as StorageDynamicConfigs;
 use tikv::storage::{config::Config as StorageConfig, Storage};
 use tikv_util::config::VersionTrack;
+use tikv_util::quota_limiter::QuotaLimiter;
 use tikv_util::worker::{LazyWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -30,25 +34,30 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage(
+pub fn create_raft_storage<R: FlowStatsReporter, F: KvFormat>(
     engine: RaftKv,
-    cfg: &StorageConfig,
+    config: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
-    pipelined_pessimistic_lock: Arc<AtomicBool>,
+    dynamic_switches: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
-    reporter: impl FlowStatsReporter,
-) -> Result<Storage<RaftKv, LockManager>> {
+    reporter: R,
+    quota_limiter: Arc<QuotaLimiter>,
+    feature_gate: FeatureGate,
+) -> Result<Storage<RaftKv, LockManager, F>> {
     let store = Storage::from_engine(
         engine,
-        cfg,
+        config,
         read_pool,
         lock_mgr,
         concurrency_manager,
-        pipelined_pessimistic_lock,
+        dynamic_switches,
         flow_controller,
         reporter,
+        ResourceTagFactory::new_for_test(), // TODO(x) support later.
+        quota_limiter,
+        feature_gate,
     )?;
     Ok(store)
 }

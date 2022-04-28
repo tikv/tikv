@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{i32, result};
 
+use api_version::KvFormat;
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
@@ -127,7 +128,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
-    grpc_thread_load: Arc<ThreadLoad>,
+    grpc_thread_load: Arc<ThreadLoadPool>,
     yatp_read_pool: Option<ReadPool>,
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
@@ -136,11 +137,11 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager>(
+    pub fn new<L: LockManager, F: KvFormat>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<RaftKv, L>,
+        storage: Storage<RaftKv, L, F>,
         copr: Endpoint<RaftKv>,
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
@@ -161,8 +162,9 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
         } else {
             None
         };
-        let grpc_thread_load =
-            Arc::new(ThreadLoad::with_threshold(cfg.value().heavy_load_threshold));
+        let grpc_thread_load = Arc::new(ThreadLoadPool::with_threshold(
+            cfg.value().heavy_load_threshold,
+        ));
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
@@ -354,7 +356,6 @@ pub mod test_router {
     use super::*;
 
     use rfstore::store::*;
-    use rfstore::Result as RaftStoreResult;
 
     use kvproto::raft_serverpb::RaftMessage;
 
@@ -383,32 +384,24 @@ pub mod test_router {
     }
 
     impl ProposalRouter for TestRaftStoreRouter {
-        fn send(&self, _: RaftCommand) -> RaftStoreResult<()> {
+        fn send(&self, _: RaftCommand) {
             let _ = self.tx.send(1);
-            Ok(())
         }
     }
 
     impl CasualRouter for TestRaftStoreRouter {
-        fn send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+        fn send(&self, _: u64, _: CasualMessage) {
             let _ = self.tx.send(1);
-            Ok(())
         }
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+        fn send_raft_msg(&self, _: RaftMessage) {
             let _ = self.tx.send(1);
-            Ok(())
         }
 
-        fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+        fn significant_send(&self, _: u64, msg: SignificantMsg) {
             let _ = self.significant_msg_sender.send(msg);
-            Ok(())
-        }
-
-        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg) {
-            let _ = self.tx.send(1);
         }
     }
 }

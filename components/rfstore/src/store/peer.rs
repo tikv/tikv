@@ -25,6 +25,7 @@ use raft::{
 use raft_proto::eraftpb::{ConfChangeType, Entry, MessageType};
 use raft_proto::*;
 use raftstore::coprocessor;
+use raftstore::coprocessor::RoleChange;
 use raftstore::store::util::{
     admin_cmd_epoch_lookup, is_initial_msg, is_region_initialized, AdminCmdEpochState, ChangePeerI,
     ConfChangeKind, Lease, LeaseState,
@@ -41,7 +42,6 @@ use tikv_util::worker::Scheduler;
 use tikv_util::{box_err, debug, error, info, warn, Either};
 use time::Timespec;
 use uuid::Uuid;
-use raftstore::coprocessor::RoleChange;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -503,7 +503,10 @@ impl Peer {
             last_compacted_index: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
-            leader_lease: Lease::new(cfg.raft_store_max_leader_lease(), cfg.renew_leader_lease_advance_duration()),
+            leader_lease: Lease::new(
+                cfg.raft_store_max_leader_lease(),
+                cfg.renew_leader_lease_advance_duration(),
+            ),
             peer_stat: PeerStat::default(),
             txn_ext: Arc::new(TxnExt::default()),
             max_ts_sync_status: Arc::new(Default::default()),
@@ -1054,14 +1057,15 @@ impl Peer {
             }
             // TODO: it may possible that only the `leader_id` change and the role
             // didn't change
-            ctx.global
-                .coprocessor_host
-                .on_role_change(self.region(), RoleChange {
+            ctx.global.coprocessor_host.on_role_change(
+                self.region(),
+                RoleChange {
                     state: ss.raft_state,
                     leader_id: ss.leader_id,
                     prev_lead_transferee: self.lead_transferee,
                     vote: self.raft_group.raft.vote,
-                });
+                },
+            );
             self.cmd_epoch_checker.maybe_update_term(self.term());
         }
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();

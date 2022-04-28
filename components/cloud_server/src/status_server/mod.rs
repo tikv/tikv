@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod profile;
-use self::profile::{
+use tikv::server::status_server::profile::{
     activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
     read_file, start_one_cpu_profile, start_one_heap_profile,
 };

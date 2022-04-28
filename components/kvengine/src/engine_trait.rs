@@ -819,7 +819,6 @@ impl WriteBatchExt for Engine {
 pub struct EngineWriteBatch;
 
 impl engine_traits::WriteBatch for EngineWriteBatch {
-
     fn write_opt(&self, _: &WriteOptions) -> TraitsResult<()> {
         panic!()
     }
