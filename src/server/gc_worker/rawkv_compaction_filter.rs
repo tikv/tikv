@@ -7,7 +7,8 @@ use crate::server::gc_worker::compaction_filter::{
 };
 use crate::server::gc_worker::GcTask;
 use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use api_version::{ApiV2, KeyMode, KvFormat};
+use api_version::api_v2::RAW_KEY_PREFIX;
+use api_version::{ApiV2, KvFormat};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
@@ -176,24 +177,11 @@ impl RawCompactionFilter {
             return Ok(CompactionFilterDecision::Keep);
         }
 
-        let (mvcc_key_prefix, _commit_ts) = split_ts(key)?;
+        let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        // remove prefix 'z'
-        let current_key = keys::origin_key(key);
-        let key_mode = ApiV2::parse_key_mode(current_key);
-
-        // not RawKV or targetValue
-        if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
-            return Ok(CompactionFilterDecision::Keep);
-        }
-
-        let (mvcc_key_prefix_vec, commit_ts_opt) =
-            ApiV2::decode_raw_key(&Key::from_encoded_slice(current_key), true).unwrap();
-
-        let commit_ts = commit_ts_opt.unwrap().into_inner();
-
-        // mvcc_key_prefix_vec = 'r' , skip this key
-        if mvcc_key_prefix_vec.len() == 1 {
+        // not RawKV or targetValue, skip
+        let key_mode = key[1];
+        if key_mode != RAW_KEY_PREFIX || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
         }
 
