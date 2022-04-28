@@ -644,15 +644,15 @@ mod tests {
             (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
         ];
         for i in 0..apiv1_keys.len() {
-            for case in &test_cases {
-                let dst_key = dispatch_api_version!(case.1, {
+            for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
+                let dst_key = dispatch_api_version!(dst_api_ver, {
                     API::convert_encoded_key_version_from(
-                        case.0,
-                        &case.2[i],
+                        src_api_ver,
+                        &src_data[i],
                         Some(TimeStamp::from(timestamp)),
                     )
                 });
-                assert_eq!(dst_key.unwrap().into_encoded(), case.3[i]);
+                assert_eq!(dst_key.unwrap().into_encoded(), dst_data[i]);
             }
         }
     }
@@ -706,11 +706,11 @@ mod tests {
             ),
         ];
         for i in 0..apiv1_values.len() {
-            for case in &test_cases {
-                let dst_value = dispatch_api_version!(case.1, {
-                    API::convert_encoded_value_version_from(case.0, &case.2[i])
+            for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
+                let dst_value = dispatch_api_version!(dst_api_ver, {
+                    API::convert_encoded_value_version_from(src_api_ver, &src_data[i])
                 });
-                assert_eq!(dst_value.unwrap(), case.3[i]);
+                assert_eq!(dst_value.unwrap(), dst_data[i]);
             }
         }
     }
@@ -767,13 +767,13 @@ mod tests {
                 &apiv1_key_ranges,
             ),
         ];
-        for case in &test_cases {
+        for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases {
             for i in 0..apiv1_key_ranges.len() {
-                let dst_key_range = dispatch_api_version!(case.1, {
-                    let (src_start, src_end) = case.2[i].clone();
-                    API::convert_user_key_range_version_from(case.0, src_start, src_end)
+                let dst_key_range = dispatch_api_version!(dst_api_ver, {
+                    let (src_start, src_end) = src_data[i].clone();
+                    API::convert_user_key_range_version_from(src_api_ver, src_start, src_end)
                 });
-                assert_eq!(dst_key_range, case.3[i]);
+                assert_eq!(dst_key_range, dst_data[i]);
             }
         }
     }
