@@ -60,6 +60,7 @@ impl KvFormat for ApiV1 {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => (start_key, end_key),
             ApiVersion::V2 => {
+                // TODO: check raw key range after check_api_version_range is refactored.
                 start_key.remove(0);
                 end_key.remove(0);
                 (start_key, end_key)
