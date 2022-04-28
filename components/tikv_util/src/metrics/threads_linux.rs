@@ -12,6 +12,11 @@ use crate::sys::thread::{self, Pid};
 use crate::time::Instant;
 use procinfo::pid;
 
+use super::ThreadBuildWrapper;
+use crate::metrics::StdThreadBuildWrapper;
+use crate::yatp_pool::{PoolTicker, YatpPoolBuilder};
+use futures::Future;
+
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = thread::process_id();
@@ -143,7 +148,12 @@ impl Collector for ThreadsCollector {
                 // Threads CPU time.
                 let total = thread::linux::cpu_total(&stat);
                 // sanitize thread name before push metrics.
-                let name = sanitize_thread_name(tid, &stat.command);
+                let name = if let Some(thread_name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid)
+                {
+                    sanitize_thread_name(tid, thread_name)
+                } else {
+                    sanitize_thread_name(tid, &stat.command)
+                };
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -457,6 +467,110 @@ impl TidRetriever {
 
         (&self.tid_buffer, updated)
     }
+}
+
+lazy_static::lazy_static! {
+    pub static ref THREAD_NAME_HASHMAP: Mutex<HashMap<Pid, String>> = Mutex::new(HashMap::default());
+}
+
+fn add_thread_name_to_map() {
+    if let Some(name) = std::thread::current().name() {
+        let tid = thread::thread_id();
+        THREAD_NAME_HASHMAP
+            .lock()
+            .unwrap()
+            .insert(tid, name.to_string());
+        debug!("tid {} thread name is {}", tid, name);
+    }
+}
+
+fn remove_thread_name_from_map() {
+    let tid = thread::thread_id();
+    THREAD_NAME_HASHMAP.lock().unwrap().remove(&tid);
+}
+
+impl StdThreadBuildWrapper for std::thread::Builder {
+    fn spawn_wrapper<F, T>(self, f: F) -> Result<std::thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static,
+    {
+        self.spawn(|| {
+            add_thread_name_to_map();
+            let res = f();
+            remove_thread_name_from_map();
+            res
+        })
+    }
+}
+
+impl<T: PoolTicker> ThreadBuildWrapper for YatpPoolBuilder<T> {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.after_start(move || {
+            add_thread_name_to_map();
+            f();
+        })
+    }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.before_stop(move || {
+            f();
+            remove_thread_name_from_map();
+        })
+    }
+}
+
+impl ThreadBuildWrapper for tokio::runtime::Builder {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_thread_start(move || {
+            add_thread_name_to_map();
+            f();
+        })
+    }
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_thread_stop(move || {
+            f();
+            remove_thread_name_from_map();
+        })
+    }
+}
+
+pub fn tokio_spawn_wrapper<T>(f: T) -> tokio::task::JoinHandle<T::Output>
+where
+    T: Future + Send + 'static,
+    T::Output: Send + 'static,
+{
+    tokio::spawn(async {
+        add_thread_name_to_map();
+        let res = f.await;
+        remove_thread_name_from_map();
+        res
+    })
+}
+
+pub fn thread_spawn_wrapper<F, T>(f: F) -> std::thread::JoinHandle<T>
+where
+    F: FnOnce() -> T,
+    F: Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .spawn_wrapper(f)
+        .expect("failed to spawn thread")
 }
 
 #[cfg(test)]

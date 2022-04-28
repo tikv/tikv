@@ -4,6 +4,7 @@ mod future_pool;
 mod metrics;
 pub use future_pool::{Full, FuturePool};
 
+use crate::metrics::ThreadBuildWrapper;
 use crate::thread_group::GroupProperties;
 use crate::time::{Duration, Instant};
 use fail::fail_point;
@@ -269,8 +270,20 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .core_thread_count(self.core_thread_count)
             .max_thread_count(self.max_thread_count);
 
-        let after_start = self.after_start.take();
-        let before_stop = self.before_stop.take();
+        let after_start = match self.after_start.take() {
+            f @ Some(_) => f,
+            None => {
+                self.after_start_wrapper(|| {});
+                self.after_start.take()
+            }
+        };
+        let before_stop = match self.before_stop.take() {
+            f @ Some(_) => f,
+            None => {
+                self.before_stop_wrapper(|| {});
+                self.before_stop.take()
+            }
+        };
         let before_pause = self.before_pause.take();
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),

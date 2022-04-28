@@ -8,6 +8,7 @@ use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IOType;
 use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
+use tikv_util::metrics::ThreadBuildWrapper;
 use tokio::io::Result as TokioResult;
 use tokio::runtime::Runtime;
 use txn_types::{Key, TimeStamp};
@@ -92,11 +93,11 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         .thread_name(thread_name)
         .enable_io()
         .enable_time()
-        .on_thread_start(|| {
+        .after_start_wrapper(|| {
             tikv_alloc::add_thread_memory_accessor();
             file_system::set_io_type(IOType::Export);
         })
-        .on_thread_stop(|| {
+        .before_stop_wrapper(|| {
             tikv_alloc::remove_thread_memory_accessor();
         })
         .worker_threads(thread_count)

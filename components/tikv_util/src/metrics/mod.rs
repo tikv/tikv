@@ -3,11 +3,15 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
+use std::io;
+use std::thread;
 
 #[cfg(target_os = "linux")]
 mod threads_linux;
 #[cfg(target_os = "linux")]
-pub use self::threads_linux::{monitor_threads, ThreadInfoStatistics};
+pub use self::threads_linux::{
+    monitor_threads, thread_spawn_wrapper, tokio_spawn_wrapper, ThreadInfoStatistics,
+};
 
 #[cfg(target_os = "linux")]
 mod process_linux;
@@ -90,4 +94,22 @@ pub fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
             pair
         })
         .collect()
+}
+
+pub trait StdThreadBuildWrapper {
+    fn spawn_wrapper<F, T>(self, f: F) -> io::Result<thread::JoinHandle<T>>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static;
+}
+
+pub trait ThreadBuildWrapper {
+    fn after_start_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static;
+
+    fn before_stop_wrapper<F>(&mut self, f: F) -> &mut Self
+    where
+        F: Fn() + Send + Sync + 'static;
 }
