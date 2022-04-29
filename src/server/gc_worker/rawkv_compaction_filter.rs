@@ -38,8 +38,8 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             Some(ref ctx) => ctx,
             None => return std::ptr::null_mut(),
         };
-
         //---------------- GC context END --------------
+
         let db = gc_context.db.clone();
         let gc_scheduler = gc_context.gc_scheduler.clone();
         let store_id = gc_context.store_id;
@@ -440,7 +440,7 @@ pub mod tests {
 
         let value1 = RawValue {
             user_value: vec![0; 10],
-            expire_ts: Some(10),
+            expire_ts: Some(TimeStamp::max().into_inner()),
             is_delete: false,
         };
 
@@ -450,32 +450,69 @@ pub mod tests {
             is_delete: true,
         };
 
-        let user_key = b"r\0aaaaaaaaaaa";
+        let user_key_del = b"r\0aaaaaaaaaaa";
 
+        // is_delete = true , it will call scheduler gctask
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                make_key(user_key, 9).as_slice(),
+                make_key(user_key_del, 9).as_slice(),
                 &ApiV2::encode_raw_value_owned(value_is_delete),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                make_key(user_key, 5).as_slice(),
+                make_key(user_key_del, 5).as_slice(),
                 &ApiV2::encode_raw_value_owned(value1.clone()),
             )
             .unwrap();
         raw_engine
             .put_cf(
                 CF_DEFAULT,
-                make_key(user_key, 1).as_slice(),
+                make_key(user_key_del, 1).as_slice(),
                 &ApiV2::encode_raw_value_owned(value1),
             )
             .unwrap();
 
-        let check_key = make_key(user_key, 1);
-        let (mvcc_key_prefix, _commit_ts) = split_ts(check_key.as_slice()).unwrap();
-        gc_and_check(true, mvcc_key_prefix);
+        let check_key_del = make_key(user_key_del, 1);
+        let (prefix_del, _commit_ts) = split_ts(check_key_del.as_slice()).unwrap();
+        gc_and_check(true, prefix_del);
+
+        // ttl expire
+        let value_ttl_expired = RawValue {
+            user_value: vec![0; 10],
+            expire_ts: Some(10),
+            is_delete: false,
+        };
+
+        let user_key_expire = b"r\0bbbbbbbbbbb";
+
+        // expire ttl , it will call scheduler gctask
+        raw_engine
+            .put_cf(
+                CF_DEFAULT,
+                make_key(user_key_expire, 9).as_slice(),
+                &ApiV2::encode_raw_value_owned(value_ttl_expired.clone()),
+            )
+            .unwrap();
+        raw_engine
+            .put_cf(
+                CF_DEFAULT,
+                make_key(user_key_expire, 5).as_slice(),
+                &ApiV2::encode_raw_value_owned(value_ttl_expired.clone()),
+            )
+            .unwrap();
+        raw_engine
+            .put_cf(
+                CF_DEFAULT,
+                make_key(user_key_expire, 1).as_slice(),
+                &ApiV2::encode_raw_value_owned(value_ttl_expired),
+            )
+            .unwrap();
+
+        let check_key_expire = make_key(user_key_expire, 1);
+        let (prefix_expire, _commit_ts) = split_ts(check_key_expire.as_slice()).unwrap();
+        gc_and_check(true, prefix_expire);
     }
 }
