@@ -779,11 +779,11 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
             if !req.get_split_key().is_empty() {
-                vec![Api::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
+                vec![F::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
             } else {
                 req.take_split_keys()
                     .into_iter()
-                    .map(|x| Api::encode_raw_key_owned(x, None).into_encoded())
+                    .map(|x| F::encode_raw_key_owned(x, None).into_encoded())
                     .collect()
             }
         } else {
