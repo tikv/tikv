@@ -206,8 +206,6 @@ pub struct MvccRaw {
 
 impl MvccRaw {
     pub fn new() -> MvccRaw {
-        // FIXME: use session variable to indicate fill cache or not.
-
         MvccRaw {
             write_size: 0,
             modifies: vec![],
@@ -460,15 +458,12 @@ where
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<(usize, usize)> {
-        let first_key = keys.first().unwrap();
-        let first_raw_key = first_key.clone().append_ts(TimeStamp::max());
+        let first_raw_key = keys.first().unwrap().clone().append_ts(TimeStamp::max());
         let range_start_key = first_raw_key.as_encoded();
 
-        let last_key = keys.last().unwrap();
-        let last_raw_key = last_key.clone().append_ts(TimeStamp::zero());
+        let last_raw_key = keys.last().unwrap().clone().append_ts(TimeStamp::zero());
         let range_end_key = last_raw_key.as_encoded();
 
-        //--------------------------------KeysInRegions-----------------------------
         struct KeysInRegions<R: Iterator<Item = Region>> {
             keys: Peekable<IntoIter<Key>>,
             regions: Peekable<R>,
@@ -511,7 +506,6 @@ where
         }
 
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
-        //--------------------------------KeysInRegions-----------------------------
 
         let mut snapshot = self
             .engine
@@ -526,9 +520,9 @@ where
                 error!(?e; "Raw GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
             }
-            // flush_raw_gc;
+            // Flush writeBatch to engine.
             Self::flush_raw_gc(raw_modifys, &self.limiter, &self.engine)?;
-            // after flush, reset rwModify=let RawModify=MvccRaw::new();
+            // After flush, reset raw_modifys.
             raw_modifys = MvccRaw::new();
             next_gc_key = keys.next();
         }
@@ -548,8 +542,7 @@ where
 
         let end_key = key.clone().append_ts(TimeStamp::zero());
 
-        let start_key_arr = start_key.as_encoded();
-        let start_seek_key = Key::from_encoded_slice(start_key_arr);
+        let start_seek_key = start_key.clone();
 
         let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT)
             .range(Some(start_key), Some(end_key))
@@ -575,7 +568,6 @@ where
         Ok(())
     }
 
-    // STEP-3 flush writeBatch to engine
     fn flush_raw_gc(raw_modifys: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
         let write_size = raw_modifys.write_size();
         let modifies = raw_modifys.into_modifies();
@@ -1814,10 +1806,9 @@ mod tests {
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
+        // Init env end...
 
-        // init engine and gc runner end...
-
-        // prepare data
+        // Prepare data
         let mut test_raws = vec![];
 
         let value_not_delete = RawValue {
@@ -1877,7 +1868,7 @@ mod tests {
             prefixed_engine.write(&ctx, batch).unwrap();
         }
 
-        // don't delete ts == safepoint
+        // Don't delete the raw if the raw's ts == safepoint
         runner
             .raw_gc_keys(
                 keys.clone(),
@@ -1892,11 +1883,11 @@ mod tests {
 
         assert_eq!(5, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
-        // if raw.ts == safepoint , it will not be delete; we just delete the raw.ts < safepoint
+        // If raw.ts == safepoint , it will not be delete. We just delete the raw.ts < safepoint
         assert_eq!(check_key_a.unwrap().is_none(), false);
         assert_eq!(check_key_b.unwrap().is_none(), true);
 
-        // delete all ts < safepoint
+        // Delete the raw, if raw.ts < safepoint
         runner
             .raw_gc_keys(keys.clone(), TimeStamp::new(120), Some((1, ri_provider)))
             .unwrap();

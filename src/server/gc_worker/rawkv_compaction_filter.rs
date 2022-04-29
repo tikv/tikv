@@ -176,7 +176,7 @@ impl RawCompactionFilter {
 
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        // not RawKV or targetValue, skip
+        // If the key is not start with RAW_KEY_PREFIX or value is not targetValue, it's need be retained.
         let key_mode = key[1];
         if key_mode != RAW_KEY_PREFIX || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
@@ -190,15 +190,15 @@ impl RawCompactionFilter {
                 return Ok(CompactionFilterDecision::Keep);
             }
             let raw_value = ApiV2::decode_raw_value(value)?;
-            // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
+            // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
-                self.raw_handle_bottommost_delete();
+                self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
                 }
-                // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
             }
-            // the lastest version ,and not deleted or expaired ttl , need to be retained
+            // 1. If it's the latest version, and not deleted or expaired ttl, it needs to be retained.
+            // 2. If it's the latest version, and it's deleted or expired, while we do async gctask to deleted or expired records, both put records and deleted/expired records are actually kept within the compaction filter.
             Ok(CompactionFilterDecision::Keep)
         } else {
             if commit_ts >= self.safe_point {
@@ -206,7 +206,7 @@ impl RawCompactionFilter {
             }
 
             self.filtered += 1;
-            // ts < safepoint ,and it's not the lastest version, it's need to be removed.
+            // If it's ts < safepoint, and it's not the latest version, it's need to be removed.
             Ok(CompactionFilterDecision::Remove)
         }
     }
@@ -215,7 +215,7 @@ impl RawCompactionFilter {
         if !self.mvcc_deletions.is_empty() {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
             let task = GcTask::RawGcKeys {
-                keys: mem::replace(&mut self.mvcc_deletions, empty), //gc_keys->gc_key->gc->gc.run
+                keys: mem::replace(&mut self.mvcc_deletions, empty),
                 safe_point: self.safe_point.into(),
                 store_id: self.regions_provider.0,
                 region_info_provider: self.regions_provider.1.clone(),
@@ -245,9 +245,9 @@ impl RawCompactionFilter {
         }
     }
 
-    fn raw_handle_bottommost_delete(&mut self) {
+    fn raw_handle_delete(&mut self) {
         // Valid MVCC records should begin with `DATA_PREFIX`.
-        debug!("raw_handle_bottommost_delete:");
+        debug!("raw_handle_delete:");
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
@@ -368,7 +368,7 @@ pub mod tests {
         //Wait gc  end
         thread::sleep(Duration::from_millis(1000));
 
-        // 70 < safepoint(80), this version was removed
+        // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
         let isexit70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
             .unwrap()
@@ -388,10 +388,10 @@ pub mod tests {
             .unwrap()
             .is_none();
 
-        // ts(100) > safepoint(80), need to be retained.
+        // If ts(100) > safepoint(80), it's need to be retained.
         assert_eq!(isexit100, false);
 
-        // ts(90) == safepoint(90), need to be retained.
+        // If ts(90) == safepoint(90), it's need to be retained.
         assert_eq!(isexit90, false);
     }
 
@@ -442,13 +442,13 @@ pub mod tests {
 
         let value_is_delete = RawValue {
             user_value: vec![0; 10],
-            expire_ts: Some(10),
+            expire_ts: Some(TimeStamp::max().into_inner()),
             is_delete: true,
         };
 
         let user_key_del = b"r\0aaaaaaaaaaa";
 
-        // is_delete = true , it will call scheduler gctask
+        // If the  is true , it will call async scheduler GcTask.
         raw_engine
             .put_cf(
                 CF_DEFAULT,
@@ -475,7 +475,7 @@ pub mod tests {
         let (prefix_del, _commit_ts) = split_ts(check_key_del.as_slice()).unwrap();
         gc_and_check(true, prefix_del);
 
-        // ttl expire
+        // Make a ttl expired RawValue.
         let value_ttl_expired = RawValue {
             user_value: vec![0; 10],
             expire_ts: Some(10),
@@ -484,7 +484,7 @@ pub mod tests {
 
         let user_key_expire = b"r\0bbbbbbbbbbb";
 
-        // expire ttl , it will call scheduler gctask
+        // If raw_value expired, it will call async scheduler GcTask.
         raw_engine
             .put_cf(
                 CF_DEFAULT,
@@ -508,7 +508,7 @@ pub mod tests {
             .unwrap();
 
         let check_key_expire = make_key(user_key_expire, 1);
-        let (prefix_expire, _commit_ts) = split_ts(check_key_expire.as_slice()).unwrap();
-        gc_and_check(true, prefix_expire);
+        let (prefix_expired, _commit_ts) = split_ts(check_key_expire.as_slice()).unwrap();
+        gc_and_check(true, prefix_expired);
     }
 }
