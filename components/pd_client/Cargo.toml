@@ -26,7 +26,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 tokio = { version = "1", features = ["sync"] }
-tokio-timer = "0.2"
+tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 txn_types = { path = "../txn_types", default-features = false }
 semver = "0.10"
 fail = "0.5"
