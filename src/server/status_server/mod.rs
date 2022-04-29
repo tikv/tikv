@@ -483,6 +483,11 @@ where
         }
     }
 
+    fn do_dump(mgr: &ConfigController) -> hyper::Result<Response<Body>> {
+        let need_simplify = mgr.get_current().server.simplified_metrics;
+        Ok(Response::new(dump(need_simplify).into()))
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -539,7 +544,7 @@ where
                         }
 
                         match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/metrics") => Self::do_dump(&cfg_controller),
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {

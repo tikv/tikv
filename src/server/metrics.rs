@@ -4,7 +4,7 @@ use prometheus::*;
 use prometheus_static_metric::*;
 
 use crate::storage::ErrorHeaderKind;
-use prometheus::exponential_buckets;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
@@ -173,10 +173,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GC_GCTASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref GC_GCTASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_gcworker_gc_tasks_vec",
         "Counter of gc tasks processed by gc_worker",
-        &["task"]
+        &["task"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref GC_GCTASK_FAIL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -191,10 +192,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GRPC_MSG_FAIL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref GRPC_MSG_FAIL_COUNTER_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -213,11 +215,12 @@ lazy_static! {
         "tikv_gcworker_gc_key_failures",
         "Counter of gc key failures"
     ).unwrap();
-    pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
@@ -361,12 +364,14 @@ lazy_static! {
         exponential_buckets(1f64, 2f64, 10).unwrap()
     )
     .unwrap();
-    pub static ref REPORT_FAILURE_MSG_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "tikv_server_report_failure_msg_total",
-        "Total number of reporting failure messages",
-        &["type", "store_id"]
-    )
-    .unwrap();
+    pub static ref REPORT_FAILURE_MSG_COUNTER: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "tikv_server_report_failure_msg_total",
+            "Total number of reporting failure messages",
+            &["type", "store_id"],
+            HIGH_PRIORITY_REGISTRY
+        )
+        .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,
@@ -464,17 +469,19 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
 }
 
 lazy_static! {
-    pub static ref ASYNC_REQUESTS_COUNTER: IntCounterVec = register_int_counter_vec!(
+    pub static ref ASYNC_REQUESTS_COUNTER: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_storage_engine_async_request_total",
         "Total number of engine asynchronous requests",
-        &["type", "status"]
+        &["type", "status"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref ASYNC_REQUESTS_DURATIONS: HistogramVec = register_histogram_vec!(
+    pub static ref ASYNC_REQUESTS_DURATIONS: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_storage_engine_async_request_duration_seconds",
         "Bucketed histogram of processing successful asynchronous requests.",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
 }

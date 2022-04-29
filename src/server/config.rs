@@ -152,6 +152,9 @@ pub struct Config {
     #[online_config(skip)]
     pub forward_max_connections_per_address: usize,
 
+    // whether to compact metrics or not.
+    pub simplified_metrics: bool,
+
     // Test only.
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -248,6 +251,7 @@ impl Default for Config {
             end_point_slow_log_threshold: ReadableDuration::secs(1),
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
+            simplified_metrics: false,
         }
     }
 }

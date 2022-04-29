@@ -2,20 +2,24 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 lazy_static! {
-    pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref PD_REQUEST_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_pd_request_duration_seconds",
         "Bucketed histogram of PD requests duration",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref PD_HEARTBEAT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_pd_heartbeat_message_total",
-        "Total number of PD heartbeat messages.",
-        &["type"]
-    )
-    .unwrap();
+    pub static ref PD_HEARTBEAT_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "tikv_pd_heartbeat_message_total",
+            "Total number of PD heartbeat messages.",
+            &["type"],
+            HIGH_PRIORITY_REGISTRY
+        )
+        .unwrap();
     pub static ref PD_BUCKETS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_pd_buckets_message_total",
         "Total number of PD buckets messages.",
@@ -38,14 +42,21 @@ lazy_static! {
         "Total number of pending region buckets"
     )
     .unwrap();
-    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_pd_validate_peer_total",
-        "Total number of pd worker validate peer task.",
-        &["type"]
+    pub static ref PD_VALIDATE_PEER_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "tikv_pd_validate_peer_total",
+            "Total number of pd worker validate peer task.",
+            &["type"],
+            HIGH_PRIORITY_REGISTRY
+        )
+        .unwrap();
+    pub static ref STORE_SIZE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec_with_registry!(
+        "tikv_store_size_bytes",
+        "Size of storage.",
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref STORE_SIZE_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!("tikv_store_size_bytes", "Size of storage.", &["type"]).unwrap();
     pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_region_read_keys",
         "Histogram of keys written for regions",

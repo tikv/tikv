@@ -3,6 +3,7 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 make_auto_flush_static_metric! {
     pub label_enum SnapType {
@@ -68,11 +69,12 @@ lazy_static! {
     .unwrap();
     pub static ref CHECK_SPILT_COUNTER: CheckSplitCounter =
         auto_flush_from!(CHECK_SPILT_COUNTER_VEC, CheckSplitCounter);
-    pub static ref SNAP_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref SNAP_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_raftstore_snapshot_duration_seconds",
         "Bucketed histogram of raftstore snapshot process duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref SNAP_HISTOGRAM: SnapHistogram =

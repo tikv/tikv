@@ -4,8 +4,10 @@ use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{IntGaugeVec, Opts, Result};
 
+use crate::metrics::HIGH_PRIORITY_REGISTRY;
+
 pub fn monitor_allocator_stats<S: Into<String>>(namespace: S) -> Result<()> {
-    prometheus::register(Box::new(AllocStatsCollector::new(namespace)?))
+    HIGH_PRIORITY_REGISTRY.register(Box::new(AllocStatsCollector::new(namespace)?))
 }
 
 struct AllocStatsCollector {

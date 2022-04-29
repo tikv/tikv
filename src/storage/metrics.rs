@@ -18,6 +18,7 @@ use kvproto::pdpb::QueryKind;
 use pd_client::BucketMeta;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
@@ -427,19 +428,21 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
 }
 
 lazy_static! {
-    pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_storage_command_total",
         "Total number of commands received.",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
         auto_flush_from!(KV_COMMAND_COUNTER_VEC, KvCommandCounterVec);
     pub static ref SCHED_STAGE_COUNTER: IntCounterVec = {
-        register_int_counter_vec!(
+        register_int_counter_vec_with_registry!(
             "tikv_scheduler_stage_total",
             "Total number of commands on each stage.",
-            &["type", "stage"]
+            &["type", "stage"],
+            HIGH_PRIORITY_REGISTRY
         )
         .unwrap()
     };
@@ -450,14 +453,16 @@ lazy_static! {
         "Total number of writing kv."
     )
     .unwrap();
-    pub static ref SCHED_CONTEX_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_CONTEX_GAUGE: IntGauge = register_int_gauge_with_registry!(
         "tikv_scheduler_contex_total",
-        "Total number of pending commands."
+        "Total number of pending commands.",
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref SCHED_WRITE_FLOW_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_WRITE_FLOW_GAUGE: IntGauge = register_int_gauge_with_registry!(
         "tikv_scheduler_write_flow",
-        "The write flow passed through at scheduler level."
+        "The write flow passed through at scheduler level.",
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_FLOW_GAUGE: IntGauge = register_int_gauge!(
@@ -502,22 +507,25 @@ lazy_static! {
     )
     .unwrap();
     pub static ref SCHED_THROTTLE_ACTION_COUNTER: IntCounterVec = {
-        register_int_counter_vec!(
+        register_int_counter_vec_with_registry!(
             "tikv_scheduler_throttle_action_total",
             "Total number of actions for flow control.",
-            &["cf", "type"]
+            &["cf", "type"],
+            HIGH_PRIORITY_REGISTRY
         )
         .unwrap()
     };
-    pub static ref SCHED_DISCARD_RATIO_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref SCHED_DISCARD_RATIO_GAUGE: IntGauge = register_int_gauge_with_registry!(
         "tikv_scheduler_discard_ratio",
-        "The discard ratio for flow control."
+        "The discard ratio for flow control.",
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
-    pub static ref SCHED_THROTTLE_CF_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref SCHED_THROTTLE_CF_GAUGE: IntGaugeVec = register_int_gauge_vec_with_registry!(
         "tikv_scheduler_throttle_cf",
         "The CF being throttled.",
-        &["cf"]
+        &["cf"],
+        HIGH_PRIORITY_REGISTRY
     ).unwrap();
     pub static ref SCHED_PENDING_COMPACTION_BYTES_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_scheduler_pending_compaction_bytes",
@@ -531,20 +539,22 @@ lazy_static! {
             "Bucketed histogram of peer commits logs duration.",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+    pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
         auto_flush_from!(SCHED_HISTOGRAM_VEC, SchedDurationVec);
-    pub static ref SCHED_LATCH_HISTOGRAM: HistogramVec = register_histogram_vec!(
+    pub static ref SCHED_LATCH_HISTOGRAM: HistogramVec = register_histogram_vec_with_registry!(
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.0005, 2.0, 20).unwrap(),
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
@@ -565,10 +575,11 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
+    pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref SCHED_TOO_BUSY_COUNTER_VEC: SchedTooBusyVec =
@@ -642,10 +653,11 @@ lazy_static! {
     pub static ref TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC: TxnCommandThrottleTimeCounterVec =
         auto_flush_from!(TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC, TxnCommandThrottleTimeCounterVec);
 
-    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER: IntCounterVec = register_int_counter_vec!(
+    pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_in_memory_pessimistic_locking",
         "Count of different types of in-memory pessimistic locking",
-        &["result"]
+        &["result"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =

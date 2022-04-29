@@ -8,6 +8,7 @@ use collections::HashMap;
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, GaugeVec, IntGaugeVec, Opts};
 
+use crate::metrics::HIGH_PRIORITY_REGISTRY;
 use crate::sys::thread::{self, Pid};
 use crate::time::Instant;
 use procinfo::pid;
@@ -16,7 +17,9 @@ use procinfo::pid;
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
     let pid = thread::process_id();
     let tc = ThreadsCollector::new(pid, namespace);
-    prometheus::register(Box::new(tc)).map_err(|e| to_io_err(format!("{:?}", e)))
+    HIGH_PRIORITY_REGISTRY
+        .register(Box::new(tc))
+        .map_err(|e| to_io_err(format!("{:?}", e)))
 }
 
 struct Metrics {
@@ -193,11 +196,27 @@ impl Collector for ThreadsCollector {
                 }
             }
         }
-        let mut mfs = metrics.cpu_totals.collect();
-        mfs.extend(metrics.threads_state.collect());
-        mfs.extend(metrics.io_totals.collect());
-        mfs.extend(metrics.voluntary_ctxt_switches.collect());
-        mfs.extend(metrics.nonvoluntary_ctxt_switches.collect());
+
+        // there are more than 100 threads and most of them are inactive,
+        // so only retain the sample which value >= 0.01 * max_sample_value
+        let simplify_metrics = |mfs: Vec<proto::MetricFamily>| {
+            let mut mfs = mfs;
+            for mf in &mut mfs {
+                let mut metrics = mf.take_metric().into_vec();
+                let threshold = metrics.iter().map(|m| m.get_gauge().get_value()).reduce(f64::max).unwrap() / 100.0;
+                metrics.retain(|m| m.get_gauge().get_value() > threshold);
+                mf.set_metric(metrics.into());
+            }
+            mfs
+        };
+
+        let mut mfs = simplify_metrics(metrics.cpu_totals.collect());
+        mfs.extend(simplify_metrics(metrics.threads_state.collect()));
+        mfs.extend(simplify_metrics(metrics.io_totals.collect()));
+        mfs.extend(simplify_metrics(metrics.voluntary_ctxt_switches.collect()));
+        mfs.extend(simplify_metrics(
+            metrics.nonvoluntary_ctxt_switches.collect(),
+        ));
         mfs
     }
 }

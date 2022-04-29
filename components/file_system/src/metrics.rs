@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 make_static_metric! {
     pub label_enum IOType {
@@ -48,10 +49,11 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref IO_BYTES_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref IO_BYTES_VEC: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_io_bytes",
         "Bytes of disk tikv io",
-        &["type", "op"]
+        &["type", "op"],
+        HIGH_PRIORITY_REGISTRY
     ).unwrap();
 
     pub static ref IO_LATENCY_MICROS_VEC: IOLatencyVec =

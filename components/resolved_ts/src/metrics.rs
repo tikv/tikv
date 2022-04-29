@@ -2,6 +2,7 @@
 
 use lazy_static::*;
 use prometheus::*;
+use tikv_util::metrics::HIGH_PRIORITY_REGISTRY;
 
 lazy_static! {
     pub static ref RTS_CHANNEL_PENDING_CMD_BYTES: IntGauge = register_int_gauge!(
@@ -36,9 +37,10 @@ lazy_static! {
         "Total number of pending rts"
     )
     .unwrap();
-    pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
+    pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge_with_registry!(
         "tikv_resolved_ts_min_resolved_ts_gap_millis",
-        "The minimal (non-zero) resolved ts gap for observe regions"
+        "The minimal (non-zero) resolved ts gap for observe regions",
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref RTS_RESOLVED_FAIL_ADVANCE_VEC: IntCounterVec = register_int_counter_vec!(
@@ -108,9 +110,10 @@ lazy_static! {
         "The minimal (non-zero) resolved ts for observe leader peers"
     )
     .unwrap();
-    pub static ref RTS_MIN_LEADER_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_GAP: IntGauge = register_int_gauge_with_registry!(
         "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
-        "The minimal (non-zero) resolved ts gap for observe leader peers"
+        "The minimal (non-zero) resolved ts gap for observe leader peers",
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
 }

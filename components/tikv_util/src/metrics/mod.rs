@@ -34,18 +34,76 @@ mod metrics_reader;
 
 use kvproto::pdpb;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
-pub fn dump() -> String {
+
+lazy_static! {
+    // the registry for high priority metrics.
+    pub static ref HIGH_PRIORITY_REGISTRY: Registry = Registry::new();
+    
+    static ref METRICS_DUMP_COUNTER: AtomicU64 = Default::default();
+}
+
+// the factor in simplify mode to return full metrics.
+const METRICS_DUMP_FACTOR: u64 = 3;
+
+
+pub fn dump(should_simplify: bool) -> String {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
-    let metric_families = prometheus::gather();
-    for mf in metric_families {
-        if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+
+    dump_metrics(
+        HIGH_PRIORITY_REGISTRY.gather(),
+        &encoder,
+        &mut buffer,
+        should_simplify,
+    );
+    if !should_simplify || METRICS_DUMP_COUNTER.fetch_add(1, Ordering::Relaxed) % METRICS_DUMP_FACTOR == 0 {
+        dump_metrics(prometheus::gather(), &encoder, &mut buffer, should_simplify);
+    }
+
+    String::from_utf8(buffer).unwrap()
+}
+
+fn dump_metrics<'a, E: Encoder, W: std::io::Write>(
+    metric_families: Vec<proto::MetricFamily>,
+    encoder: &E,
+    writer: &mut W,
+    should_simplify: bool,
+) {
+    use prometheus::proto::MetricType;
+    if !should_simplify {
+        if let Err(e) = encoder.encode(&*metric_families, writer) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
+        return;
     }
-    String::from_utf8(buffer).unwrap()
+
+    for mut mf in metric_families {
+        let mut metrics = mf.take_metric().into_vec();
+        match mf.get_field_type() {
+            // filter out counters with value 0.
+            MetricType::COUNTER => {
+                metrics.retain(|m| m.get_counter().get_value() > 0.0);
+            }
+            // filter all histogram that the total accumulated value is 0.
+            MetricType::HISTOGRAM => {
+                metrics.retain(|m| {
+                    let buckets = m.get_histogram().get_bucket();
+                    !buckets.is_empty() && buckets[buckets.len() - 1].get_cumulative_count() > 0
+                });
+            }
+            _ => {}
+        }
+
+        if !metrics.is_empty() {
+            mf.set_metric(metrics.into());
+            if let Err(e) = encoder.encode(&[mf], writer) {
+                warn!("prometheus encoding error"; "err" => ?e);
+            }
+        }
+    }
 }
 
 make_auto_flush_static_metric! {
@@ -62,10 +120,11 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
-    pub static ref CRITICAL_ERROR: IntCounterVec = register_int_counter_vec!(
+    pub static ref CRITICAL_ERROR: IntCounterVec = register_int_counter_vec_with_registry!(
         "tikv_critical_error_total",
         "Counter of critical error.",
-        &["type"]
+        &["type"],
+        HIGH_PRIORITY_REGISTRY
     )
     .unwrap();
     pub static ref NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC: IntCounterVec =

@@ -115,6 +115,7 @@ fn test_serde_custom_tikv_config() {
         end_point_slow_log_threshold: ReadableDuration::secs(1),
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
+        simplified_metrics: false,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
