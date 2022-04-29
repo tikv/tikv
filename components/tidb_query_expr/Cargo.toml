@@ -6,15 +6,12 @@ publish = false
 description = "Vector expressions of query engine to run TiDB pushed down executors"
 
 [dependencies]
-rand = "0.8.3"
-safemem = { version = "0.3", default-features = false }
-time = "0.1"
 base64 = "0.13"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { path = "../codec", default-features = false }
-flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 file_system = { path = "../file_system", default-features = false }
+flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 hex = "0.4"
 log_wrappers = { path = "../log_wrappers" }
 match_template = { path = "../match_template" }
@@ -22,21 +19,24 @@ num = { version = "0.3", default-features = false }
 num-traits = "0.2"
 openssl = { version = "0.10" }
 protobuf = "2"
+rand = "0.8.3"
 regex = "1.1"
+safemem = { version = "0.3", default-features = false }
+serde = "1.0"
+serde_json = "1.0"
+static_assertions = { version = "1.0", features = ["nightly"] }
 tidb_query_codegen = { path = "../tidb_query_codegen" }
-tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "../tidb_query_common", default-features = false }
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
+time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
-static_assertions = { version = "1.0", features = ["nightly"] }
-serde = "1.0"
-serde_json = "1.0"
 
 [dev-dependencies]
 bstr = "0.2.8"
 chrono = "0.4"
-profiler = { path = "../profiler" }
 panic_hook = { path = "../panic_hook" }
+profiler = { path = "../profiler" }
 tipb_helper = { path = "../tipb_helper", default-features = false }

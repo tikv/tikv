@@ -22,7 +22,6 @@ test-engines-panic = [
   "test-engine-raft-panic",
 ]
 
-
 [dependencies]
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
