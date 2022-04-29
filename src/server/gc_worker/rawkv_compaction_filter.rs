@@ -253,6 +253,7 @@ impl RawCompactionFilter {
         self.mvcc_deletions.push(key);
     }
 
+    // TODO some refactor to avoid duplicated codes.
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
             self.versions_hist.observe(self.versions as f64);
