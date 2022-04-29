@@ -1705,6 +1705,13 @@ where
             health_service.set_serving_status("", status);
         }
     }
+
+    fn update_health_status(&mut self, status: ServingStatus) {
+        self.curr_health_status = status;
+        if let Some(health_service) = &self.health_service {
+            health_service.set_serving_status("", status);
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
