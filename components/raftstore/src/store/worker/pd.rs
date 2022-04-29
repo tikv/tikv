@@ -1183,51 +1183,62 @@ where
                             || plan.get_demotes().len() != 0
                             || plan.get_tombstones().len() != 0
                         {
-                            let counter = Arc::new(AtomicUsize::new(
-                                plan.get_creates().len()
-                                    + plan.get_tombstones().len()
-                                    + plan.get_demotes().len(),
-                            ));
+                            let counter = Arc::new(AtomicUsize::new(1));
                             let report_id = UnsafeRecoveryReportId {
                                 id: plan.get_step(),
                                 exit_force_leader_after_reporting: true,
                             };
                             for create in plan.get_creates() {
                                 info!("Unsafe recovery, asked to create region"; "region" => ?create);
+                                let _ = counter.fetch_add(1, Ordering::SeqCst);
                                 if let Err(e) =
-                                    router.send_control(StoreMsg::CreatePeerForUnsafeRecovery {
+                                    router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
                                         create: create.clone(),
                                         counter: counter.clone(),
                                         report_id,
                                     })
                                 {
                                     error!("fail to send creat peer message for recovery"; "err" => ?e);
+                                    let _ = counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             for delete in plan.get_tombstones() {
                                 info!("Unsafe recovery, asked to delete peer"; "peer" => delete);
+                                let _ = counter.fetch_add(1, Ordering::SeqCst);
                                 if let Err(e) = router.force_send(
                                     *delete,
-                                    PeerMsg::DestroyForUnsafeRecovery {
+                                    PeerMsg::UnsafeRecoveryDestroy {
                                         counter: counter.clone(),
                                         report_id,
                                     },
                                 ) {
                                     error!("fail to send delete peer message for recovery"; "err" => ?e);
+                                    let _ = counter.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             for demote in plan.get_demotes() {
                                 info!("Unsafe recovery, required to demote failed peers"; "demotion" => ?demote);
+                                let _ = counter.fetch_add(1, Ordering::SeqCst);
                                 if let Err(e) = router.force_send(
                                     demote.get_region_id(),
-                                    PeerMsg::DemoteFailedVotersForUnsafeRecovery {
+                                    PeerMsg::UnsafeRecoveryDemoteFailedVoters {
                                         failed_voters: demote.get_failed_voters().to_vec(),
                                         counter: counter.clone(),
                                         report_id,
                                     },
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);
+                                    let _ = counter.fetch_sub(1, Ordering::SeqCst);
                                 }
+                            }
+                            if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                                start_unsafe_recovery_report(
+                                    &router,
+                                    UnsafeRecoveryReportId {
+                                        id: plan.get_step(),
+                                        exit_force_leader_after_reporting: true,
+                                    },
+                                );
                             }
                         } else {
                             info!(

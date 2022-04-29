@@ -510,7 +510,7 @@ pub enum UnsafeRecoveryState {
         commit_index: u64,
         // Failed regions may be stuck in joint state, if that is the case, we need to ask the
         // region to exit joint state before proposing the demotion.
-        propose_after_exit: bool,
+        demote_after_exit: bool,
         report_id: UnsafeRecoveryReportId,
     },
     Destroy {
@@ -5306,7 +5306,7 @@ pub fn schedule_store_report<EK: KvEngine, ER: RaftEngine>(
     let mut store_report = pdpb::StoreReport::default();
     store_report.set_peer_reports(RepeatedField::from_vec(peer_reports));
     store_report.set_step(report_id.id);
-    if let Err(e) = router.send_control(StoreMsg::ReportForUnsafeRecovery(store_report)) {
+    if let Err(e) = router.send_control(StoreMsg::UnsafeRecoveryReport(store_report)) {
         error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
     }
     if report_id.exit_force_leader_after_reporting {

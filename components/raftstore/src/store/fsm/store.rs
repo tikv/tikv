@@ -67,7 +67,7 @@ use crate::store::fsm::{
 use crate::store::local_metrics::{RaftMetrics, RaftReadyMetrics};
 use crate::store::memory::*;
 use crate::store::metrics::*;
-use crate::store::peer::{start_unsafe_recovery_report, UnsafeRecoveryReportId};
+use crate::store::peer::start_unsafe_recovery_report;
 use crate::store::peer_storage;
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, RegionReadProgressRegistry};
@@ -623,12 +623,17 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     inspector.record_store_wait(send_time.saturating_elapsed());
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
-                StoreMsg::ReportForUnsafeRecovery(report) => self.store_heartbeat_pd(Some(report)),
-                StoreMsg::CreatePeerForUnsafeRecovery {
+                StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
+                StoreMsg::UnsafeRecoveryCreatePeer {
                     create,
                     counter,
                     report_id,
-                } => self.on_create_peer_for_unsafe_recovery(create, counter, report_id),
+                } => {
+                    self.on_unsafe_recovery_create_peer(create);
+                    if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+                        start_unsafe_recovery_report(&self.ctx.router, report_id);
+                    }
+                }
             }
         }
     }
@@ -2641,12 +2646,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.report_status_update()
     }
 
-    fn on_create_peer_for_unsafe_recovery(
-        &self,
-        region: Region,
-        counter: Arc<AtomicUsize>,
-        report_id: UnsafeRecoveryReportId,
-    ) {
+    fn on_unsafe_recovery_create_peer(&self, region: Region) {
         info!("Unsafe recovery, creating a peer"; "peer" => ?region);
         let mut meta = self.ctx.store_meta.lock().unwrap();
         for (_, id) in meta.region_ranges.range((
@@ -2657,42 +2657,36 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if enc_start_key(exist_region) >= data_end_key(region.get_end_key()) {
                 break;
             }
-            panic!(
-                "{:?} is overlapped with an existing region {:?}",
-                region, exist_region
-            );
-        }
-        let mut kv_wb = self.ctx.engines.kv.write_batch();
-        let region_state_key = keys::region_state_key(region.get_id());
-        match self
-            .ctx
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(region_state)) => {
-                info!(
-                    "target region already exists, existing region: {:?}, want to create: {:?}",
-                    region_state, region
+            if exist_region.get_id() == region.get_id() {
+                warn!("Unsafe recovery, region has already been created."; "region"=>?region);
+                return;
+            } else {
+                error!(
+                    "Unsafe recovery, region to be created overlaps with an existing region";
+                    "region" => ?region,
+                    "exist_region" => ?exist_region,
                 );
                 return;
             }
-            Ok(None) => {}
-            Err(e) => {
-                panic!("cannot determine whether {:?} exists, err {:?}", region, e)
-            }
-        };
-        peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "fail to add peer state into write batch while creating {:?} err {:?}",
-                    region, e
-                )
-            });
+        }
+        let mut kv_wb = self.ctx.engines.kv.write_batch();
+        if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
+        {
+            error!(
+                "Unsafe recovery, fail to add peer state into write batch";
+                "region" => ?region,
+                "err" => ?e,
+            );
+            return;
+        }
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         if let Err(e) = kv_wb.write_opt(&write_opts) {
-            panic!("fail to write while creating {:?} err {:?}", region, e);
+            error!("Unsafe recoverym fail to write while creating peer.";
+                "region" => ?region,
+                "err" => ?e,
+            );
+            return;
         }
         let (sender, mut peer) = match PeerFsm::create(
             self.ctx.store.get_id(),
@@ -2704,19 +2698,27 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         ) {
             Ok((sender, peer)) => (sender, peer),
             Err(e) => {
-                panic!(
-                    "fail to create peer fsm while creating {:?} err {:?}",
-                    region, e
+                error!(
+                    "Unsafe recovery, fail to create peer fsm";
+                    "region" => ?region,
+                    "err" => ?e,
                 );
+                return;
             }
         };
-        let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        {
+            let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+            peer.peer.init_replication_mode(&mut *replication_state);
+        }
         peer.peer.activate(self.ctx);
         if meta
-            .region_ranges
-            .insert(enc_end_key(&region), region.get_id())
+            .regions
+            .insert(region.get_id(), region.clone())
             .is_some()
+            || meta
+                .region_ranges
+                .insert(enc_end_key(&region), region.get_id())
+                .is_some()
             || meta
                 .readers
                 .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
@@ -2726,10 +2728,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .insert(region.get_id(), peer.peer.read_progress.clone())
                 .is_some()
         {
-            panic!(
-                "key conflicts while insert region {:?} into store meta",
-                region
+            error!(
+                "Unsafe recovery, key conflicts while inserting region into store meta";
+                "region" => ?region,
             );
+            return;
         }
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
         self.ctx.router.register(region.get_id(), mailbox);
@@ -2737,9 +2740,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .router
             .force_send(region.get_id(), PeerMsg::Start)
             .unwrap();
-        if counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            start_unsafe_recovery_report(&self.ctx.router, report_id);
-        }
     }
 }
 

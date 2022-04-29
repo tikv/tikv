@@ -573,12 +573,12 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Asks region to change replication mode.
     UpdateReplicationMode,
     Destroy(u64),
-    DemoteFailedVotersForUnsafeRecovery {
+    UnsafeRecoveryDemoteFailedVoters {
         failed_voters: Vec<metapb::Peer>,
         counter: Arc<AtomicUsize>,
         report_id: UnsafeRecoveryReportId,
     },
-    DestroyForUnsafeRecovery {
+    UnsafeRecoveryDestroy {
         counter: Arc<AtomicUsize>,
         report_id: UnsafeRecoveryReportId,
     },
@@ -612,14 +612,14 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
-            PeerMsg::DemoteFailedVotersForUnsafeRecovery { failed_voters, .. } => {
+            PeerMsg::UnsafeRecoveryDemoteFailedVoters { failed_voters, .. } => {
                 write!(
                     fmt,
                     "Demote following voters {:?} from the region",
                     failed_voters
                 )
             }
-            PeerMsg::DestroyForUnsafeRecovery { .. } => {
+            PeerMsg::UnsafeRecoveryDestroy { .. } => {
                 write!(fmt, "Destroy the peer for unsafe recovery")
             }
             PeerMsg::UnsafeRecoveryWaitApply(_) => write!(fmt, "WaitApply for unsafe recovery"),
@@ -670,8 +670,8 @@ where
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 
-    ReportForUnsafeRecovery(pdpb::StoreReport),
-    CreatePeerForUnsafeRecovery {
+    UnsafeRecoveryReport(pdpb::StoreReport),
+    UnsafeRecoveryCreatePeer {
         create: metapb::Region,
         counter: Arc<AtomicUsize>,
         report_id: UnsafeRecoveryReportId,
@@ -704,9 +704,9 @@ where
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
-            StoreMsg::ReportForUnsafeRecovery(..) => write!(fmt, "ReportForUnsafeRecovery"),
-            StoreMsg::CreatePeerForUnsafeRecovery { .. } => {
-                write!(fmt, "CreatePeerForUnsafeRecovery")
+            StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => {
+                write!(fmt, "UnsafeRecoveryCreatePeer")
             }
         }
     }
