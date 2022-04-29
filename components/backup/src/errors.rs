@@ -11,6 +11,7 @@ use thiserror::Error;
 use tikv::storage::kv::{Error as KvError, ErrorInner as EngineErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv_util::codec::Error as CodecError;
 use tokio::sync::AcquireError;
 
 use crate::metrics::*;
@@ -118,6 +119,8 @@ pub enum Error {
     Semaphore(#[from] AcquireError),
     #[error("Channel is closed")]
     ChannelClosed,
+    #[error("Codec error {0}")]
+    Codec(#[from] CodecError),
 }
 
 macro_rules! impl_from {

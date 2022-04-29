@@ -371,6 +371,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "async-channel",
  "collections",
  "concurrency_manager",
@@ -5141,6 +5142,7 @@ dependencies = [
 name = "test_backup"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "backup",
  "collections",
  "concurrency_manager",
@@ -5153,6 +5155,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "kvproto",
+ "protobuf",
  "rand 0.8.3",
  "tempfile",
  "test_raftstore",
@@ -5205,6 +5208,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backtrace",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crossbeam",
