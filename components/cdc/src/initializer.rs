@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use api_version::{ApiV2, KvFormat, RAW_KEY_PREFIX};
+use api_version::{DATA_KEY_PREFIX_LEN, RAW_KEY_PREFIX};
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::PROP_MAX_TS;
 use engine_traits::{
@@ -205,31 +205,12 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
-        if self.ts_filter_is_helpful(&snap) {
+        if kv_api == ChangeDataRequestKvApi::TiDb && self.ts_filter_is_helpful(&snap) {
             hint_min_ts = Some(self.checkpoint_ts);
             let wc = new_old_value_cursor(&snap, CF_WRITE);
             let dc = new_old_value_cursor(&snap, CF_DEFAULT);
             old_value_cursors = Some(OldValueCursors::new(wc, dc));
         }
-
-        let curr_state = self.downstream_state.load();
-        assert!(matches!(
-            curr_state,
-            DownstreamState::Initializing | DownstreamState::Stopped
-        ));
-
-        fail_point!("cdc_incremental_scan_start");
-        let conn_id = self.conn_id;
-        let start = Instant::now_coarse();
-
-        let on_cancel = || -> Result<()> {
-            info!("cdc async incremental scan canceled";
-                "region_id" => region_id,
-                "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" => ?conn_id);
-            Err(box_err!("scan canceled"))
-        };
 
         let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
             let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
@@ -242,15 +223,34 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
-            iter_opt.set_lower_bound(&[RAW_KEY_PREFIX], 1);
-            iter_opt.set_upper_bound(&[RAW_KEY_PREFIX + 1], 1);
+            iter_opt.set_lower_bound(&[RAW_KEY_PREFIX], DATA_KEY_PREFIX_LEN);
+            iter_opt.set_upper_bound(&[RAW_KEY_PREFIX + 1], DATA_KEY_PREFIX_LEN);
             let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
 
             iter.seek_to_first().unwrap();
             Scanner::RawKvScanner(iter)
         };
 
+        fail_point!("cdc_incremental_scan_start");
+        let conn_id = self.conn_id;
         let mut done = false;
+        let start = Instant::now_coarse();
+
+        let curr_state = self.downstream_state.load();
+        assert!(matches!(
+            curr_state,
+            DownstreamState::Initializing | DownstreamState::Stopped
+        ));
+
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
+
         while !done {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
@@ -333,13 +333,12 @@ impl<E: KvEngine> Initializer<E> {
                 },
                 Scanner::RawKvScanner(iter) => {
                     if iter.valid()? {
-                        let key = iter.key().to_vec();
-                        let (_, ts) =
-                            ApiV2::decode_raw_key_owned(Key::from_encoded(key.clone()), true)?;
-                        if ts.unwrap() >= self.checkpoint_ts {
-                            let value = iter.value().to_vec();
+                        let key = iter.key();
+                        let ts = Key::decode_ts_from(key);
+                        if ts.is_ok() && ts.unwrap() > self.checkpoint_ts {
+                            let value = iter.value();
                             total_bytes += key.len() + value.len();
-                            entries.push(Some(KvEntry::RawKvEntry((key, value))));
+                            entries.push(Some(KvEntry::RawKvEntry((key.to_vec(), value.to_vec()))));
                         }
                         iter.next()?;
                     } else {

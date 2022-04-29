@@ -335,8 +335,9 @@ impl ServerCluster {
             None
         };
 
-        if cfg.tikv.storage.api_version == 2 {
-            let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        if ApiVersion::V2 == F::TAG {
+            let causal_ts_provider =
+                Arc::new(causal_ts::SimpleTsoProvider::new(self.pd_client.clone()));
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(&mut coprocessor_host);
         }

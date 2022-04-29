@@ -282,7 +282,7 @@ impl TestSuite {
         );
     }
 
-    pub fn must_kv_raw_v2(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
+    pub fn must_kv_raw_put_v2(&mut self, region_id: u64, key: Vec<u8>, value: Vec<u8>) {
         let mut rawkv_req = RawPutRequest::default();
         let mut context = self.get_context(region_id);
         context.set_api_version(ApiVersion::V2);

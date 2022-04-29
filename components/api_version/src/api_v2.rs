@@ -11,6 +11,7 @@ pub const RAW_KEY_PREFIX: u8 = b'r';
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
+pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -324,6 +325,26 @@ mod tests {
         {
             let v = ApiV2::decode_raw_value(&ApiV2::ENCODED_LOGICAL_DELETE).unwrap();
             assert!(v.is_delete);
+        }
+    }
+
+    #[test]
+    fn test_decode_ts_from() {
+        let test_cases: Vec<(Vec<u8>, TimeStamp)> = vec![
+            (b"rkey1".to_vec(), 1.into()),
+            (b"rkey2".to_vec(), 2.into()),
+            (b"rkey3".to_vec(), 3.into()),
+            (b"rkey4".to_vec(), 4.into()),
+        ];
+        for (idx, (key, ts)) in test_cases.into_iter().enumerate() {
+            let key_with_ts = ApiV2::encode_raw_key(&key, Some(ts)).into_encoded();
+            let (decoded_key, decoded_ts1) =
+                ApiV2::decode_raw_key_owned(Key::from_encoded(key_with_ts.clone()), true).unwrap();
+            let decoded_ts2 = Key::decode_ts_from(&key_with_ts).unwrap();
+
+            assert_eq!(key, decoded_key, "case {}", idx);
+            assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);
+            assert_eq!(ts, decoded_ts2, "case {}", idx);
         }
     }
 }

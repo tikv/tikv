@@ -473,15 +473,20 @@ impl Delegate {
             match entry {
                 Some(KvEntry::RawKvEntry(kv_pair)) => {
                     let mut row = EventRow::default();
-                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row);
-
-                    let row_size = row.key.len() + row.value.len();
-                    if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                        rows.push(Vec::with_capacity(entries_len));
-                        current_rows_size = 0;
+                    match decode_rawkv(kv_pair.0, kv_pair.1, &mut row) {
+                        Ok(()) => {
+                            let row_size = row.key.len() + row.value.len();
+                            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
+                                rows.push(Vec::with_capacity(entries_len));
+                                current_rows_size = 0;
+                            }
+                            current_rows_size += row_size;
+                            rows.last_mut().unwrap().push(row);
+                        }
+                        Err(e) => {
+                            warn!("cdc decode_rawkv failed"; "error" => ?e);
+                        }
                     }
-                    current_rows_size += row_size;
-                    rows.last_mut().unwrap().push(row);
                 }
                 Some(KvEntry::TxnEntry(txn_entry)) => {
                     match txn_entry {
@@ -676,7 +681,7 @@ impl Delegate {
 
     fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
         let mut row = EventRow::default();
-        decode_rawkv(put.take_key(), put.take_value(), &mut row);
+        decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
         rows.push(row);
         Ok(())
     }
@@ -962,9 +967,9 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
-    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true).unwrap();
-    let decoded_value = ApiV2::decode_raw_value_owned(value).unwrap();
+fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> {
+    let (decoded_key, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded(key), true)?;
+    let decoded_value = ApiV2::decode_raw_value_owned(value)?;
 
     row.start_ts = ts.unwrap().into_inner();
     row.commit_ts = row.start_ts;
@@ -981,6 +986,7 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) {
         row.op_type = EventRowOpType::Put;
     }
     set_event_row_type(row, EventLogType::Committed);
+    Ok(())
 }
 
 fn decode_default(value: Vec<u8>, row: &mut EventRow) {
@@ -1202,9 +1208,10 @@ mod tests {
                 is_delete,
             };
             let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
-            decode_rawkv(key_with_ts, encoded_value, &mut row);
+            decode_rawkv(key_with_ts, encoded_value, &mut row).unwrap();
 
             assert_eq!(row.start_ts, start_ts);
+            assert_eq!(row.commit_ts, start_ts);
             assert_eq!(row.key, key);
             assert_eq!(row.value, value);
 

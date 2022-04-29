@@ -218,7 +218,21 @@ fn test_cdc_rawkv_basic() {
         .unwrap();
 
     let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
-    suite.must_kv_raw_v2(1, k, v);
+    suite.must_kv_raw_put_v2(1, k, v);
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // boundary case
+    let (k, v) = (b"r\0".to_vec(), b"value".to_vec());
+    suite.must_kv_raw_put_v2(1, k, v);
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
 
@@ -579,15 +593,23 @@ fn test_cdc_scan() {
 fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
+    suite.set_tso(10);
     let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
-    suite.must_kv_raw_v2(1, k1, v1);
+    suite.must_kv_raw_put_v2(1, k1, v1);
 
     let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
-    suite.must_kv_raw_v2(1, k2.clone(), v2.clone());
+    suite.must_kv_raw_put_v2(1, k2, v2);
+
+    suite.set_tso(100);
+    let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
+    suite.must_kv_raw_put_v2(1, k3.clone(), v3.clone());
+
+    let (k4, v4) = (b"rkey4".to_vec(), b"value4".to_vec());
+    suite.must_kv_raw_put_v2(1, k4.clone(), v4.clone());
 
     let mut req = suite.new_changedata_request(1);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
-    req.set_checkpoint_ts(101);
+    req.set_checkpoint_ts(99);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -600,11 +622,16 @@ fn test_cdc_rawkv_scan() {
     match events.remove(0).event.unwrap() {
         // Batch size is set to 3.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert!(es.entries.len() == 2, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
-            assert_eq!(e.key, k2, "{:?}", es);
-            assert_eq!(e.value, v2, "{:?}", es);
+            assert_eq!(e.key, k3, "{:?}", es);
+            assert_eq!(e.value, v3, "{:?}", es);
+
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k4, "{:?}", es);
+            assert_eq!(e.value, v4, "{:?}", es);
         }
         other => panic!("unknown event {:?}", other),
     }

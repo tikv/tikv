@@ -604,7 +604,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         if (kv_api == ChangeDataRequestKvApi::RawKv && api_version != ApiVersion::V2)
             || (kv_api == ChangeDataRequestKvApi::TxnKv)
         {
-            error!("RawKv are supported by api-version 2 only, TxnKv aren't supported now.");
+            error!("cdc rawkv are supported by api-version 2 only, TxnKv aren't supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
             err.set_required_version("TxnKv doesn't support now, RawKv requires tikv version >= 6.1 with storage.api-version=2".to_string());
