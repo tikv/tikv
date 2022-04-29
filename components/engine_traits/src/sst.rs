@@ -6,7 +6,7 @@ use kvproto::import_sstpb::SstMeta;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
-pub struct SSTMetaInfo {
+pub struct SstMetaInfo {
     pub total_bytes: u64,
     pub total_kvs: u64,
     pub meta: SstMeta,

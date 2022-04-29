@@ -69,6 +69,7 @@ impl From<KvError> for Error {
     fn from(err: KvError) -> Self {
         match err {
             KvError(box KvErrorInner::Request(e)) => Error::Region(e),
+            KvError(box KvErrorInner::KeyIsLocked(lock_info)) => Error::Locked(lock_info),
             e => Error::Other(e.to_string()),
         }
     }

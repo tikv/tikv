@@ -9,7 +9,7 @@ use std::{result, thread};
 use crossbeam::channel::TrySendError;
 use futures::executor::block_on;
 use kvproto::errorpb::Error as PbError;
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{ApiVersion, Context};
 use kvproto::metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
@@ -166,11 +166,12 @@ impl<T: Simulator> Cluster<T> {
         count: usize,
         sim: Arc<RwLock<T>>,
         pd_client: Arc<TestPdClient>,
+        api_version: ApiVersion,
     ) -> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
             cfg: Config {
-                tikv: new_tikv_config(id),
+                tikv: new_tikv_config_with_api_ver(id, api_version),
                 prefer_mem: true,
             },
             leaders: HashMap::default(),
