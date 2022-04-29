@@ -504,8 +504,8 @@ impl BlockBuilder {
             let dst = &mut self.buf[buf_len..];
             let size = if self.compression_tp == LZ4_COMPRESSION {
                 lz4::liblz4::LZ4_compress_default(
-                    src.as_ptr() as *const i8,
-                    dst.as_mut_ptr() as *mut i8,
+                    src.as_ptr() as *const libc::c_char,
+                    dst.as_mut_ptr() as *mut libc::c_char,
                     src.len() as i32,
                     dst.len() as i32,
                 ) as usize
