@@ -4,7 +4,7 @@
 use crate::storage::kv::{Iterator, Result, Snapshot, RAW_VALUE_TOMBSTONE};
 use crate::storage::Statistics;
 
-use api_version::APIVersion;
+use api_version::KvFormat;
 use engine_traits::raw_ttl::ttl_current_ts;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, ReadOptions};
@@ -12,13 +12,13 @@ use std::marker::PhantomData;
 use txn_types::{Key, Value};
 
 #[derive(Clone)]
-pub struct RawEncodeSnapshot<S: Snapshot, Api: APIVersion> {
+pub struct RawEncodeSnapshot<S: Snapshot, F: KvFormat> {
     snap: S,
     current_ts: u64,
-    _phantom: PhantomData<Api>,
+    _phantom: PhantomData<F>,
 }
 
-impl<S: Snapshot, Api: APIVersion> RawEncodeSnapshot<S, Api> {
+impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
     pub fn from_snapshot(snap: S) -> Self {
         RawEncodeSnapshot {
             snap,
@@ -29,7 +29,7 @@ impl<S: Snapshot, Api: APIVersion> RawEncodeSnapshot<S, Api> {
 
     fn map_value(&self, value: Result<Option<Value>>) -> Result<Option<Value>> {
         if let Some(v) = value? {
-            let raw_value = Api::decode_raw_value_owned(v)?;
+            let raw_value = F::decode_raw_value_owned(v)?;
             if raw_value.is_valid(self.current_ts) {
                 return Ok(Some(raw_value.user_value));
             }
@@ -47,7 +47,7 @@ impl<S: Snapshot, Api: APIVersion> RawEncodeSnapshot<S, Api> {
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
         if let Some(v) = self.snap.get_cf(cf, key)? {
             stats.data.flow_stats.read_bytes += v.len();
-            let raw_value = Api::decode_raw_value_owned(v)?;
+            let raw_value = F::decode_raw_value_owned(v)?;
             return match raw_value.expire_ts {
                 Some(expire_ts) if expire_ts <= self.current_ts => Ok(None),
                 Some(expire_ts) => Ok(Some(expire_ts - self.current_ts)),
@@ -58,8 +58,8 @@ impl<S: Snapshot, Api: APIVersion> RawEncodeSnapshot<S, Api> {
     }
 }
 
-impl<S: Snapshot, Api: APIVersion> Snapshot for RawEncodeSnapshot<S, Api> {
-    type Iter = RawEncodeIterator<S::Iter, Api>;
+impl<S: Snapshot, F: KvFormat> Snapshot for RawEncodeSnapshot<S, F> {
+    type Iter = RawEncodeIterator<S::Iter, F>;
     type Ext<'a>
     where
         S: 'a,
@@ -106,14 +106,14 @@ impl<S: Snapshot, Api: APIVersion> Snapshot for RawEncodeSnapshot<S, Api> {
     }
 }
 
-pub struct RawEncodeIterator<I: Iterator, Api: APIVersion> {
+pub struct RawEncodeIterator<I: Iterator, F: KvFormat> {
     inner: I,
     current_ts: u64,
     skip_invalid: usize,
-    _phantom: PhantomData<Api>,
+    _phantom: PhantomData<F>,
 }
 
-impl<I: Iterator, Api: APIVersion> RawEncodeIterator<I, Api> {
+impl<I: Iterator, F: KvFormat> RawEncodeIterator<I, F> {
     fn new(inner: I, current_ts: u64) -> Self {
         RawEncodeIterator {
             inner,
@@ -130,7 +130,7 @@ impl<I: Iterator, Api: APIVersion> RawEncodeIterator<I, Api> {
             }
 
             if *res.as_ref().unwrap() {
-                let raw_value = Api::decode_raw_value(self.inner.value())?;
+                let raw_value = F::decode_raw_value(self.inner.value())?;
                 if !raw_value.is_valid(self.current_ts) {
                     self.skip_invalid += 1;
                     res = if forward {
@@ -147,7 +147,7 @@ impl<I: Iterator, Api: APIVersion> RawEncodeIterator<I, Api> {
     }
 }
 
-impl<I: Iterator, Api: APIVersion> Drop for RawEncodeIterator<I, Api> {
+impl<I: Iterator, F: KvFormat> Drop for RawEncodeIterator<I, F> {
     fn drop(&mut self) {
         RAW_VALUE_TOMBSTONE.with(|m| {
             *m.borrow_mut() += self.skip_invalid;
@@ -155,7 +155,7 @@ impl<I: Iterator, Api: APIVersion> Drop for RawEncodeIterator<I, Api> {
     }
 }
 
-impl<I: Iterator, Api: APIVersion> Iterator for RawEncodeIterator<I, Api> {
+impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
     fn next(&mut self) -> Result<bool> {
         let res = self.inner.next();
         self.find_valid_value(res, true)
@@ -199,8 +199,6 @@ impl<I: Iterator, Api: APIVersion> Iterator for RawEncodeIterator<I, Api> {
     }
 
     fn value(&self) -> &[u8] {
-        Api::decode_raw_value(self.inner.value())
-            .unwrap()
-            .user_value
+        F::decode_raw_value(self.inner.value()).unwrap().user_value
     }
 }
