@@ -142,6 +142,7 @@ fn test_serving_status() {
 
     fail::remove("pause_on_peer_collect_message");
 
-    thread::sleep(Duration::from_millis(500));
+    // It should recover within one round.
+    thread::sleep(Duration::from_millis(200));
     assert_eq!(check(), ServingStatus::Serving);
 }

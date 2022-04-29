@@ -783,7 +783,10 @@ where
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
     slow_score: SlowScore,
+
+    // The health status of the store is updated by the slow score mechanism.
     health_service: Option<HealthService>,
+    curr_health_status: ServingStatus,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -842,6 +845,7 @@ where
             remote,
             slow_score: SlowScore::new(cfg.inspect_interval.0),
             health_service,
+            curr_health_status: ServingStatus::Serving,
         }
     }
 
@@ -1673,6 +1677,13 @@ where
             })
             .or_insert(buckets);
     }
+
+    fn update_health_status(&mut self, status: ServingStatus) {
+        self.curr_health_status = status;
+        if let Some(health_service) = &self.health_service {
+            health_service.set_serving_status("", status);
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -1917,6 +1928,13 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
+        // The health status is recovered to serving as long as any tick
+        // does not timeout.
+        if self.curr_health_status == ServingStatus::ServiceUnknown
+            && self.slow_score.last_tick_finished
+        {
+            self.update_health_status(ServingStatus::Serving);
+        }
         if !self.slow_score.last_tick_finished {
             self.slow_score.record_timeout();
         }
@@ -1924,17 +1942,14 @@ where
         let id = self.slow_score.last_tick_id + 1;
         self.slow_score.last_tick_id += 1;
         self.slow_score.last_tick_finished = false;
+
         if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
-            // `last_update_time` is refreshed every round. We use it to maintain
-            // the health status of the TiKV.
-            let health_status =
-                if self.slow_score.last_record_time < self.slow_score.last_update_time {
-                    ServingStatus::ServiceUnknown
-                } else {
-                    ServingStatus::Serving
-                };
-            if let Some(health_service) = &self.health_service {
-                health_service.set_serving_status("", health_status);
+            // `last_update_time` is refreshed every round. If no update happens in a whole round,
+            // we set the status to unknown.
+            if self.curr_health_status == ServingStatus::Serving
+                && self.slow_score.last_record_time < self.slow_score.last_update_time
+            {
+                self.update_health_status(ServingStatus::ServiceUnknown);
             }
             let slow_score = self.slow_score.update();
             STORE_SLOW_SCORE_GAUGE.set(slow_score);
