@@ -80,7 +80,6 @@ struct RawCompactionFilter {
     filtered: usize,
     total_versions: usize,
     total_filtered: usize,
-    mvcc_rollback_and_locks: usize,
     orphan_versions: usize,
     versions_hist: LocalHistogram,
     filtered_hist: LocalHistogram,
@@ -156,7 +155,6 @@ impl RawCompactionFilter {
             filtered: 0,
             total_versions: 0,
             total_filtered: 0,
-            mvcc_rollback_and_locks: 0,
             orphan_versions: 0,
             versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
@@ -194,7 +192,7 @@ impl RawCompactionFilter {
             }
             let raw_value = ApiV2::decode_raw_value(value)?;
             // the lastest version ,and it's deleted or expaired ttl , need to be send to async gc task
-            if raw_value.is_delete || raw_value.expire_ts.unwrap() < self.current_ts {
+            if !raw_value.is_valid(self.current_ts) {
                 self.raw_handle_bottommost_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
@@ -225,7 +223,6 @@ impl RawCompactionFilter {
             };
             self.schedule_gc_task(task, false);
         }
-        self.mvcc_deletions.clear();
     }
 
     // `log_on_error` indicates whether to print an error log on scheduling failures.
@@ -272,7 +269,6 @@ impl RawCompactionFilter {
 
     fn flush_metrics(&self) {
         GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
-        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
             .with_label_values(&["generated"])
             .inc_by(self.orphan_versions as u64);
@@ -285,7 +281,7 @@ impl RawCompactionFilter {
             None
         }) {
             if filtered > 0 {
-                info!("Compaction filter reports"; "total" => versions, "filtered" => filtered);
+                info!("RawKV Compaction filter reports"; "total" => versions, "filtered" => filtered);
             }
         }
     }
