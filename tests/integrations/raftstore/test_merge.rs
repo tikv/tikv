@@ -1254,6 +1254,69 @@ fn test_merge_snapshot_demote() {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
+/// Check if merge is cleaned up if the merge target is destroyed several times before it's ever
+/// scheduled.
+#[test]
+fn test_node_merge_long_isolated() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k3").unwrap();
+
+    cluster.must_transfer_leader(right.get_id(), new_peer(3, 3));
+    let target_leader = peer_on_store(&left, 3);
+    cluster.must_transfer_leader(left.get_id(), target_leader);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    // So cluster becomes:
+    //  left region: 1 I 2 3(leader)
+    // right region: 1 I 2 3(leader)
+    // I means isolation.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    pd_client.must_remove_peer(right.get_id(), peer_on_store(&right, 1));
+    // Split to make sure the range of new peer won't overlap with source.
+    let right = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&right, b"k2");
+    cluster.must_put(b"k4", b"v4");
+    // Ensure the node is removed, so it will not catch up any logs but just destroy itself.
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+
+    let filter = RegionPacketFilter::new(left.get_id(), 1);
+    cluster.clear_send_filters();
+    // Ensure source region will not take any actions.
+    cluster.add_send_filter(CloneFilterFactory(filter));
+    must_get_none(&cluster.get_engine(1), b"k3");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    // So new peer will not apply snapshot.
+    let filter = RegionPacketFilter::new(right.get_id(), 1).msg_type(MessageType::MsgSnapshot);
+    cluster.add_send_filter(CloneFilterFactory(filter));
+    pd_client.must_add_peer(right.get_id(), new_peer(1, 1010));
+    cluster.must_put(b"k5", b"v5");
+    must_get_equal(&cluster.get_engine(2), b"k5", b"v5");
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    // Now peer(1, 1010) should probably created in memory but not persisted.
+    pd_client.must_remove_peer(right.get_id(), new_peer(1, 1010));
+    cluster.wait_tombstone(right.get_id(), new_peer(1, 1010));
+    cluster.clear_send_filters();
+    // Source peer should discover it's impossible to proceed and cleanup itself.
+    must_get_none(&cluster.get_engine(1), b"k1");
+}
+
 #[test]
 fn test_stale_message_after_merge() {
     let mut cluster = new_server_cluster(0, 3);
