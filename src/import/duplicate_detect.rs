@@ -236,14 +236,14 @@ mod tests {
     use crate::storage::lock_manager::{DummyLockManager, LockManager};
     use crate::storage::txn::commands;
     use crate::storage::{Storage, TestStorageBuilderApiV1};
-    use api_version::APIVersion;
+    use api_version::KvFormat;
     use kvproto::kvrpcpb::Context;
     use std::sync::mpsc::channel;
     use tikv_kv::Engine;
     use txn_types::Mutation;
 
-    fn prewrite_data<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -274,8 +274,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    fn rollback_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -297,8 +297,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager, Api: APIVersion>(
-        storage: &Storage<E, L, Api>,
+    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {
