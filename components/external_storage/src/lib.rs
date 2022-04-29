@@ -9,6 +9,7 @@ extern crate slog_global;
 extern crate tikv_alloc;
 
 use std::io::{self, Write};
+use std::pin::Pin;
 use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,8 +18,11 @@ use async_trait::async_trait;
 use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
-use futures_io::AsyncRead;
-use futures_util::AsyncReadExt;
+use futures_util::{
+    AsyncReadExt,
+    io::AsyncRead,
+    task::{Context, Poll},
+};
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::{Instant, Limiter};
 use tokio::time::timeout;
@@ -50,6 +54,20 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// in order to make rustc happy. (And reduce the length of signture of write.)
 /// see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
+
+impl AsyncRead for UnpinReader {
+    #[inline]
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        unsafe { self.map_unchecked_mut(|r| &mut r.0) }.poll_read(cx, buf)
+        // Pin::new(&mut *self).poll_read(cx, buf)
+        //let inner = Pin::into_inner(*self);
+        //Pin::new(&mut inner.reader).poll_read(cx, buf)
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct BackendConfig {

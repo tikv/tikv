@@ -1,42 +1,41 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::UnpinReader;
+
 use anyhow::Context;
-use futures::executor::block_on;
-use futures_io::{AsyncRead, AsyncWrite};
+use futures_io::AsyncWrite;
 use kvproto::brpb as proto;
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 use std::io::{self, ErrorKind};
 use tikv_util::time::Limiter;
 use tokio::runtime::Runtime;
-use tokio_util::compat::Tokio02AsyncReadCompatExt;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
 pub fn write_sender(
     runtime: &Runtime,
     backend: Backend,
     file_path: std::path::PathBuf,
     name: &str,
-    reader: Box<dyn AsyncRead + Send + Unpin>,
+    reader: UnpinReader,
     content_length: u64,
-) -> io::Result<proto::ExternalStorageWriteRequest> {
-    (|| -> anyhow::Result<proto::ExternalStorageWriteRequest> {
+) -> io::Result<proto::ExternalStorageSaveRequest> {
+    (|| -> anyhow::Result<proto::ExternalStorageSaveRequest> {
         // TODO: the reader should write direct to the file_path
         // currently it is copying into an intermediate buffer
         // Writing to a file here uses up disk space
         // But as a positive it gets the backup data out of the DB the fastest
         // Currently this waits for the file to be completely written before sending to storage
-        runtime.enter(|| {
-            block_on(async {
-                let msg = |action: &str| format!("{} file {:?}", action, &file_path);
-                let f = tokio::fs::File::create(file_path.clone())
-                    .await
-                    .context(msg("create"))?;
-                let mut writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Box::pin(f.compat()));
-                futures_util::io::copy(reader, &mut writer)
-                    .await
-                    .context(msg("copy"))
-            })
+        runtime.block_on(async {
+            let msg = |action: &str| format!("{} file {:?}", action, &file_path);
+            let f = tokio::fs::File::create(file_path.clone())
+                .await
+                .context(msg("create"))?;
+            let mut writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Box::pin(f.compat()));
+            futures_util::io::copy(reader, &mut writer)
+                .await
+                .context(msg("copy"))
         })?;
-        let mut req = proto::ExternalStorageWriteRequest::default();
+        let mut req = proto::ExternalStorageSaveRequest::default();
         req.set_object_name(name.to_string());
         req.set_content_length(content_length);
         let mut sb = proto::StorageBackend::default();

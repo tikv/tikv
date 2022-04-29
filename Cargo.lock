@@ -1517,6 +1517,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes 1.0.1",
  "encryption",
@@ -1553,6 +1554,7 @@ dependencies = [
 name = "external_storage_export"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "async-trait",
  "aws",
  "azure",

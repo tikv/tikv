@@ -44,10 +44,10 @@ use tikv_util::warn;
 
 pub fn create_storage(
     storage_backend: &StorageBackend,
-    config: BackendConfig,
+    _config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
-        create_backend(backend, config)
+        create_backend(backend)
     } else {
         Err(bad_storage_backend(storage_backend))
     }

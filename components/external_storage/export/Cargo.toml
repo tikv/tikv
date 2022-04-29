@@ -21,6 +21,7 @@ cloud-gcp = ["gcp"]
 cloud-azure = ["azure"]
 cloud-storage-dylib = [
   "external_storage/cloud-storage-dylib",
+  "anyhow",
   "ffi-support",
   "file_system",
   "futures",
@@ -35,6 +36,7 @@ cloud-storage-dylib = [
 ]
 cloud-storage-grpc = [
   "external_storage/cloud-storage-grpc",
+  "anyhow",
   "grpcio",
   "file_system",
   "futures",
@@ -50,6 +52,7 @@ cloud-storage-grpc = [
 ]
 
 [dependencies]
+anyhow = { optional = true, version = "1.0" }
 aws = { optional = true, path = "../../cloud/aws", default-features = false }
 azure = { optional = true, path = "../../cloud/azure", default-features = false }
 cloud = { path = "../../cloud", default_features = false }
