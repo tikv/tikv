@@ -162,7 +162,21 @@ impl StoreMeta {
             panic!("{} region corrupted", peer.tag);
         }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(host, reader, region);
+        info!(
+            "ReadDelegate before set_region: reader version={:?}, localversion={:?}, region_id={}, peer_id={}",
+            reader.track_ver.get_version(),
+            reader.track_ver.get_local_version(),
+            region.clone().get_id(),
+            peer.peer.get_id()
+        );
+        peer.set_region(host, reader, region.clone());
+        info!(
+            "ReadDelegate after set_region: reader version={:?}, localversion={:?}, region_id={}, peer_id={}",
+            reader.track_ver.get_version(),
+            reader.track_ver.get_local_version(),
+            region.clone().get_id(),
+            peer.peer.get_id()
+        );
     }
 }
 

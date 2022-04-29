@@ -3026,7 +3026,21 @@ where
             "peer_id" => self.peer.get_id(),
             "progress" => ?progress,
         );
+        info!(
+            "maybe_update_read_progress before update: ReadDelegate version={:?}, localversion={:?}, region_id={}, peer_id={}",
+            reader.track_ver.get_version(),
+            reader.track_ver.get_local_version(),
+            self.region_id,
+            self.peer.get_id()
+        );
         reader.update(progress);
+        info!(
+            "maybe_update_read_progress after update: ReadDelegate version={:?}, localversion={:?}, region_id={}, peer_id={}",
+            reader.track_ver.get_version(),
+            reader.track_ver.get_local_version(),
+            self.region_id,
+            self.peer.get_id()
+        );
     }
 
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {

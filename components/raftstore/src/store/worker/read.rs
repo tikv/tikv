@@ -33,7 +33,7 @@ use tikv_util::codec::number::decode_u64;
 use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
-use tikv_util::{debug, error};
+use tikv_util::{debug, error, info};
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
@@ -164,7 +164,21 @@ pub struct ReadDelegate {
 impl Drop for ReadDelegate {
     fn drop(&mut self) {
         // call `inc` to notify the source `ReadDelegate` is dropped
+        info!(
+            "ReadDelegate Drop before inc: reader version={:?}, localversion={:?}, region_id={}, peer_id={}",
+            self.track_ver.get_version(),
+            self.track_ver.get_local_version(),
+            self.region.get_id(),
+            self.peer_id
+        );
         self.track_ver.inc();
+        info!(
+            "ReadDelegate Drop After inc: reader version={:?}, localversion={:?}, region_id={}, peer_id={}",
+            self.track_ver.get_version(),
+            self.track_ver.get_local_version(),
+            self.region.get_id(),
+            self.peer_id
+        );
     }
 }
 
@@ -198,6 +212,14 @@ impl TrackVer {
 
     fn any_new(&self) -> bool {
         self.version.load(Ordering::Relaxed) > self.local_ver
+    }
+
+    pub fn get_version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+
+    pub fn get_local_version(&self) -> u64 {
+        self.local_ver
     }
 }
 
@@ -510,6 +532,10 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
+    fn get_must_track_version_changed_failpoint(&self) -> bool {
+        fail_point!("must_track_version_changed", |_| true);
+        false
+    }
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
     // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
     // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
@@ -520,8 +546,23 @@ where
             // The local `ReadDelegate` is up to date
             Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
             _ => {
+                if self.get_must_track_version_changed_failpoint() {
+                    match self.delegates.get(&region_id) {
+                        Some(d) => {
+                            info!(
+                                "must_track_version_changed: {}, version={:?}, localversion={:?}",
+                                d.track_ver.any_new(),
+                                d.track_ver.get_version(),
+                                d.track_ver.get_local_version()
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
+
+                let t = Instant::now();
 
                 let (meta_len, meta_reader) = {
                     let meta = self.store_meta.lock().unwrap();
@@ -530,6 +571,9 @@ where
                         meta.readers.get(&region_id).cloned().map(Arc::new),
                     )
                 };
+                if self.get_must_track_version_changed_failpoint() {
+                    info!("store meta lock acquire takes {:?}", t.saturating_elapsed());
+                }
 
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);

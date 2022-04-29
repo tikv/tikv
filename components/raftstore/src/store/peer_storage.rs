@@ -1867,6 +1867,8 @@ where
             .clean(region_id, first_index, raft_state, raft_wb)
     );
 
+    // sleep when triggerred.
+    fail_point!("seek_first_log_index_duration");
     info!(
         "finish clear peer meta";
         "region_id" => region_id,

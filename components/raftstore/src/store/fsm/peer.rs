@@ -3094,7 +3094,15 @@ where
         self.fsm.peer.read_progress.pause();
 
         // Destroy read delegates.
+        info!(
+            "destroy_peer begin to remove readers of region id {}",
+            region_id
+        );
         meta.readers.remove(&region_id);
+        info!(
+            "destroy_peer finish removing readers of region id {}",
+            region_id
+        );
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
